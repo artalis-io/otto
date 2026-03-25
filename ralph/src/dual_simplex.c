@@ -63,15 +63,15 @@ static void configure_dual_tableau_for_solver(SimplexSolver *solver, SimplexTabl
     if (!tab->lu) return;
 
     int enable_supernode = 0;
-    tab->lu->telemetry_enabled = solver->telemetry_enabled;
-    tab->lu->owner = solver;
+    lu_set_telemetry_enabled(tab->lu, solver->telemetry_enabled);
+    lu_set_owner(tab->lu, solver);
     if (solver->policy.basis_governor_mode == LP_BASIS_GOV_MODE_OFF) {
-        tab->lu->basis_governor = NULL;
+        lu_set_basis_governor(tab->lu, NULL);
     } else {
-        tab->lu->basis_governor = &solver->policy.basis_governor;
+        lu_set_basis_governor(tab->lu, &solver->policy.basis_governor);
     }
 
-    tab->lu->mkz_enabled = 1;
+    lu_set_mkz_enabled(tab->lu, 1);
     if (solver->lu_supernode) {
         enable_supernode = 1;
     } else if (tab->m > 300) {
@@ -79,20 +79,20 @@ static void configure_dual_tableau_for_solver(SimplexSolver *solver, SimplexTabl
     }
 
     lu_apply_backend_policy(tab->lu, solver->lu_backend_policy);
-    tab->lu->sn_enabled = enable_supernode ? 1 : 0;
+    lu_set_sn_enabled(tab->lu, enable_supernode ? 1 : 0);
 
     if (solver->lu_update_limit_override > 0) {
-        tab->lu->max_updates = solver->lu_update_limit_override;
+        lu_set_max_updates(tab->lu, solver->lu_update_limit_override);
         update_cap = lu_update_backend_storage_capacity(tab->lu);
-        if (update_cap > 0 && tab->lu->max_updates > update_cap) {
-            tab->lu->max_updates = update_cap;
+        if (update_cap > 0 && lu_get_max_updates(tab->lu) > update_cap) {
+            lu_set_max_updates(tab->lu, update_cap);
         }
     }
     if (solver->lu_pivot_tol_override > 0.0) {
-        tab->lu->pivot_tol = solver->lu_pivot_tol_override;
+        lu_set_pivot_tol(tab->lu, solver->lu_pivot_tol_override);
     }
     if (solver->lu_growth_guard_override > 0.0) {
-        tab->lu->growth_refactor_threshold = solver->lu_growth_guard_override;
+        lu_set_growth_refactor_threshold(tab->lu, solver->lu_growth_guard_override);
     }
 }
 
@@ -349,8 +349,8 @@ static int dual_governor_refactor_decision(
         solver->policy.reinvert_dual.last_hot_ms = dual_hot_ms;
         lp_reinvert_controller_state_record_iter_cost(reinvert_state, dual_iter_hot_ms);
         lp_reinvert_controller_state_record_update_age_ratio(reinvert_state,
-                                                             tab->lu->num_updates,
-                                                             tab->lu->max_updates);
+                                                             lu_get_num_updates(tab->lu),
+                                                             lu_get_max_updates(tab->lu));
         ftran_density = dual_average_solve_density(solver->telemetry.perf_ftran_sol_nnz_total,
                                                    solver->telemetry.perf_ftran_nnz_samples,
                                                    tab->m);
@@ -364,8 +364,8 @@ static int dual_governor_refactor_decision(
         reinvert_signals.phase = 2;
         reinvert_signals.iter = iter;
         reinvert_signals.m = tab->m;
-        reinvert_signals.num_updates = tab->lu->num_updates;
-        reinvert_signals.max_updates = tab->lu->max_updates;
+        reinvert_signals.num_updates = lu_get_num_updates(tab->lu);
+        reinvert_signals.max_updates = lu_get_max_updates(tab->lu);
         reinvert_signals.periodic_due = quality_refactor_nominal ? 1 : 0;
         reinvert_signals.min_update_age = (base_interval > 0) ? (base_interval / 2) : 8;
         reinvert_signals.cooldown_updates = 0;
@@ -747,9 +747,9 @@ static void dual_ratio_adaptive_config_for_tableau(const SimplexTableau *tab,
     double cond_estimate = 1.0;
     double growth_factor = 1.0;
     if (tab && tab->lu) {
-        pivot_tol = tab->lu->pivot_tol;
-        cond_estimate = tab->lu->cond_estimate;
-        growth_factor = tab->lu->growth_factor;
+        pivot_tol = lu_get_pivot_tol(tab->lu);
+        cond_estimate = lu_get_cond_estimate(tab->lu);
+        growth_factor = lu_get_growth_factor(tab->lu);
     }
     if (tab && tab->owner &&
         !lp_glpk_strict_use_dual_adaptive_ratio_thresholds(
@@ -1770,10 +1770,10 @@ static int dual_simplex_pivot(SimplexTableau *tab, int entering, int leaving, do
     if (!(tab->model && tab->model->num_integers > 0)) {
         sparse_pressure_refactor = dual_sparse_pressure_force_refactor_core(
             tab->m,
-            tab->lu ? tab->lu->num_updates : 0,
-            tab->lu ? tab->lu->max_updates : 0,
-            (tab->lu && tab->lu->use_ft_updates) ? tab->lu->spike_pool_used : -1,
-            (tab->lu && tab->lu->use_ft_updates) ? tab->lu->spike_pool_capacity : -1,
+            tab->lu ? lu_get_num_updates(tab->lu) : 0,
+            tab->lu ? lu_get_max_updates(tab->lu) : 0,
+            (tab->lu && lu_get_use_ft_updates(tab->lu)) ? lu_get_spike_pool_used(tab->lu) : -1,
+            (tab->lu && lu_get_use_ft_updates(tab->lu)) ? lu_get_spike_pool_capacity(tab->lu) : -1,
             ftran_nnz,
             btran_nnz);
     }

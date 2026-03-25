@@ -1020,8 +1020,8 @@ static void reinvert_shadow_prepare_phase(SimplexSolver *solver,
     if (!state) return;
 
     lp_reinvert_controller_state_record_update_age_ratio(state,
-                                                         tab->lu->num_updates,
-                                                         tab->lu->max_updates);
+                                                         lu_get_num_updates(tab->lu),
+                                                         lu_get_max_updates(tab->lu));
     ftran_density = average_solve_density(solver->telemetry.perf_ftran_sol_nnz_total,
                                           solver->telemetry.perf_ftran_nnz_samples,
                                           tab->m);
@@ -1036,8 +1036,8 @@ static void reinvert_shadow_prepare_phase(SimplexSolver *solver,
     signals.phase = phase;
     signals.iter = iter;
     signals.m = tab->m;
-    signals.num_updates = tab->lu->num_updates;
-    signals.max_updates = tab->lu->max_updates;
+    signals.num_updates = lu_get_num_updates(tab->lu);
+    signals.max_updates = lu_get_max_updates(tab->lu);
     signals.periodic_due = periodic_due ? 1 : 0;
     signals.min_update_age = (min_update_age > 0) ? min_update_age : 0;
     signals.cooldown_updates = (cooldown_updates > 0) ? cooldown_updates : 0;
@@ -2500,7 +2500,7 @@ static void verify_solution(SimplexSolver *solver) {
     /* 6. Basis conditioning (T3.6) */
     double cond = 1.0;
     if (solver->tableau && solver->tableau->lu) {
-        cond = solver->tableau->lu->cond_estimate;
+        cond = lu_get_cond_estimate(solver->tableau->lu);
     }
 
     /* Store metrics */
@@ -3875,7 +3875,7 @@ int tableau_refactorize(SimplexTableau *tab) {
     double t_refactor_ms = lp_telemetry_timer_start();
     SimplexSolver *owner = tab ? tab->owner : NULL;
     int reason = RALPH_REFACTOR_REASON_OTHER;
-    int updates_before = (tab && tab->lu) ? tab->lu->num_updates : 0;
+    int updates_before = (tab && tab->lu) ? lu_get_num_updates(tab->lu) : 0;
     lp_telemetry_begin_refactor(owner, &reason);
 
     /* When Phase 2 has stuck artificials on redundant rows, move them to
@@ -3903,43 +3903,40 @@ int tableau_refactorize(SimplexTableau *tab) {
     SparseMatrix *B = build_basis_matrix(tab);
     if (!B) return -1;
 
-    /* Pass redundant row hints to LU for handling stuck artificials */
-    tab->lu->redundant_rows = tab->redundant_rows;
-    tab->lu->num_redundant = tab->num_redundant;
-
-    /* Allow limited regularization for near-singular bases.
+    /* Pass redundant row hints and regularization config to LU.
      * Phase 1: many artificial variables create near-singular bases.
      * Phase 2 with redundant rows: always allow (even after zeroing A_ext).
      * After zeroing, the sparse LU may still encounter zero pivots at zeroed
      * rows if its column ordering doesn't process artificials first. */
-    if (tab->use_two_phase && (tab->phase == 1 ||
-        (tab->phase == 2 && tab->num_redundant > 0))) {
-        int reg_limit = RALPH_PHASE1_MAX_REGULARIZATIONS;
-        if (tab->num_redundant > reg_limit) {
-            reg_limit = tab->num_redundant;
+    {
+        int allow = 0;
+        int reg_limit = 0;
+        if (tab->use_two_phase && (tab->phase == 1 ||
+            (tab->phase == 2 && tab->num_redundant > 0))) {
+            allow = 1;
+            reg_limit = RALPH_PHASE1_MAX_REGULARIZATIONS;
+            if (tab->num_redundant > reg_limit) {
+                reg_limit = tab->num_redundant;
+            }
+            if (reg_limit > tab->m) {
+                reg_limit = tab->m;
+            }
         }
-        if (reg_limit > tab->m) {
-            reg_limit = tab->m;
-        }
-        tab->lu->allow_regularization = 1;
-        tab->lu->max_regularizations = reg_limit;
-    } else {
-        tab->lu->allow_regularization = 0;
-        tab->lu->max_regularizations = 0;
+        lu_configure_regularization(tab->lu, allow, reg_limit,
+                                    tab->redundant_rows, tab->num_redundant);
     }
-    tab->lu->num_regularized = 0;
 
     /* When Phase 2 has redundant rows (not yet zeroed), relax pivot tolerance
      * to accept small but valid structural pivots. After zeroing, use normal
      * tolerance since the basis is well-conditioned. */
-    double saved_tol = tab->lu->pivot_tol;
+    double saved_tol = lu_get_pivot_tol(tab->lu);
     if (tab->phase == 2 && tab->num_redundant > 0 && !tab->redundant_rows_zeroed) {
-        tab->lu->pivot_tol = 1e-15;
+        lu_set_pivot_tol(tab->lu, 1e-15);
     }
 
     int status = lu_factorize(tab->lu, B);
 
-    tab->lu->pivot_tol = saved_tol;
+    lu_set_pivot_tol(tab->lu, saved_tol);
 
     if (status != 0) {
         /* Factorization failed - try to repair the basis */
@@ -4004,7 +4001,7 @@ int tableau_compute_solution(SimplexTableau *tab) {
         int lu_num_updates = -1;
         if (tab->lu) {
             lu_factorize_calls = tab->lu->telemetry.perf_factorize_calls;
-            lu_num_updates = tab->lu->num_updates;
+            lu_num_updates = lu_get_num_updates(tab->lu);
             if (tab->solution_last_residual_iter == tab->iterations &&
                 tab->solution_last_residual_factorize_calls == lu_factorize_calls &&
                 tab->solution_last_residual_num_updates == lu_num_updates) {
@@ -6441,10 +6438,10 @@ static int simplex_pivot(SimplexTableau *tab,
     int update_reason = LU_FAIL_NONE;
     int refactor_forced_path = 0;
     int skip_se_update = 0;  /* Flag to skip SE update after reset */
-    double growth_factor = (tab->lu) ? tab->lu->growth_factor : 0.0;
-    int lu_num_updates = (tab->lu) ? tab->lu->num_updates : 0;
-    double growth_threshold = (tab->lu && tab->lu->growth_refactor_threshold > 0.0)
-        ? tab->lu->growth_refactor_threshold
+    double growth_factor = (tab->lu) ? lu_get_growth_factor(tab->lu) : 0.0;
+    int lu_num_updates = (tab->lu) ? lu_get_num_updates(tab->lu) : 0;
+    double growth_threshold = (tab->lu && lu_get_growth_refactor_threshold(tab->lu) > 0.0)
+        ? lu_get_growth_refactor_threshold(tab->lu)
         : RALPH_LU_GROWTH_REFACTOR_THRESHOLD;
     LPBasisAction action = lp_refactor_policy_choose_basis_action(
         pivot,
@@ -6470,10 +6467,10 @@ static int simplex_pivot(SimplexTableau *tab,
                     goto basis_update_done;
                 }
                 lu_update_status = -1;
-                update_reason = (tab->lu) ? tab->lu->last_failure_reason : LU_FAIL_NONE;
+                update_reason = (tab->lu) ? lu_get_last_failure_reason(tab->lu) : LU_FAIL_NONE;
                 lu_reason = update_reason;
-                growth_factor = (tab->lu) ? tab->lu->growth_factor : growth_factor;
-                lu_num_updates = (tab->lu) ? tab->lu->num_updates : lu_num_updates;
+                growth_factor = (tab->lu) ? lu_get_growth_factor(tab->lu) : growth_factor;
+                lu_num_updates = (tab->lu) ? lu_get_num_updates(tab->lu) : lu_num_updates;
                 action = lp_refactor_policy_choose_basis_action(
                     pivot,
                     force_refactor,
@@ -6503,9 +6500,9 @@ static int simplex_pivot(SimplexTableau *tab,
                     goto basis_update_done;
                 }
                 lu_update_status = -2;
-                lu_reason = (tab->lu) ? tab->lu->last_failure_reason : lu_reason;
-                growth_factor = (tab->lu) ? tab->lu->growth_factor : growth_factor;
-                lu_num_updates = (tab->lu) ? tab->lu->num_updates : lu_num_updates;
+                lu_reason = (tab->lu) ? lu_get_last_failure_reason(tab->lu) : lu_reason;
+                growth_factor = (tab->lu) ? lu_get_growth_factor(tab->lu) : growth_factor;
+                lu_num_updates = (tab->lu) ? lu_get_num_updates(tab->lu) : lu_num_updates;
                 action = lp_refactor_policy_choose_basis_action(
                     pivot,
                     force_refactor,
@@ -6521,9 +6518,9 @@ static int simplex_pivot(SimplexTableau *tab,
                     goto basis_update_done;
                 }
                 lu_update_status = -3;
-                lu_reason = (tab->lu) ? tab->lu->last_failure_reason : lu_reason;
-                growth_factor = (tab->lu) ? tab->lu->growth_factor : growth_factor;
-                lu_num_updates = (tab->lu) ? tab->lu->num_updates : lu_num_updates;
+                lu_reason = (tab->lu) ? lu_get_last_failure_reason(tab->lu) : lu_reason;
+                growth_factor = (tab->lu) ? lu_get_growth_factor(tab->lu) : growth_factor;
+                lu_num_updates = (tab->lu) ? lu_get_num_updates(tab->lu) : lu_num_updates;
                 action = lp_refactor_policy_choose_basis_action(
                     pivot,
                     force_refactor,
@@ -9689,13 +9686,13 @@ static int simplex_phase1(SimplexSolver *solver) {
         }
         LPLUHealthRefactorDecision lu_health_decision =
             lp_refactor_policy_lu_health_refactor_decision(tab->m,
-                                                           tab->lu->use_ft_updates,
-                                                           tab->lu->num_updates,
-                                                           tab->lu->max_updates,
-                                                           tab->lu->spike_pool_used,
-                                                           tab->lu->spike_pool_capacity,
-                                                           tab->lu->cond_estimate,
-                                                           tab->lu->growth_factor,
+                                                           lu_get_use_ft_updates(tab->lu),
+                                                           lu_get_num_updates(tab->lu),
+                                                           lu_get_max_updates(tab->lu),
+                                                           lu_get_spike_pool_used(tab->lu),
+                                                           lu_get_spike_pool_capacity(tab->lu),
+                                                           lu_get_cond_estimate(tab->lu),
+                                                           lu_get_growth_factor(tab->lu),
                                                            lu_soft_health_streak);
         int lu_refactor_nominal = lu_health_decision.refactor_now;
         int lu_refactor_needed = lu_health_decision.refactor_now;
@@ -9706,12 +9703,12 @@ static int simplex_phase1(SimplexSolver *solver) {
         LPPeriodicRefactorPolicy periodic_policy =
             lp_refactor_policy_build_from_metrics(1,
                                                   tab->m,
-                                                  tab->lu->max_updates,
-                                                  tab->lu->num_updates,
-                                                  tab->lu->spike_pool_used,
-                                                  tab->lu->spike_pool_capacity,
-                                                  tab->lu->cond_estimate,
-                                                  tab->lu->growth_factor,
+                                                  lu_get_max_updates(tab->lu),
+                                                  lu_get_num_updates(tab->lu),
+                                                  lu_get_spike_pool_used(tab->lu),
+                                                  lu_get_spike_pool_capacity(tab->lu),
+                                                  lu_get_cond_estimate(tab->lu),
+                                                  lu_get_growth_factor(tab->lu),
                                                   use_bland,
                                                   degenerate_count,
                                                   periodic_feedback_bias);
@@ -9752,12 +9749,12 @@ static int simplex_phase1(SimplexSolver *solver) {
                 tab->m,
                 use_bland,
                 degenerate_count,
-                tab->lu->num_updates,
-                tab->lu->max_updates,
-                tab->lu->spike_pool_used,
-                tab->lu->spike_pool_capacity,
-                tab->lu->cond_estimate,
-                tab->lu->growth_factor,
+                lu_get_num_updates(tab->lu),
+                lu_get_max_updates(tab->lu),
+                lu_get_spike_pool_used(tab->lu),
+                lu_get_spike_pool_capacity(tab->lu),
+                lu_get_cond_estimate(tab->lu),
+                lu_get_growth_factor(tab->lu),
                 soft_lu_refactor_cost_ewma(solver, 1),
                 soft_lu_iter_cost_ewma(solver, 1),
                 soft_lu_consecutive_defers(solver, 1),
@@ -9775,8 +9772,8 @@ static int simplex_phase1(SimplexSolver *solver) {
                     soft_lu_record_cap_forced(solver, 1);
                     if (solver->verbose >= 2) {
                         LP_LOG_STDERR("[simplex_phase1] Soft LU defer cap reached; forcing periodic LU-health refactor (updates=%d/%d, degen=%d)\n",
-                                tab->lu->num_updates,
-                                tab->lu->max_updates,
+                                lu_get_num_updates(tab->lu),
+                                lu_get_max_updates(tab->lu),
                                 degenerate_count);
                     }
                 }
@@ -9812,12 +9809,12 @@ static int simplex_phase1(SimplexSolver *solver) {
                 1,
                 iter,
                 tab->m,
-                tab->lu->max_updates,
-                tab->lu->num_updates,
-                tab->lu->spike_pool_used,
-                tab->lu->spike_pool_capacity,
-                tab->lu->cond_estimate,
-                tab->lu->growth_factor,
+                lu_get_max_updates(tab->lu),
+                lu_get_num_updates(tab->lu),
+                lu_get_spike_pool_used(tab->lu),
+                lu_get_spike_pool_capacity(tab->lu),
+                lu_get_cond_estimate(tab->lu),
+                lu_get_growth_factor(tab->lu),
                 use_bland,
                 degenerate_count,
                 periodic_feedback_bias,
@@ -9861,12 +9858,12 @@ static int simplex_phase1(SimplexSolver *solver) {
                             tab->m,
                             use_bland,
                             degenerate_count,
-                            tab->lu->num_updates,
-                            tab->lu->max_updates,
-                            tab->lu->spike_pool_used,
-                            tab->lu->spike_pool_capacity,
-                            tab->lu->cond_estimate,
-                            tab->lu->growth_factor,
+                            lu_get_num_updates(tab->lu),
+                            lu_get_max_updates(tab->lu),
+                            lu_get_spike_pool_used(tab->lu),
+                            lu_get_spike_pool_capacity(tab->lu),
+                            lu_get_cond_estimate(tab->lu),
+                            lu_get_growth_factor(tab->lu),
                             soft_lu_refactor_cost_ewma(solver, 1),
                             soft_lu_iter_cost_ewma(solver, 1),
                             periodic_cost_refactor_samples(solver, 1),
@@ -9884,8 +9881,8 @@ static int simplex_phase1(SimplexSolver *solver) {
                             periodic_cost_set_consecutive_defers(solver, 1, next_consecutive);
                             if (solver->verbose >= 2) {
                                 LP_LOG_STDERR("[simplex_phase1] Deferred policy periodic refactor by cost gate (updates=%d/%d, degen=%d, iter_ewma=%.3fms, ref_ewma=%.3fms)\n",
-                                        tab->lu->num_updates,
-                                        tab->lu->max_updates,
+                                        lu_get_num_updates(tab->lu),
+                                        lu_get_max_updates(tab->lu),
                                         degenerate_count,
                                         soft_lu_iter_cost_ewma(solver, 1),
                                         soft_lu_refactor_cost_ewma(solver, 1));
@@ -9896,8 +9893,8 @@ static int simplex_phase1(SimplexSolver *solver) {
                                 periodic_cost_record_cap_forced(solver, 1);
                                 if (solver->verbose >= 2) {
                                     LP_LOG_STDERR("[simplex_phase1] Policy periodic defer cap reached; forcing periodic policy refactor (updates=%d/%d, degen=%d)\n",
-                                            tab->lu->num_updates,
-                                            tab->lu->max_updates,
+                                            lu_get_num_updates(tab->lu),
+                                            lu_get_max_updates(tab->lu),
                                             degenerate_count);
                                 }
                             } else if (solver->verbose >= 3) {
@@ -10071,8 +10068,8 @@ static int simplex_phase1(SimplexSolver *solver) {
             if (solver->pricing_strategy == 4) heap_build(tab);
         } else if (lu_soft_cost_deferred && solver->verbose >= 2) {
             LP_LOG_STDERR("[simplex_phase1] Deferred soft LU-health periodic refactor (updates=%d/%d, degen=%d, iter_ewma=%.3fms, ref_ewma=%.3fms)\n",
-                    tab->lu->num_updates,
-                    tab->lu->max_updates,
+                    lu_get_num_updates(tab->lu),
+                    lu_get_max_updates(tab->lu),
                     degenerate_count,
                     soft_lu_iter_cost_ewma(solver, 1),
                     soft_lu_refactor_cost_ewma(solver, 1));
@@ -10354,7 +10351,7 @@ static int simplex_transition_phase2(SimplexSolver *solver) {
         /* Invalidate LU symbolic analysis cache. The A_ext values changed (zeroed
          * rows) but the CSC structure didn't, so the fingerprint would still match.
          * Without invalidation, the sparse LU reuses a stale elimination order. */
-        tab->lu->sym_valid = 0;
+        lu_invalidate_symbolic_cache(tab->lu);
         tab->basis_cache_valid = 0;
         tab->basis_cache_total_nnz = 0;
     }
@@ -10436,7 +10433,7 @@ static int simplex_phase2(SimplexSolver *solver) {
      * state after the transition. Redundant rows were zeroed in A_ext during
      * the transition, so the basis matrix is now well-conditioned. */
     if (tab->use_two_phase) {
-        tab->lu->num_updates = tab->lu->max_updates;
+        lu_force_refactorization(tab->lu);
         {
             double t_refactor_ms = lp_telemetry_timer_start();
             int rc = tableau_refactorize_with_reason(tab, RALPH_REFACTOR_REASON_PHASE_TRANSITION);
@@ -10899,13 +10896,13 @@ static int simplex_phase2(SimplexSolver *solver) {
         }
         LPLUHealthRefactorDecision lu_health_decision =
             lp_refactor_policy_lu_health_refactor_decision(tab->m,
-                                                           tab->lu->use_ft_updates,
-                                                           tab->lu->num_updates,
-                                                           tab->lu->max_updates,
-                                                           tab->lu->spike_pool_used,
-                                                           tab->lu->spike_pool_capacity,
-                                                           tab->lu->cond_estimate,
-                                                           tab->lu->growth_factor,
+                                                           lu_get_use_ft_updates(tab->lu),
+                                                           lu_get_num_updates(tab->lu),
+                                                           lu_get_max_updates(tab->lu),
+                                                           lu_get_spike_pool_used(tab->lu),
+                                                           lu_get_spike_pool_capacity(tab->lu),
+                                                           lu_get_cond_estimate(tab->lu),
+                                                           lu_get_growth_factor(tab->lu),
                                                            lu_soft_health_streak);
         int lu_refactor_nominal = lu_health_decision.refactor_now;
         int lu_refactor_needed = lu_health_decision.refactor_now;
@@ -10944,12 +10941,12 @@ static int simplex_phase2(SimplexSolver *solver) {
                 tab->m,
                 use_bland,
                 degenerate_count,
-                tab->lu->num_updates,
-                tab->lu->max_updates,
-                tab->lu->spike_pool_used,
-                tab->lu->spike_pool_capacity,
-                tab->lu->cond_estimate,
-                tab->lu->growth_factor,
+                lu_get_num_updates(tab->lu),
+                lu_get_max_updates(tab->lu),
+                lu_get_spike_pool_used(tab->lu),
+                lu_get_spike_pool_capacity(tab->lu),
+                lu_get_cond_estimate(tab->lu),
+                lu_get_growth_factor(tab->lu),
                 soft_lu_refactor_cost_ewma(solver, 2),
                 soft_lu_iter_cost_ewma(solver, 2),
                 soft_lu_consecutive_defers(solver, 2),
@@ -10968,8 +10965,8 @@ static int simplex_phase2(SimplexSolver *solver) {
                     soft_lu_record_cap_forced(solver, 2);
                     if (solver->verbose >= 2) {
                         LP_LOG_STDERR("[primal_simplex] Soft LU defer cap reached; forcing periodic LU-health refactor (updates=%d/%d, degen=%d)\n",
-                                tab->lu->num_updates,
-                                tab->lu->max_updates,
+                                lu_get_num_updates(tab->lu),
+                                lu_get_max_updates(tab->lu),
                                 degenerate_count);
                     }
                 }
@@ -10980,12 +10977,12 @@ static int simplex_phase2(SimplexSolver *solver) {
                 2,
                 iter,
                 tab->m,
-                tab->lu->max_updates,
-                tab->lu->num_updates,
-                tab->lu->spike_pool_used,
-                tab->lu->spike_pool_capacity,
-                tab->lu->cond_estimate,
-                tab->lu->growth_factor,
+                lu_get_max_updates(tab->lu),
+                lu_get_num_updates(tab->lu),
+                lu_get_spike_pool_used(tab->lu),
+                lu_get_spike_pool_capacity(tab->lu),
+                lu_get_cond_estimate(tab->lu),
+                lu_get_growth_factor(tab->lu),
                 use_bland,
                 degenerate_count,
                 periodic_feedback_bias,
@@ -11029,12 +11026,12 @@ static int simplex_phase2(SimplexSolver *solver) {
                             tab->m,
                             use_bland,
                             degenerate_count,
-                            tab->lu->num_updates,
-                            tab->lu->max_updates,
-                            tab->lu->spike_pool_used,
-                            tab->lu->spike_pool_capacity,
-                            tab->lu->cond_estimate,
-                            tab->lu->growth_factor,
+                            lu_get_num_updates(tab->lu),
+                            lu_get_max_updates(tab->lu),
+                            lu_get_spike_pool_used(tab->lu),
+                            lu_get_spike_pool_capacity(tab->lu),
+                            lu_get_cond_estimate(tab->lu),
+                            lu_get_growth_factor(tab->lu),
                             soft_lu_refactor_cost_ewma(solver, 2),
                             soft_lu_iter_cost_ewma(solver, 2),
                             periodic_cost_refactor_samples(solver, 2),
@@ -11052,8 +11049,8 @@ static int simplex_phase2(SimplexSolver *solver) {
                             periodic_cost_set_consecutive_defers(solver, 2, next_consecutive);
                             if (solver->verbose >= 2) {
                                 LP_LOG_STDERR("[primal_simplex] Deferred policy periodic refactor by cost gate (updates=%d/%d, degen=%d, iter_ewma=%.3fms, ref_ewma=%.3fms)\n",
-                                        tab->lu->num_updates,
-                                        tab->lu->max_updates,
+                                        lu_get_num_updates(tab->lu),
+                                        lu_get_max_updates(tab->lu),
                                         degenerate_count,
                                         soft_lu_iter_cost_ewma(solver, 2),
                                         soft_lu_refactor_cost_ewma(solver, 2));
@@ -11064,8 +11061,8 @@ static int simplex_phase2(SimplexSolver *solver) {
                                 periodic_cost_record_cap_forced(solver, 2);
                                 if (solver->verbose >= 2) {
                                     LP_LOG_STDERR("[primal_simplex] Policy periodic defer cap reached; forcing periodic policy refactor (updates=%d/%d, degen=%d)\n",
-                                            tab->lu->num_updates,
-                                            tab->lu->max_updates,
+                                            lu_get_num_updates(tab->lu),
+                                            lu_get_max_updates(tab->lu),
                                             degenerate_count);
                                 }
                             } else if (solver->verbose >= 3) {
@@ -11187,8 +11184,8 @@ static int simplex_phase2(SimplexSolver *solver) {
             }
         } else if (lu_soft_cost_deferred && solver->verbose >= 2) {
             LP_LOG_STDERR("[primal_simplex] Deferred soft LU-health periodic refactor (updates=%d/%d, degen=%d, iter_ewma=%.3fms, ref_ewma=%.3fms)\n",
-                    tab->lu->num_updates,
-                    tab->lu->max_updates,
+                    lu_get_num_updates(tab->lu),
+                    lu_get_max_updates(tab->lu),
                     degenerate_count,
                     soft_lu_iter_cost_ewma(solver, 2),
                     soft_lu_refactor_cost_ewma(solver, 2));
@@ -11203,10 +11200,10 @@ static int simplex_phase2(SimplexSolver *solver) {
                     tab->m,
                     use_bland,
                     degenerate_count,
-                    tab->lu->spike_pool_used,
-                    tab->lu->spike_pool_capacity,
-                    tab->lu->cond_estimate,
-                    tab->lu->growth_factor);
+                    lu_get_spike_pool_used(tab->lu),
+                    lu_get_spike_pool_capacity(tab->lu),
+                    lu_get_cond_estimate(tab->lu),
+                    lu_get_growth_factor(tab->lu));
             if (iter > 0 &&
                 periodic_recompute_interval > 0 &&
                 (iter % periodic_recompute_interval) == 0) {
@@ -11593,15 +11590,15 @@ static void configure_tableau_for_solver(SimplexSolver *solver, SimplexTableau *
     tab->trace_phase1_enabled = solver->trace_phase1;
     if (tab->lu) {
         int enable_supernode = 0;
-        tab->lu->telemetry_enabled = solver->telemetry_enabled;
-        tab->lu->owner = solver;
+        lu_set_telemetry_enabled(tab->lu, solver->telemetry_enabled);
+        lu_set_owner(tab->lu, solver);
         if (solver->policy.basis_governor_mode == LP_BASIS_GOV_MODE_OFF) {
-            tab->lu->basis_governor = NULL;
+            lu_set_basis_governor(tab->lu, NULL);
         } else {
-            tab->lu->basis_governor = &solver->policy.basis_governor;
+            lu_set_basis_governor(tab->lu, &solver->policy.basis_governor);
         }
 
-        tab->lu->mkz_enabled = 1;
+        lu_set_mkz_enabled(tab->lu, 1);
         if (solver->lu_supernode) {
             enable_supernode = 1;
         } else if (tab->m > 300) {
@@ -11609,20 +11606,20 @@ static void configure_tableau_for_solver(SimplexSolver *solver, SimplexTableau *
         }
 
         lu_apply_backend_policy(tab->lu, solver->lu_backend_policy);
-        tab->lu->sn_enabled = enable_supernode ? 1 : 0;
+        lu_set_sn_enabled(tab->lu, enable_supernode ? 1 : 0);
 
         if (solver->lu_update_limit_override > 0) {
-            tab->lu->max_updates = solver->lu_update_limit_override;
+            lu_set_max_updates(tab->lu, solver->lu_update_limit_override);
             update_cap = lu_update_backend_storage_capacity(tab->lu);
-            if (update_cap > 0 && tab->lu->max_updates > update_cap) {
-                tab->lu->max_updates = update_cap;
+            if (update_cap > 0 && lu_get_max_updates(tab->lu) > update_cap) {
+                lu_set_max_updates(tab->lu, update_cap);
             }
         }
         if (solver->lu_pivot_tol_override > 0.0) {
-            tab->lu->pivot_tol = solver->lu_pivot_tol_override;
+            lu_set_pivot_tol(tab->lu, solver->lu_pivot_tol_override);
         }
         if (solver->lu_growth_guard_override > 0.0) {
-            tab->lu->growth_refactor_threshold = solver->lu_growth_guard_override;
+            lu_set_growth_refactor_threshold(tab->lu, solver->lu_growth_guard_override);
         }
     }
     tab->trace_phase1_iter = -1;
