@@ -6788,6 +6788,7 @@ SimplexSolver* simplex_create(LPModel *model) {
     solver->warm_basis_last_applied = 0;
     solver->warm_basis_last_rejected = 0;
     solver->unbounded_valid = 0;
+    lp_refactor_policy_config_defaults(&solver->refactor_config);
     solver->policy.basis_governor_mode = LP_BASIS_GOV_MODE_OFF;
     solver->policy.reinvert_controller_mode = LP_REINVERT_MODE_SHADOW;
     lp_basis_governor_set_mode(&solver->policy.basis_governor,
