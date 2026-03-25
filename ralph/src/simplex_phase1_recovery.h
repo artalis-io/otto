@@ -162,4 +162,59 @@ void p1_recovery_init(P1RecoveryState *rs,
                       const SimplexSolver *solver,
                       const SimplexTableau *tab);
 
+/* ── Progress operations ─────────────────────────────────────────── */
+
+/* Reset the 4 progress-window fields (no_progress_streak, prev/anchor art_sum,
+ * window_steps).  Does NOT reset no_pivot_streak or other progress state. */
+void p1_progress_reset(P1ProgressState *ps);
+
+/* Update progress tracking based on current artificial variable sum. */
+void p1_progress_update(SimplexSolver *solver,
+                        const SimplexTableau *tab,
+                        P1ProgressState *ps);
+
+/* Note a no-pivot event, increment streak, and decide whether to force.
+ * Returns 1 if a forced refactor should be triggered. */
+int p1_progress_note_no_pivot(SimplexSolver *solver,
+                              int m,
+                              int degenerate_count,
+                              LPPhase1NoPivotForceReason reason,
+                              P1ProgressState *ps);
+
+/* Record a window-pressure event (failed stabilize or dir skip). */
+void p1_window_pressure_note(SimplexSolver *solver,
+                             int event_kind,
+                             int local_memory_fail,
+                             P1ProgressState *ps);
+
+/* Reset window-pressure counters after a successful pivot. */
+void p1_window_pressure_reset(SimplexSolver *solver,
+                              P1ProgressState *ps);
+
+/* ── Cross-category helpers ──────────────────────────────────────── */
+
+/* Attempt dual rescue via the no-pivot ladder.  Returns 1 on success,
+ * 0 on failure (retry), -1 on time limit (caller must return). */
+int p1_progress_attempt_ladder_rescue(
+    SimplexSolver *solver,
+    SimplexTableau *tab,
+    int iter,
+    LPPhase1NoPivotForceReason reason,
+    LPPhase1RecomputeReason recomp_reason,
+    P1ProgressState *ps,
+    int *rc_only_streak_io);
+
+/* Activate force-pivot mode if the streak/budget thresholds are met.
+ * Returns 1 if activated.  When force_pending_out / force_reason_out
+ * are non-NULL and activation occurs, outputs are written. */
+int p1_progress_activate_force_pivot(
+    SimplexSolver *solver,
+    int m,
+    int degenerate_count,
+    int queue_force_pending,
+    int *streak_io,
+    P1ProgressState *ps,
+    int *force_pending_out,
+    LPPhase1NoPivotForceReason *force_reason_out);
+
 #endif /* SIMPLEX_PHASE1_RECOVERY_H */
