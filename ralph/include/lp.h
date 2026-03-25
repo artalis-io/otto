@@ -1278,6 +1278,34 @@ typedef struct {
     int last_recompute_perturb;
 } LPPhase1StagnationPolicyState;
 
+/* Runtime-configurable refactoring policy parameters (R2).
+ * Replaces compile-time #define constants in lp_refactor_policy.c.
+ * Defaults match the existing #define values for behavioral equivalence. */
+typedef struct {
+    int phase1_refactor_min_interval;
+    int phase1_refactor_max_interval;
+    int phase2_refactor_min_interval;
+    int phase2_refactor_max_interval;
+    double refactor_pressure_trigger;
+    int periodic_min_update_age;
+    int degen_escape_min_m;
+    int degen_escape_trigger;
+    int phase1_auto_dantzig_min_m;
+    double lu_cost_ewma_alpha;
+    int lu_max_consec_defer_phase1;
+    int lu_max_consec_defer_phase2;
+    double lu_cost_gate_ratio;
+    int lu_spike_warn_pct;
+    int no_pivot_progress_window;
+    int phase1_stall_threshold_default;
+    int phase2_degen_escape_policy_trigger;
+    double feedback_decay;
+    double feedback_relax_step;
+    double feedback_tighten_step;
+} LPRefactorPolicyConfig;
+
+void lp_refactor_policy_config_defaults(LPRefactorPolicyConfig *cfg);
+
 /* Solver policy state (behavioral scheduling/control, not telemetry). */
 typedef struct {
     int refactor_next_reason;  /* RalphRefactorReason hint consumed by tableau_refactorize */
@@ -1383,6 +1411,7 @@ typedef struct SimplexSolver {
     int degenerate_pivots;
     LPSolverTelemetryState telemetry;
     LPSolverPolicyState policy;
+    LPRefactorPolicyConfig refactor_config;
 
     /* Post-solve verification metrics (T2.3 + T3.6) */
     double verify_primal_infeas;    /* ||Ax - b||_inf for satisfied constraints */
