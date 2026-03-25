@@ -97,6 +97,13 @@ struct RalphModel {
     int glpk_bfcp_nfs_max; /* -1=auto */
     int glpk_bfcp_nrs_max; /* -1=auto */
 
+    /* Refactoring policy overrides (R2) */
+    int refactor_min_interval;      /* Phase 2 periodic min interval (default 10) */
+    int refactor_max_interval;      /* Phase 2 periodic max interval (default 80) */
+    int degen_escape_min_m;         /* Min m for degen escape (default 1200) */
+    double lu_cost_ewma_alpha;      /* EWMA alpha for LU cost tracking (default 0.20) */
+    int lu_spike_warn_pct;          /* Spike pool warning pct (default 85) */
+
     /* Solution */
     RalphStatus status;
     double obj_value;
@@ -1124,6 +1131,13 @@ RalphModel* ralph_core_create(void) {
         lp_policy_glpk_compat_init(&cfg);
         ralph_glpk_policy_config_to_model(model, &cfg);
     }
+
+    /* Refactoring policy defaults (R2) — match compile-time #define values */
+    model->refactor_min_interval = 10;   /* PHASE2_PERIODIC_REFACTOR_MIN_INTERVAL */
+    model->refactor_max_interval = 80;   /* PHASE2_PERIODIC_REFACTOR_MAX_INTERVAL */
+    model->degen_escape_min_m    = 1200; /* PHASE2_DEGEN_ESCAPE_MIN_M */
+    model->lu_cost_ewma_alpha    = 0.20; /* SOFT_LU_COST_EWMA_ALPHA */
+    model->lu_spike_warn_pct     = 85;   /* LU_HEALTH_SOFT_SPIKE_WARN_PCT */
 
     model->status = RALPH_STATUS_UNKNOWN;
     model->mip_start = NULL;
@@ -2239,6 +2253,12 @@ static int ralph_optimize_with_mode(RalphModel *model, RalphSolveMode mode) {
         if (model->dual_steepest_edge >= 0)
             model->lp_solver->use_dual_steepest_edge = model->dual_steepest_edge;
         model->lp_solver->lu_supernode = model->lu_supernode;
+        /* Copy R2 refactoring policy overrides to solver config */
+        model->lp_solver->refactor_config.phase2_refactor_min_interval = model->refactor_min_interval;
+        model->lp_solver->refactor_config.phase2_refactor_max_interval = model->refactor_max_interval;
+        model->lp_solver->refactor_config.degen_escape_min_m = model->degen_escape_min_m;
+        model->lp_solver->refactor_config.lu_cost_ewma_alpha = model->lu_cost_ewma_alpha;
+        model->lp_solver->refactor_config.lu_spike_warn_pct = model->lu_spike_warn_pct;
         model->lp_solver->lu_strict_lane_active = strict_bfcp_plan.strict_lane_active;
         model->lp_solver->lu_strict_prefer_dense_ge_numeric =
             strict_bfcp_plan.prefer_dense_ge_numeric;
@@ -6004,6 +6024,61 @@ static const RalphParamSpec* ralph_param_specs(void) {
             .aliases = {"GLPKBFCPNrsMax"},
             .alias_count = 1
         },
+        [RALPH_PARAM_REFACTOR_MIN_INTERVAL] = {
+            .id = RALPH_PARAM_REFACTOR_MIN_INTERVAL,
+            .name = "refactor_min_interval",
+            .scope = RALPH_PARAM_SCOPE_LP,
+            .value_type = RALPH_PARAM_VALUE_INT,
+            .default_value = 10.0,
+            .has_min = 1,
+            .min_value = 1.0,
+            .aliases = {"RefactorMinInterval"},
+            .alias_count = 1
+        },
+        [RALPH_PARAM_REFACTOR_MAX_INTERVAL] = {
+            .id = RALPH_PARAM_REFACTOR_MAX_INTERVAL,
+            .name = "refactor_max_interval",
+            .scope = RALPH_PARAM_SCOPE_LP,
+            .value_type = RALPH_PARAM_VALUE_INT,
+            .default_value = 80.0,
+            .has_min = 1,
+            .min_value = 1.0,
+            .aliases = {"RefactorMaxInterval"},
+            .alias_count = 1
+        },
+        [RALPH_PARAM_DEGEN_ESCAPE_MIN_M] = {
+            .id = RALPH_PARAM_DEGEN_ESCAPE_MIN_M,
+            .name = "degen_escape_min_m",
+            .scope = RALPH_PARAM_SCOPE_LP,
+            .value_type = RALPH_PARAM_VALUE_INT,
+            .default_value = 1200.0,
+            .has_min = 1,
+            .min_value = 1.0,
+            .aliases = {"DegenEscapeMinM"},
+            .alias_count = 1
+        },
+        [RALPH_PARAM_LU_COST_EWMA_ALPHA] = {
+            .id = RALPH_PARAM_LU_COST_EWMA_ALPHA,
+            .name = "lu_cost_ewma_alpha",
+            .scope = RALPH_PARAM_SCOPE_LP,
+            .value_type = RALPH_PARAM_VALUE_DOUBLE,
+            .default_value = 0.20,
+            .has_min = 1,
+            .min_value = 0.0,
+            .aliases = {"LUCostEWMAAlpha"},
+            .alias_count = 1
+        },
+        [RALPH_PARAM_LU_SPIKE_WARN_PCT] = {
+            .id = RALPH_PARAM_LU_SPIKE_WARN_PCT,
+            .name = "lu_spike_warn_pct",
+            .scope = RALPH_PARAM_SCOPE_LP,
+            .value_type = RALPH_PARAM_VALUE_INT,
+            .default_value = 85.0,
+            .has_min = 1,
+            .min_value = 1.0,
+            .aliases = {"LUSpikeWarnPct"},
+            .alias_count = 1
+        },
         [RALPH_PARAM_TIME_LIMIT] = {
             .id = RALPH_PARAM_TIME_LIMIT,
             .name = "time_limit",
@@ -6429,6 +6504,18 @@ int ralph_core_set_int_param_id(RalphModel *model, RalphParamId param, int value
                                "invalid glpk policy integer parameter value");
             }
             break;
+        case RALPH_PARAM_REFACTOR_MIN_INTERVAL:
+            model->refactor_min_interval = (value >= 1) ? value : 1;
+            break;
+        case RALPH_PARAM_REFACTOR_MAX_INTERVAL:
+            model->refactor_max_interval = (value >= 1) ? value : 1;
+            break;
+        case RALPH_PARAM_DEGEN_ESCAPE_MIN_M:
+            model->degen_escape_min_m = (value >= 1) ? value : 1;
+            break;
+        case RALPH_PARAM_LU_SPIKE_WARN_PCT:
+            model->lu_spike_warn_pct = (value >= 1) ? value : 1;
+            break;
         default:
             RALPH_FAIL_API(model,
                            RALPH_ERROR_DOMAIN_PARAMETER,
@@ -6552,6 +6639,9 @@ int ralph_core_set_dbl_param_id(RalphModel *model, RalphParamId param, double va
                                0,
                                "invalid glpk policy float parameter value");
             }
+            break;
+        case RALPH_PARAM_LU_COST_EWMA_ALPHA:
+            model->lu_cost_ewma_alpha = (value >= 0.0) ? value : 0.0;
             break;
         default:
             RALPH_FAIL_API(model,
@@ -6746,6 +6836,18 @@ int ralph_core_get_int_param_id(const RalphModel *model, RalphParamId param, int
         case RALPH_PARAM_GLPK_BFCP_NRS_MAX:
             *value = model->glpk_bfcp_nrs_max;
             break;
+        case RALPH_PARAM_REFACTOR_MIN_INTERVAL:
+            *value = model->refactor_min_interval;
+            break;
+        case RALPH_PARAM_REFACTOR_MAX_INTERVAL:
+            *value = model->refactor_max_interval;
+            break;
+        case RALPH_PARAM_DEGEN_ESCAPE_MIN_M:
+            *value = model->degen_escape_min_m;
+            break;
+        case RALPH_PARAM_LU_SPIKE_WARN_PCT:
+            *value = model->lu_spike_warn_pct;
+            break;
         default:
             RALPH_FAIL_API(model,
                            RALPH_ERROR_DOMAIN_PARAMETER,
@@ -6830,6 +6932,9 @@ int ralph_core_get_dbl_param_id(const RalphModel *model, RalphParamId param, dou
             break;
         case RALPH_PARAM_GLPK_BFCP_GROWTH_GUARD:
             *value = model->glpk_bfcp_growth_guard;
+            break;
+        case RALPH_PARAM_LU_COST_EWMA_ALPHA:
+            *value = model->lu_cost_ewma_alpha;
             break;
         default:
             RALPH_FAIL_API(model,
