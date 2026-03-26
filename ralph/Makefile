@@ -63,6 +63,7 @@ SOURCES = $(SRC_DIR)/sparse.c \
           $(SRC_DIR)/simplex_ratio.c \
           $(SRC_DIR)/simplex_perturb.c \
           $(SRC_DIR)/simplex_phase1_recovery.c \
+          $(SRC_DIR)/simplex_phase1_stabilize.c \
           $(SRC_DIR)/simplex_phase1_zones.c \
           $(SRC_DIR)/lp_telemetry_core.c \
           $(SRC_DIR)/lp_telemetry_solver.c \
