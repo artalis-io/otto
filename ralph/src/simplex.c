@@ -76,12 +76,6 @@ static int phase1_failed_stabilize_retry_shadow_guard_plan(
     int shadow_dir_nnz,
     double shadow_pivot_abs,
     int retry_alt_streak);
-static void phase1_failed_stabilize_retry_direction_shape(
-    const SimplexTableau *tab,
-    int leaving,
-    double *dir_inf_out,
-    int *dir_nnz_out,
-    double *pivot_abs_out);
 static void phase1_shadow_guard_followup_consume_failed_stabilize(
     SimplexSolver *solver,
     int *pending);
@@ -1341,9 +1335,9 @@ static int phase1_no_pivot_ladder_apply_rescue_guard(
         solver, rescue_cooldown_iters, rescue_fail_streak, 1);
 }
 
-static int phase1_direct_dual_rescue_guard_plan(SimplexSolver *solver,
-                                                int rescue_cooldown_iters,
-                                                int rescue_fail_streak) {
+int phase1_direct_dual_rescue_guard_plan(SimplexSolver *solver,
+                                         int rescue_cooldown_iters,
+                                         int rescue_fail_streak) {
     return phase1_dual_rescue_guard_step(
         solver, rescue_cooldown_iters, rescue_fail_streak, 0);
 }
@@ -4710,7 +4704,7 @@ static void phase1_direction_shape_from_vector(
     if (pivot_abs_out) *pivot_abs_out = pivot_abs;
 }
 
-static void phase1_failed_stabilize_retry_direction_shape(
+void phase1_failed_stabilize_retry_direction_shape(
     const SimplexTableau *tab,
     int leaving,
     double *dir_inf_out,
