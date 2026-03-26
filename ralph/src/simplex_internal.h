@@ -14,6 +14,7 @@
 #include "lp.h"
 #include "lp_refactor_policy.h"
 #include "lp_reinvert_controller.h"
+#include "simplex_phase1_stabilize.h"
 
 /* Variable eligibility check (accounts for GLPK-compat exclusion rules) */
 int simplex_smcp_excl_skip_var(const SimplexTableau *tab, int j);
@@ -26,19 +27,7 @@ double tableau_get_rc(SimplexTableau *tab, int j);
 
 /* Phase 1 helpers needed by simplex_phase1_recovery.c */
 double phase1_artificial_abs_sum(const SimplexTableau *tab);
-void phase1_recompute_full_with_reason(SimplexSolver *solver,
-                                       SimplexTableau *tab,
-                                       int *rc_only_streak,
-                                       LPPhase1RecomputeReason reason);
 void phase1_trace_emit_summary(SimplexSolver *solver, RalphStatus phase1_status);
-
-/* Direction shape extraction from tab->work2 (needed by recovery direction recorders) */
-void phase1_failed_stabilize_retry_direction_shape(
-    const SimplexTableau *tab,
-    int leaving,
-    double *dir_inf_out,
-    int *dir_nnz_out,
-    double *pivot_abs_out);
 
 /* Direct dual rescue guard (needed by p1_progress_attempt_direct_rescue) */
 int phase1_direct_dual_rescue_guard_plan(SimplexSolver *solver,
@@ -124,19 +113,6 @@ static inline int tableau_refactorize_with_reason(SimplexTableau *tab, int reaso
     return tableau_refactorize(tab);
 }
 
-/* RC-only recompute with streak guard */
-int phase1_recompute_rc_only_guarded(SimplexSolver *solver,
-                                     SimplexTableau *tab,
-                                     int *rc_only_streak);
-
-/* Direction-skip safe recompute */
-void phase1_recompute_dir_skip_safe(SimplexSolver *solver,
-                                    SimplexTableau *tab,
-                                    int degenerate_count,
-                                    int no_pivot_streak,
-                                    int *rc_only_streak,
-                                    int *dir_skip_no_recompute_streak);
-
 /* Phase 1 trace recording */
 void phase1_trace_record_no_entering(SimplexSolver *solver, int iter, int status_code);
 void phase1_trace_record_pivot_failure(SimplexSolver *solver,
@@ -209,33 +185,6 @@ int phase1_force_extreme_catastrophic_tiny_theta_relax_plan(int m,
     int degenerate_count, int no_progress_streak, double dir_inf_ratio,
     int force_extreme_dir, int force_lu_health, int lu_hard_trigger,
     int tiny_theta_followup_streak, double pivot_ratio);
-
-/* Failed-stabilize retry helpers */
-int phase1_failed_stabilize_retry_penalty_plan(int entering,
-    int last_failed_entering, int same_entering_streak);
-int phase1_failed_stabilize_retry_local_memory_plan(int original_entering,
-    int last_retry_alt, int last_retry_alt_streak, int retry_penalize_last_failed);
-void phase1_failed_stabilize_retry_sample_pool(SimplexSolver *solver,
-    SimplexTableau *tab, int excluded_a, int excluded_b, int *sample_counter);
-int phase1_failed_stabilize_retry_select_local_memory(SimplexSolver *solver,
-    SimplexTableau *tab, int original_entering, int last_retry_alt,
-    int retry_ratio_fail_streak, int last_retry_alt_streak,
-    int *entering, int *bland_entering_out, int *best_entering_out,
-    int *used_guarded_out);
-int phase1_failed_stabilize_retry_eval_candidates(SimplexSolver *solver,
-    SimplexTableau *tab, int excluded_a, int excluded_b,
-    int *bland_entering_out, double *bland_score_out,
-    int *best_entering_out, double *best_score_out, int *eligible_count_out);
-void phase1_failed_stabilize_retry_shadow_direction_proxy(SimplexSolver *solver,
-    SimplexTableau *tab, int entering, int *ratio_success_out,
-    int *dir_stable_out, double *dir_inf_out, int *dir_nnz_out,
-    double *pivot_abs_out);
-int phase1_failed_stabilize_retry_direction_guard_plan(double dir_inf,
-    int dir_nnz, double pivot_abs, int retry_alt_streak);
-int phase1_failed_stabilize_retry_shadow_guard_plan(double actual_dir_inf,
-    int actual_dir_nnz, double actual_pivot_abs, int shadow_ratio_success,
-    double shadow_dir_inf, int shadow_dir_nnz, double shadow_pivot_abs,
-    int retry_alt_streak);
 
 /* Soft LU / periodic policy helpers (needed by post-pivot zone) */
 double phase_hotpath_ms(const SimplexSolver *owner, int phase);
