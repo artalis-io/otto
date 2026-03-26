@@ -76,24 +76,6 @@ static int phase1_failed_stabilize_retry_shadow_guard_plan(
     int shadow_dir_nnz,
     double shadow_pivot_abs,
     int retry_alt_streak);
-static void phase1_shadow_guard_followup_consume_failed_stabilize(
-    SimplexSolver *solver,
-    int *pending);
-static void phase1_shadow_guard_followup_consume_ratio_breakdown(
-    SimplexSolver *solver,
-    int *pending);
-static void phase1_shadow_guard_followup_consume_pivot_fail(
-    SimplexSolver *solver,
-    int *pending);
-static void phase1_shadow_guard_followup_consume_pivot_success(
-    SimplexSolver *solver,
-    int *pending);
-static void phase1_shadow_guard_followup_record_direction(
-    SimplexSolver *solver,
-    const SimplexTableau *tab,
-    int leaving,
-    double theta);
-
 /* PHASE1_PIVOT_FAIL_* enum now in simplex_phase1_recovery.h */
 
 static const char* phase1_pivot_fail_reason_str(int reason) {
@@ -137,8 +119,6 @@ static int phase1_trace_reason_from_lu_failure(int lu_reason, int forced_refacto
 #define PHASE2_DEGEN_ESCAPE_BLAND_HOLD_ITERS 16
 #define PHASE1_NO_ENTERING_CLEANUP_MAX_ITERS 128
 #define PHASE1_RC_ONLY_STREAK_GUARD 6
-#define PHASE1_PIVOT_FAIL_RECOVERY_EXCLUDE_TRIGGER 2
-#define PHASE1_PIVOT_FAIL_RECOVERY_EXCLUDE_ITERS RALPH_PHASE1_ENTERING_EXCLUDE_ITERS
 #define PHASE1_FAILED_STABILIZE_RETRY_PENALTY_TRIGGER 3
 #define PHASE1_FAILED_STABILIZE_RETRY_LOCAL_MEMORY_TRIGGER 2
 #define PHASE1_FAILED_STABILIZE_RETRY_GUARDED_SELECTOR_RATIO_FAIL_TRIGGER 2
@@ -1251,12 +1231,6 @@ int simplex_periodic_cost_defer_plan_for_test(int phase,
     return should_defer;
 }
 
-enum {
-    PHASE1_NO_PIVOT_LADDER_STEP_RETRY = 0,
-    PHASE1_NO_PIVOT_LADDER_STEP_DUAL_RESCUE = 1,
-    PHASE1_NO_PIVOT_LADDER_STEP_FORCE_REFACTOR = 2
-};
-
 static int phase1_dual_rescue_guard_step(SimplexSolver *solver,
                                          int rescue_cooldown_iters,
                                          int rescue_fail_streak,
@@ -1340,44 +1314,6 @@ int phase1_direct_dual_rescue_guard_plan(SimplexSolver *solver,
                                          int rescue_fail_streak) {
     return phase1_dual_rescue_guard_step(
         solver, rescue_cooldown_iters, rescue_fail_streak, 0);
-}
-
-static int phase1_attempt_direct_dual_rescue(
-    SimplexSolver *solver,
-    SimplexTableau *tab,
-    int iter,
-    int *rescue_cooldown_io,
-    int *rescue_fail_streak_io) {
-    int rescue_status;
-    int guard_step = phase1_direct_dual_rescue_guard_plan(
-        solver,
-        rescue_cooldown_io ? *rescue_cooldown_io : 0,
-        rescue_fail_streak_io ? *rescue_fail_streak_io : 0);
-    if (guard_step != PHASE1_NO_PIVOT_LADDER_STEP_DUAL_RESCUE) {
-        return 0;
-    }
-
-    rescue_status = dual_simplex_phase1_rescue(
-        solver, tab->m * RALPH_PHASE1_DUAL_RESCUE_MULT);
-    if (rescue_cooldown_io) {
-        *rescue_cooldown_io = PHASE1_NO_PIVOT_LADDER_RESCUE_COOLDOWN_ITERS;
-    }
-    if (rescue_status == 0) {
-        if (rescue_fail_streak_io) *rescue_fail_streak_io = 0;
-        lp_telemetry_record_phase1_direct_dual_rescue(solver, 1);
-        return 1;
-    }
-    if (solver->status == RALPH_STATUS_TIME_LIMIT) {
-        primal_remove_perturbation(tab);
-        solver->iterations = iter;
-        phase1_trace_emit_summary(solver, RALPH_STATUS_TIME_LIMIT);
-        return -1;
-    }
-    if (rescue_fail_streak_io && *rescue_fail_streak_io < INT_MAX) {
-        (*rescue_fail_streak_io)++;
-    }
-    lp_telemetry_record_phase1_direct_dual_rescue(solver, 0);
-    return 0;
 }
 
 static int phase1_dir_stabilize_escape_gate_plan(int m,
@@ -3971,278 +3907,11 @@ static inline void tableau_invalidate_rc(SimplexTableau *tab) {
 }
 
 
-static void phase1_exclude_entering_var(int var,
-                                        int ttl,
-                                        int *exclude_a,
-                                        int *ttl_a,
-                                        int *exclude_b,
-                                        int *ttl_b) {
-    if (var < 0 || ttl <= 0 || !exclude_a || !ttl_a || !exclude_b || !ttl_b) return;
-    /* Note: var is validated by callers (pricing functions return valid indices),
-     * but we skip storing obviously invalid indices defensively. */
-
-    if (*exclude_a == var || *ttl_a <= 0) {
-        *exclude_a = var;
-        *ttl_a = ttl;
-        return;
-    }
-    if (*exclude_b == var || *ttl_b <= 0) {
-        *exclude_b = var;
-        *ttl_b = ttl;
-        return;
-    }
-
-    if (*ttl_a <= *ttl_b) {
-        *exclude_a = var;
-        *ttl_a = ttl;
-    } else {
-        *exclude_b = var;
-        *ttl_b = ttl;
-    }
-}
-
-static void phase1_exclude_entering_var_tracked(SimplexSolver *solver,
-                                                int var,
-                                                int ttl,
-                                                int *exclude_a,
-                                                int *ttl_a,
-                                                int *exclude_b,
-                                                int *ttl_b) {
-    int repeated_slot = 0;
-
-    if (var < 0 || ttl <= 0 || !exclude_a || !ttl_a || !exclude_b || !ttl_b) return;
-    if ((*ttl_a > 0 && *exclude_a == var) || (*ttl_b > 0 && *exclude_b == var)) {
-        repeated_slot = 1;
-    }
-    phase1_exclude_entering_var(var, ttl, exclude_a, ttl_a, exclude_b, ttl_b);
-    lp_telemetry_record_phase1_entering_exclusion(solver, repeated_slot);
-}
-
-static void phase1_note_dir_skip_entering(SimplexSolver *solver,
-                                          int entering,
-                                          int *last_entering,
-                                          int *same_entering_streak) {
-    int streak = 0;
-    int same_entering = 0;
-
-    if (entering < 0 || !last_entering || !same_entering_streak) return;
-    if (*last_entering == entering) {
-        same_entering = 1;
-        streak = *same_entering_streak;
-        if (streak < INT_MAX) streak++;
-    } else {
-        *last_entering = entering;
-        streak = 1;
-    }
-    *same_entering_streak = streak;
-    lp_telemetry_record_phase1_dir_skip_entering(solver, same_entering, streak);
-}
-
-static void phase1_note_failed_stabilize_entering(SimplexSolver *solver,
-                                                  int entering,
-                                                  int *last_entering,
-                                                  int *same_entering_streak) {
-    int streak = 0;
-    int same_entering = 0;
-
-    if (entering < 0 || !last_entering || !same_entering_streak) return;
-    if (*last_entering == entering) {
-        same_entering = 1;
-        streak = *same_entering_streak;
-        if (streak < INT_MAX) streak++;
-    } else {
-        *last_entering = entering;
-        streak = 1;
-    }
-    *same_entering_streak = streak;
-    lp_telemetry_record_phase1_failed_stabilize_entering(
-        solver, same_entering, streak);
-}
-
-static void phase1_note_failed_stabilize_retry_alternate(SimplexSolver *solver,
-                                                         int entering,
-                                                         int *last_entering,
-                                                         int *same_entering_streak) {
-    int streak = 0;
-    int same_entering = 0;
-
-    if (entering < 0 || !last_entering || !same_entering_streak) return;
-    if (*last_entering == entering) {
-        same_entering = 1;
-        streak = *same_entering_streak;
-        if (streak < INT_MAX) streak++;
-    } else {
-        *last_entering = entering;
-        streak = 1;
-    }
-    *same_entering_streak = streak;
-    lp_telemetry_record_phase1_failed_stabilize_retry_penalty_alternate(
-        solver, same_entering, streak);
-}
-
-static void phase1_shadow_guard_followup_consume_failed_stabilize(
-    SimplexSolver *solver,
-    int *pending) {
-    if (!pending || !*pending) return;
-    *pending = 0;
-    lp_telemetry_record_phase1_failed_stabilize_retry_shadow_next_failed_stabilize(
-        solver);
-}
-
-static void phase1_shadow_guard_followup_consume_ratio_breakdown(
-    SimplexSolver *solver,
-    int *pending) {
-    if (!pending || !*pending) return;
-    *pending = 0;
-    lp_telemetry_record_phase1_failed_stabilize_retry_shadow_next_ratio_breakdown(
-        solver);
-}
-
-static void phase1_shadow_guard_followup_consume_pivot_fail(
-    SimplexSolver *solver,
-    int *pending) {
-    if (!pending || !*pending) return;
-    *pending = 0;
-    lp_telemetry_record_phase1_failed_stabilize_retry_shadow_next_pivot_fail(
-        solver);
-}
-
-static void phase1_shadow_guard_followup_consume_pivot_success(
-    SimplexSolver *solver,
-    int *pending) {
-    if (!pending || !*pending) return;
-    *pending = 0;
-    lp_telemetry_record_phase1_failed_stabilize_retry_shadow_next_pivot_success(
-        solver);
-}
-
-static void phase1_shadow_guard_followup_record_direction(
-    SimplexSolver *solver,
-    const SimplexTableau *tab,
-    int leaving,
-    double theta) {
-    double dir_inf = 0.0;
-    int dir_nnz = 0;
-    double pivot_abs = 0.0;
-
-    if (!solver || !tab) return;
-    phase1_failed_stabilize_retry_direction_shape(
-        tab,
-        leaving,
-        &dir_inf,
-        &dir_nnz,
-        &pivot_abs);
-    lp_telemetry_record_phase1_failed_stabilize_retry_shadow_followup_direction(
-        solver,
-        leaving,
-        theta,
-        dir_inf,
-        dir_nnz,
-        pivot_abs);
-}
-
-static void phase1_force_extreme_followup_consume_failed_stabilize(
-    SimplexSolver *solver,
-    int *pending) {
-    if (!pending || !*pending) return;
-    *pending = 0;
-    lp_telemetry_record_phase1_force_extreme_followup_next_failed_stabilize(
-        solver);
-}
-
-static void phase1_force_extreme_followup_consume_ratio_breakdown(
-    SimplexSolver *solver,
-    int *pending) {
-    if (!pending || !*pending) return;
-    *pending = 0;
-    lp_telemetry_record_phase1_force_extreme_followup_next_ratio_breakdown(
-        solver);
-}
-
-static void phase1_force_extreme_followup_consume_pivot_fail(
-    SimplexSolver *solver,
-    int *pending) {
-    if (!pending || !*pending) return;
-    *pending = 0;
-    lp_telemetry_record_phase1_force_extreme_followup_next_pivot_fail(
-        solver);
-}
-
-static void phase1_force_extreme_followup_consume_pivot_success(
-    SimplexSolver *solver,
-    int *pending) {
-    if (!pending || !*pending) return;
-    *pending = 0;
-    lp_telemetry_record_phase1_force_extreme_followup_next_pivot_success(
-        solver);
-}
-
 enum {
     PHASE1_FORCE_EXTREME_TINY_THETA_RELAX_REFACTOR_LU_HEALTH = 1,
     PHASE1_FORCE_EXTREME_TINY_THETA_RELAX_REFACTOR_FORCE_PIVOT = 2,
     PHASE1_FORCE_EXTREME_TINY_THETA_RELAX_REFACTOR_LADDER = 3
 };
-
-static void phase1_force_extreme_tiny_theta_relax_consume_failed_stabilize(
-    SimplexSolver *solver,
-    int *pending) {
-    if (!pending || !*pending) return;
-    *pending = 0;
-    lp_telemetry_record_phase1_force_extreme_tiny_theta_relax_next_failed_stabilize(
-        solver);
-}
-
-static void phase1_force_extreme_tiny_theta_relax_consume_ratio_breakdown(
-    SimplexSolver *solver,
-    int *pending) {
-    if (!pending || !*pending) return;
-    *pending = 0;
-    lp_telemetry_record_phase1_force_extreme_tiny_theta_relax_next_ratio_breakdown(
-        solver);
-}
-
-static void phase1_force_extreme_tiny_theta_relax_consume_pivot_fail(
-    SimplexSolver *solver,
-    int *pending) {
-    if (!pending || !*pending) return;
-    *pending = 0;
-    lp_telemetry_record_phase1_force_extreme_tiny_theta_relax_next_pivot_fail(
-        solver);
-}
-
-static void phase1_force_extreme_tiny_theta_relax_consume_pivot_success(
-    SimplexSolver *solver,
-    int *pending) {
-    if (!pending || !*pending) return;
-    *pending = 0;
-    lp_telemetry_record_phase1_force_extreme_tiny_theta_relax_next_pivot_success(
-        solver);
-}
-
-static void phase1_force_extreme_followup_record_direction(
-    SimplexSolver *solver,
-    const SimplexTableau *tab,
-    int leaving,
-    double theta) {
-    double dir_inf = 0.0;
-    int dir_nnz = 0;
-    double pivot_abs = 0.0;
-
-    if (!solver || !tab) return;
-    phase1_failed_stabilize_retry_direction_shape(
-        tab,
-        leaving,
-        &dir_inf,
-        &dir_nnz,
-        &pivot_abs);
-    lp_telemetry_record_phase1_force_extreme_followup_direction(
-        solver,
-        leaving,
-        theta,
-        dir_inf,
-        dir_nnz,
-        pivot_abs);
-}
 
 static int phase1_failed_stabilize_retry_penalty_plan(int original_entering,
                                                       int last_failed_entering,
@@ -4383,25 +4052,6 @@ static int phase1_failed_stabilize_retry_shadow_guard_plan(
     }
     return shadow_pivot_dir_ratio <=
            PHASE1_FAILED_STABILIZE_RETRY_SHADOW_GUARD_MAX_SHADOW_PIVOT_DIR_RATIO;
-}
-
-static void phase1_pivot_fail_recovery_maybe_exclude_entering(
-    SimplexSolver *solver,
-    int fail_repeat_count,
-    int entering,
-    int *excluded_entering_a,
-    int *excluded_entering_ttl_a,
-    int *excluded_entering_b,
-    int *excluded_entering_ttl_b) {
-    if (fail_repeat_count < PHASE1_PIVOT_FAIL_RECOVERY_EXCLUDE_TRIGGER) return;
-    phase1_exclude_entering_var_tracked(solver,
-                                        entering,
-                                        PHASE1_PIVOT_FAIL_RECOVERY_EXCLUDE_ITERS,
-                                        excluded_entering_a,
-                                        excluded_entering_ttl_a,
-                                        excluded_entering_b,
-                                        excluded_entering_ttl_b);
-    lp_telemetry_record_phase1_pivot_fail_recovery_exclusion(solver);
 }
 
 void phase1_recompute_full_with_reason(SimplexSolver *solver,
@@ -6114,12 +5764,7 @@ static int simplex_phase1(SimplexSolver *solver) {
             rs.numerical.force_extreme_followup_direction_pending = 0;
             rs.numerical.force_extreme_followup_bound_flip_streak = 0;
             rs.numerical.force_extreme_followup_tiny_theta_streak = 0;
-            phase1_shadow_guard_followup_consume_ratio_breakdown(
-                solver, &rs.numerical.shadow_guard_followup_pending);
-            phase1_force_extreme_tiny_theta_relax_consume_ratio_breakdown(
-                solver, &rs.numerical.force_extreme_tiny_theta_relax_next_pending);
-            phase1_force_extreme_followup_consume_ratio_breakdown(
-                solver, &rs.numerical.force_extreme_followup_pending);
+            p1_numerical_consume_followup(solver, P1_FOLLOWUP_EVENT_RATIO_BREAKDOWN, &rs.numerical);
             phase1_trace_record_no_entering(solver, iter, ratio_status);
             if (p1_progress_note_no_pivot(
                     solver,
@@ -6156,13 +5801,8 @@ static int simplex_phase1(SimplexSolver *solver) {
                         solver,
                         LP_PHASE1_NO_PIVOT_FORCE_REASON_RATIO_BREAKDOWN);
                     lp_telemetry_record_phase1_ratio_breakdown_retry(solver);
-                    phase1_exclude_entering_var_tracked(solver,
-                                                        entering,
-                                                        RALPH_PHASE1_ENTERING_EXCLUDE_ITERS,
-                                                        &rs.basis.excluded_entering_a,
-                                                        &rs.basis.excluded_entering_ttl_a,
-                                                        &rs.basis.excluded_entering_b,
-                                                        &rs.basis.excluded_entering_ttl_b);
+                    p1_basis_exclude_entering(solver, entering,
+                                              RALPH_PHASE1_ENTERING_EXCLUDE_ITERS, &rs.basis);
                     rs.cycling.use_bland = 1;
                     phase1_recompute_rc_only_guarded(solver,
                                                      tab,
@@ -6244,12 +5884,8 @@ static int simplex_phase1(SimplexSolver *solver) {
                 }
             }
 
-            int rescue_status = phase1_attempt_direct_dual_rescue(
-                solver,
-                tab,
-                iter,
-                &rs.progress.no_pivot_ladder_rescue_cooldown,
-                &rs.progress.no_pivot_ladder_rescue_fail_streak);
+            int rescue_status = p1_progress_attempt_direct_rescue(
+                solver, tab, iter, &rs.progress);
             if (rescue_status == 0) {
                 if (solver->verbose) {
                     LP_LOG_STDERR("[simplex_phase1] Dual rescue recovered after ratio-test breakdown at iter %d\n", iter);
@@ -6280,13 +5916,8 @@ static int simplex_phase1(SimplexSolver *solver) {
                 rs.basis.ratio_breakdown_last_entering = entering;
                 rs.basis.ratio_breakdown_same_entering_streak = 1;
             }
-            phase1_exclude_entering_var_tracked(solver,
-                                                entering,
-                                                RALPH_PHASE1_ENTERING_EXCLUDE_ITERS,
-                                                &rs.basis.excluded_entering_a,
-                                                &rs.basis.excluded_entering_ttl_a,
-                                                &rs.basis.excluded_entering_b,
-                                                &rs.basis.excluded_entering_ttl_b);
+            p1_basis_exclude_entering(solver, entering,
+                                      RALPH_PHASE1_ENTERING_EXCLUDE_ITERS, &rs.basis);
             {
                 int ratio_breakdown_limit =
                     lp_refactor_policy_phase1_ratio_breakdown_limit(
@@ -6324,19 +5955,11 @@ static int simplex_phase1(SimplexSolver *solver) {
          * Re-factorize and recompute ratio test from the same entering column. */
         double dir_inf = vec_abs_max(tab->work2, tab->m);
         if (rs.numerical.shadow_guard_followup_direction_pending) {
-            phase1_shadow_guard_followup_record_direction(
-                solver,
-                tab,
-                leaving,
-                theta);
+            p1_numerical_record_shadow_direction(solver, tab, leaving, theta);
             rs.numerical.shadow_guard_followup_direction_pending = 0;
         }
         if (rs.numerical.force_extreme_followup_direction_pending) {
-            phase1_force_extreme_followup_record_direction(
-                solver,
-                tab,
-                leaving,
-                theta);
+            p1_numerical_record_extreme_direction(solver, tab, leaving, theta);
             if (leaving == -2) {
                 if (rs.numerical.force_extreme_followup_bound_flip_streak < INT_MAX) {
                     rs.numerical.force_extreme_followup_bound_flip_streak++;
@@ -6575,17 +6198,9 @@ static int simplex_phase1(SimplexSolver *solver) {
                     LP_LOG_STDERR("[simplex_phase1] Moderate direction norm %.2e at iter %d (entering=%d), deferring one refactor and retrying pricing\n",
                             dir_inf, iter, entering);
                 }
-                phase1_note_dir_skip_entering(solver,
-                                              entering,
-                                              &rs.numerical.last_dir_skip_entering,
-                                              &rs.numerical.dir_skip_same_entering_streak);
-                phase1_exclude_entering_var_tracked(solver,
-                                                    entering,
-                                                    RALPH_PHASE1_ENTERING_EXCLUDE_ITERS,
-                                                    &rs.basis.excluded_entering_a,
-                                                    &rs.basis.excluded_entering_ttl_a,
-                                                    &rs.basis.excluded_entering_b,
-                                                    &rs.basis.excluded_entering_ttl_b);
+                p1_numerical_note_dir_skip_entering(solver, entering, &rs.numerical);
+                p1_basis_exclude_entering(solver, entering,
+                                          RALPH_PHASE1_ENTERING_EXCLUDE_ITERS, &rs.basis);
                 if (rs.numerical.dir_skip_event_streak < INT_MAX) {
                     rs.numerical.dir_skip_event_streak++;
                 }
@@ -6694,17 +6309,9 @@ static int simplex_phase1(SimplexSolver *solver) {
                 if (dir_stabilize_cooldown_target > rs.numerical.dir_stabilize_cooldown) {
                     rs.numerical.dir_stabilize_cooldown = dir_stabilize_cooldown_target;
                 }
-                phase1_note_dir_skip_entering(solver,
-                                              entering,
-                                              &rs.numerical.last_dir_skip_entering,
-                                              &rs.numerical.dir_skip_same_entering_streak);
-                phase1_exclude_entering_var_tracked(solver,
-                                                    entering,
-                                                    RALPH_PHASE1_ENTERING_EXCLUDE_ITERS,
-                                                    &rs.basis.excluded_entering_a,
-                                                    &rs.basis.excluded_entering_ttl_a,
-                                                    &rs.basis.excluded_entering_b,
-                                                    &rs.basis.excluded_entering_ttl_b);
+                p1_numerical_note_dir_skip_entering(solver, entering, &rs.numerical);
+                p1_basis_exclude_entering(solver, entering,
+                                          RALPH_PHASE1_ENTERING_EXCLUDE_ITERS, &rs.basis);
                 if (rs.numerical.dir_skip_event_streak < INT_MAX) {
                     rs.numerical.dir_skip_event_streak++;
                 }
@@ -6843,17 +6450,9 @@ static int simplex_phase1(SimplexSolver *solver) {
                     if (dir_stabilize_cooldown_target > rs.numerical.dir_stabilize_cooldown) {
                         rs.numerical.dir_stabilize_cooldown = dir_stabilize_cooldown_target;
                     }
-                    phase1_note_dir_skip_entering(solver,
-                                                  entering,
-                                                  &rs.numerical.last_dir_skip_entering,
-                                                  &rs.numerical.dir_skip_same_entering_streak);
-                    phase1_exclude_entering_var_tracked(solver,
-                                                        entering,
-                                                        RALPH_PHASE1_ENTERING_EXCLUDE_ITERS,
-                                                        &rs.basis.excluded_entering_a,
-                                                        &rs.basis.excluded_entering_ttl_a,
-                                                        &rs.basis.excluded_entering_b,
-                                                        &rs.basis.excluded_entering_ttl_b);
+                    p1_numerical_note_dir_skip_entering(solver, entering, &rs.numerical);
+                    p1_basis_exclude_entering(solver, entering,
+                                              RALPH_PHASE1_ENTERING_EXCLUDE_ITERS, &rs.basis);
                     if (rs.numerical.dir_skip_event_streak < INT_MAX) {
                         rs.numerical.dir_skip_event_streak++;
                     }
@@ -7008,8 +6607,7 @@ static int simplex_phase1(SimplexSolver *solver) {
                         lp_telemetry_record_phase1_force_extreme_followup_ratio_breakdown(
                             solver);
                     }
-                    phase1_force_extreme_tiny_theta_relax_consume_ratio_breakdown(
-                        solver, &rs.numerical.force_extreme_tiny_theta_relax_next_pending);
+                    p1_numerical_consume_followup(solver, P1_FOLLOWUP_EVENT_RATIO_BREAKDOWN, &rs.numerical);
                     if (retry_consumed_alternate) {
                         lp_telemetry_record_phase1_failed_stabilize_retry_penalty_outcome(
                             solver, 0);
@@ -7170,11 +6768,7 @@ static int simplex_phase1(SimplexSolver *solver) {
                     double retry_dir_fail_inf = 0.0;
                     int retry_dir_fail_nnz = 0;
                     double retry_dir_fail_pivot_abs = 0.0;
-                    phase1_note_failed_stabilize_retry_alternate(
-                        solver,
-                        entering,
-                        &rs.basis.last_failed_stabilize_retry_alt,
-                        &rs.basis.failed_stabilize_retry_alt_streak);
+                    p1_basis_note_failed_stabilize_retry_alt(solver, entering, &rs.basis);
                     if (rs.basis.failed_stabilize_retry_alt_streak <= 1) {
                         rs.basis.failed_stabilize_retry_alt_ratio_fail_streak = 0;
                     }
@@ -7332,14 +6926,8 @@ static int simplex_phase1(SimplexSolver *solver) {
                         exclude_iters =
                             PHASE1_FAILED_STABILIZE_RETRY_SHADOW_GUARD_EXCLUDE_ITERS;
                     }
-                    phase1_exclude_entering_var_tracked(
-                        solver,
-                        original_entering,
-                        exclude_iters,
-                        &rs.basis.excluded_entering_a,
-                        &rs.basis.excluded_entering_ttl_a,
-                        &rs.basis.excluded_entering_b,
-                        &rs.basis.excluded_entering_ttl_b);
+                    p1_basis_exclude_entering(solver, original_entering,
+                                              exclude_iters, &rs.basis);
                     if (retry_direction_guard_exclude_original) {
                         lp_telemetry_record_phase1_failed_stabilize_retry_dir_guard_original_exclusion(
                             solver);
@@ -7358,12 +6946,7 @@ static int simplex_phase1(SimplexSolver *solver) {
                 }
                 rs.numerical.shadow_guard_followup_direction_pending = 0;
                 rs.numerical.force_extreme_followup_direction_pending = 0;
-                phase1_shadow_guard_followup_consume_failed_stabilize(
-                    solver, &rs.numerical.shadow_guard_followup_pending);
-                phase1_force_extreme_tiny_theta_relax_consume_failed_stabilize(
-                    solver, &rs.numerical.force_extreme_tiny_theta_relax_next_pending);
-                phase1_force_extreme_followup_consume_failed_stabilize(
-                    solver, &rs.numerical.force_extreme_followup_pending);
+                p1_numerical_consume_followup(solver, P1_FOLLOWUP_EVENT_FAILED_STABILIZE, &rs.numerical);
                 if (force_extreme_followup_tracked) {
                     lp_telemetry_record_phase1_force_extreme_followup_failed_stabilize(
                         solver);
@@ -7376,18 +6959,9 @@ static int simplex_phase1(SimplexSolver *solver) {
                     PHASE1_WINDOW_PRESSURE_EVENT_FAILED_STABILIZE,
                     retry_used_local_memory_alt,
                     &rs.progress);
-                phase1_note_failed_stabilize_entering(
-                    solver,
-                    entering,
-                    &rs.basis.last_failed_stabilize_entering,
-                    &rs.basis.failed_stabilize_same_entering_streak);
-                phase1_exclude_entering_var_tracked(solver,
-                                                    entering,
-                                                    RALPH_PHASE1_ENTERING_EXCLUDE_ITERS,
-                                                    &rs.basis.excluded_entering_a,
-                                                    &rs.basis.excluded_entering_ttl_a,
-                                                    &rs.basis.excluded_entering_b,
-                                                    &rs.basis.excluded_entering_ttl_b);
+                p1_basis_note_failed_stabilize_entering(solver, entering, &rs.basis);
+                p1_basis_exclude_entering(solver, entering,
+                                          RALPH_PHASE1_ENTERING_EXCLUDE_ITERS, &rs.basis);
                 if (arm_shadow_guard_followup_pending) {
                     rs.numerical.shadow_guard_followup_pending = 1;
                     rs.numerical.shadow_guard_followup_direction_pending = 1;
@@ -7595,12 +7169,7 @@ static int simplex_phase1(SimplexSolver *solver) {
             rs.numerical.force_extreme_followup_direction_pending = 0;
             rs.numerical.force_extreme_followup_bound_flip_streak = 0;
             rs.numerical.force_extreme_followup_tiny_theta_streak = 0;
-            phase1_shadow_guard_followup_consume_pivot_fail(
-                solver, &rs.numerical.shadow_guard_followup_pending);
-            phase1_force_extreme_tiny_theta_relax_consume_pivot_fail(
-                solver, &rs.numerical.force_extreme_tiny_theta_relax_next_pending);
-            phase1_force_extreme_followup_consume_pivot_fail(
-                solver, &rs.numerical.force_extreme_followup_pending);
+            p1_numerical_consume_followup(solver, P1_FOLLOWUP_EVENT_PIVOT_FAIL, &rs.numerical);
             if (p1_progress_note_no_pivot(
                     solver,
                     tab->m,
@@ -7725,14 +7294,8 @@ static int simplex_phase1(SimplexSolver *solver) {
             /* simplex_pivot can leave basis/LU partially updated on failure.
              * Try the same recovery ladder used in Phase 2. */
             if (tableau_refactorize_with_reason(tab, RALPH_REFACTOR_REASON_PIVOT_RECOVERY) == 0) {
-                phase1_pivot_fail_recovery_maybe_exclude_entering(
-                    solver,
-                    rs.basis.fail_repeat_count,
-                    entering,
-                    &rs.basis.excluded_entering_a,
-                    &rs.basis.excluded_entering_ttl_a,
-                    &rs.basis.excluded_entering_b,
-                    &rs.basis.excluded_entering_ttl_b);
+                p1_basis_pivot_fail_maybe_exclude(solver,
+                    rs.basis.fail_repeat_count, entering, &rs.basis);
                 rs.cycling.use_bland = 1;
                 phase1_recompute_full_with_reason(
                     solver,
@@ -7742,14 +7305,8 @@ static int simplex_phase1(SimplexSolver *solver) {
                 continue;
             }
             if (repair_singular_basis(tab) == 0) {
-                phase1_pivot_fail_recovery_maybe_exclude_entering(
-                    solver,
-                    rs.basis.fail_repeat_count,
-                    entering,
-                    &rs.basis.excluded_entering_a,
-                    &rs.basis.excluded_entering_ttl_a,
-                    &rs.basis.excluded_entering_b,
-                    &rs.basis.excluded_entering_ttl_b);
+                p1_basis_pivot_fail_maybe_exclude(solver,
+                    rs.basis.fail_repeat_count, entering, &rs.basis);
                 rs.cycling.use_bland = 1;
                 phase1_recompute_full_with_reason(
                     solver,
@@ -7774,14 +7331,8 @@ static int simplex_phase1(SimplexSolver *solver) {
                                 leaving, leave_var);
                     }
                     if (tableau_refactorize_with_reason(tab, RALPH_REFACTOR_REASON_PIVOT_RECOVERY) == 0) {
-                        phase1_pivot_fail_recovery_maybe_exclude_entering(
-                            solver,
-                            rs.basis.fail_repeat_count,
-                            entering,
-                            &rs.basis.excluded_entering_a,
-                            &rs.basis.excluded_entering_ttl_a,
-                            &rs.basis.excluded_entering_b,
-                            &rs.basis.excluded_entering_ttl_b);
+                        p1_basis_pivot_fail_maybe_exclude(solver,
+                            rs.basis.fail_repeat_count, entering, &rs.basis);
                         rs.cycling.use_bland = 1;
                         phase1_recompute_full_with_reason(
                             solver,
@@ -7803,14 +7354,8 @@ static int simplex_phase1(SimplexSolver *solver) {
                             marked);
                 }
                 if (tableau_refactorize_with_reason(tab, RALPH_REFACTOR_REASON_PIVOT_RECOVERY) == 0) {
-                    phase1_pivot_fail_recovery_maybe_exclude_entering(
-                        solver,
-                        rs.basis.fail_repeat_count,
-                        entering,
-                        &rs.basis.excluded_entering_a,
-                        &rs.basis.excluded_entering_ttl_a,
-                        &rs.basis.excluded_entering_b,
-                        &rs.basis.excluded_entering_ttl_b);
+                    p1_basis_pivot_fail_maybe_exclude(solver,
+                        rs.basis.fail_repeat_count, entering, &rs.basis);
                     rs.cycling.use_bland = 1;
                     phase1_recompute_full_with_reason(
                         solver,
@@ -7823,24 +7368,14 @@ static int simplex_phase1(SimplexSolver *solver) {
 
             /* Final fallback for stuck Phase 1 states: try a bounded dual-simplex
              * rescue on the current tableau (no recursion to primal simplex). */
-            int rescue_status = phase1_attempt_direct_dual_rescue(
-                solver,
-                tab,
-                iter,
-                &rs.progress.no_pivot_ladder_rescue_cooldown,
-                &rs.progress.no_pivot_ladder_rescue_fail_streak);
+            int rescue_status = p1_progress_attempt_direct_rescue(
+                solver, tab, iter, &rs.progress);
             if (rescue_status == 0) {
                 if (solver->verbose) {
                     LP_LOG_STDERR("[simplex_phase1] Dual rescue restored feasibility progress at iter %d\n", iter);
                 }
-                phase1_pivot_fail_recovery_maybe_exclude_entering(
-                    solver,
-                    rs.basis.fail_repeat_count,
-                    entering,
-                    &rs.basis.excluded_entering_a,
-                    &rs.basis.excluded_entering_ttl_a,
-                    &rs.basis.excluded_entering_b,
-                    &rs.basis.excluded_entering_ttl_b);
+                p1_basis_pivot_fail_maybe_exclude(solver,
+                    rs.basis.fail_repeat_count, entering, &rs.basis);
                 rs.cycling.use_bland = 1;
                 phase1_recompute_full_with_reason(
                     solver,
@@ -8041,12 +7576,7 @@ static int simplex_phase1(SimplexSolver *solver) {
             rs.numerical.force_extreme_followup_direction_pending = 0;
             rs.numerical.force_extreme_followup_bound_flip_streak = 0;
             rs.numerical.force_extreme_followup_tiny_theta_streak = 0;
-            phase1_shadow_guard_followup_consume_pivot_success(
-                solver, &rs.numerical.shadow_guard_followup_pending);
-            phase1_force_extreme_tiny_theta_relax_consume_pivot_success(
-                solver, &rs.numerical.force_extreme_tiny_theta_relax_next_pending);
-            phase1_force_extreme_followup_consume_pivot_success(
-                solver, &rs.numerical.force_extreme_followup_pending);
+            p1_numerical_consume_followup(solver, P1_FOLLOWUP_EVENT_PIVOT_SUCCESS, &rs.numerical);
         }
         if (lu_soft_cost_deferred) {
             int soft_policy_cooldown = phase1_soft_lu_policy_cooldown_updates(
@@ -8266,12 +7796,8 @@ static int simplex_phase1(SimplexSolver *solver) {
                     }
                 }
 
-                int rescue_status = phase1_attempt_direct_dual_rescue(
-                    solver,
-                    tab,
-                    iter,
-                    &rs.progress.no_pivot_ladder_rescue_cooldown,
-                    &rs.progress.no_pivot_ladder_rescue_fail_streak);
+                int rescue_status = p1_progress_attempt_direct_rescue(
+                    solver, tab, iter, &rs.progress);
                 if (rescue_status == 0) {
                     if (solver->verbose) {
                         LP_LOG_STDERR("[simplex_phase1] Dual rescue recovered after refactorization failure at iter %d\n", iter);
