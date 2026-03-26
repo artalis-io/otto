@@ -241,6 +241,35 @@ static int p1_dir_skip_ladder_rescue_attempt(
     return 0;
 }
 
+/* Clear 4 followup fields, consume the followup event, then call
+ * p1_progress_note_no_pivot and arm no_pivot_force_pending if triggered.
+ * Shared by p1_zone_ratio_breakdown() and p1_zone_pivot() (pivot fail).
+ * Returns 1 if no_pivot_force_pending was armed. */
+static int p1_clear_followups_and_note_no_pivot(
+    SimplexSolver *solver,
+    SimplexTableau *tab,
+    P1RecoveryState *rs,
+    P1FollowupEvent event,
+    LPPhase1NoPivotForceReason reason)
+{
+    rs->numerical.shadow_guard_followup_direction_pending = 0;
+    rs->numerical.force_extreme_followup_direction_pending = 0;
+    rs->numerical.force_extreme_followup_bound_flip_streak = 0;
+    rs->numerical.force_extreme_followup_tiny_theta_streak = 0;
+    p1_numerical_consume_followup(solver, event, &rs->numerical);
+    if (p1_progress_note_no_pivot(
+            solver,
+            tab->m,
+            rs->cycling.degenerate_count,
+            reason,
+            &rs->progress)) {
+        rs->progress.no_pivot_force_pending = 1;
+        rs->progress.no_pivot_force_reason = reason;
+        return 1;
+    }
+    return 0;
+}
+
 /* ── Zone 1: Cooldown tick ──────────────────────────────────────────── */
 
 void p1_zone_tick_cooldowns(SimplexSolver *solver,
@@ -557,22 +586,10 @@ P1ZoneResult p1_zone_ratio_breakdown(SimplexSolver *solver,
 {
     int entering = ctx->entering;
 
-    rs->numerical.shadow_guard_followup_direction_pending = 0;
-    rs->numerical.force_extreme_followup_direction_pending = 0;
-    rs->numerical.force_extreme_followup_bound_flip_streak = 0;
-    rs->numerical.force_extreme_followup_tiny_theta_streak = 0;
-    p1_numerical_consume_followup(solver, P1_FOLLOWUP_EVENT_RATIO_BREAKDOWN, &rs->numerical);
+    p1_clear_followups_and_note_no_pivot(solver, tab, rs,
+        P1_FOLLOWUP_EVENT_RATIO_BREAKDOWN,
+        LP_PHASE1_NO_PIVOT_FORCE_REASON_RATIO_BREAKDOWN);
     phase1_trace_record_no_entering(solver, iter, ctx->ratio_status);
-    if (p1_progress_note_no_pivot(
-            solver,
-            tab->m,
-            rs->cycling.degenerate_count,
-            LP_PHASE1_NO_PIVOT_FORCE_REASON_RATIO_BREAKDOWN,
-            &rs->progress)) {
-        rs->progress.no_pivot_force_pending = 1;
-        rs->progress.no_pivot_force_reason =
-            LP_PHASE1_NO_PIVOT_FORCE_REASON_RATIO_BREAKDOWN;
-    }
 
     p1_progress_update(solver, tab, &rs->progress);
     {
@@ -807,21 +824,9 @@ P1ZoneResult p1_zone_pivot(SimplexSolver *solver,
         lp_telemetry_record_pivot_timed(solver, 1, t_pivot_ms);
     }
     if (pivot_status != 0) {
-        rs->numerical.shadow_guard_followup_direction_pending = 0;
-        rs->numerical.force_extreme_followup_direction_pending = 0;
-        rs->numerical.force_extreme_followup_bound_flip_streak = 0;
-        rs->numerical.force_extreme_followup_tiny_theta_streak = 0;
-        p1_numerical_consume_followup(solver, P1_FOLLOWUP_EVENT_PIVOT_FAIL, &rs->numerical);
-        if (p1_progress_note_no_pivot(
-                solver,
-                tab->m,
-                rs->cycling.degenerate_count,
-                LP_PHASE1_NO_PIVOT_FORCE_REASON_PIVOT_FAIL,
-                &rs->progress)) {
-            rs->progress.no_pivot_force_pending = 1;
-            rs->progress.no_pivot_force_reason =
-                LP_PHASE1_NO_PIVOT_FORCE_REASON_PIVOT_FAIL;
-        }
+        p1_clear_followups_and_note_no_pivot(solver, tab, rs,
+            P1_FOLLOWUP_EVENT_PIVOT_FAIL,
+            LP_PHASE1_NO_PIVOT_FORCE_REASON_PIVOT_FAIL);
         int pivot_fail_reason = tab->trace_last_fail_reason;
         if (entering == rs->basis.fail_entering &&
             leaving == rs->basis.fail_leaving_pos &&
