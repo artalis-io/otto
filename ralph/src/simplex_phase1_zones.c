@@ -19,3 +19,162 @@
 
 #include <math.h>
 #include <limits.h>
+
+/* ── Zone 1: Cooldown tick ──────────────────────────────────────────── */
+
+void p1_zone_tick_cooldowns(SimplexSolver *solver,
+                            SimplexTableau *tab,
+                            P1RecoveryState *rs)
+{
+    if (rs->basis.excluded_entering_ttl_a > 0) {
+        rs->basis.excluded_entering_ttl_a--;
+        if (rs->basis.excluded_entering_ttl_a == 0) {
+            rs->basis.excluded_entering_a = -1;
+        }
+    }
+    if (rs->basis.excluded_entering_ttl_b > 0) {
+        rs->basis.excluded_entering_ttl_b--;
+        if (rs->basis.excluded_entering_ttl_b == 0) {
+            rs->basis.excluded_entering_b = -1;
+        }
+    }
+    if (rs->numerical.dir_stabilize_cooldown > 0) {
+        rs->numerical.dir_stabilize_cooldown--;
+    }
+    if (rs->progress.no_pivot_force_cooldown > 0) {
+        rs->progress.no_pivot_force_cooldown--;
+    }
+    if (rs->progress.no_pivot_ladder_rescue_cooldown > 0) {
+        rs->progress.no_pivot_ladder_rescue_cooldown--;
+    }
+    if (rs->progress.dir_escape_cooldown > 0) {
+        rs->progress.dir_escape_cooldown--;
+    }
+    rs->shared.periodic_policy_cooldown =
+        lp_refactor_policy_periodic_cooldown_tick(rs->shared.periodic_policy_cooldown);
+#if PHASE1_STAGNATION_ESCAPE_RUNTIME
+    if (tab->m >= PHASE1_STAGNATION_MIN_M &&
+        solver->policy.phase1_stagnation.escape_cooldown > 0) {
+        solver->policy.phase1_stagnation.escape_cooldown--;
+    }
+#else
+    (void)solver;
+    (void)tab;
+#endif
+    rs->shared.periodic_policy_pressure_decay =
+        lp_refactor_policy_periodic_pressure_decay_recover(
+            1, rs->shared.periodic_policy_pressure_decay);
+}
+
+/* ── Zone 2: Pre-iteration ──────────────────────────────────────────── */
+
+P1ZoneResult p1_zone_pre_iter(SimplexSolver *solver,
+                              SimplexTableau *tab,
+                              P1RecoveryState *rs,
+                              int iter,
+                              P1IterContext *ctx)
+{
+    (void)ctx;
+
+    /* Auto-Dantzig pricing switch for large degenerate Phase 1 */
+    if (!rs->cycling.auto_dantzig_enabled &&
+        solver->phase1_pricing < 0 &&
+        tab->use_two_phase &&
+        tab->m >= PHASE1_AUTO_DANTZIG_MIN_M &&
+        tab->m <= PHASE1_AUTO_DANTZIG_MAX_M &&
+        rs->cycling.degenerate_count >= PHASE1_AUTO_DANTZIG_DEGEN_TRIGGER) {
+        rs->cycling.pricing_strategy = 0;  /* Dantzig */
+        rs->cycling.auto_dantzig_enabled = 1;
+        if (solver->verbose >= 2) {
+            LP_LOG_STDERR("[simplex_phase1] Switching pricing to Dantzig under large degenerate Phase 1 workload (m=%d, degen=%d)\n",
+                    tab->m, rs->cycling.degenerate_count);
+        }
+    }
+
+    /* No-pivot force pending: refactorize and reset */
+    if (rs->progress.no_pivot_force_pending) {
+        rs->progress.no_pivot_force_pending = 0;
+        if (solver->verbose >= 2) {
+            LP_LOG_STDERR("[simplex_phase1] No-pivot streak force refactor (%s)\n",
+                    lp_refactor_policy_phase1_no_pivot_force_reason_string((int)rs->progress.no_pivot_force_reason));
+        }
+        rs->progress.no_pivot_force_reason = LP_PHASE1_NO_PIVOT_FORCE_REASON_UNKNOWN;
+        lp_telemetry_record_phase1_dir_stabilize_refactor_trigger(
+            solver,
+            PHASE1_DIR_REFACTOR_TELEM_NO_PIVOT_FORCE);
+        if (tableau_refactorize_with_reason(tab, RALPH_REFACTOR_REASON_DIRECTION_STABILIZE) == 0) {
+            rs->cycling.use_bland = 1;
+            rs->basis.ratio_breakdown_count = 0;
+            rs->basis.ratio_breakdown_last_entering = -1;
+            rs->basis.ratio_breakdown_same_entering_streak = 0;
+            rs->numerical.dir_skip_event_streak = 0;
+            rs->numerical.dir_skip_no_recompute_streak = 0;
+            rs->numerical.dir_force_refactor_streak = 0;
+            rs->progress.dir_escape_cooldown = 0;
+            p1_progress_reset(&rs->progress);
+            rs->progress.no_pivot_ladder_rescue_cooldown = 0;
+            rs->progress.no_pivot_ladder_rescue_fail_streak = 0;
+            phase1_recompute_full_with_reason(
+                solver,
+                tab,
+                &rs->numerical.rc_only_streak,
+                LP_PHASE1_RECOMPUTE_REASON_DIR_REFACTOR);
+            return P1_ZONE_CONTINUE;
+        }
+    }
+
+#if PHASE1_STAGNATION_ESCAPE_RUNTIME
+    /* Stagnation escape: refactorize when Phase 1 stalls */
+    if (tab->m >= PHASE1_STAGNATION_MIN_M &&
+        phase1_stagnation_escape_should_trigger(solver, tab, iter)) {
+        if (solver->verbose >= 2) {
+            LP_LOG_STDERR("[simplex_phase1] Stagnation escape trigger: obj_delta=%g retry_ratio=%.3f update_ratio=%.3f recompute=[ratio=%d dir_skip=%d dir_ref=%d piv=%d pert=%d] window=%d\n",
+                    solver->policy.phase1_stagnation.last_obj_delta,
+                    solver->policy.phase1_stagnation.last_retry_defer_ratio,
+                    solver->policy.phase1_stagnation.last_update_recovery_ratio,
+                    solver->policy.phase1_stagnation.last_recompute_ratio,
+                    solver->policy.phase1_stagnation.last_recompute_dir_skip,
+                    solver->policy.phase1_stagnation.last_recompute_dir_refactor,
+                    solver->policy.phase1_stagnation.last_recompute_pivot_fail,
+                    solver->policy.phase1_stagnation.last_recompute_perturb,
+                    solver->policy.phase1_stagnation.last_window_iters);
+        }
+        if (tableau_refactorize_with_reason(
+                tab,
+                RALPH_REFACTOR_REASON_DIRECTION_STABILIZE) == 0) {
+            solver->policy.phase1_stagnation.escape_successes++;
+            solver->policy.phase1_stagnation.escape_cooldown =
+                PHASE1_STAGNATION_ESCAPE_COOLDOWN_ITERS;
+            rs->cycling.use_bland = 1;
+            rs->progress.no_pivot_streak = 0;
+            rs->basis.ratio_breakdown_count = 0;
+            rs->basis.ratio_breakdown_last_entering = -1;
+            rs->basis.ratio_breakdown_same_entering_streak = 0;
+            rs->numerical.dir_skip_event_streak = 0;
+            rs->numerical.dir_skip_no_recompute_streak = 0;
+            rs->progress.dir_escape_cooldown = 0;
+            p1_progress_reset(&rs->progress);
+            rs->progress.no_pivot_ladder_rescue_cooldown = 0;
+            rs->progress.no_pivot_ladder_rescue_fail_streak = 0;
+            phase1_recompute_full_with_reason(
+                solver,
+                tab,
+                &rs->numerical.rc_only_streak,
+                LP_PHASE1_RECOMPUTE_REASON_DIR_REFACTOR);
+            phase1_stagnation_window_begin(solver, tab, iter);
+            return P1_ZONE_CONTINUE;
+        }
+        solver->policy.phase1_stagnation.escape_failures++;
+        if (solver->policy.phase1_stagnation.escape_cooldown <
+            PHASE1_STAGNATION_ESCAPE_FAIL_COOLDOWN_ITERS) {
+            solver->policy.phase1_stagnation.escape_cooldown =
+                PHASE1_STAGNATION_ESCAPE_FAIL_COOLDOWN_ITERS;
+        }
+        phase1_stagnation_window_begin(solver, tab, iter);
+    }
+#else
+    (void)iter;
+#endif
+
+    return P1_ZONE_PROCEED;
+}
