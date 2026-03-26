@@ -31,6 +31,17 @@ enum {
     PHASE1_PIVOT_FAIL_REFACTOR_AFTER_UPDATE_OTHER = 9
 };
 
+/* Pivot-fail recovery exclusion thresholds */
+#define PHASE1_PIVOT_FAIL_RECOVERY_EXCLUDE_TRIGGER 2
+#define PHASE1_PIVOT_FAIL_RECOVERY_EXCLUDE_ITERS RALPH_PHASE1_ENTERING_EXCLUDE_ITERS
+
+/* No-pivot ladder step decisions */
+enum {
+    PHASE1_NO_PIVOT_LADDER_STEP_RETRY = 0,
+    PHASE1_NO_PIVOT_LADDER_STEP_DUAL_RESCUE = 1,
+    PHASE1_NO_PIVOT_LADDER_STEP_FORCE_REFACTOR = 2
+};
+
 /* Window pressure event kinds */
 #define PHASE1_WINDOW_PRESSURE_EVENT_NONE 0
 #define PHASE1_WINDOW_PRESSURE_EVENT_FAILED_STABILIZE 1
@@ -216,5 +227,68 @@ int p1_progress_activate_force_pivot(
     P1ProgressState *ps,
     int *force_pending_out,
     LPPhase1NoPivotForceReason *force_reason_out);
+
+/* ── Numerical followup consumption ────────────────────────────────── */
+
+/* Event types for followup consumption dispatch */
+typedef enum {
+    P1_FOLLOWUP_EVENT_FAILED_STABILIZE = 0,
+    P1_FOLLOWUP_EVENT_RATIO_BREAKDOWN,
+    P1_FOLLOWUP_EVENT_PIVOT_FAIL,
+    P1_FOLLOWUP_EVENT_PIVOT_SUCCESS
+} P1FollowupEvent;
+
+/* Consume pending flags for all 3 numerical followup subsystems
+ * (shadow guard, force extreme, force extreme tiny theta relax).
+ * Clears each pending flag and fires the corresponding telemetry. */
+void p1_numerical_consume_followup(SimplexSolver *solver,
+                                   P1FollowupEvent event,
+                                   P1NumericalState *ns);
+
+/* ── Streak / entering trackers ───────────────────────────────────── */
+
+void p1_numerical_note_dir_skip_entering(SimplexSolver *solver,
+                                         int entering,
+                                         P1NumericalState *ns);
+
+void p1_basis_note_failed_stabilize_entering(SimplexSolver *solver,
+                                             int entering,
+                                             P1BasisRepairState *bs);
+
+void p1_basis_note_failed_stabilize_retry_alt(SimplexSolver *solver,
+                                              int entering,
+                                              P1BasisRepairState *bs);
+
+/* ── Direction recording ──────────────────────────────────────────── */
+
+void p1_numerical_record_shadow_direction(SimplexSolver *solver,
+                                          const SimplexTableau *tab,
+                                          int leaving, double theta);
+
+void p1_numerical_record_extreme_direction(SimplexSolver *solver,
+                                           const SimplexTableau *tab,
+                                           int leaving, double theta);
+
+/* ── Basis repair: entering exclusion ─────────────────────────────── */
+
+/* Exclude an entering variable from pricing for ttl iterations (2-slot TTL). */
+void p1_basis_exclude_entering(SimplexSolver *solver,
+                               int var, int ttl,
+                               P1BasisRepairState *bs);
+
+/* Conditionally exclude entering after repeated pivot failures. */
+void p1_basis_pivot_fail_maybe_exclude(SimplexSolver *solver,
+                                       int fail_repeat_count,
+                                       int entering,
+                                       P1BasisRepairState *bs);
+
+/* ── Direct dual rescue ───────────────────────────────────────────── */
+
+/* Attempt direct dual rescue (without ladder logic).  Returns 1 on success,
+ * 0 on failure, -1 on time limit (caller must return). */
+int p1_progress_attempt_direct_rescue(SimplexSolver *solver,
+                                      SimplexTableau *tab,
+                                      int iter,
+                                      P1ProgressState *ps);
 
 #endif /* SIMPLEX_PHASE1_RECOVERY_H */
