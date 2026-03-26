@@ -88,6 +88,159 @@ static void p1_dir_skip_defer_core(SimplexSolver *solver,
     }
 }
 
+typedef enum {
+    P1_DIR_SKIP_FOLLOWUP_TINY_THETA,   /* moderate-defer, cooldown-skip */
+    P1_DIR_SKIP_FOLLOWUP_STABILIZE     /* !stabilized path */
+} P1DirSkipFollowupKind;
+
+typedef struct {
+    P1DirSkipFollowupKind kind;
+    int arm_force_extreme_followup;    /* only for STABILIZE */
+    int arm_shadow_guard_followup;     /* only for STABILIZE */
+} P1DirSkipFollowupCtx;
+
+/* Ladder+rescue block shared by 3 paths: moderate-defer, cooldown-skip,
+ * and the !stabilized fallthrough.
+ * Encapsulates: no_pivot_ladder_retry telemetry → note_no_pivot →
+ * ladder_rescue_due check → rescue_guard → attempt_ladder_rescue →
+ * force_refactor escalation → final followup classification.
+ *
+ * Returns: 1 = caller should return P1_ZONE_CONTINUE,
+ *         -1 = caller should return P1_ZONE_RETURN_FAIL,
+ *          0 = no early return, caller continues its own flow. */
+static int p1_dir_skip_ladder_rescue_attempt(
+    SimplexSolver *solver,
+    SimplexTableau *tab,
+    P1RecoveryState *rs,
+    int iter,
+    const P1DirSkipFollowupCtx *followup)
+{
+    int tiny_theta = (followup->kind == P1_DIR_SKIP_FOLLOWUP_TINY_THETA);
+    int classified_a = 0;  /* tiny_theta_relax or force_extreme */
+    int classified_b = 0;  /* shadow guard (STABILIZE only) */
+
+    lp_telemetry_record_phase1_no_pivot_ladder_retry(
+        solver,
+        LP_PHASE1_NO_PIVOT_FORCE_REASON_DIR_SKIP);
+    if (p1_progress_note_no_pivot(
+            solver,
+            tab->m,
+            rs->cycling.degenerate_count,
+            LP_PHASE1_NO_PIVOT_FORCE_REASON_DIR_SKIP,
+            &rs->progress)) {
+        rs->progress.no_pivot_force_pending = 1;
+        rs->progress.no_pivot_force_reason =
+            LP_PHASE1_NO_PIVOT_FORCE_REASON_DIR_SKIP;
+        if (tiny_theta) {
+            if (rs->numerical.force_extreme_tiny_theta_relax_branch_pending) {
+                lp_telemetry_record_phase1_force_extreme_tiny_theta_relax_post_dir_skip_forced_refactor(
+                    solver);
+                rs->numerical.force_extreme_tiny_theta_relax_branch_pending = 0;
+                rs->numerical.force_extreme_tiny_theta_relax_next_pending = 1;
+                classified_a = 1;
+            }
+        } else {
+            if (followup->arm_force_extreme_followup) {
+                lp_telemetry_record_phase1_force_extreme_followup_post_dir_skip_forced_refactor(
+                    solver);
+                classified_a = 1;
+            }
+            if (followup->arm_shadow_guard_followup) {
+                lp_telemetry_record_phase1_failed_stabilize_retry_shadow_post_dir_skip_forced_refactor(
+                    solver);
+                classified_b = 1;
+            }
+        }
+    }
+    if (!rs->progress.no_pivot_force_pending &&
+        lp_refactor_policy_phase1_dir_skip_ladder_rescue_due(rs->numerical.dir_skip_event_streak)) {
+        int rescue_step = phase1_no_pivot_ladder_apply_rescue_guard(
+            solver,
+            PHASE1_NO_PIVOT_LADDER_STEP_DUAL_RESCUE,
+            rs->progress.no_pivot_ladder_rescue_cooldown,
+            rs->progress.no_pivot_ladder_rescue_fail_streak);
+        if (rescue_step == PHASE1_NO_PIVOT_LADDER_STEP_DUAL_RESCUE) {
+            int rescue_result = p1_progress_attempt_ladder_rescue(
+                solver,
+                tab,
+                iter,
+                LP_PHASE1_NO_PIVOT_FORCE_REASON_DIR_SKIP,
+                LP_PHASE1_RECOMPUTE_REASON_DIR_SKIP,
+                &rs->progress,
+                &rs->numerical.rc_only_streak);
+            if (tiny_theta) {
+                if (rs->numerical.force_extreme_tiny_theta_relax_branch_pending) {
+                    lp_telemetry_record_phase1_force_extreme_tiny_theta_relax_post_dir_skip_dual_rescue(
+                        solver);
+                    rs->numerical.force_extreme_tiny_theta_relax_branch_pending = 0;
+                    rs->numerical.force_extreme_tiny_theta_relax_next_pending = 1;
+                    classified_a = 1;
+                }
+            } else {
+                if (followup->arm_force_extreme_followup) {
+                    lp_telemetry_record_phase1_force_extreme_followup_post_dir_skip_dual_rescue(
+                        solver);
+                    classified_a = 1;
+                }
+                if (followup->arm_shadow_guard_followup) {
+                    lp_telemetry_record_phase1_failed_stabilize_retry_shadow_post_dir_skip_dual_rescue(
+                        solver);
+                    classified_b = 1;
+                }
+            }
+            if (rescue_result == 1) return 1;
+            if (rescue_result < 0) return -1;
+        } else if (rescue_step == PHASE1_NO_PIVOT_LADDER_STEP_FORCE_REFACTOR) {
+            lp_telemetry_record_phase1_no_pivot_ladder_forced_refactor(
+                solver,
+                LP_PHASE1_NO_PIVOT_FORCE_REASON_DIR_SKIP);
+            rs->progress.no_pivot_force_pending = 1;
+            rs->progress.no_pivot_force_reason =
+                LP_PHASE1_NO_PIVOT_FORCE_REASON_DIR_SKIP;
+            if (tiny_theta) {
+                if (rs->numerical.force_extreme_tiny_theta_relax_branch_pending) {
+                    lp_telemetry_record_phase1_force_extreme_tiny_theta_relax_post_dir_skip_forced_refactor(
+                        solver);
+                    rs->numerical.force_extreme_tiny_theta_relax_branch_pending = 0;
+                    rs->numerical.force_extreme_tiny_theta_relax_next_pending = 1;
+                    classified_a = 1;
+                }
+            } else {
+                if (followup->arm_force_extreme_followup) {
+                    lp_telemetry_record_phase1_force_extreme_followup_post_dir_skip_forced_refactor(
+                        solver);
+                    classified_a = 1;
+                }
+                if (followup->arm_shadow_guard_followup) {
+                    lp_telemetry_record_phase1_failed_stabilize_retry_shadow_post_dir_skip_forced_refactor(
+                        solver);
+                    classified_b = 1;
+                }
+            }
+        }
+    }
+    /* Final classification for any unclassified followups. */
+    if (tiny_theta) {
+        if (rs->numerical.force_extreme_tiny_theta_relax_branch_pending &&
+            !classified_a) {
+            lp_telemetry_record_phase1_force_extreme_tiny_theta_relax_post_dir_skip_retry(
+                solver);
+            rs->numerical.force_extreme_tiny_theta_relax_branch_pending = 0;
+            rs->numerical.force_extreme_tiny_theta_relax_next_pending = 1;
+        }
+    } else {
+        if (followup->arm_force_extreme_followup && !classified_a) {
+            lp_telemetry_record_phase1_force_extreme_followup_post_dir_skip_retry(
+                solver);
+        }
+        if (followup->arm_shadow_guard_followup && !classified_b) {
+            lp_telemetry_record_phase1_failed_stabilize_retry_shadow_post_dir_skip_retry(
+                solver);
+        }
+    }
+    return 0;
+}
+
 /* ── Zone 1: Cooldown tick ──────────────────────────────────────────── */
 
 void p1_zone_tick_cooldowns(SimplexSolver *solver,
@@ -1647,76 +1800,11 @@ P1ZoneResult p1_zone_direction_guard(SimplexSolver *solver,
                                    P1_DIR_DEFER_MODERATE,
                                    dir_stabilize_cooldown_target);
             {
-                int tiny_theta_relax_immediate_classified = 0;
-
-            lp_telemetry_record_phase1_no_pivot_ladder_retry(
-                solver,
-                LP_PHASE1_NO_PIVOT_FORCE_REASON_DIR_SKIP);
-            if (p1_progress_note_no_pivot(
-                    solver,
-                    tab->m,
-                    rs->cycling.degenerate_count,
-                    LP_PHASE1_NO_PIVOT_FORCE_REASON_DIR_SKIP,
-                    &rs->progress)) {
-                rs->progress.no_pivot_force_pending = 1;
-                rs->progress.no_pivot_force_reason =
-                    LP_PHASE1_NO_PIVOT_FORCE_REASON_DIR_SKIP;
-                if (rs->numerical.force_extreme_tiny_theta_relax_branch_pending) {
-                    lp_telemetry_record_phase1_force_extreme_tiny_theta_relax_post_dir_skip_forced_refactor(
-                        solver);
-                    rs->numerical.force_extreme_tiny_theta_relax_branch_pending = 0;
-                    rs->numerical.force_extreme_tiny_theta_relax_next_pending = 1;
-                    tiny_theta_relax_immediate_classified = 1;
-                }
-            }
-            if (!rs->progress.no_pivot_force_pending &&
-                lp_refactor_policy_phase1_dir_skip_ladder_rescue_due(rs->numerical.dir_skip_event_streak)) {
-                int rescue_step = phase1_no_pivot_ladder_apply_rescue_guard(
-                    solver,
-                    PHASE1_NO_PIVOT_LADDER_STEP_DUAL_RESCUE,
-                    rs->progress.no_pivot_ladder_rescue_cooldown,
-                    rs->progress.no_pivot_ladder_rescue_fail_streak);
-                if (rescue_step == PHASE1_NO_PIVOT_LADDER_STEP_DUAL_RESCUE) {
-                    int rescue_result = p1_progress_attempt_ladder_rescue(
-                        solver,
-                        tab,
-                        iter,
-                        LP_PHASE1_NO_PIVOT_FORCE_REASON_DIR_SKIP,
-                        LP_PHASE1_RECOMPUTE_REASON_DIR_SKIP,
-                        &rs->progress,
-                        &rs->numerical.rc_only_streak);
-                    if (rs->numerical.force_extreme_tiny_theta_relax_branch_pending) {
-                        lp_telemetry_record_phase1_force_extreme_tiny_theta_relax_post_dir_skip_dual_rescue(
-                            solver);
-                        rs->numerical.force_extreme_tiny_theta_relax_branch_pending = 0;
-                        rs->numerical.force_extreme_tiny_theta_relax_next_pending = 1;
-                        tiny_theta_relax_immediate_classified = 1;
-                    }
-                    if (rescue_result == 1) return P1_ZONE_CONTINUE;
-                    if (rescue_result < 0) return P1_ZONE_RETURN_FAIL;
-                } else if (rescue_step == PHASE1_NO_PIVOT_LADDER_STEP_FORCE_REFACTOR) {
-                    lp_telemetry_record_phase1_no_pivot_ladder_forced_refactor(
-                        solver,
-                        LP_PHASE1_NO_PIVOT_FORCE_REASON_DIR_SKIP);
-                    rs->progress.no_pivot_force_pending = 1;
-                    rs->progress.no_pivot_force_reason =
-                        LP_PHASE1_NO_PIVOT_FORCE_REASON_DIR_SKIP;
-                    if (rs->numerical.force_extreme_tiny_theta_relax_branch_pending) {
-                        lp_telemetry_record_phase1_force_extreme_tiny_theta_relax_post_dir_skip_forced_refactor(
-                            solver);
-                        rs->numerical.force_extreme_tiny_theta_relax_branch_pending = 0;
-                        rs->numerical.force_extreme_tiny_theta_relax_next_pending = 1;
-                        tiny_theta_relax_immediate_classified = 1;
-                    }
-                }
-            }
-                if (rs->numerical.force_extreme_tiny_theta_relax_branch_pending &&
-                    !tiny_theta_relax_immediate_classified) {
-                    lp_telemetry_record_phase1_force_extreme_tiny_theta_relax_post_dir_skip_retry(
-                        solver);
-                    rs->numerical.force_extreme_tiny_theta_relax_branch_pending = 0;
-                    rs->numerical.force_extreme_tiny_theta_relax_next_pending = 1;
-                }
+                P1DirSkipFollowupCtx followup = { .kind = P1_DIR_SKIP_FOLLOWUP_TINY_THETA };
+                int rc = p1_dir_skip_ladder_rescue_attempt(
+                    solver, tab, rs, iter, &followup);
+                if (rc == 1) return P1_ZONE_CONTINUE;
+                if (rc < 0) return P1_ZONE_RETURN_FAIL;
             }
             return P1_ZONE_CONTINUE;
         }
@@ -1730,76 +1818,11 @@ P1ZoneResult p1_zone_direction_guard(SimplexSolver *solver,
                                    P1_DIR_DEFER_COOLDOWN,
                                    dir_stabilize_cooldown_target);
             {
-                int tiny_theta_relax_immediate_classified = 0;
-
-            lp_telemetry_record_phase1_no_pivot_ladder_retry(
-                solver,
-                LP_PHASE1_NO_PIVOT_FORCE_REASON_DIR_SKIP);
-            if (p1_progress_note_no_pivot(
-                    solver,
-                    tab->m,
-                    rs->cycling.degenerate_count,
-                    LP_PHASE1_NO_PIVOT_FORCE_REASON_DIR_SKIP,
-                    &rs->progress)) {
-                rs->progress.no_pivot_force_pending = 1;
-                rs->progress.no_pivot_force_reason =
-                    LP_PHASE1_NO_PIVOT_FORCE_REASON_DIR_SKIP;
-                if (rs->numerical.force_extreme_tiny_theta_relax_branch_pending) {
-                    lp_telemetry_record_phase1_force_extreme_tiny_theta_relax_post_dir_skip_forced_refactor(
-                        solver);
-                    rs->numerical.force_extreme_tiny_theta_relax_branch_pending = 0;
-                    rs->numerical.force_extreme_tiny_theta_relax_next_pending = 1;
-                    tiny_theta_relax_immediate_classified = 1;
-                }
-            }
-            if (!rs->progress.no_pivot_force_pending &&
-                lp_refactor_policy_phase1_dir_skip_ladder_rescue_due(rs->numerical.dir_skip_event_streak)) {
-                int rescue_step = phase1_no_pivot_ladder_apply_rescue_guard(
-                    solver,
-                    PHASE1_NO_PIVOT_LADDER_STEP_DUAL_RESCUE,
-                    rs->progress.no_pivot_ladder_rescue_cooldown,
-                    rs->progress.no_pivot_ladder_rescue_fail_streak);
-                if (rescue_step == PHASE1_NO_PIVOT_LADDER_STEP_DUAL_RESCUE) {
-                    int rescue_result = p1_progress_attempt_ladder_rescue(
-                        solver,
-                        tab,
-                        iter,
-                        LP_PHASE1_NO_PIVOT_FORCE_REASON_DIR_SKIP,
-                        LP_PHASE1_RECOMPUTE_REASON_DIR_SKIP,
-                        &rs->progress,
-                        &rs->numerical.rc_only_streak);
-                    if (rs->numerical.force_extreme_tiny_theta_relax_branch_pending) {
-                        lp_telemetry_record_phase1_force_extreme_tiny_theta_relax_post_dir_skip_dual_rescue(
-                            solver);
-                        rs->numerical.force_extreme_tiny_theta_relax_branch_pending = 0;
-                        rs->numerical.force_extreme_tiny_theta_relax_next_pending = 1;
-                        tiny_theta_relax_immediate_classified = 1;
-                    }
-                    if (rescue_result == 1) return P1_ZONE_CONTINUE;
-                    if (rescue_result < 0) return P1_ZONE_RETURN_FAIL;
-                } else if (rescue_step == PHASE1_NO_PIVOT_LADDER_STEP_FORCE_REFACTOR) {
-                    lp_telemetry_record_phase1_no_pivot_ladder_forced_refactor(
-                        solver,
-                        LP_PHASE1_NO_PIVOT_FORCE_REASON_DIR_SKIP);
-                    rs->progress.no_pivot_force_pending = 1;
-                    rs->progress.no_pivot_force_reason =
-                        LP_PHASE1_NO_PIVOT_FORCE_REASON_DIR_SKIP;
-                    if (rs->numerical.force_extreme_tiny_theta_relax_branch_pending) {
-                        lp_telemetry_record_phase1_force_extreme_tiny_theta_relax_post_dir_skip_forced_refactor(
-                            solver);
-                        rs->numerical.force_extreme_tiny_theta_relax_branch_pending = 0;
-                        rs->numerical.force_extreme_tiny_theta_relax_next_pending = 1;
-                        tiny_theta_relax_immediate_classified = 1;
-                    }
-                }
-            }
-                if (rs->numerical.force_extreme_tiny_theta_relax_branch_pending &&
-                    !tiny_theta_relax_immediate_classified) {
-                    lp_telemetry_record_phase1_force_extreme_tiny_theta_relax_post_dir_skip_retry(
-                        solver);
-                    rs->numerical.force_extreme_tiny_theta_relax_branch_pending = 0;
-                    rs->numerical.force_extreme_tiny_theta_relax_next_pending = 1;
-                }
+                P1DirSkipFollowupCtx followup = { .kind = P1_DIR_SKIP_FOLLOWUP_TINY_THETA };
+                int rc = p1_dir_skip_ladder_rescue_attempt(
+                    solver, tab, rs, iter, &followup);
+                if (rc == 1) return P1_ZONE_CONTINUE;
+                if (rc < 0) return P1_ZONE_RETURN_FAIL;
             }
             return P1_ZONE_CONTINUE;
         }
@@ -2395,89 +2418,15 @@ P1ZoneResult p1_zone_direction_guard(SimplexSolver *solver,
             }
             p1_progress_update(solver, tab, &rs->progress);
             {
-                int force_extreme_followup_immediate_classified = 0;
-                int shadow_followup_immediate_classified = 0;
-
-                lp_telemetry_record_phase1_no_pivot_ladder_retry(
-                    solver,
-                    LP_PHASE1_NO_PIVOT_FORCE_REASON_DIR_SKIP);
-                if (p1_progress_note_no_pivot(
-                        solver,
-                        tab->m,
-                        rs->cycling.degenerate_count,
-                        LP_PHASE1_NO_PIVOT_FORCE_REASON_DIR_SKIP,
-                        &rs->progress)) {
-                    rs->progress.no_pivot_force_pending = 1;
-                    rs->progress.no_pivot_force_reason =
-                        LP_PHASE1_NO_PIVOT_FORCE_REASON_DIR_SKIP;
-                    if (arm_force_extreme_followup_pending) {
-                        lp_telemetry_record_phase1_force_extreme_followup_post_dir_skip_forced_refactor(
-                            solver);
-                        force_extreme_followup_immediate_classified = 1;
-                    }
-                    if (arm_shadow_guard_followup_pending) {
-                        lp_telemetry_record_phase1_failed_stabilize_retry_shadow_post_dir_skip_forced_refactor(
-                            solver);
-                        shadow_followup_immediate_classified = 1;
-                    }
-                }
-                if (!rs->progress.no_pivot_force_pending &&
-                    lp_refactor_policy_phase1_dir_skip_ladder_rescue_due(rs->numerical.dir_skip_event_streak)) {
-                    int rescue_step = phase1_no_pivot_ladder_apply_rescue_guard(
-                        solver,
-                        PHASE1_NO_PIVOT_LADDER_STEP_DUAL_RESCUE,
-                        rs->progress.no_pivot_ladder_rescue_cooldown,
-                        rs->progress.no_pivot_ladder_rescue_fail_streak);
-                    if (rescue_step == PHASE1_NO_PIVOT_LADDER_STEP_DUAL_RESCUE) {
-                        int rescue_result = p1_progress_attempt_ladder_rescue(
-                            solver,
-                            tab,
-                            iter,
-                            LP_PHASE1_NO_PIVOT_FORCE_REASON_DIR_SKIP,
-                            LP_PHASE1_RECOMPUTE_REASON_DIR_SKIP,
-                            &rs->progress,
-                            &rs->numerical.rc_only_streak);
-                        if (arm_force_extreme_followup_pending) {
-                            lp_telemetry_record_phase1_force_extreme_followup_post_dir_skip_dual_rescue(
-                                solver);
-                            force_extreme_followup_immediate_classified = 1;
-                        }
-                        if (arm_shadow_guard_followup_pending) {
-                            lp_telemetry_record_phase1_failed_stabilize_retry_shadow_post_dir_skip_dual_rescue(
-                                solver);
-                            shadow_followup_immediate_classified = 1;
-                        }
-                        if (rescue_result == 1) return P1_ZONE_CONTINUE;
-                        if (rescue_result < 0) return P1_ZONE_RETURN_FAIL;
-                    } else if (rescue_step == PHASE1_NO_PIVOT_LADDER_STEP_FORCE_REFACTOR) {
-                        lp_telemetry_record_phase1_no_pivot_ladder_forced_refactor(
-                            solver,
-                            LP_PHASE1_NO_PIVOT_FORCE_REASON_DIR_SKIP);
-                        rs->progress.no_pivot_force_pending = 1;
-                        rs->progress.no_pivot_force_reason =
-                            LP_PHASE1_NO_PIVOT_FORCE_REASON_DIR_SKIP;
-                        if (arm_force_extreme_followup_pending) {
-                            lp_telemetry_record_phase1_force_extreme_followup_post_dir_skip_forced_refactor(
-                                solver);
-                            force_extreme_followup_immediate_classified = 1;
-                        }
-                        if (arm_shadow_guard_followup_pending) {
-                            lp_telemetry_record_phase1_failed_stabilize_retry_shadow_post_dir_skip_forced_refactor(
-                                solver);
-                            shadow_followup_immediate_classified = 1;
-                        }
-                    }
-                }
-                if (arm_force_extreme_followup_pending &&
-                    !force_extreme_followup_immediate_classified) {
-                    lp_telemetry_record_phase1_force_extreme_followup_post_dir_skip_retry(
-                        solver);
-                }
-                if (arm_shadow_guard_followup_pending &&
-                    !shadow_followup_immediate_classified) {
-                    lp_telemetry_record_phase1_failed_stabilize_retry_shadow_post_dir_skip_retry(
-                        solver);
-                }
+                P1DirSkipFollowupCtx followup = {
+                    .kind = P1_DIR_SKIP_FOLLOWUP_STABILIZE,
+                    .arm_force_extreme_followup = arm_force_extreme_followup_pending,
+                    .arm_shadow_guard_followup = arm_shadow_guard_followup_pending
+                };
+                int rc = p1_dir_skip_ladder_rescue_attempt(
+                    solver, tab, rs, iter, &followup);
+                if (rc == 1) return P1_ZONE_CONTINUE;
+                if (rc < 0) return P1_ZONE_RETURN_FAIL;
             }
             return P1_ZONE_CONTINUE;
         }
