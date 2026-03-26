@@ -30,4 +30,17 @@ void phase1_recompute_full_with_reason(SimplexSolver *solver,
                                        LPPhase1RecomputeReason reason);
 void phase1_trace_emit_summary(SimplexSolver *solver, RalphStatus phase1_status);
 
+/* Direction shape extraction from tab->work2 (needed by recovery direction recorders) */
+void phase1_failed_stabilize_retry_direction_shape(
+    const SimplexTableau *tab,
+    int leaving,
+    double *dir_inf_out,
+    int *dir_nnz_out,
+    double *pivot_abs_out);
+
+/* Direct dual rescue guard (needed by p1_progress_attempt_direct_rescue) */
+int phase1_direct_dual_rescue_guard_plan(SimplexSolver *solver,
+                                         int rescue_cooldown_iters,
+                                         int rescue_fail_streak);
+
 #endif /* SIMPLEX_INTERNAL_H */
