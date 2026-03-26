@@ -20,6 +20,256 @@
 #include <math.h>
 #include <limits.h>
 
+/* ── Shared helpers ─────────────────────────────────────────────────── */
+
+typedef enum {
+    P1_DIR_DEFER_MODERATE,    /* sets moderate_defer_pending = 1 */
+    P1_DIR_DEFER_COOLDOWN,    /* updates cooldown, clears moderate_defer */
+    P1_DIR_DEFER_LADDER       /* updates cooldown only */
+} P1DirDeferReason;
+
+/* Core defer logic shared by 3 paths in p1_zone_direction_guard():
+ * moderate-defer, cooldown-skip, and no-pivot ladder-defer.
+ * Encapsulates: note_dir_skip → exclude_entering → bump streak →
+ * use_bland → recompute_dir_skip_safe → activate_force_pivot →
+ * progress_update (moderate/cooldown only). */
+static void p1_dir_skip_defer_core(SimplexSolver *solver,
+                                   SimplexTableau *tab,
+                                   P1RecoveryState *rs,
+                                   int entering,
+                                   P1DirDeferReason reason,
+                                   int dir_stabilize_cooldown_target)
+{
+    /* Per-reason state setup */
+    if (reason == P1_DIR_DEFER_MODERATE) {
+        rs->numerical.dir_stabilize_moderate_defer_pending = 1;
+    } else if (reason == P1_DIR_DEFER_COOLDOWN) {
+        rs->numerical.dir_stabilize_moderate_defer_pending = 0;
+        if (dir_stabilize_cooldown_target > rs->numerical.dir_stabilize_cooldown) {
+            rs->numerical.dir_stabilize_cooldown = dir_stabilize_cooldown_target;
+        }
+    } else { /* P1_DIR_DEFER_LADDER */
+        if (dir_stabilize_cooldown_target > rs->numerical.dir_stabilize_cooldown) {
+            rs->numerical.dir_stabilize_cooldown = dir_stabilize_cooldown_target;
+        }
+    }
+
+    p1_numerical_note_dir_skip_entering(solver, entering, &rs->numerical);
+    p1_basis_exclude_entering(solver, entering,
+                              RALPH_PHASE1_ENTERING_EXCLUDE_ITERS, &rs->basis);
+    if (rs->numerical.dir_skip_event_streak < INT_MAX) {
+        rs->numerical.dir_skip_event_streak++;
+    }
+    rs->cycling.use_bland = 1;
+    phase1_recompute_dir_skip_safe(solver,
+                                   tab,
+                                   rs->cycling.degenerate_count,
+                                   rs->progress.no_pivot_streak + 1,
+                                   &rs->numerical.rc_only_streak,
+                                   &rs->numerical.dir_skip_no_recompute_streak);
+    if (p1_progress_activate_force_pivot(
+            solver,
+            tab->m,
+            rs->cycling.degenerate_count,
+            1,
+            &rs->numerical.dir_skip_event_streak,
+            &rs->progress,
+            &rs->progress.no_pivot_force_pending,
+            &rs->progress.no_pivot_force_reason) &&
+        solver->verbose >= 2) {
+        LP_LOG_STDERR("[simplex_phase1] Force-pivot mode activated after repeated dir-skip/no-recompute (budget=%d)\n",
+                rs->progress.force_pivot_attempt_budget);
+    }
+    /* Moderate-defer and cooldown-skip need a progress snapshot here;
+     * ladder-defer already called p1_progress_update before the ladder
+     * step check, so skip it to avoid double-counting window steps. */
+    if (reason != P1_DIR_DEFER_LADDER) {
+        p1_progress_update(solver, tab, &rs->progress);
+    }
+}
+
+typedef enum {
+    P1_DIR_SKIP_FOLLOWUP_TINY_THETA,   /* moderate-defer, cooldown-skip */
+    P1_DIR_SKIP_FOLLOWUP_STABILIZE     /* !stabilized path */
+} P1DirSkipFollowupKind;
+
+typedef struct {
+    P1DirSkipFollowupKind kind;
+    int arm_force_extreme_followup;    /* only for STABILIZE */
+    int arm_shadow_guard_followup;     /* only for STABILIZE */
+} P1DirSkipFollowupCtx;
+
+/* Ladder+rescue block shared by 3 paths: moderate-defer, cooldown-skip,
+ * and the !stabilized fallthrough.
+ * Encapsulates: no_pivot_ladder_retry telemetry → note_no_pivot →
+ * ladder_rescue_due check → rescue_guard → attempt_ladder_rescue →
+ * force_refactor escalation → final followup classification.
+ *
+ * Returns: 1 = caller should return P1_ZONE_CONTINUE,
+ *         -1 = caller should return P1_ZONE_RETURN_FAIL,
+ *          0 = no early return, caller continues its own flow. */
+static int p1_dir_skip_ladder_rescue_attempt(
+    SimplexSolver *solver,
+    SimplexTableau *tab,
+    P1RecoveryState *rs,
+    int iter,
+    const P1DirSkipFollowupCtx *followup)
+{
+    int tiny_theta = (followup->kind == P1_DIR_SKIP_FOLLOWUP_TINY_THETA);
+    int classified_a = 0;  /* tiny_theta_relax or force_extreme */
+    int classified_b = 0;  /* shadow guard (STABILIZE only) */
+
+    lp_telemetry_record_phase1_no_pivot_ladder_retry(
+        solver,
+        LP_PHASE1_NO_PIVOT_FORCE_REASON_DIR_SKIP);
+    if (p1_progress_note_no_pivot(
+            solver,
+            tab->m,
+            rs->cycling.degenerate_count,
+            LP_PHASE1_NO_PIVOT_FORCE_REASON_DIR_SKIP,
+            &rs->progress)) {
+        rs->progress.no_pivot_force_pending = 1;
+        rs->progress.no_pivot_force_reason =
+            LP_PHASE1_NO_PIVOT_FORCE_REASON_DIR_SKIP;
+        if (tiny_theta) {
+            if (rs->numerical.force_extreme_tiny_theta_relax_branch_pending) {
+                lp_telemetry_record_phase1_force_extreme_tiny_theta_relax_post_dir_skip_forced_refactor(
+                    solver);
+                rs->numerical.force_extreme_tiny_theta_relax_branch_pending = 0;
+                rs->numerical.force_extreme_tiny_theta_relax_next_pending = 1;
+                classified_a = 1;
+            }
+        } else {
+            if (followup->arm_force_extreme_followup) {
+                lp_telemetry_record_phase1_force_extreme_followup_post_dir_skip_forced_refactor(
+                    solver);
+                classified_a = 1;
+            }
+            if (followup->arm_shadow_guard_followup) {
+                lp_telemetry_record_phase1_failed_stabilize_retry_shadow_post_dir_skip_forced_refactor(
+                    solver);
+                classified_b = 1;
+            }
+        }
+    }
+    if (!rs->progress.no_pivot_force_pending &&
+        lp_refactor_policy_phase1_dir_skip_ladder_rescue_due(rs->numerical.dir_skip_event_streak)) {
+        int rescue_step = phase1_no_pivot_ladder_apply_rescue_guard(
+            solver,
+            PHASE1_NO_PIVOT_LADDER_STEP_DUAL_RESCUE,
+            rs->progress.no_pivot_ladder_rescue_cooldown,
+            rs->progress.no_pivot_ladder_rescue_fail_streak);
+        if (rescue_step == PHASE1_NO_PIVOT_LADDER_STEP_DUAL_RESCUE) {
+            int rescue_result = p1_progress_attempt_ladder_rescue(
+                solver,
+                tab,
+                iter,
+                LP_PHASE1_NO_PIVOT_FORCE_REASON_DIR_SKIP,
+                LP_PHASE1_RECOMPUTE_REASON_DIR_SKIP,
+                &rs->progress,
+                &rs->numerical.rc_only_streak);
+            if (tiny_theta) {
+                if (rs->numerical.force_extreme_tiny_theta_relax_branch_pending) {
+                    lp_telemetry_record_phase1_force_extreme_tiny_theta_relax_post_dir_skip_dual_rescue(
+                        solver);
+                    rs->numerical.force_extreme_tiny_theta_relax_branch_pending = 0;
+                    rs->numerical.force_extreme_tiny_theta_relax_next_pending = 1;
+                    classified_a = 1;
+                }
+            } else {
+                if (followup->arm_force_extreme_followup) {
+                    lp_telemetry_record_phase1_force_extreme_followup_post_dir_skip_dual_rescue(
+                        solver);
+                    classified_a = 1;
+                }
+                if (followup->arm_shadow_guard_followup) {
+                    lp_telemetry_record_phase1_failed_stabilize_retry_shadow_post_dir_skip_dual_rescue(
+                        solver);
+                    classified_b = 1;
+                }
+            }
+            if (rescue_result == 1) return 1;
+            if (rescue_result < 0) return -1;
+        } else if (rescue_step == PHASE1_NO_PIVOT_LADDER_STEP_FORCE_REFACTOR) {
+            lp_telemetry_record_phase1_no_pivot_ladder_forced_refactor(
+                solver,
+                LP_PHASE1_NO_PIVOT_FORCE_REASON_DIR_SKIP);
+            rs->progress.no_pivot_force_pending = 1;
+            rs->progress.no_pivot_force_reason =
+                LP_PHASE1_NO_PIVOT_FORCE_REASON_DIR_SKIP;
+            if (tiny_theta) {
+                if (rs->numerical.force_extreme_tiny_theta_relax_branch_pending) {
+                    lp_telemetry_record_phase1_force_extreme_tiny_theta_relax_post_dir_skip_forced_refactor(
+                        solver);
+                    rs->numerical.force_extreme_tiny_theta_relax_branch_pending = 0;
+                    rs->numerical.force_extreme_tiny_theta_relax_next_pending = 1;
+                    classified_a = 1;
+                }
+            } else {
+                if (followup->arm_force_extreme_followup) {
+                    lp_telemetry_record_phase1_force_extreme_followup_post_dir_skip_forced_refactor(
+                        solver);
+                    classified_a = 1;
+                }
+                if (followup->arm_shadow_guard_followup) {
+                    lp_telemetry_record_phase1_failed_stabilize_retry_shadow_post_dir_skip_forced_refactor(
+                        solver);
+                    classified_b = 1;
+                }
+            }
+        }
+    }
+    /* Final classification for any unclassified followups. */
+    if (tiny_theta) {
+        if (rs->numerical.force_extreme_tiny_theta_relax_branch_pending &&
+            !classified_a) {
+            lp_telemetry_record_phase1_force_extreme_tiny_theta_relax_post_dir_skip_retry(
+                solver);
+            rs->numerical.force_extreme_tiny_theta_relax_branch_pending = 0;
+            rs->numerical.force_extreme_tiny_theta_relax_next_pending = 1;
+        }
+    } else {
+        if (followup->arm_force_extreme_followup && !classified_a) {
+            lp_telemetry_record_phase1_force_extreme_followup_post_dir_skip_retry(
+                solver);
+        }
+        if (followup->arm_shadow_guard_followup && !classified_b) {
+            lp_telemetry_record_phase1_failed_stabilize_retry_shadow_post_dir_skip_retry(
+                solver);
+        }
+    }
+    return 0;
+}
+
+/* Clear 4 followup fields, consume the followup event, then call
+ * p1_progress_note_no_pivot and arm no_pivot_force_pending if triggered.
+ * Shared by p1_zone_ratio_breakdown() and p1_zone_pivot() (pivot fail).
+ * Returns 1 if no_pivot_force_pending was armed. */
+static int p1_clear_followups_and_note_no_pivot(
+    SimplexSolver *solver,
+    SimplexTableau *tab,
+    P1RecoveryState *rs,
+    P1FollowupEvent event,
+    LPPhase1NoPivotForceReason reason)
+{
+    rs->numerical.shadow_guard_followup_direction_pending = 0;
+    rs->numerical.force_extreme_followup_direction_pending = 0;
+    rs->numerical.force_extreme_followup_bound_flip_streak = 0;
+    rs->numerical.force_extreme_followup_tiny_theta_streak = 0;
+    p1_numerical_consume_followup(solver, event, &rs->numerical);
+    if (p1_progress_note_no_pivot(
+            solver,
+            tab->m,
+            rs->cycling.degenerate_count,
+            reason,
+            &rs->progress)) {
+        rs->progress.no_pivot_force_pending = 1;
+        rs->progress.no_pivot_force_reason = reason;
+        return 1;
+    }
+    return 0;
+}
+
 /* ── Zone 1: Cooldown tick ──────────────────────────────────────────── */
 
 void p1_zone_tick_cooldowns(SimplexSolver *solver,
@@ -336,22 +586,10 @@ P1ZoneResult p1_zone_ratio_breakdown(SimplexSolver *solver,
 {
     int entering = ctx->entering;
 
-    rs->numerical.shadow_guard_followup_direction_pending = 0;
-    rs->numerical.force_extreme_followup_direction_pending = 0;
-    rs->numerical.force_extreme_followup_bound_flip_streak = 0;
-    rs->numerical.force_extreme_followup_tiny_theta_streak = 0;
-    p1_numerical_consume_followup(solver, P1_FOLLOWUP_EVENT_RATIO_BREAKDOWN, &rs->numerical);
+    p1_clear_followups_and_note_no_pivot(solver, tab, rs,
+        P1_FOLLOWUP_EVENT_RATIO_BREAKDOWN,
+        LP_PHASE1_NO_PIVOT_FORCE_REASON_RATIO_BREAKDOWN);
     phase1_trace_record_no_entering(solver, iter, ctx->ratio_status);
-    if (p1_progress_note_no_pivot(
-            solver,
-            tab->m,
-            rs->cycling.degenerate_count,
-            LP_PHASE1_NO_PIVOT_FORCE_REASON_RATIO_BREAKDOWN,
-            &rs->progress)) {
-        rs->progress.no_pivot_force_pending = 1;
-        rs->progress.no_pivot_force_reason =
-            LP_PHASE1_NO_PIVOT_FORCE_REASON_RATIO_BREAKDOWN;
-    }
 
     p1_progress_update(solver, tab, &rs->progress);
     {
@@ -586,21 +824,9 @@ P1ZoneResult p1_zone_pivot(SimplexSolver *solver,
         lp_telemetry_record_pivot_timed(solver, 1, t_pivot_ms);
     }
     if (pivot_status != 0) {
-        rs->numerical.shadow_guard_followup_direction_pending = 0;
-        rs->numerical.force_extreme_followup_direction_pending = 0;
-        rs->numerical.force_extreme_followup_bound_flip_streak = 0;
-        rs->numerical.force_extreme_followup_tiny_theta_streak = 0;
-        p1_numerical_consume_followup(solver, P1_FOLLOWUP_EVENT_PIVOT_FAIL, &rs->numerical);
-        if (p1_progress_note_no_pivot(
-                solver,
-                tab->m,
-                rs->cycling.degenerate_count,
-                LP_PHASE1_NO_PIVOT_FORCE_REASON_PIVOT_FAIL,
-                &rs->progress)) {
-            rs->progress.no_pivot_force_pending = 1;
-            rs->progress.no_pivot_force_reason =
-                LP_PHASE1_NO_PIVOT_FORCE_REASON_PIVOT_FAIL;
-        }
+        p1_clear_followups_and_note_no_pivot(solver, tab, rs,
+            P1_FOLLOWUP_EVENT_PIVOT_FAIL,
+            LP_PHASE1_NO_PIVOT_FORCE_REASON_PIVOT_FAIL);
         int pivot_fail_reason = tab->trace_last_fail_reason;
         if (entering == rs->basis.fail_entering &&
             leaving == rs->basis.fail_leaving_pos &&
@@ -1571,220 +1797,37 @@ P1ZoneResult p1_zone_direction_guard(SimplexSolver *solver,
         }
 
         if (moderate_defer && !force_dir_refactor && !force_pivot_mode_active) {
-            rs->numerical.dir_stabilize_moderate_defer_pending = 1;
             if (solver->verbose >= 2) {
                 LP_LOG_STDERR("[simplex_phase1] Moderate direction norm %.2e at iter %d (entering=%d), deferring one refactor and retrying pricing\n",
                         dir_inf, iter, entering);
             }
-            p1_numerical_note_dir_skip_entering(solver, entering, &rs->numerical);
-            p1_basis_exclude_entering(solver, entering,
-                                      RALPH_PHASE1_ENTERING_EXCLUDE_ITERS, &rs->basis);
-            if (rs->numerical.dir_skip_event_streak < INT_MAX) {
-                rs->numerical.dir_skip_event_streak++;
-            }
-            rs->cycling.use_bland = 1;
-            phase1_recompute_dir_skip_safe(solver,
-                                           tab,
-                                           rs->cycling.degenerate_count,
-                                           rs->progress.no_pivot_streak + 1,
-                                           &rs->numerical.rc_only_streak,
-                                           &rs->numerical.dir_skip_no_recompute_streak);
-            if (p1_progress_activate_force_pivot(
-                    solver,
-                    tab->m,
-                    rs->cycling.degenerate_count,
-                    1,
-                    &rs->numerical.dir_skip_event_streak,
-                    &rs->progress,
-                    &rs->progress.no_pivot_force_pending,
-                    &rs->progress.no_pivot_force_reason) &&
-                solver->verbose >= 2) {
-                LP_LOG_STDERR("[simplex_phase1] Force-pivot mode activated after repeated dir-skip/no-recompute (budget=%d)\n",
-                        rs->progress.force_pivot_attempt_budget);
-            }
-            p1_progress_update(solver, tab, &rs->progress);
+            p1_dir_skip_defer_core(solver, tab, rs, entering,
+                                   P1_DIR_DEFER_MODERATE,
+                                   dir_stabilize_cooldown_target);
             {
-                int tiny_theta_relax_immediate_classified = 0;
-
-            lp_telemetry_record_phase1_no_pivot_ladder_retry(
-                solver,
-                LP_PHASE1_NO_PIVOT_FORCE_REASON_DIR_SKIP);
-            if (p1_progress_note_no_pivot(
-                    solver,
-                    tab->m,
-                    rs->cycling.degenerate_count,
-                    LP_PHASE1_NO_PIVOT_FORCE_REASON_DIR_SKIP,
-                    &rs->progress)) {
-                rs->progress.no_pivot_force_pending = 1;
-                rs->progress.no_pivot_force_reason =
-                    LP_PHASE1_NO_PIVOT_FORCE_REASON_DIR_SKIP;
-                if (rs->numerical.force_extreme_tiny_theta_relax_branch_pending) {
-                    lp_telemetry_record_phase1_force_extreme_tiny_theta_relax_post_dir_skip_forced_refactor(
-                        solver);
-                    rs->numerical.force_extreme_tiny_theta_relax_branch_pending = 0;
-                    rs->numerical.force_extreme_tiny_theta_relax_next_pending = 1;
-                    tiny_theta_relax_immediate_classified = 1;
-                }
-            }
-            if (!rs->progress.no_pivot_force_pending &&
-                lp_refactor_policy_phase1_dir_skip_ladder_rescue_due(rs->numerical.dir_skip_event_streak)) {
-                int rescue_step = phase1_no_pivot_ladder_apply_rescue_guard(
-                    solver,
-                    PHASE1_NO_PIVOT_LADDER_STEP_DUAL_RESCUE,
-                    rs->progress.no_pivot_ladder_rescue_cooldown,
-                    rs->progress.no_pivot_ladder_rescue_fail_streak);
-                if (rescue_step == PHASE1_NO_PIVOT_LADDER_STEP_DUAL_RESCUE) {
-                    int rescue_result = p1_progress_attempt_ladder_rescue(
-                        solver,
-                        tab,
-                        iter,
-                        LP_PHASE1_NO_PIVOT_FORCE_REASON_DIR_SKIP,
-                        LP_PHASE1_RECOMPUTE_REASON_DIR_SKIP,
-                        &rs->progress,
-                        &rs->numerical.rc_only_streak);
-                    if (rs->numerical.force_extreme_tiny_theta_relax_branch_pending) {
-                        lp_telemetry_record_phase1_force_extreme_tiny_theta_relax_post_dir_skip_dual_rescue(
-                            solver);
-                        rs->numerical.force_extreme_tiny_theta_relax_branch_pending = 0;
-                        rs->numerical.force_extreme_tiny_theta_relax_next_pending = 1;
-                        tiny_theta_relax_immediate_classified = 1;
-                    }
-                    if (rescue_result == 1) return P1_ZONE_CONTINUE;
-                    if (rescue_result < 0) return P1_ZONE_RETURN_FAIL;
-                } else if (rescue_step == PHASE1_NO_PIVOT_LADDER_STEP_FORCE_REFACTOR) {
-                    lp_telemetry_record_phase1_no_pivot_ladder_forced_refactor(
-                        solver,
-                        LP_PHASE1_NO_PIVOT_FORCE_REASON_DIR_SKIP);
-                    rs->progress.no_pivot_force_pending = 1;
-                    rs->progress.no_pivot_force_reason =
-                        LP_PHASE1_NO_PIVOT_FORCE_REASON_DIR_SKIP;
-                    if (rs->numerical.force_extreme_tiny_theta_relax_branch_pending) {
-                        lp_telemetry_record_phase1_force_extreme_tiny_theta_relax_post_dir_skip_forced_refactor(
-                            solver);
-                        rs->numerical.force_extreme_tiny_theta_relax_branch_pending = 0;
-                        rs->numerical.force_extreme_tiny_theta_relax_next_pending = 1;
-                        tiny_theta_relax_immediate_classified = 1;
-                    }
-                }
-            }
-                if (rs->numerical.force_extreme_tiny_theta_relax_branch_pending &&
-                    !tiny_theta_relax_immediate_classified) {
-                    lp_telemetry_record_phase1_force_extreme_tiny_theta_relax_post_dir_skip_retry(
-                        solver);
-                    rs->numerical.force_extreme_tiny_theta_relax_branch_pending = 0;
-                    rs->numerical.force_extreme_tiny_theta_relax_next_pending = 1;
-                }
+                P1DirSkipFollowupCtx followup = { .kind = P1_DIR_SKIP_FOLLOWUP_TINY_THETA };
+                int rc = p1_dir_skip_ladder_rescue_attempt(
+                    solver, tab, rs, iter, &followup);
+                if (rc == 1) return P1_ZONE_CONTINUE;
+                if (rc < 0) return P1_ZONE_RETURN_FAIL;
             }
             return P1_ZONE_CONTINUE;
         }
 
         if (cooldown_active && !force_dir_refactor && !force_pivot_mode_active) {
-            rs->numerical.dir_stabilize_moderate_defer_pending = 0;
             if (solver->verbose >= 2) {
                 LP_LOG_STDERR("[simplex_phase1] Large direction norm %.2e at iter %d (entering=%d), skipping direction-stabilize refactor (cooldown=%d)\n",
                         dir_inf, iter, entering, rs->numerical.dir_stabilize_cooldown);
             }
-            if (dir_stabilize_cooldown_target > rs->numerical.dir_stabilize_cooldown) {
-                rs->numerical.dir_stabilize_cooldown = dir_stabilize_cooldown_target;
-            }
-            p1_numerical_note_dir_skip_entering(solver, entering, &rs->numerical);
-            p1_basis_exclude_entering(solver, entering,
-                                      RALPH_PHASE1_ENTERING_EXCLUDE_ITERS, &rs->basis);
-            if (rs->numerical.dir_skip_event_streak < INT_MAX) {
-                rs->numerical.dir_skip_event_streak++;
-            }
-            rs->cycling.use_bland = 1;
-            phase1_recompute_dir_skip_safe(solver,
-                                           tab,
-                                           rs->cycling.degenerate_count,
-                                           rs->progress.no_pivot_streak + 1,
-                                           &rs->numerical.rc_only_streak,
-                                           &rs->numerical.dir_skip_no_recompute_streak);
-            if (p1_progress_activate_force_pivot(
-                    solver,
-                    tab->m,
-                    rs->cycling.degenerate_count,
-                    1,
-                    &rs->numerical.dir_skip_event_streak,
-                    &rs->progress,
-                    &rs->progress.no_pivot_force_pending,
-                    &rs->progress.no_pivot_force_reason) &&
-                solver->verbose >= 2) {
-                LP_LOG_STDERR("[simplex_phase1] Force-pivot mode activated after repeated dir-skip/no-recompute (budget=%d)\n",
-                        rs->progress.force_pivot_attempt_budget);
-            }
-            p1_progress_update(solver, tab, &rs->progress);
+            p1_dir_skip_defer_core(solver, tab, rs, entering,
+                                   P1_DIR_DEFER_COOLDOWN,
+                                   dir_stabilize_cooldown_target);
             {
-                int tiny_theta_relax_immediate_classified = 0;
-
-            lp_telemetry_record_phase1_no_pivot_ladder_retry(
-                solver,
-                LP_PHASE1_NO_PIVOT_FORCE_REASON_DIR_SKIP);
-            if (p1_progress_note_no_pivot(
-                    solver,
-                    tab->m,
-                    rs->cycling.degenerate_count,
-                    LP_PHASE1_NO_PIVOT_FORCE_REASON_DIR_SKIP,
-                    &rs->progress)) {
-                rs->progress.no_pivot_force_pending = 1;
-                rs->progress.no_pivot_force_reason =
-                    LP_PHASE1_NO_PIVOT_FORCE_REASON_DIR_SKIP;
-                if (rs->numerical.force_extreme_tiny_theta_relax_branch_pending) {
-                    lp_telemetry_record_phase1_force_extreme_tiny_theta_relax_post_dir_skip_forced_refactor(
-                        solver);
-                    rs->numerical.force_extreme_tiny_theta_relax_branch_pending = 0;
-                    rs->numerical.force_extreme_tiny_theta_relax_next_pending = 1;
-                    tiny_theta_relax_immediate_classified = 1;
-                }
-            }
-            if (!rs->progress.no_pivot_force_pending &&
-                lp_refactor_policy_phase1_dir_skip_ladder_rescue_due(rs->numerical.dir_skip_event_streak)) {
-                int rescue_step = phase1_no_pivot_ladder_apply_rescue_guard(
-                    solver,
-                    PHASE1_NO_PIVOT_LADDER_STEP_DUAL_RESCUE,
-                    rs->progress.no_pivot_ladder_rescue_cooldown,
-                    rs->progress.no_pivot_ladder_rescue_fail_streak);
-                if (rescue_step == PHASE1_NO_PIVOT_LADDER_STEP_DUAL_RESCUE) {
-                    int rescue_result = p1_progress_attempt_ladder_rescue(
-                        solver,
-                        tab,
-                        iter,
-                        LP_PHASE1_NO_PIVOT_FORCE_REASON_DIR_SKIP,
-                        LP_PHASE1_RECOMPUTE_REASON_DIR_SKIP,
-                        &rs->progress,
-                        &rs->numerical.rc_only_streak);
-                    if (rs->numerical.force_extreme_tiny_theta_relax_branch_pending) {
-                        lp_telemetry_record_phase1_force_extreme_tiny_theta_relax_post_dir_skip_dual_rescue(
-                            solver);
-                        rs->numerical.force_extreme_tiny_theta_relax_branch_pending = 0;
-                        rs->numerical.force_extreme_tiny_theta_relax_next_pending = 1;
-                        tiny_theta_relax_immediate_classified = 1;
-                    }
-                    if (rescue_result == 1) return P1_ZONE_CONTINUE;
-                    if (rescue_result < 0) return P1_ZONE_RETURN_FAIL;
-                } else if (rescue_step == PHASE1_NO_PIVOT_LADDER_STEP_FORCE_REFACTOR) {
-                    lp_telemetry_record_phase1_no_pivot_ladder_forced_refactor(
-                        solver,
-                        LP_PHASE1_NO_PIVOT_FORCE_REASON_DIR_SKIP);
-                    rs->progress.no_pivot_force_pending = 1;
-                    rs->progress.no_pivot_force_reason =
-                        LP_PHASE1_NO_PIVOT_FORCE_REASON_DIR_SKIP;
-                    if (rs->numerical.force_extreme_tiny_theta_relax_branch_pending) {
-                        lp_telemetry_record_phase1_force_extreme_tiny_theta_relax_post_dir_skip_forced_refactor(
-                            solver);
-                        rs->numerical.force_extreme_tiny_theta_relax_branch_pending = 0;
-                        rs->numerical.force_extreme_tiny_theta_relax_next_pending = 1;
-                        tiny_theta_relax_immediate_classified = 1;
-                    }
-                }
-            }
-                if (rs->numerical.force_extreme_tiny_theta_relax_branch_pending &&
-                    !tiny_theta_relax_immediate_classified) {
-                    lp_telemetry_record_phase1_force_extreme_tiny_theta_relax_post_dir_skip_retry(
-                        solver);
-                    rs->numerical.force_extreme_tiny_theta_relax_branch_pending = 0;
-                    rs->numerical.force_extreme_tiny_theta_relax_next_pending = 1;
-                }
+                P1DirSkipFollowupCtx followup = { .kind = P1_DIR_SKIP_FOLLOWUP_TINY_THETA };
+                int rc = p1_dir_skip_ladder_rescue_attempt(
+                    solver, tab, rs, iter, &followup);
+                if (rc == 1) return P1_ZONE_CONTINUE;
+                if (rc < 0) return P1_ZONE_RETURN_FAIL;
             }
             return P1_ZONE_CONTINUE;
         }
@@ -1825,35 +1868,9 @@ P1ZoneResult p1_zone_direction_guard(SimplexSolver *solver,
                     LP_LOG_STDERR("[simplex_phase1] No-pivot ladder defers dir-stabilize refactor (iter=%d entering=%d no_progress=%d threshold=%d)\n",
                             iter, entering, rs->progress.no_pivot_no_progress_streak, ladder_threshold);
                 }
-                if (dir_stabilize_cooldown_target > rs->numerical.dir_stabilize_cooldown) {
-                    rs->numerical.dir_stabilize_cooldown = dir_stabilize_cooldown_target;
-                }
-                p1_numerical_note_dir_skip_entering(solver, entering, &rs->numerical);
-                p1_basis_exclude_entering(solver, entering,
-                                          RALPH_PHASE1_ENTERING_EXCLUDE_ITERS, &rs->basis);
-                if (rs->numerical.dir_skip_event_streak < INT_MAX) {
-                    rs->numerical.dir_skip_event_streak++;
-                }
-                rs->cycling.use_bland = 1;
-                phase1_recompute_dir_skip_safe(solver,
-                                               tab,
-                                               rs->cycling.degenerate_count,
-                                               rs->progress.no_pivot_streak + 1,
-                                               &rs->numerical.rc_only_streak,
-                                               &rs->numerical.dir_skip_no_recompute_streak);
-                if (p1_progress_activate_force_pivot(
-                        solver,
-                        tab->m,
-                        rs->cycling.degenerate_count,
-                        1,
-                        &rs->numerical.dir_skip_event_streak,
-                        &rs->progress,
-                        &rs->progress.no_pivot_force_pending,
-                        &rs->progress.no_pivot_force_reason) &&
-                    solver->verbose >= 2) {
-                    LP_LOG_STDERR("[simplex_phase1] Force-pivot mode activated after repeated dir-skip/no-recompute (budget=%d)\n",
-                            rs->progress.force_pivot_attempt_budget);
-                }
+                p1_dir_skip_defer_core(solver, tab, rs, entering,
+                                       P1_DIR_DEFER_LADDER,
+                                       dir_stabilize_cooldown_target);
                 if (p1_progress_note_no_pivot(
                         solver,
                         tab->m,
@@ -2406,89 +2423,15 @@ P1ZoneResult p1_zone_direction_guard(SimplexSolver *solver,
             }
             p1_progress_update(solver, tab, &rs->progress);
             {
-                int force_extreme_followup_immediate_classified = 0;
-                int shadow_followup_immediate_classified = 0;
-
-                lp_telemetry_record_phase1_no_pivot_ladder_retry(
-                    solver,
-                    LP_PHASE1_NO_PIVOT_FORCE_REASON_DIR_SKIP);
-                if (p1_progress_note_no_pivot(
-                        solver,
-                        tab->m,
-                        rs->cycling.degenerate_count,
-                        LP_PHASE1_NO_PIVOT_FORCE_REASON_DIR_SKIP,
-                        &rs->progress)) {
-                    rs->progress.no_pivot_force_pending = 1;
-                    rs->progress.no_pivot_force_reason =
-                        LP_PHASE1_NO_PIVOT_FORCE_REASON_DIR_SKIP;
-                    if (arm_force_extreme_followup_pending) {
-                        lp_telemetry_record_phase1_force_extreme_followup_post_dir_skip_forced_refactor(
-                            solver);
-                        force_extreme_followup_immediate_classified = 1;
-                    }
-                    if (arm_shadow_guard_followup_pending) {
-                        lp_telemetry_record_phase1_failed_stabilize_retry_shadow_post_dir_skip_forced_refactor(
-                            solver);
-                        shadow_followup_immediate_classified = 1;
-                    }
-                }
-                if (!rs->progress.no_pivot_force_pending &&
-                    lp_refactor_policy_phase1_dir_skip_ladder_rescue_due(rs->numerical.dir_skip_event_streak)) {
-                    int rescue_step = phase1_no_pivot_ladder_apply_rescue_guard(
-                        solver,
-                        PHASE1_NO_PIVOT_LADDER_STEP_DUAL_RESCUE,
-                        rs->progress.no_pivot_ladder_rescue_cooldown,
-                        rs->progress.no_pivot_ladder_rescue_fail_streak);
-                    if (rescue_step == PHASE1_NO_PIVOT_LADDER_STEP_DUAL_RESCUE) {
-                        int rescue_result = p1_progress_attempt_ladder_rescue(
-                            solver,
-                            tab,
-                            iter,
-                            LP_PHASE1_NO_PIVOT_FORCE_REASON_DIR_SKIP,
-                            LP_PHASE1_RECOMPUTE_REASON_DIR_SKIP,
-                            &rs->progress,
-                            &rs->numerical.rc_only_streak);
-                        if (arm_force_extreme_followup_pending) {
-                            lp_telemetry_record_phase1_force_extreme_followup_post_dir_skip_dual_rescue(
-                                solver);
-                            force_extreme_followup_immediate_classified = 1;
-                        }
-                        if (arm_shadow_guard_followup_pending) {
-                            lp_telemetry_record_phase1_failed_stabilize_retry_shadow_post_dir_skip_dual_rescue(
-                                solver);
-                            shadow_followup_immediate_classified = 1;
-                        }
-                        if (rescue_result == 1) return P1_ZONE_CONTINUE;
-                        if (rescue_result < 0) return P1_ZONE_RETURN_FAIL;
-                    } else if (rescue_step == PHASE1_NO_PIVOT_LADDER_STEP_FORCE_REFACTOR) {
-                        lp_telemetry_record_phase1_no_pivot_ladder_forced_refactor(
-                            solver,
-                            LP_PHASE1_NO_PIVOT_FORCE_REASON_DIR_SKIP);
-                        rs->progress.no_pivot_force_pending = 1;
-                        rs->progress.no_pivot_force_reason =
-                            LP_PHASE1_NO_PIVOT_FORCE_REASON_DIR_SKIP;
-                        if (arm_force_extreme_followup_pending) {
-                            lp_telemetry_record_phase1_force_extreme_followup_post_dir_skip_forced_refactor(
-                                solver);
-                            force_extreme_followup_immediate_classified = 1;
-                        }
-                        if (arm_shadow_guard_followup_pending) {
-                            lp_telemetry_record_phase1_failed_stabilize_retry_shadow_post_dir_skip_forced_refactor(
-                                solver);
-                            shadow_followup_immediate_classified = 1;
-                        }
-                    }
-                }
-                if (arm_force_extreme_followup_pending &&
-                    !force_extreme_followup_immediate_classified) {
-                    lp_telemetry_record_phase1_force_extreme_followup_post_dir_skip_retry(
-                        solver);
-                }
-                if (arm_shadow_guard_followup_pending &&
-                    !shadow_followup_immediate_classified) {
-                    lp_telemetry_record_phase1_failed_stabilize_retry_shadow_post_dir_skip_retry(
-                        solver);
-                }
+                P1DirSkipFollowupCtx followup = {
+                    .kind = P1_DIR_SKIP_FOLLOWUP_STABILIZE,
+                    .arm_force_extreme_followup = arm_force_extreme_followup_pending,
+                    .arm_shadow_guard_followup = arm_shadow_guard_followup_pending
+                };
+                int rc = p1_dir_skip_ladder_rescue_attempt(
+                    solver, tab, rs, iter, &followup);
+                if (rc == 1) return P1_ZONE_CONTINUE;
+                if (rc < 0) return P1_ZONE_RETURN_FAIL;
             }
             return P1_ZONE_CONTINUE;
         }
