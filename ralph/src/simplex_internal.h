@@ -15,6 +15,7 @@
 #include "lp_refactor_policy.h"
 #include "lp_reinvert_controller.h"
 #include "simplex_phase1_stabilize.h"
+#include "simplex_refactor_schedule.h"
 
 /* Variable eligibility check (accounts for GLPK-compat exclusion rules) */
 int simplex_smcp_excl_skip_var(const SimplexTableau *tab, int j);
@@ -34,13 +35,7 @@ int phase1_direct_dual_rescue_guard_plan(SimplexSolver *solver,
                                          int rescue_cooldown_iters,
                                          int rescue_fail_streak);
 
-/* ── Types shared between simplex.c and zone handlers ─────────────── */
-
-typedef struct {
-    int active;
-    int suggested_refactor;
-    LPReinvertControllerDecision decision;
-} LPReinvertShadowEval;
+/* LPReinvertShadowEval now defined in simplex_refactor_schedule.h */
 
 /* ── Constants shared between simplex.c and simplex_phase1_zones.c ── */
 
@@ -186,64 +181,8 @@ int phase1_force_extreme_catastrophic_tiny_theta_relax_plan(int m,
     int force_extreme_dir, int force_lu_health, int lu_hard_trigger,
     int tiny_theta_followup_streak, double pivot_ratio);
 
-/* Soft LU / periodic policy helpers (needed by post-pivot zone) */
-double phase_hotpath_ms(const SimplexSolver *owner, int phase);
-void soft_lu_record_iter_cost(SimplexSolver *owner, int phase, double iter_ms);
-void soft_lu_record_refactor_cost(SimplexSolver *owner, int phase, double refactor_ms);
-double soft_lu_iter_cost_ewma(const SimplexSolver *owner, int phase);
-double soft_lu_refactor_cost_ewma(const SimplexSolver *owner, int phase);
-void soft_lu_record_defer(SimplexSolver *owner, int phase);
-int soft_lu_consecutive_defers(const SimplexSolver *owner, int phase);
-void soft_lu_set_consecutive_defers(SimplexSolver *owner, int phase, int value);
-void soft_lu_reset_defer_streak(SimplexSolver *owner, int phase);
-void soft_lu_record_cap_forced(SimplexSolver *owner, int phase);
-double periodic_feedback_bias_for_phase(const SimplexSolver *owner, int phase);
-int periodic_policy_refactor_count(const SimplexSolver *owner, int phase);
-void periodic_feedback_set_hint(SimplexSolver *owner, int phase,
-                                int interval, double pressure);
-void periodic_cost_record_defer(SimplexSolver *owner, int phase);
-int periodic_cost_consecutive_defers(const SimplexSolver *owner, int phase);
-void periodic_cost_set_consecutive_defers(SimplexSolver *owner, int phase, int value);
-void periodic_cost_reset_defer_streak(SimplexSolver *owner, int phase);
-void periodic_cost_record_cap_forced(SimplexSolver *owner, int phase);
-void periodic_cost_record_gate_reason(SimplexSolver *owner, int phase,
-                                      LPPeriodicCostDampenReason reason);
-int periodic_cost_iter_samples(const SimplexSolver *owner, int phase);
-int periodic_cost_refactor_samples(const SimplexSolver *owner, int phase);
-void runtime_record_periodic_refactor_trigger(SimplexSolver *solver,
-                                              int phase, int lu_health_triggered);
+/* Soft LU / periodic policy / reinvert helpers now in simplex_refactor_schedule.h */
 int phase1_soft_lu_policy_cooldown_updates(int m, int degenerate_count,
                                            int periodic_interval);
-
-/* Reinvert controller helpers */
-LPReinvertControllerState *reinvert_state_for_phase(SimplexSolver *solver, int phase);
-void reinvert_phase1_pressure_safety_update(SimplexSolver *solver,
-    int iter, int no_pivot_streak, int no_progress_streak,
-    int ratio_breakdown_count, int dir_skip_no_recompute_streak,
-    int hard_lu_trigger);
-int reinvert_controller_controls_periodic_phase(const SimplexSolver *solver, int phase);
-void reinvert_shadow_prepare_phase(SimplexSolver *solver, SimplexTableau *tab,
-    int phase, int iter, const LPLUHealthRefactorDecision *lu_decision,
-    int periodic_nominal, int min_update_age, int policy_cooldown,
-    int control_periodic, int *periodic_candidate_io,
-    LPReinvertShadowEval *eval);
-void reinvert_shadow_eval_reset(LPReinvertShadowEval *eval);
-void reinvert_shadow_finalize_phase(SimplexSolver *solver, int phase,
-    const LPReinvertShadowEval *eval, int final_refactor);
-
-/* Soft LU / periodic cost defer plan (test-visible wrappers already non-static) */
-int simplex_soft_lu_defer_plan_for_test(int phase, int m, int use_bland,
-    int degenerate_count, int num_updates, int max_updates,
-    int spike_pool_used, int spike_pool_capacity, double cond_estimate,
-    double growth_factor, double refactor_cost_ewma, double iter_cost_ewma,
-    int consecutive_defers, int *defer_reason_out, int *cap_blocked_out,
-    int *next_consecutive_out);
-int simplex_periodic_cost_defer_plan_for_test(int phase, int m, int use_bland,
-    int degenerate_count, int num_updates, int max_updates,
-    int spike_pool_used, int spike_pool_capacity, double cond_estimate,
-    double growth_factor, double refactor_cost_ewma, double iter_cost_ewma,
-    int refactor_samples, int iter_samples, int consecutive_defers,
-    int *gate_reason_out, int *defer_reason_out, int *cap_blocked_out,
-    int *next_consecutive_out);
 
 #endif /* SIMPLEX_INTERNAL_H */
