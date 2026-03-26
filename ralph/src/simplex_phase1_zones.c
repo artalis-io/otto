@@ -178,3 +178,150 @@ P1ZoneResult p1_zone_pre_iter(SimplexSolver *solver,
 
     return P1_ZONE_PROCEED;
 }
+
+/* ── Zone 3: Pricing ────────────────────────────────────────────────── */
+
+P1ZoneResult p1_zone_pricing(SimplexSolver *solver,
+                             SimplexTableau *tab,
+                             P1RecoveryState *rs,
+                             int iter,
+                             P1IterContext *ctx)
+{
+    int entering;
+    int price_status;
+    double t_pricing_ms = lp_telemetry_timer_start();
+
+    price_status = pricing_dispatch(tab, rs->cycling.pricing_strategy, rs->cycling.use_bland,
+                                    0, iter, &entering);
+
+    if ((rs->basis.excluded_entering_ttl_a > 0 || rs->basis.excluded_entering_ttl_b > 0) &&
+        entering >= 0 &&
+        (entering == rs->basis.excluded_entering_a || entering == rs->basis.excluded_entering_b)) {
+        int alt_entering = -1;
+        int rerouted = 0;
+        int exclude_a = (rs->basis.excluded_entering_ttl_a > 0) ? rs->basis.excluded_entering_a : -1;
+        int exclude_b = (rs->basis.excluded_entering_ttl_b > 0) ? rs->basis.excluded_entering_b : -1;
+        if (pricing_bland_excluding_two(tab, exclude_a, exclude_b, &alt_entering) == 0) {
+            if (solver->verbose >= 2) {
+                LP_LOG_STDERR("[simplex_phase1] Excluding unstable entering (%d,%d), using %d instead\n",
+                        exclude_a, exclude_b, alt_entering);
+            }
+            entering = alt_entering;
+            rerouted = 1;
+        }
+        lp_telemetry_record_phase1_entering_exclusion_hit(solver, rerouted);
+    }
+    {
+        lp_telemetry_record_pricing_timed(solver, 1, t_pricing_ms);
+    }
+
+    if (price_status != 0) {
+        double art_sum;
+        phase1_trace_record_no_entering(solver, iter, price_status);
+
+        /* Optimal for Phase 1 - remove perturbation first, then check */
+        primal_remove_perturbation(tab);
+
+        /* Recompute solution without perturbation */
+        tab->phase1_compute_solution_context =
+            LP_PHASE1_COMPUTE_CTX_NO_ENTERING_CLEANUP;
+        tableau_compute_solution(tab);
+
+        /* Check if all artificial variables are zero */
+        art_sum = 0.0;
+        for (int k = 0; k < tab->num_artificial; k++) {
+            int j = tab->artificial_vars[k];
+            art_sum += fabs(tab->x[j]);
+        }
+
+        if (art_sum > RALPH_FEAS_TOL) {
+            /* Small residual might be fixable with a few more iterations.
+             * Use a relaxed tolerance (1e-4) to distinguish true infeasibility
+             * from numerical noise. */
+            if (art_sum > 1e-4) {
+                rs->progress.no_entering_cleanup_streak = 0;
+                /* Revalidate on a freshly factorized basis before certifying infeasible.
+                 * This guards against RC/solution drift on numerically hard instances. */
+                if (tableau_refactorize_with_reason(tab, RALPH_REFACTOR_REASON_INFEASIBILITY_CLEANUP) == 0) {
+                    tab->phase1_compute_solution_context =
+                        LP_PHASE1_COMPUTE_CTX_INFEAS_CLEANUP;
+                    tab->phase1_compute_rc_context =
+                        LP_PHASE1_COMPUTE_CTX_INFEAS_CLEANUP;
+                    tableau_compute_solution(tab);
+                    tableau_compute_reduced_costs(tab);
+
+                    double refined_art_sum = 0.0;
+                    for (int k = 0; k < tab->num_artificial; k++) {
+                        int j = tab->artificial_vars[k];
+                        refined_art_sum += fabs(tab->x[j]);
+                    }
+
+                    if (refined_art_sum <= 1e-4) {
+                        if (solver->verbose) {
+                            LP_LOG_STDERR("[simplex_phase1] Refactorized cleanup: art_sum %g -> %g\n",
+                                    art_sum, refined_art_sum);
+                        }
+                        return P1_ZONE_CONTINUE;
+                    }
+                    art_sum = refined_art_sum;
+                }
+
+                /* Truly infeasible - extract Farkas ray from Phase 1 duals.
+                 * The Phase 1 duals y = c_B^T * B^{-1} provide the certificate. */
+                if (solver->verbose) {
+                    LP_LOG_STDERR("[simplex_phase1] INFEASIBLE: artificial sum = %g after %d iterations\n",
+                            art_sum, iter);
+                }
+                extract_farkas_ray(solver);
+                solver->current_phase = SIMPLEX_PHASE_INFEASIBLE;
+                solver->status = RALPH_STATUS_INFEASIBLE;
+                solver->iterations = iter;
+                phase1_trace_emit_summary(solver, RALPH_STATUS_INFEASIBLE);
+                return P1_ZONE_RETURN_FAIL;
+            }
+
+            /* Small residual - try to clean up with a few more iterations */
+            rs->progress.no_entering_cleanup_streak++;
+            if (rs->progress.no_entering_cleanup_streak >= PHASE1_NO_ENTERING_CLEANUP_MAX_ITERS) {
+                if (solver->verbose) {
+                    LP_LOG_STDERR("[simplex_phase1] Accepting Phase 1 feasibility after %d no-entering cleanup iterations (art_sum=%g)\n",
+                            rs->progress.no_entering_cleanup_streak, art_sum);
+                }
+                solver->iterations = iter;
+                phase1_trace_emit_summary(solver, RALPH_STATUS_OPTIMAL);
+                return P1_ZONE_RETURN_OK;
+            }
+            if (solver->verbose) {
+                LP_LOG_STDERR("[simplex_phase1] Cleanup phase: art_sum=%g, continuing...\n", art_sum);
+            }
+            phase1_recompute_rc_only_guarded(solver, tab, &rs->numerical.rc_only_streak);
+            return P1_ZONE_CONTINUE;
+        }
+
+        /* Success */
+        rs->progress.no_entering_cleanup_streak = 0;
+        if (solver->verbose) {
+            LP_LOG_STDERR("[simplex_phase1] Phase 1 complete: feasible in %d iterations\n", iter);
+        }
+        solver->iterations = iter;
+        phase1_trace_emit_summary(solver, RALPH_STATUS_OPTIMAL);
+        return P1_ZONE_RETURN_OK;
+    }
+
+    rs->progress.no_entering_cleanup_streak = 0;
+
+    /* Ratio test: select leaving variable */
+    {
+        double t_ratio_ms = lp_telemetry_timer_start();
+        ctx->ratio_status = primal_ratio_test_with_policy(solver,
+                                                          tab,
+                                                          0,
+                                                          entering,
+                                                          &ctx->leaving,
+                                                          &ctx->theta);
+        lp_telemetry_record_ratio_timed(solver, 1, t_ratio_ms);
+    }
+
+    ctx->entering = entering;
+    return P1_ZONE_PROCEED;
+}
