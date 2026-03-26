@@ -312,11 +312,289 @@ static int test_window_pressure_reset_null_ps(void) {
     return 1;
 }
 
+/* ── p1_numerical_consume_followup (R3.3) ─────────────────────────── */
+
+static int test_consume_followup_clears_all_pending(void) {
+    P1NumericalState ns;
+    memset(&ns, 0, sizeof(ns));
+    ns.shadow_guard_followup_pending = 1;
+    ns.force_extreme_followup_pending = 1;
+    ns.force_extreme_tiny_theta_relax_next_pending = 1;
+
+    p1_numerical_consume_followup(NULL, P1_FOLLOWUP_EVENT_RATIO_BREAKDOWN, &ns);
+
+    ASSERT_INT_EQ(ns.shadow_guard_followup_pending, 0,
+                  "shadow_guard pending cleared");
+    ASSERT_INT_EQ(ns.force_extreme_followup_pending, 0,
+                  "force_extreme pending cleared");
+    ASSERT_INT_EQ(ns.force_extreme_tiny_theta_relax_next_pending, 0,
+                  "tiny_theta_relax pending cleared");
+
+    printf("PASS: test_consume_followup_clears_all_pending\n");
+    return 1;
+}
+
+static int test_consume_followup_skips_non_pending(void) {
+    P1NumericalState ns;
+    memset(&ns, 0, sizeof(ns));
+    ns.shadow_guard_followup_pending = 0;
+    ns.force_extreme_followup_pending = 1;
+    ns.force_extreme_tiny_theta_relax_next_pending = 0;
+
+    p1_numerical_consume_followup(NULL, P1_FOLLOWUP_EVENT_PIVOT_FAIL, &ns);
+
+    ASSERT_INT_EQ(ns.shadow_guard_followup_pending, 0,
+                  "shadow_guard still 0");
+    ASSERT_INT_EQ(ns.force_extreme_followup_pending, 0,
+                  "force_extreme cleared");
+    ASSERT_INT_EQ(ns.force_extreme_tiny_theta_relax_next_pending, 0,
+                  "tiny_theta still 0");
+
+    printf("PASS: test_consume_followup_skips_non_pending\n");
+    return 1;
+}
+
+static int test_consume_followup_null_ns(void) {
+    /* Should not crash */
+    p1_numerical_consume_followup(NULL, P1_FOLLOWUP_EVENT_PIVOT_SUCCESS, NULL);
+
+    printf("PASS: test_consume_followup_null_ns\n");
+    tests_total++;
+    tests_passed++;
+    return 1;
+}
+
+static int test_consume_followup_all_events(void) {
+    P1NumericalState ns;
+    P1FollowupEvent events[] = {
+        P1_FOLLOWUP_EVENT_FAILED_STABILIZE,
+        P1_FOLLOWUP_EVENT_RATIO_BREAKDOWN,
+        P1_FOLLOWUP_EVENT_PIVOT_FAIL,
+        P1_FOLLOWUP_EVENT_PIVOT_SUCCESS
+    };
+    int i;
+
+    for (i = 0; i < 4; i++) {
+        memset(&ns, 0, sizeof(ns));
+        ns.shadow_guard_followup_pending = 1;
+        p1_numerical_consume_followup(NULL, events[i], &ns);
+        ASSERT_INT_EQ(ns.shadow_guard_followup_pending, 0,
+                      "pending cleared for each event type");
+    }
+
+    printf("PASS: test_consume_followup_all_events\n");
+    return 1;
+}
+
+/* ── p1_numerical_note_dir_skip_entering (R3.3) ──────────────────── */
+
+static int test_dir_skip_entering_new(void) {
+    P1NumericalState ns;
+    memset(&ns, 0, sizeof(ns));
+    ns.last_dir_skip_entering = -1;
+    ns.dir_skip_same_entering_streak = 0;
+
+    p1_numerical_note_dir_skip_entering(NULL, 42, &ns);
+
+    ASSERT_INT_EQ(ns.last_dir_skip_entering, 42,
+                  "entering recorded");
+    ASSERT_INT_EQ(ns.dir_skip_same_entering_streak, 1,
+                  "streak starts at 1");
+
+    printf("PASS: test_dir_skip_entering_new\n");
+    return 1;
+}
+
+static int test_dir_skip_entering_same(void) {
+    P1NumericalState ns;
+    memset(&ns, 0, sizeof(ns));
+    ns.last_dir_skip_entering = 42;
+    ns.dir_skip_same_entering_streak = 3;
+
+    p1_numerical_note_dir_skip_entering(NULL, 42, &ns);
+
+    ASSERT_INT_EQ(ns.last_dir_skip_entering, 42,
+                  "entering still 42");
+    ASSERT_INT_EQ(ns.dir_skip_same_entering_streak, 4,
+                  "streak incremented");
+
+    printf("PASS: test_dir_skip_entering_same\n");
+    return 1;
+}
+
+static int test_dir_skip_entering_different(void) {
+    P1NumericalState ns;
+    memset(&ns, 0, sizeof(ns));
+    ns.last_dir_skip_entering = 42;
+    ns.dir_skip_same_entering_streak = 5;
+
+    p1_numerical_note_dir_skip_entering(NULL, 99, &ns);
+
+    ASSERT_INT_EQ(ns.last_dir_skip_entering, 99,
+                  "entering updated to 99");
+    ASSERT_INT_EQ(ns.dir_skip_same_entering_streak, 1,
+                  "streak reset to 1");
+
+    printf("PASS: test_dir_skip_entering_different\n");
+    return 1;
+}
+
+/* ── p1_basis_note_failed_stabilize_entering (R3.3) ──────────────── */
+
+static int test_failed_stabilize_entering_same(void) {
+    P1BasisRepairState bs;
+    memset(&bs, 0, sizeof(bs));
+    bs.last_failed_stabilize_entering = 10;
+    bs.failed_stabilize_same_entering_streak = 2;
+
+    p1_basis_note_failed_stabilize_entering(NULL, 10, &bs);
+
+    ASSERT_INT_EQ(bs.failed_stabilize_same_entering_streak, 3,
+                  "streak incremented");
+
+    printf("PASS: test_failed_stabilize_entering_same\n");
+    return 1;
+}
+
+static int test_failed_stabilize_entering_different(void) {
+    P1BasisRepairState bs;
+    memset(&bs, 0, sizeof(bs));
+    bs.last_failed_stabilize_entering = 10;
+    bs.failed_stabilize_same_entering_streak = 5;
+
+    p1_basis_note_failed_stabilize_entering(NULL, 20, &bs);
+
+    ASSERT_INT_EQ(bs.last_failed_stabilize_entering, 20,
+                  "entering updated");
+    ASSERT_INT_EQ(bs.failed_stabilize_same_entering_streak, 1,
+                  "streak reset to 1");
+
+    printf("PASS: test_failed_stabilize_entering_different\n");
+    return 1;
+}
+
+/* ── p1_basis_exclude_entering (R3.4) ─────────────────────────────── */
+
+static int test_exclude_entering_fills_slot_a(void) {
+    P1BasisRepairState bs;
+    memset(&bs, 0, sizeof(bs));
+    bs.excluded_entering_a = -1;
+    bs.excluded_entering_ttl_a = 0;
+    bs.excluded_entering_b = -1;
+    bs.excluded_entering_ttl_b = 0;
+
+    p1_basis_exclude_entering(NULL, 7, 5, &bs);
+
+    ASSERT_INT_EQ(bs.excluded_entering_a, 7, "slot A filled with var 7");
+    ASSERT_INT_EQ(bs.excluded_entering_ttl_a, 5, "slot A TTL set to 5");
+
+    printf("PASS: test_exclude_entering_fills_slot_a\n");
+    return 1;
+}
+
+static int test_exclude_entering_fills_slot_b(void) {
+    P1BasisRepairState bs;
+    memset(&bs, 0, sizeof(bs));
+    bs.excluded_entering_a = 3;
+    bs.excluded_entering_ttl_a = 4;
+    bs.excluded_entering_b = -1;
+    bs.excluded_entering_ttl_b = 0;
+
+    p1_basis_exclude_entering(NULL, 9, 6, &bs);
+
+    ASSERT_INT_EQ(bs.excluded_entering_a, 3, "slot A unchanged");
+    ASSERT_INT_EQ(bs.excluded_entering_b, 9, "slot B filled with var 9");
+    ASSERT_INT_EQ(bs.excluded_entering_ttl_b, 6, "slot B TTL set to 6");
+
+    printf("PASS: test_exclude_entering_fills_slot_b\n");
+    return 1;
+}
+
+static int test_exclude_entering_evicts_lower_ttl(void) {
+    P1BasisRepairState bs;
+    memset(&bs, 0, sizeof(bs));
+    bs.excluded_entering_a = 1;
+    bs.excluded_entering_ttl_a = 2;
+    bs.excluded_entering_b = 2;
+    bs.excluded_entering_ttl_b = 5;
+
+    /* Slot A has lower TTL (2 < 5), so it gets evicted */
+    p1_basis_exclude_entering(NULL, 3, 8, &bs);
+
+    ASSERT_INT_EQ(bs.excluded_entering_a, 3, "slot A evicted, now var 3");
+    ASSERT_INT_EQ(bs.excluded_entering_ttl_a, 8, "slot A TTL updated");
+    ASSERT_INT_EQ(bs.excluded_entering_b, 2, "slot B unchanged");
+
+    printf("PASS: test_exclude_entering_evicts_lower_ttl\n");
+    return 1;
+}
+
+static int test_exclude_entering_repeated_slot(void) {
+    P1BasisRepairState bs;
+    memset(&bs, 0, sizeof(bs));
+    bs.excluded_entering_a = 5;
+    bs.excluded_entering_ttl_a = 3;
+    bs.excluded_entering_b = -1;
+    bs.excluded_entering_ttl_b = 0;
+
+    /* Re-exclude same var — should refresh TTL */
+    p1_basis_exclude_entering(NULL, 5, 10, &bs);
+
+    ASSERT_INT_EQ(bs.excluded_entering_a, 5, "slot A still var 5");
+    ASSERT_INT_EQ(bs.excluded_entering_ttl_a, 10, "slot A TTL refreshed");
+
+    printf("PASS: test_exclude_entering_repeated_slot\n");
+    return 1;
+}
+
+/* ── p1_basis_pivot_fail_maybe_exclude (R3.4) ─────────────────────── */
+
+static int test_pivot_fail_maybe_exclude_below_threshold(void) {
+    P1BasisRepairState bs;
+    memset(&bs, 0, sizeof(bs));
+    bs.excluded_entering_a = -1;
+    bs.excluded_entering_ttl_a = 0;
+    bs.excluded_entering_b = -1;
+    bs.excluded_entering_ttl_b = 0;
+
+    /* fail_repeat_count=1 < PHASE1_PIVOT_FAIL_RECOVERY_EXCLUDE_TRIGGER=2 */
+    p1_basis_pivot_fail_maybe_exclude(NULL, 1, 42, &bs);
+
+    ASSERT_INT_EQ(bs.excluded_entering_a, -1,
+                  "no exclusion below threshold");
+
+    printf("PASS: test_pivot_fail_maybe_exclude_below_threshold\n");
+    return 1;
+}
+
+static int test_pivot_fail_maybe_exclude_at_threshold(void) {
+    P1BasisRepairState bs;
+    memset(&bs, 0, sizeof(bs));
+    bs.excluded_entering_a = -1;
+    bs.excluded_entering_ttl_a = 0;
+    bs.excluded_entering_b = -1;
+    bs.excluded_entering_ttl_b = 0;
+
+    /* fail_repeat_count=2 >= PHASE1_PIVOT_FAIL_RECOVERY_EXCLUDE_TRIGGER=2 */
+    p1_basis_pivot_fail_maybe_exclude(NULL, 2, 42, &bs);
+
+    ASSERT_INT_EQ(bs.excluded_entering_a, 42,
+                  "excluded at threshold");
+    ASSERT_TRUE(bs.excluded_entering_ttl_a > 0,
+                "TTL set");
+
+    printf("PASS: test_pivot_fail_maybe_exclude_at_threshold\n");
+    return 1;
+}
+
 /* ── main ─────────────────────────────────────────────────────────── */
+
+#define NUM_TESTS 26
 
 int main(void) {
     int pass = 0;
 
+    /* R3.2 tests */
     pass += test_progress_reset_zeros_fields();
     pass += test_note_no_pivot_increments_streak();
     pass += test_note_no_pivot_null_ps_returns_zero();
@@ -329,7 +607,30 @@ int main(void) {
     pass += test_window_pressure_reset_noop_when_empty();
     pass += test_window_pressure_reset_null_ps();
 
+    /* R3.3 tests: consume followup */
+    pass += test_consume_followup_clears_all_pending();
+    pass += test_consume_followup_skips_non_pending();
+    pass += test_consume_followup_null_ns();
+    pass += test_consume_followup_all_events();
+
+    /* R3.3 tests: streak trackers */
+    pass += test_dir_skip_entering_new();
+    pass += test_dir_skip_entering_same();
+    pass += test_dir_skip_entering_different();
+    pass += test_failed_stabilize_entering_same();
+    pass += test_failed_stabilize_entering_different();
+
+    /* R3.4 tests: entering exclusion */
+    pass += test_exclude_entering_fills_slot_a();
+    pass += test_exclude_entering_fills_slot_b();
+    pass += test_exclude_entering_evicts_lower_ttl();
+    pass += test_exclude_entering_repeated_slot();
+
+    /* R3.4 tests: pivot-fail exclusion */
+    pass += test_pivot_fail_maybe_exclude_below_threshold();
+    pass += test_pivot_fail_maybe_exclude_at_threshold();
+
     printf("\nPhase 1 recovery tests: %d/%d passed (%d assertions)\n",
-           pass, 11, tests_passed);
-    return (pass == 11) ? 0 : 1;
+           pass, NUM_TESTS, tests_passed);
+    return (pass == NUM_TESTS) ? 0 : 1;
 }
