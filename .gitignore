@@ -126,6 +126,7 @@ nexus/tests/golden/
 
 # Build artifacts
 ralph/api/ralph-solver-server
+ralph/ralph-benchmark
 site/test-results/
 
 # Node modules and package-lock.json
