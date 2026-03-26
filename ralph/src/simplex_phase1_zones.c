@@ -20,6 +20,74 @@
 #include <math.h>
 #include <limits.h>
 
+/* ── Shared helpers ─────────────────────────────────────────────────── */
+
+typedef enum {
+    P1_DIR_DEFER_MODERATE,    /* sets moderate_defer_pending = 1 */
+    P1_DIR_DEFER_COOLDOWN,    /* updates cooldown, clears moderate_defer */
+    P1_DIR_DEFER_LADDER       /* updates cooldown only */
+} P1DirDeferReason;
+
+/* Core defer logic shared by 3 paths in p1_zone_direction_guard():
+ * moderate-defer, cooldown-skip, and no-pivot ladder-defer.
+ * Encapsulates: note_dir_skip → exclude_entering → bump streak →
+ * use_bland → recompute_dir_skip_safe → activate_force_pivot →
+ * progress_update (moderate/cooldown only). */
+static void p1_dir_skip_defer_core(SimplexSolver *solver,
+                                   SimplexTableau *tab,
+                                   P1RecoveryState *rs,
+                                   int entering,
+                                   P1DirDeferReason reason,
+                                   int dir_stabilize_cooldown_target)
+{
+    /* Per-reason state setup */
+    if (reason == P1_DIR_DEFER_MODERATE) {
+        rs->numerical.dir_stabilize_moderate_defer_pending = 1;
+    } else if (reason == P1_DIR_DEFER_COOLDOWN) {
+        rs->numerical.dir_stabilize_moderate_defer_pending = 0;
+        if (dir_stabilize_cooldown_target > rs->numerical.dir_stabilize_cooldown) {
+            rs->numerical.dir_stabilize_cooldown = dir_stabilize_cooldown_target;
+        }
+    } else { /* P1_DIR_DEFER_LADDER */
+        if (dir_stabilize_cooldown_target > rs->numerical.dir_stabilize_cooldown) {
+            rs->numerical.dir_stabilize_cooldown = dir_stabilize_cooldown_target;
+        }
+    }
+
+    p1_numerical_note_dir_skip_entering(solver, entering, &rs->numerical);
+    p1_basis_exclude_entering(solver, entering,
+                              RALPH_PHASE1_ENTERING_EXCLUDE_ITERS, &rs->basis);
+    if (rs->numerical.dir_skip_event_streak < INT_MAX) {
+        rs->numerical.dir_skip_event_streak++;
+    }
+    rs->cycling.use_bland = 1;
+    phase1_recompute_dir_skip_safe(solver,
+                                   tab,
+                                   rs->cycling.degenerate_count,
+                                   rs->progress.no_pivot_streak + 1,
+                                   &rs->numerical.rc_only_streak,
+                                   &rs->numerical.dir_skip_no_recompute_streak);
+    if (p1_progress_activate_force_pivot(
+            solver,
+            tab->m,
+            rs->cycling.degenerate_count,
+            1,
+            &rs->numerical.dir_skip_event_streak,
+            &rs->progress,
+            &rs->progress.no_pivot_force_pending,
+            &rs->progress.no_pivot_force_reason) &&
+        solver->verbose >= 2) {
+        LP_LOG_STDERR("[simplex_phase1] Force-pivot mode activated after repeated dir-skip/no-recompute (budget=%d)\n",
+                rs->progress.force_pivot_attempt_budget);
+    }
+    /* Moderate-defer and cooldown-skip need a progress snapshot here;
+     * ladder-defer already called p1_progress_update before the ladder
+     * step check, so skip it to avoid double-counting window steps. */
+    if (reason != P1_DIR_DEFER_LADDER) {
+        p1_progress_update(solver, tab, &rs->progress);
+    }
+}
+
 /* ── Zone 1: Cooldown tick ──────────────────────────────────────────── */
 
 void p1_zone_tick_cooldowns(SimplexSolver *solver,
@@ -1571,38 +1639,13 @@ P1ZoneResult p1_zone_direction_guard(SimplexSolver *solver,
         }
 
         if (moderate_defer && !force_dir_refactor && !force_pivot_mode_active) {
-            rs->numerical.dir_stabilize_moderate_defer_pending = 1;
             if (solver->verbose >= 2) {
                 LP_LOG_STDERR("[simplex_phase1] Moderate direction norm %.2e at iter %d (entering=%d), deferring one refactor and retrying pricing\n",
                         dir_inf, iter, entering);
             }
-            p1_numerical_note_dir_skip_entering(solver, entering, &rs->numerical);
-            p1_basis_exclude_entering(solver, entering,
-                                      RALPH_PHASE1_ENTERING_EXCLUDE_ITERS, &rs->basis);
-            if (rs->numerical.dir_skip_event_streak < INT_MAX) {
-                rs->numerical.dir_skip_event_streak++;
-            }
-            rs->cycling.use_bland = 1;
-            phase1_recompute_dir_skip_safe(solver,
-                                           tab,
-                                           rs->cycling.degenerate_count,
-                                           rs->progress.no_pivot_streak + 1,
-                                           &rs->numerical.rc_only_streak,
-                                           &rs->numerical.dir_skip_no_recompute_streak);
-            if (p1_progress_activate_force_pivot(
-                    solver,
-                    tab->m,
-                    rs->cycling.degenerate_count,
-                    1,
-                    &rs->numerical.dir_skip_event_streak,
-                    &rs->progress,
-                    &rs->progress.no_pivot_force_pending,
-                    &rs->progress.no_pivot_force_reason) &&
-                solver->verbose >= 2) {
-                LP_LOG_STDERR("[simplex_phase1] Force-pivot mode activated after repeated dir-skip/no-recompute (budget=%d)\n",
-                        rs->progress.force_pivot_attempt_budget);
-            }
-            p1_progress_update(solver, tab, &rs->progress);
+            p1_dir_skip_defer_core(solver, tab, rs, entering,
+                                   P1_DIR_DEFER_MODERATE,
+                                   dir_stabilize_cooldown_target);
             {
                 int tiny_theta_relax_immediate_classified = 0;
 
@@ -1679,41 +1722,13 @@ P1ZoneResult p1_zone_direction_guard(SimplexSolver *solver,
         }
 
         if (cooldown_active && !force_dir_refactor && !force_pivot_mode_active) {
-            rs->numerical.dir_stabilize_moderate_defer_pending = 0;
             if (solver->verbose >= 2) {
                 LP_LOG_STDERR("[simplex_phase1] Large direction norm %.2e at iter %d (entering=%d), skipping direction-stabilize refactor (cooldown=%d)\n",
                         dir_inf, iter, entering, rs->numerical.dir_stabilize_cooldown);
             }
-            if (dir_stabilize_cooldown_target > rs->numerical.dir_stabilize_cooldown) {
-                rs->numerical.dir_stabilize_cooldown = dir_stabilize_cooldown_target;
-            }
-            p1_numerical_note_dir_skip_entering(solver, entering, &rs->numerical);
-            p1_basis_exclude_entering(solver, entering,
-                                      RALPH_PHASE1_ENTERING_EXCLUDE_ITERS, &rs->basis);
-            if (rs->numerical.dir_skip_event_streak < INT_MAX) {
-                rs->numerical.dir_skip_event_streak++;
-            }
-            rs->cycling.use_bland = 1;
-            phase1_recompute_dir_skip_safe(solver,
-                                           tab,
-                                           rs->cycling.degenerate_count,
-                                           rs->progress.no_pivot_streak + 1,
-                                           &rs->numerical.rc_only_streak,
-                                           &rs->numerical.dir_skip_no_recompute_streak);
-            if (p1_progress_activate_force_pivot(
-                    solver,
-                    tab->m,
-                    rs->cycling.degenerate_count,
-                    1,
-                    &rs->numerical.dir_skip_event_streak,
-                    &rs->progress,
-                    &rs->progress.no_pivot_force_pending,
-                    &rs->progress.no_pivot_force_reason) &&
-                solver->verbose >= 2) {
-                LP_LOG_STDERR("[simplex_phase1] Force-pivot mode activated after repeated dir-skip/no-recompute (budget=%d)\n",
-                        rs->progress.force_pivot_attempt_budget);
-            }
-            p1_progress_update(solver, tab, &rs->progress);
+            p1_dir_skip_defer_core(solver, tab, rs, entering,
+                                   P1_DIR_DEFER_COOLDOWN,
+                                   dir_stabilize_cooldown_target);
             {
                 int tiny_theta_relax_immediate_classified = 0;
 
@@ -1825,35 +1840,9 @@ P1ZoneResult p1_zone_direction_guard(SimplexSolver *solver,
                     LP_LOG_STDERR("[simplex_phase1] No-pivot ladder defers dir-stabilize refactor (iter=%d entering=%d no_progress=%d threshold=%d)\n",
                             iter, entering, rs->progress.no_pivot_no_progress_streak, ladder_threshold);
                 }
-                if (dir_stabilize_cooldown_target > rs->numerical.dir_stabilize_cooldown) {
-                    rs->numerical.dir_stabilize_cooldown = dir_stabilize_cooldown_target;
-                }
-                p1_numerical_note_dir_skip_entering(solver, entering, &rs->numerical);
-                p1_basis_exclude_entering(solver, entering,
-                                          RALPH_PHASE1_ENTERING_EXCLUDE_ITERS, &rs->basis);
-                if (rs->numerical.dir_skip_event_streak < INT_MAX) {
-                    rs->numerical.dir_skip_event_streak++;
-                }
-                rs->cycling.use_bland = 1;
-                phase1_recompute_dir_skip_safe(solver,
-                                               tab,
-                                               rs->cycling.degenerate_count,
-                                               rs->progress.no_pivot_streak + 1,
-                                               &rs->numerical.rc_only_streak,
-                                               &rs->numerical.dir_skip_no_recompute_streak);
-                if (p1_progress_activate_force_pivot(
-                        solver,
-                        tab->m,
-                        rs->cycling.degenerate_count,
-                        1,
-                        &rs->numerical.dir_skip_event_streak,
-                        &rs->progress,
-                        &rs->progress.no_pivot_force_pending,
-                        &rs->progress.no_pivot_force_reason) &&
-                    solver->verbose >= 2) {
-                    LP_LOG_STDERR("[simplex_phase1] Force-pivot mode activated after repeated dir-skip/no-recompute (budget=%d)\n",
-                            rs->progress.force_pivot_attempt_budget);
-                }
+                p1_dir_skip_defer_core(solver, tab, rs, entering,
+                                       P1_DIR_DEFER_LADDER,
+                                       dir_stabilize_cooldown_target);
                 if (p1_progress_note_no_pivot(
                         solver,
                         tab->m,
