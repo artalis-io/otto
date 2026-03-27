@@ -15,6 +15,7 @@
 #include "lp_refactor_policy.h"
 #include "lp_reinvert_controller.h"
 #include "simplex_phase1_stabilize.h"
+#include "simplex_phase1_decision.h"
 #include "simplex_refactor_schedule.h"
 
 /* Variable eligibility check (accounts for GLPK-compat exclusion rules) */
@@ -26,14 +27,8 @@ int tableau_compute_duals(SimplexTableau *tab);
 /* Lazy single reduced cost computation */
 double tableau_get_rc(SimplexTableau *tab, int j);
 
-/* Phase 1 helpers needed by simplex_phase1_recovery.c */
-double phase1_artificial_abs_sum(const SimplexTableau *tab);
+/* Phase 1 trace summary (still in simplex.c) */
 void phase1_trace_emit_summary(SimplexSolver *solver, RalphStatus phase1_status);
-
-/* Direct dual rescue guard (needed by p1_progress_attempt_direct_rescue) */
-int phase1_direct_dual_rescue_guard_plan(SimplexSolver *solver,
-                                         int rescue_cooldown_iters,
-                                         int rescue_fail_streak);
 
 /* LPReinvertShadowEval now defined in simplex_refactor_schedule.h */
 
@@ -138,51 +133,7 @@ int simplex_pivot(SimplexTableau *tab, int entering, int leaving_pos,
 /* Heap rebuild for pricing strategy 4 */
 void heap_build(SimplexTableau *tab);
 
-/* No-pivot ladder decision */
-int phase1_no_pivot_ladder_step(SimplexSolver *solver, int m,
-                                int degenerate_count,
-                                LPPhase1NoPivotForceReason reason,
-                                int no_pivot_streak,
-                                int no_progress_streak,
-                                int force_pivot_mode_active,
-                                int *refactor_threshold_out);
-int phase1_no_pivot_ladder_apply_rescue_guard(SimplexSolver *solver,
-                                              int ladder_step,
-                                              int rescue_cooldown_iters,
-                                              int rescue_fail_streak);
-
-/* Direction stabilize escape gate */
-int phase1_dir_stabilize_escape_gate_plan(int m, int degenerate_count,
-    int dir_skip_event_streak, int no_progress_streak, int escape_cooldown,
-    int force_extreme_dir, int force_lu_health, int lu_hard_trigger,
-    int *next_escape_cooldown_out, int *triggered_out, int *hard_bypass_out);
-
-/* Force relax plans */
-int phase1_force_pivot_refactor_relax_plan(int m, int degenerate_count,
-    int no_progress_streak, int force_pivot_mode_active,
-    int force_extreme_dir, int force_lu_health, int lu_hard_trigger,
-    int dual_rescue_attempts, int dual_rescue_successes,
-    int dual_rescue_fail_streak);
-int phase1_force_extreme_refactor_relax_plan(int m, int degenerate_count,
-    int no_progress_streak, double dir_inf_ratio,
-    int force_extreme_dir, int force_lu_health, int lu_hard_trigger,
-    int dual_rescue_attempts, int dual_rescue_successes,
-    int dual_rescue_fail_streak);
-int phase1_force_extreme_bound_flip_relax_plan(int m, int degenerate_count,
-    int no_progress_streak, double dir_inf_ratio,
-    int force_extreme_dir, int force_lu_health, int lu_hard_trigger,
-    int bound_flip_followup_streak);
-int phase1_force_extreme_tiny_theta_relax_plan(int m, int degenerate_count,
-    int no_progress_streak, double dir_inf_ratio,
-    int force_extreme_dir, int force_lu_health, int lu_hard_trigger,
-    int tiny_theta_followup_streak);
-int phase1_force_extreme_catastrophic_tiny_theta_relax_plan(int m,
-    int degenerate_count, int no_progress_streak, double dir_inf_ratio,
-    int force_extreme_dir, int force_lu_health, int lu_hard_trigger,
-    int tiny_theta_followup_streak, double pivot_ratio);
-
-/* Soft LU / periodic policy / reinvert helpers now in simplex_refactor_schedule.h */
-int phase1_soft_lu_policy_cooldown_updates(int m, int degenerate_count,
-                                           int periodic_interval);
+/* No-pivot ladder, force relax plans, escape gate, soft LU cooldown
+ * now in simplex_phase1_decision.h */
 
 #endif /* SIMPLEX_INTERNAL_H */
