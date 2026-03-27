@@ -3810,53 +3810,62 @@ stronger interventions, not 15 parallel crisis detectors.
 
 ---
 
-### Phase R4: Phase Unification
+### Phase R4: Structural Parity (Revised)
 
-**Risk:** Medium — restructures main iteration loops.
+**Risk:** Low-Medium — same code-motion pattern proven in R3.
 **Effort:** 1-2 weeks.
-**Depends on:** R1 (extraction), R3 (unified recovery).
+**Depends on:** R3 (completed — simplex.c at 5,018 lines).
 
-#### R4.1: Shared Iteration Function
+**Original vision** (shared `simplex_iterate()`) was assessed infeasible: Phase 1
+has 79 recovery state variables with 7 zone functions (2,447 lines of crisis code);
+Phase 2 has ~20 locals with inline perturbation+Bland recovery. A unified function
+would need 5+ function pointers and phase-branching at 10+ points — harder to read
+than two dedicated loops. The revised plan achieves the same goals (readability,
+testability, shared utilities) via zone extraction + shared building blocks.
 
-After R1 and R3, the Phase 1 and Phase 2 loops should look structurally identical:
-1. Price (select entering variable)
-2. Compute direction (FTRAN)
-3. Ratio test (select leaving variable)
-4. Pivot (update basis)
-5. Recovery check (escalate if stalled)
-6. Telemetry
-7. Termination check
+#### R4.1: Extract Phase 2 Zone Functions
 
-Extract this into `simplex_iterate()`:
+Mirror the R3 pattern. Extract `simplex_phase2` (858 lines inline) into zone
+functions, reducing it to ~100 lines of orchestration.
 
-```c
-typedef struct {
-    SimplexPhase phase;
-    int (*termination_check)(const SimplexSolver *solver, const SimplexTableau *tab);
-    double (*objective_value)(const SimplexTableau *tab);
-} SimplexIterateConfig;
+New files: `simplex_phase2_zones.c/h`, with `P2IterState` struct replacing ~20
+function-scope locals.
 
-int simplex_iterate(SimplexSolver *solver, const SimplexIterateConfig *cfg);
-```
+| Zone | ~Lines | Purpose |
+|------|--------|---------|
+| `p2_zone_pricing` | 80 | pricing dispatch + optimality confirmation |
+| `p2_zone_ratio_recovery` | 60 | ratio failure: refactorize → re-price → retry |
+| `p2_zone_degeneracy` | 40 | perturbation + Bland's tracking |
+| `p2_zone_pivot` | 80 | pivot + failure recovery |
+| `p2_zone_refactor_policy` | 200 | LU health + periodic + cost gate + reinvert |
+| `p2_zone_stall_detect` | 40 | re-perturbation on stagnation |
+| `p2_zone_periodic_recompute` | 30 | solution/RC drift correction |
 
-Phase 1 calls `simplex_iterate()` with `phase=PHASE_1`, `objective_value` = sum of
-artificials. Phase 2 calls it with `phase=PHASE_2`, `objective_value` = original obj.
+**Commits:** R4.1a–e, each gated by `make test` + NETLIB small gate.
 
-#### R4.2: Eliminate Phase-Specific Constants
+#### R4.2 + R4.3: Assessed and Deferred
 
-With a unified iteration loop and unified recovery, most `PHASE1_*` constants
-become `RECOVERY_*` constants shared between phases. The ~308 `PHASE1_` defines
-collapse to ~20 shared defines + ~10 phase-specific ones (mainly Phase 1 termination
-criteria: "all artificials zero").
+Shared iteration utilities (R4.2) and constants consolidation (R4.3)
+were assessed post-R4.1 and found to provide insufficient value:
 
-**After R4:** `simplex.c` contains `simplex_solve()`, `simplex_phase1()`,
-`simplex_phase2()`, `simplex_iterate()`, and `simplex_pivot()`. Each is < 200 lines.
-Total simplex.c: ~2,000-3,000 lines.
+- The building blocks (`pricing_dispatch`, `simplex_pivot`,
+  `primal_ratio_test_with_policy`) are already shared functions. What
+  differs is the recovery orchestration, which is phase-specific by
+  design (Phase 1: 200-line exclusion/retry ladder; Phase 2: simple
+  refactorize-or-repair).
+- Phase 1 cycling thresholds are runtime-computed from `m`; Phase 2
+  uses fixed constants. No meaningful constant duplication exists.
+
+R4 is complete with R4.1 alone — both loops are zone-based orchestrators.
+
+**After R4:** `simplex_phase1` ~100 lines, `simplex_phase2` ~100 lines,
+`simplex.c` ~3,500 lines. Both loops are zone-based orchestrators with
+shared utilities.
 
 **Validation:**
 - `make test` PASS
-- `make test-netlib-gate` PASS
-- `/ralph-arch-audit` metrics: simplex.c < 5,000, PHASE1 asymmetry < 3:1
+- `make test-netlib-gate` PASS (full gate on final commit)
+- `make -C fuelwise test` PASS
 
 ---
 
