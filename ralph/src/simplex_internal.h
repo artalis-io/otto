@@ -18,6 +18,7 @@
 #include "simplex_phase1_decision.h"
 #include "simplex_phase1_trace.h"
 #include "simplex_scaling.h"
+#include "simplex_crash.h"
 #include "simplex_refactor_schedule.h"
 
 /* Variable eligibility check (accounts for GLPK-compat exclusion rules) */
