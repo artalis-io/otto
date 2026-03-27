@@ -16,6 +16,7 @@
 #include "lp_reinvert_controller.h"
 #include "simplex_phase1_stabilize.h"
 #include "simplex_phase1_decision.h"
+#include "simplex_phase1_trace.h"
 #include "simplex_refactor_schedule.h"
 
 /* Variable eligibility check (accounts for GLPK-compat exclusion rules) */
@@ -26,9 +27,6 @@ int tableau_compute_duals(SimplexTableau *tab);
 
 /* Lazy single reduced cost computation */
 double tableau_get_rc(SimplexTableau *tab, int j);
-
-/* Phase 1 trace summary (still in simplex.c) */
-void phase1_trace_emit_summary(SimplexSolver *solver, RalphStatus phase1_status);
 
 /* LPReinvertShadowEval now defined in simplex_refactor_schedule.h */
 
@@ -102,20 +100,6 @@ static inline int tableau_refactorize_with_reason(SimplexTableau *tab, int reaso
     lp_telemetry_set_refactor_next_reason(tab ? tab->owner : NULL, reason);
     return tableau_refactorize(tab);
 }
-
-/* Phase 1 trace recording */
-void phase1_trace_record_no_entering(SimplexSolver *solver, int iter, int status_code);
-void phase1_trace_record_pivot_failure(SimplexSolver *solver,
-                                       const SimplexTableau *tab,
-                                       int iter, int repeat_count);
-
-/* Stagnation escape (conditional on PHASE1_STAGNATION_ESCAPE_RUNTIME) */
-void phase1_stagnation_window_begin(SimplexSolver *solver,
-                                    const SimplexTableau *tab,
-                                    int iter);
-int phase1_stagnation_escape_should_trigger(SimplexSolver *solver,
-                                            const SimplexTableau *tab,
-                                            int iter);
 
 /* Vector utility */
 double vec_abs_max(const double *x, int n);
