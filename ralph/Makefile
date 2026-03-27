@@ -62,6 +62,7 @@ SOURCES = $(SRC_DIR)/sparse.c \
           $(SRC_DIR)/simplex_pricing.c \
           $(SRC_DIR)/simplex_ratio.c \
           $(SRC_DIR)/simplex_perturb.c \
+          $(SRC_DIR)/simplex_phase1_decision.c \
           $(SRC_DIR)/simplex_phase1_recovery.c \
           $(SRC_DIR)/simplex_phase1_stabilize.c \
           $(SRC_DIR)/simplex_phase1_zones.c \
