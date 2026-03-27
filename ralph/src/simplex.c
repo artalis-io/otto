@@ -30,6 +30,7 @@
 #include "simplex_phase1_stabilize.h"
 #include "simplex_refactor_schedule.h"
 #include "simplex_phase1_decision.h"
+#include "simplex_phase2_zones.h"
 
 /* Forward declarations */
 int lp_model_finalize(LPModel *model);
@@ -48,11 +49,7 @@ static int lp_time_limit_exceeded(SimplexSolver *solver, int iter);
 
 
 
-#define PHASE2_DEGEN_ESCAPE_MIN_M 1200
-#define PHASE2_DEGEN_ESCAPE_DEGEN_TRIGGER 120
-#define PHASE2_DEGEN_ESCAPE_POLICY_TRIGGER 200
-#define PHASE2_DEGEN_ESCAPE_MAX_ATTEMPTS 2
-#define PHASE2_DEGEN_ESCAPE_BLAND_HOLD_ITERS 16
+/* PHASE2_DEGEN_ESCAPE_* constants now in simplex_internal.h (R4.1) */
 /* Refactor scheduling constants/helpers moved to simplex_refactor_schedule.c (R3.7) */
 
 int simplex_smcp_working_excl_should_skip_for_test(int smcp_excl,
@@ -2454,7 +2451,7 @@ void extract_farkas_ray(SimplexSolver *solver) {
  *   delta_basic = -(d * dir)
  * Non-basic non-entering variables stay fixed.
  */
-static void extract_unbounded_ray(SimplexSolver *solver, int entering, double dir) {
+void extract_unbounded_ray(SimplexSolver *solver, int entering, double dir) {
     if (!solver || !solver->tableau || !solver->model) return;
 
     SimplexTableau *tab = solver->tableau;
@@ -3085,7 +3082,7 @@ static int simplex_transition_phase2(SimplexSolver *solver) {
  * Incremental RC updates can occasionally mark a large degenerate basis as
  * optimal too early; this pass re-factorizes and re-prices strictly before
  * returning OPTIMAL. */
-static int phase2_confirm_optimality(SimplexSolver *solver, int iter, int *entering_out) {
+int phase2_confirm_optimality(SimplexSolver *solver, int iter, int *entering_out) {
     SimplexTableau *tab;
     int rc;
     int entering = -1;
@@ -3143,67 +3140,40 @@ static int simplex_phase2(SimplexSolver *solver) {
         }
     }
 
-    /* D4: Apply proactive perturbation when arriving from dual fallback.
-     * The dual failed on a degenerate problem, so proactive perturbation saves
-     * the ~30 wasted degenerate pivots before reactive perturbation kicks in.
-     * Do NOT apply for two-phase transitions — the post-transition basis is fragile. */
-    int perturbation_active = 0;
+    /* Initialize iteration state */
+    P2IterState st;
+    memset(&st, 0, sizeof(st));
+
+    /* D4: Apply proactive perturbation when arriving from dual fallback. */
     if (solver->from_dual_fallback && !tab->use_two_phase) {
         primal_apply_perturbation(tab);
-        perturbation_active = 1;
+        st.perturbation_active = 1;
     }
 
     /* Compute initial solution for Phase 2 */
     tableau_compute_solution(tab);
 
-    /* Cycling detection: track consecutive degenerate pivots */
-    int degenerate_count = 0;
-    int non_degen_streak = 0;
-    const int DEGEN_THRESHOLD = 50;  /* Switch to Bland's rule after this many */
-    const int NON_DEGEN_THRESHOLD = 100;  /* Non-degenerate pivots to turn Bland off */
-    int use_bland = 0;
+    st.last_obj = tab->obj_value;
+    st.last_entering = -1;
+    st.last_leaving = -1;
+    st.bland_start_iters = tab->use_two_phase ? 20 : 0;
 
-    /* Stall detection: track objective progress for re-perturbation.
-     * Mirrors dual_simplex.c stall detection (lines 1137-1165).
-     * When Phase 2 stalls (no objective progress for STALL_THRESHOLD iters),
-     * remove perturbation, re-apply with scaled magnitude, and reset Bland's.
-     * This is independent of the degenerate pivot counter above. */
-    double last_obj_p2 = tab->obj_value;
-    int stall_count_p2 = 0;
-    const int P2_STALL_THRESHOLD = 50;
-    int perturb_attempts_p2 = 0;
-    const int P2_MAX_PERTURB_ATTEMPTS = 15;
-    int last_entering = -1;
-    int last_leaving = -1;
-    int repeat_entering_streak = 0;
-    int repeat_leaving_streak = 0;
-
-    /* For two-phase problems after transition, start with Bland's rule for the first
-     * few pivots to avoid numerical issues with the post-transition basis.
-     * The transition may leave the basis in a fragile state where aggressive pricing
-     * selects entering variables that cause LU update failures. */
-    int bland_start_iters = tab->use_two_phase ? 20 : 0;
-    int periodic_policy_cooldown = 0;
-    double periodic_policy_pressure_decay = 0.0;
-    int lu_soft_health_streak = 0;
-
-    /* Compute initial reduced costs.
-     * After two-phase transition, ALWAYS compute full RCs because Bland's rule
-     * (used for the first bland_start_iters) reads tab->rc[] directly.
-     * For non-two-phase, partial pricing can use lazy mode (duals only). */
+    /* Compute initial reduced costs. */
     if (solver->pricing_strategy == 3 && !tab->use_two_phase) {
-        tableau_compute_duals(tab);  /* Lazy mode: duals only */
+        tableau_compute_duals(tab);
     } else {
         tableau_compute_reduced_costs(tab);
         if (solver->pricing_strategy == 4) heap_build(tab);
     }
-    if (perturbation_active && solver->telemetry_enabled) {
+    if (st.perturbation_active && solver->telemetry_enabled) {
         solver->telemetry.perf_phase2_perturb_applied++;
     }
-    double phase2_hot_ms_prev = phase_hotpath_ms(solver, 2);
+    st.phase2_hot_ms_prev = phase_hotpath_ms(solver, 2);
 
     for (int iter = 0; iter < solver->max_iterations; iter++) {
         tab->iterations = iter;
+
+        /* User callbacks / time limit (stays in orchestrator) */
         if (lp_run_user_callbacks(solver, tab, RALPH_LP_PROGRESS_PHASE_2, iter, 0, 1) != 0) {
             primal_remove_perturbation(tab);
             solver->status = RALPH_STATUS_TIME_LIMIT;
@@ -3211,766 +3181,33 @@ static int simplex_phase2(SimplexSolver *solver) {
             return -1;
         }
 
-        periodic_policy_cooldown =
-            lp_refactor_policy_periodic_cooldown_tick(periodic_policy_cooldown);
-        periodic_policy_pressure_decay =
-            lp_refactor_policy_periodic_pressure_decay_recover(
-                2, periodic_policy_pressure_decay);
+        /* Zone 1: cooldown tick + objective limit */
+        P2ZoneResult zr = p2_zone_pre_iter(solver, tab, &st, iter);
+        if (zr == P2_ZONE_RETURN_OPTIMAL) return 0;
+        if (zr == P2_ZONE_RETURN_FAIL)    return -1;
 
-        /* T3.1: Objective limit early-exit (internal minimization space) */
-        if (solver->objective_limit < RALPH_INFINITY &&
-            tab->obj_value >= solver->objective_limit) {
-            primal_remove_perturbation(tab);
-            tableau_compute_solution(tab);
-            solver->status = RALPH_STATUS_OBJ_LIMIT;
-            solver->iterations = iter;
-            solver->obj_value = tab->obj_value * solver->model->obj_sense + solver->model->obj_offset;
-            return 0;
-        }
+        /* Zone 2: pricing */
+        zr = p2_zone_pricing(solver, tab, &st, iter);
+        if (zr == P2_ZONE_RETURN_OPTIMAL) return 0;
+        if (zr == P2_ZONE_RETURN_FAIL)    return -1;
 
-        /* Reduced costs are updated incrementally in simplex_pivot().
-         * Full recomputation only needed:
-         * - After refactorization (for numerical stability)
-         * - Periodically to correct drift
-         */
+        /* Zone 3: ratio test */
+        zr = p2_zone_ratio(solver, tab, &st, iter);
+        if (zr == P2_ZONE_RETURN_OPTIMAL) return 0;
+        if (zr == P2_ZONE_RETURN_FAIL)    return -1;
 
-        /* Pricing: select entering variable */
-        int entering;
-        int price_status;
-        double t_pricing_ms = lp_telemetry_timer_start();
-        int adaptive_devex_partial =
-            phase2_use_adaptive_devex_partial(tab,
-                                              iter,
-                                              degenerate_count,
-                                              (use_bland || iter < bland_start_iters),
-                                              solver->pricing_strategy);
-        if (solver->telemetry_enabled) {
-            if (use_bland || iter < bland_start_iters) {
-                solver->telemetry.perf_phase2_bland_pricing_iters++;
-            } else if (solver->pricing_strategy == 2 &&
-                       adaptive_devex_partial &&
-                       (iter & DEVEX_PARTIAL_FULL_RESCAN_MASK) != 0) {
-                solver->telemetry.perf_phase2_adaptive_devex_partial_iters++;
-            }
-        }
+        /* Zone 4: pre-pivot (direction telemetry, degeneracy tracking) */
+        p2_zone_pre_pivot(solver, tab, &st, iter);
 
-        price_status = pricing_dispatch(tab, solver->pricing_strategy,
-                                        (use_bland || iter < bland_start_iters),
-                                        adaptive_devex_partial, iter, &entering);
-        {
-            lp_telemetry_record_pricing_timed(solver, 2, t_pricing_ms);
-        }
+        /* Zone 5: pivot */
+        zr = p2_zone_pivot(solver, tab, &st, iter);
+        if (zr == P2_ZONE_CONTINUE)    continue;
+        if (zr == P2_ZONE_RETURN_FAIL) return -1;
 
-        if (price_status != 0) {
-            int confirm = phase2_confirm_optimality(solver, iter, &entering);
-            if (confirm < 0) {
-                primal_remove_perturbation(tab);
-                return -1;
-            }
-            if (confirm > 0) {
-                /* Optimal - remove perturbation and finalize */
-                primal_remove_perturbation(tab);
-                solver->current_phase = SIMPLEX_PHASE_OPTIMAL;
-                solver->status = RALPH_STATUS_OPTIMAL;
-                solver->iterations = iter;
-                solver->degenerate_pivots = degenerate_count;
-                tableau_compute_solution(tab);
-                solver->obj_value = tab->obj_value * solver->model->obj_sense + solver->model->obj_offset;
-                return 0;
-            }
-        }
-
-        /* Ratio test: select leaving variable */
-        int leaving;
-        double theta;
-        int ratio_status;
-        double t_ratio_ms = lp_telemetry_timer_start();
-
-        ratio_status = primal_ratio_test_with_policy(solver,
-                                                     tab,
-                                                     use_bland,
-                                                     entering,
-                                                     &leaving,
-                                                     &theta);
-        {
-            lp_telemetry_record_ratio_timed(solver, 2, t_ratio_ms);
-        }
-
-        if (ratio_status != 0) {
-            /* No leaving variable found — possibly unbounded.
-             * Stale LU factors can produce spurious theta=inf (e.g., lotfi).
-             * Refactorize and retry once before declaring UNBOUNDED. */
-            int refactor_rc;
-            int degen_episode =
-                (degenerate_count > 0 || use_bland || perturbation_active);
-            {
-                double t_refactor_ms = lp_telemetry_timer_start();
-                refactor_rc = tableau_refactorize_with_reason(tab, RALPH_REFACTOR_REASON_RATIO_RECOVERY);
-                lp_telemetry_add_refactor_runtime_timed(solver, t_refactor_ms);
-            }
-            if (degen_episode) {
-                lp_telemetry_record_phase2_degenerate_refactor(
-                    solver,
-                    RALPH_REFACTOR_REASON_RATIO_RECOVERY,
-                    0,
-                    lp_telemetry_refactor_reason_is_safety_forced(
-                        RALPH_REFACTOR_REASON_RATIO_RECOVERY));
-            }
-            if (refactor_rc == 0) {
-                tableau_compute_solution(tab);
-                tableau_compute_reduced_costs(tab);
-                if (solver->pricing_strategy == 4) heap_build(tab);
-
-                /* Re-price: the entering variable may no longer be eligible */
-                t_pricing_ms = lp_telemetry_timer_start();
-                price_status = pricing_dispatch(tab, solver->pricing_strategy,
-                                                (use_bland || iter < bland_start_iters),
-                                                adaptive_devex_partial, iter, &entering);
-                {
-                    lp_telemetry_record_pricing_timed(solver, 2, t_pricing_ms);
-                }
-
-                if (price_status != 0) {
-                    int confirm = phase2_confirm_optimality(solver, iter, &entering);
-                    if (confirm < 0) {
-                        primal_remove_perturbation(tab);
-                        return -1;
-                    }
-                    if (confirm > 0) {
-                        /* Actually optimal after refactorization */
-                        primal_remove_perturbation(tab);
-                        solver->current_phase = SIMPLEX_PHASE_OPTIMAL;
-                        solver->status = RALPH_STATUS_OPTIMAL;
-                        solver->iterations = iter;
-                        solver->degenerate_pivots = degenerate_count;
-                        tableau_compute_solution(tab);
-                        solver->obj_value = tab->obj_value * solver->model->obj_sense + solver->model->obj_offset;
-                        return 0;
-                    }
-                }
-
-                /* Retry ratio test with fresh LU */
-                t_ratio_ms = lp_telemetry_timer_start();
-                ratio_status = primal_ratio_test_with_policy(solver,
-                                                             tab,
-                                                             use_bland,
-                                                             entering,
-                                                             &leaving,
-                                                             &theta);
-                {
-                    lp_telemetry_record_ratio_timed(solver, 2, t_ratio_ms);
-                }
-            }
-
-            if (ratio_status != 0) {
-                double dir = (tab->var_status[entering] == RALPH_NONBASIC_UPPER) ? -1.0 : 1.0;
-                extract_unbounded_ray(solver, entering, dir);
-                primal_remove_perturbation(tab);
-                solver->current_phase = SIMPLEX_PHASE_UNBOUNDED;
-                solver->status = RALPH_STATUS_UNBOUNDED;
-                solver->iterations = iter;
-                return -1;
-            }
-            /* Recovery succeeded — fall through to pivot */
-        }
-
-        {
-            double phase2_dir_inf = 0.0;
-            int phase2_dir_nnz = 0;
-            double phase2_pivot_abs = 0.0;
-
-            phase1_direction_shape_from_vector(
-                tab->work2,
-                tab->m,
-                leaving,
-                &phase2_dir_inf,
-                &phase2_dir_nnz,
-                &phase2_pivot_abs);
-            lp_telemetry_record_phase2_pivot_geometry(
-                solver,
-                theta,
-                phase2_dir_inf,
-                phase2_pivot_abs);
-        }
-        if (solver->telemetry_enabled) {
-            if (entering == last_entering) {
-                repeat_entering_streak++;
-                solver->telemetry.perf_phase2_repeat_entering_events++;
-                if (repeat_entering_streak >
-                    solver->telemetry.perf_phase2_repeat_entering_max_streak) {
-                    solver->telemetry.perf_phase2_repeat_entering_max_streak =
-                        repeat_entering_streak;
-                }
-            } else {
-                repeat_entering_streak = 0;
-            }
-            last_entering = entering;
-
-            if (leaving >= 0 && leaving == last_leaving) {
-                repeat_leaving_streak++;
-                solver->telemetry.perf_phase2_repeat_leaving_events++;
-                if (repeat_leaving_streak >
-                    solver->telemetry.perf_phase2_repeat_leaving_max_streak) {
-                    solver->telemetry.perf_phase2_repeat_leaving_max_streak =
-                        repeat_leaving_streak;
-                }
-            } else {
-                repeat_leaving_streak = 0;
-            }
-            last_leaving = (leaving >= 0) ? leaving : -1;
-        }
-
-        /* Track degenerate/near-degenerate pivots for cycling prevention
-         *
-         * Strategy:
-         * 1. After 30 degenerate pivots: apply bound perturbation
-         * 2. After 100 more degenerate pivots: switch to Bland's rule
-         * 3. After 100 non-degenerate pivots: reset and try faster methods
-         */
-        {
-        const double NEAR_DEGEN_TOL = 1e-3;
-        const int PERTURB_THRESHOLD = 30;
-
-        if (theta < NEAR_DEGEN_TOL) {
-            if (solver->telemetry_enabled && degenerate_count == 0) {
-                solver->telemetry.perf_phase2_degenerate_episodes++;
-            }
-            degenerate_count++;
-            if (solver->telemetry_enabled &&
-                degenerate_count > solver->telemetry.perf_phase2_degenerate_streak_max) {
-                solver->telemetry.perf_phase2_degenerate_streak_max = degenerate_count;
-            }
-            non_degen_streak = 0;
-
-            /* First try perturbation */
-            if (degenerate_count >= PERTURB_THRESHOLD && !perturbation_active && !use_bland) {
-                primal_apply_perturbation(tab);
-                perturbation_active = 1;
-                if (solver->telemetry_enabled) {
-                    solver->telemetry.perf_phase2_perturb_applied++;
-                }
-                if (solver->verbose) {
-                    LP_LOG_STDOUT("Iter %d: Applying perturbation due to degeneracy\n", iter);
-                }
-            }
-
-            /* If still cycling after perturbation, use Bland's rule */
-            if (degenerate_count >= DEGEN_THRESHOLD && !use_bland) {
-                use_bland = 1;
-                if (solver->telemetry_enabled) {
-                    solver->telemetry.perf_phase2_bland_enter_episodes++;
-                }
-                if (solver->verbose) {
-                    LP_LOG_STDOUT("Iter %d: Switching to Bland's rule due to potential cycling\n", iter);
-                }
-            }
-        } else {
-            /* Only reset after many consecutive non-degenerate pivots */
-            non_degen_streak++;
-            degenerate_count = 0;
-            if (use_bland && non_degen_streak >= NON_DEGEN_THRESHOLD) {
-                use_bland = 0;
-                if (solver->telemetry_enabled) {
-                    solver->telemetry.perf_phase2_bland_exit_episodes++;
-                }
-                non_degen_streak = 0;
-                if (solver->verbose) {
-                    LP_LOG_STDOUT("Iter %d: Turning off Bland's rule after %d non-degenerate pivots\n",
-                           iter, NON_DEGEN_THRESHOLD);
-                }
-            }
-        }
-        }  /* end degeneracy tracking block */
-
-        /* Perform pivot */
-        int pivot_rc;
-        {
-            double t_pivot_ms = lp_telemetry_timer_start();
-            pivot_rc = simplex_pivot(tab, entering, leaving, theta, 0);
-            lp_telemetry_record_pivot_timed(solver, 2, t_pivot_ms);
-        }
-        if (pivot_rc != 0) {
-            if (solver->verbose) {
-                LP_LOG_STDERR("[primal_simplex] Pivot failed at iter %d (entering=%d, leaving=%d, theta=%e), attempting recovery\n",
-                        iter, entering, leaving, theta);
-            }
-            /* Pivot failed - the basis was partially updated in simplex_pivot.
-             * Try to recover by refactorizing the current (post-pivot) basis. */
-            int rc_refactor;
-            int degen_episode =
-                (degenerate_count > 0 || use_bland || perturbation_active);
-            {
-                double t_refactor_ms = lp_telemetry_timer_start();
-                rc_refactor = tableau_refactorize_with_reason(tab, RALPH_REFACTOR_REASON_PIVOT_RECOVERY);
-                lp_telemetry_add_refactor_runtime_timed(solver, t_refactor_ms);
-            }
-            if (degen_episode) {
-                lp_telemetry_record_phase2_degenerate_refactor(
-                    solver,
-                    RALPH_REFACTOR_REASON_PIVOT_RECOVERY,
-                    0,
-                    lp_telemetry_refactor_reason_is_safety_forced(
-                        RALPH_REFACTOR_REASON_PIVOT_RECOVERY));
-            }
-            if (rc_refactor == 0) {
-                /* Refactorization succeeded - recompute and continue */
-                tableau_compute_solution(tab);
-                if (solver->pricing_strategy == 3) {
-                    tableau_compute_duals(tab);
-                } else {
-                    tableau_compute_reduced_costs(tab);
-                    if (solver->pricing_strategy == 4) heap_build(tab);
-                }
-                if (solver->verbose) {
-                    LP_LOG_STDERR("[primal_simplex] Recovery via refactorization at iter %d\n", iter);
-                }
-                continue;
-            }
-            /* Refactorization failed - try basis repair */
-            if (repair_singular_basis(tab) == 0) {
-                tableau_compute_solution(tab);
-                if (solver->pricing_strategy == 3) {
-                    tableau_compute_duals(tab);
-                } else {
-                    tableau_compute_reduced_costs(tab);
-                    if (solver->pricing_strategy == 4) heap_build(tab);
-                }
-                if (solver->verbose) {
-                    LP_LOG_STDERR("[primal_simplex] Recovery via basis repair at iter %d\n", iter);
-                }
-                continue;
-            }
-            /* All recovery attempts failed */
-            if (solver->verbose) {
-                LP_LOG_STDERR("[primal_simplex] ERROR: all recovery attempts failed at iter %d\n", iter);
-            }
-            primal_remove_perturbation(tab);
-            solver->status = RALPH_STATUS_ERROR;
-            return -1;
-        }
-
-        /* Refactorize if needed.
-         * For two-phase problems, periodic refresh is adaptive (interval + LU health). */
-        {
-            double phase2_hot_ms_now = phase_hotpath_ms(solver, 2);
-            double iter_hot_ms = phase2_hot_ms_now - phase2_hot_ms_prev;
-            soft_lu_record_iter_cost(solver, 2, iter_hot_ms);
-            lp_reinvert_controller_state_record_iter_cost(
-                reinvert_state_for_phase(solver, 2), iter_hot_ms);
-            phase2_hot_ms_prev = phase2_hot_ms_now;
-        }
-        LPLUHealthRefactorDecision lu_health_decision =
-            lp_refactor_policy_lu_health_refactor_decision(tab->m,
-                                                           lu_get_use_ft_updates(tab->lu),
-                                                           lu_get_num_updates(tab->lu),
-                                                           lu_get_max_updates(tab->lu),
-                                                           lu_get_spike_pool_used(tab->lu),
-                                                           lu_get_spike_pool_capacity(tab->lu),
-                                                           lu_get_cond_estimate(tab->lu),
-                                                           lu_get_growth_factor(tab->lu),
-                                                           lu_soft_health_streak);
-        int lu_refactor_nominal = lu_health_decision.refactor_now;
-        int lu_refactor_needed = lu_health_decision.refactor_now;
-        int lu_soft_cost_deferred = 0;
-        int needs_refactor = lu_refactor_needed;
-        int periodic_refactor = 0;
-        int periodic_refactor_nominal = 0;
-        int reinvert_periodic_candidate = 0;
-        int reinvert_control_periodic =
-            reinvert_controller_controls_periodic_phase(solver, 2);
-        int cooldown_eligible = 0;
-        double effective_policy_pressure = 0.0;
-        double periodic_feedback_bias = periodic_feedback_bias_for_phase(solver, 2);
-        LPPeriodicRefactorPolicy periodic_policy = {0, 0, 0.0, 0.0};
-        LPReinvertShadowEval reinvert_shadow_eval;
-        reinvert_shadow_eval_reset(&reinvert_shadow_eval);
-        lu_soft_health_streak = lu_health_decision.soft_breach_streak_next;
-        if (lu_health_decision.hard_trigger) {
-            periodic_policy_cooldown = 0;
-            periodic_policy_pressure_decay = 0.0;
-            soft_lu_reset_defer_streak(solver, 2);
-            periodic_cost_reset_defer_streak(solver, 2);
-        } else if (lu_refactor_needed) {
-            periodic_cost_reset_defer_streak(solver, 2);
-        } else if (!lu_health_decision.soft_trigger || !solver->policy.soft_lu_cost_gate_enabled) {
-            soft_lu_reset_defer_streak(solver, 2);
-        }
-        if (lu_refactor_needed &&
-            solver->policy.soft_lu_cost_gate_enabled &&
-            lu_health_decision.soft_trigger &&
-            !lu_health_decision.hard_trigger) {
-            int cap_blocked = 0;
-            int next_consecutive = 0;
-            int should_defer = simplex_soft_lu_defer_plan_for_test(
-                2,
-                tab->m,
-                use_bland,
-                degenerate_count,
-                lu_get_num_updates(tab->lu),
-                lu_get_max_updates(tab->lu),
-                lu_get_spike_pool_used(tab->lu),
-                lu_get_spike_pool_capacity(tab->lu),
-                lu_get_cond_estimate(tab->lu),
-                lu_get_growth_factor(tab->lu),
-                soft_lu_refactor_cost_ewma(solver, 2),
-                soft_lu_iter_cost_ewma(solver, 2),
-                soft_lu_consecutive_defers(solver, 2),
-                NULL,
-                &cap_blocked,
-                &next_consecutive);
-            if (should_defer) {
-                lu_refactor_needed = 0;
-                lu_soft_cost_deferred = 1;
-                soft_lu_record_defer(solver, 2);
-                soft_lu_set_consecutive_defers(solver, 2, next_consecutive);
-                needs_refactor = 0;
-            } else {
-                soft_lu_reset_defer_streak(solver, 2);
-                if (cap_blocked) {
-                    soft_lu_record_cap_forced(solver, 2);
-                    if (solver->verbose >= 2) {
-                        LP_LOG_STDERR("[primal_simplex] Soft LU defer cap reached; forcing periodic LU-health refactor (updates=%d/%d, degen=%d)\n",
-                                lu_get_num_updates(tab->lu),
-                                lu_get_max_updates(tab->lu),
-                                degenerate_count);
-                    }
-                }
-            }
-        }
-        if (!lu_refactor_needed) {
-            LPPeriodicRefactorPlan periodic_plan = lp_refactor_policy_periodic_plan(
-                2,
-                iter,
-                tab->m,
-                lu_get_max_updates(tab->lu),
-                lu_get_num_updates(tab->lu),
-                lu_get_spike_pool_used(tab->lu),
-                lu_get_spike_pool_capacity(tab->lu),
-                lu_get_cond_estimate(tab->lu),
-                lu_get_growth_factor(tab->lu),
-                use_bland,
-                degenerate_count,
-                periodic_feedback_bias,
-                0,
-                periodic_policy_cooldown,
-                periodic_policy_pressure_decay);
-            periodic_policy = periodic_plan.policy;
-            cooldown_eligible = periodic_plan.cooldown_eligible;
-            effective_policy_pressure = periodic_plan.effective_run_pressure;
-            periodic_refactor = periodic_plan.should_run;
-            periodic_refactor_nominal = periodic_refactor;
-            reinvert_periodic_candidate = periodic_refactor_nominal;
-            reinvert_shadow_prepare_phase(solver,
-                                          tab,
-                                          2,
-                                          iter,
-                                          &lu_health_decision,
-                                          periodic_refactor_nominal,
-                                          periodic_policy.min_update_age,
-                                          periodic_policy_cooldown,
-                                          reinvert_control_periodic,
-                                          &reinvert_periodic_candidate,
-                                          &reinvert_shadow_eval);
-            if (reinvert_control_periodic) {
-                periodic_refactor = reinvert_periodic_candidate;
-                periodic_refactor_nominal = periodic_refactor;
-                periodic_cost_reset_defer_streak(solver, 2);
-            } else {
-                if (periodic_refactor &&
-                    cooldown_eligible &&
-                    periodic_policy_cooldown > 0) {
-                    periodic_refactor = 0;
-                }
-                if (periodic_refactor) {
-                    if (solver->policy.periodic_cost_gate_enabled) {
-                        int cap_blocked = 0;
-                        int next_consecutive = 0;
-                        int gate_reason = LP_PERIODIC_COST_DAMPEN_BLOCK_INVALID_PHASE;
-                        int should_defer = simplex_periodic_cost_defer_plan_for_test(
-                            2,
-                            tab->m,
-                            use_bland,
-                            degenerate_count,
-                            lu_get_num_updates(tab->lu),
-                            lu_get_max_updates(tab->lu),
-                            lu_get_spike_pool_used(tab->lu),
-                            lu_get_spike_pool_capacity(tab->lu),
-                            lu_get_cond_estimate(tab->lu),
-                            lu_get_growth_factor(tab->lu),
-                            soft_lu_refactor_cost_ewma(solver, 2),
-                            soft_lu_iter_cost_ewma(solver, 2),
-                            periodic_cost_refactor_samples(solver, 2),
-                            periodic_cost_iter_samples(solver, 2),
-                            periodic_cost_consecutive_defers(solver, 2),
-                            &gate_reason,
-                            NULL,
-                            &cap_blocked,
-                            &next_consecutive);
-                        periodic_cost_record_gate_reason(
-                            solver, 2, (LPPeriodicCostDampenReason)gate_reason);
-                        if (should_defer) {
-                            periodic_refactor = 0;
-                            periodic_cost_record_defer(solver, 2);
-                            periodic_cost_set_consecutive_defers(solver, 2, next_consecutive);
-                            if (solver->verbose >= 2) {
-                                LP_LOG_STDERR("[primal_simplex] Deferred policy periodic refactor by cost gate (updates=%d/%d, degen=%d, iter_ewma=%.3fms, ref_ewma=%.3fms)\n",
-                                        lu_get_num_updates(tab->lu),
-                                        lu_get_max_updates(tab->lu),
-                                        degenerate_count,
-                                        soft_lu_iter_cost_ewma(solver, 2),
-                                        soft_lu_refactor_cost_ewma(solver, 2));
-                            }
-                        } else {
-                            periodic_cost_reset_defer_streak(solver, 2);
-                            if (cap_blocked) {
-                                periodic_cost_record_cap_forced(solver, 2);
-                                if (solver->verbose >= 2) {
-                                    LP_LOG_STDERR("[primal_simplex] Policy periodic defer cap reached; forcing periodic policy refactor (updates=%d/%d, degen=%d)\n",
-                                            lu_get_num_updates(tab->lu),
-                                            lu_get_max_updates(tab->lu),
-                                            degenerate_count);
-                                }
-                            } else if (solver->verbose >= 3) {
-                                LP_LOG_STDERR("[primal_simplex] Policy periodic cost gate blocked defer: %s\n",
-                                        lp_refactor_policy_periodic_cost_dampen_reason_string(
-                                            (LPPeriodicCostDampenReason)gate_reason));
-                            }
-                        }
-                    } else {
-                        periodic_cost_reset_defer_streak(solver, 2);
-                    }
-                }
-            }
-            needs_refactor = periodic_refactor;
-        } else {
-            reinvert_shadow_prepare_phase(solver,
-                                          tab,
-                                          2,
-                                          iter,
-                                          &lu_health_decision,
-                                          0,
-                                          periodic_policy.min_update_age,
-                                          periodic_policy_cooldown,
-                                          0,
-                                          NULL,
-                                          &reinvert_shadow_eval);
-        }
-        if (periodic_refactor) {
-            periodic_feedback_set_hint(solver, 2, periodic_policy.interval, effective_policy_pressure);
-        }
-        {
-            int shadow_refactor = lp_basis_governor_shadow_decide(
-                LP_BASIS_GOV_PHASE2,
-                lu_refactor_nominal,
-                periodic_refactor_nominal);
-            int governed_refactor = lp_basis_governor_decide_refactor(
-                &solver->policy.basis_governor,
-                LP_BASIS_GOV_PHASE2,
-                lu_refactor_nominal,
-                periodic_refactor_nominal,
-                needs_refactor);
-            if (solver->telemetry_enabled) {
-                lp_basis_governor_observe_refactor(
-                    &solver->policy.basis_governor,
-                    LP_BASIS_GOV_PHASE2,
-                    shadow_refactor,
-                    governed_refactor);
-            }
-            needs_refactor = governed_refactor;
-        }
-        reinvert_shadow_finalize_phase(solver, 2, &reinvert_shadow_eval, needs_refactor);
-
-        if (needs_refactor) {
-            soft_lu_reset_defer_streak(solver, 2);
-            periodic_cost_reset_defer_streak(solver, 2);
-            runtime_record_periodic_refactor_trigger(solver, 2, lu_refactor_needed);
-            int rc_refactor;
-            double refactor_elapsed_ms = 0.0;
-            int degen_episode =
-                (degenerate_count > 0 || use_bland || perturbation_active);
-            {
-                double t_refactor_ms = lp_telemetry_timer_start();
-                rc_refactor = tableau_refactorize_with_reason(tab, RALPH_REFACTOR_REASON_PERIODIC);
-                refactor_elapsed_ms = lp_telemetry_timer_elapsed_ms(t_refactor_ms);
-                lp_telemetry_add_refactor_runtime_ms(solver, refactor_elapsed_ms);
-            }
-            if (degen_episode) {
-                lp_telemetry_record_phase2_degenerate_refactor(
-                    solver,
-                    RALPH_REFACTOR_REASON_PERIODIC,
-                    lu_refactor_needed,
-                    lp_telemetry_refactor_reason_is_safety_forced(
-                        RALPH_REFACTOR_REASON_PERIODIC));
-            }
-            if (rc_refactor == 0) {
-                soft_lu_record_refactor_cost(solver, 2, refactor_elapsed_ms);
-                lp_reinvert_controller_state_record_refactor_cost(
-                    reinvert_state_for_phase(solver, 2), refactor_elapsed_ms);
-            }
-            if (lu_refactor_needed && rc_refactor == 0) {
-                lu_soft_health_streak = 0;
-            }
-            if (!lu_refactor_needed && periodic_refactor) {
-                lp_refactor_policy_periodic_post_refactor_update(
-                    2,
-                    cooldown_eligible,
-                    periodic_policy.interval,
-                    rc_refactor,
-                    &periodic_policy_cooldown,
-                    &periodic_policy_pressure_decay);
-            }
-            if (rc_refactor != 0) {
-                if (solver->verbose) {
-                    LP_LOG_STDERR("[primal_simplex] ERROR: refactorization failed at iter %d, attempting repair\n", iter);
-                }
-                /* Try to repair the singular basis */
-                if (repair_singular_basis(tab) != 0) {
-                    if (solver->verbose) {
-                        LP_LOG_STDERR("[primal_simplex] ERROR: basis repair failed at iter %d\n", iter);
-                    }
-                    primal_remove_perturbation(tab);
-                    solver->status = RALPH_STATUS_ERROR;
-                    solver->iterations = iter;
-                    return -1;
-                }
-                if (solver->verbose) {
-                    LP_LOG_STDERR("[primal_simplex] Basis repaired at iter %d\n", iter);
-                }
-            }
-            /* After refactorization, recompute solution to eliminate drift */
-            tableau_compute_solution(tab);
-            /* For partial pricing, use lazy RC computation (duals only).
-             * For other strategies, compute full RC for incremental updates. */
-            if (solver->pricing_strategy == 3) {
-                tableau_compute_duals(tab);  /* Lazy mode: duals only */
-            } else {
-                tableau_compute_reduced_costs(tab);  /* Full RC for incremental updates */
-                if (solver->pricing_strategy == 4) heap_build(tab);
-            }
-        } else if (lu_soft_cost_deferred && solver->verbose >= 2) {
-            LP_LOG_STDERR("[primal_simplex] Deferred soft LU-health periodic refactor (updates=%d/%d, degen=%d, iter_ewma=%.3fms, ref_ewma=%.3fms)\n",
-                    lu_get_num_updates(tab->lu),
-                    lu_get_max_updates(tab->lu),
-                    degenerate_count,
-                    soft_lu_iter_cost_ewma(solver, 2),
-                    soft_lu_refactor_cost_ewma(solver, 2));
-        }
-
-        /* Periodically recompute solution and reduced costs to correct numerical drift.
-         * For large, highly-degenerate phase-2 runs with healthy LU metrics, we relax
-         * cadence to reduce full-vector recompute overhead. */
-        {
-            int periodic_recompute_interval =
-                lp_refactor_policy_phase2_periodic_recompute_interval(
-                    tab->m,
-                    use_bland,
-                    degenerate_count,
-                    lu_get_spike_pool_used(tab->lu),
-                    lu_get_spike_pool_capacity(tab->lu),
-                    lu_get_cond_estimate(tab->lu),
-                    lu_get_growth_factor(tab->lu));
-            if (iter > 0 &&
-                periodic_recompute_interval > 0 &&
-                (iter % periodic_recompute_interval) == 0) {
-                tableau_compute_solution(tab);
-                /* For partial pricing, use lazy RC. For others, full RC. */
-                if (solver->pricing_strategy == 3) {
-                    tableau_compute_duals(tab);  /* Lazy mode */
-                } else {
-                    tableau_compute_reduced_costs(tab);  /* Full recomputation */
-                    if (solver->pricing_strategy == 4) heap_build(tab);
-                }
-                if (solver->verbose) {
-                    int leave_var = (leaving >= 0) ? tab->basis[leaving] : leaving;
-                    LP_LOG_STDOUT("Iter %d: obj = %.6f, enter=%d, leave=%d, theta=%.2e, rc=%.2e\n",
-                           iter, tab->obj_value, entering, leave_var, theta, tab->rc[entering]);
-                }
-            }
-        }
-
-        /* Stall detection: check objective progress after each pivot.
-         * If objective hasn't improved for P2_STALL_THRESHOLD iterations,
-         * remove+re-apply perturbation with progressive scaling to break
-         * the cycling pattern. This catches cases where Bland's rule is
-         * active but making negligible progress (O(2^n) worst case).
-         * Independent of the degeneracy counter — triggered by objective stagnation. */
-        {
-        double obj_tol_p2 = 1e-4 * (1.0 + fabs(last_obj_p2));
-        double obj_change_p2 = fabs(tab->obj_value - last_obj_p2);
-        if (obj_change_p2 < obj_tol_p2) {
-            stall_count_p2++;
-            if (stall_count_p2 >= P2_STALL_THRESHOLD &&
-                perturb_attempts_p2 < PHASE2_DEGEN_ESCAPE_MAX_ATTEMPTS &&
-                tab->m >= PHASE2_DEGEN_ESCAPE_MIN_M &&
-                degenerate_count >= PHASE2_DEGEN_ESCAPE_DEGEN_TRIGGER &&
-                periodic_policy_refactor_count(solver, 2) >= PHASE2_DEGEN_ESCAPE_POLICY_TRIGGER) {
-                double scale = 4.0 + 2.0 * (double)perturb_attempts_p2;
-                primal_apply_perturbation_scaled(tab, scale);
-                perturbation_active = 1;
-                if (solver->telemetry_enabled) {
-                    solver->telemetry.perf_phase2_degen_escape_triggers++;
-                    solver->telemetry.perf_phase2_perturb_applied++;
-                    if (!use_bland) {
-                        solver->telemetry.perf_phase2_bland_enter_episodes++;
-                    }
-                }
-                use_bland = 1;
-                degenerate_count = 0;
-                /* Keep Bland active briefly before allowing fast pricing again. */
-                non_degen_streak = -PHASE2_DEGEN_ESCAPE_BLAND_HOLD_ITERS;
-                stall_count_p2 = 0;
-                perturb_attempts_p2++;
-                tableau_compute_solution(tab);
-                if (solver->pricing_strategy == 3) {
-                    tableau_compute_duals(tab);
-                } else {
-                    tableau_compute_reduced_costs(tab);
-                    if (solver->pricing_strategy == 4) heap_build(tab);
-                }
-                if (solver->verbose) {
-                    LP_LOG_STDOUT("Iter %d: Phase 2 degen-escape (scale %.1f)\n", iter, scale);
-                }
-                continue;
-            }
-            if (stall_count_p2 >= P2_STALL_THRESHOLD) {
-                perturb_attempts_p2++;
-                if (perturb_attempts_p2 <= P2_MAX_PERTURB_ATTEMPTS) {
-                    double scale = 1.0 + 2.0 * perturb_attempts_p2;
-                    primal_apply_perturbation_scaled(tab, scale);
-                    perturbation_active = 1;
-                    if (solver->telemetry_enabled) {
-                        solver->telemetry.perf_phase2_perturb_applied++;
-                        if (use_bland) {
-                            solver->telemetry.perf_phase2_bland_exit_episodes++;
-                        }
-                    }
-                    /* Reset Bland's rule — fresh perturbation should break the
-                     * cycle, allowing faster pricing to make progress again */
-                    use_bland = 0;
-                    degenerate_count = 0;
-                    non_degen_streak = 0;
-                    stall_count_p2 = 0;
-                    /* Recompute after perturbation change */
-                    tableau_compute_solution(tab);
-                    if (solver->pricing_strategy == 3) {
-                        tableau_compute_duals(tab);
-                    } else {
-                        tableau_compute_reduced_costs(tab);
-                        if (solver->pricing_strategy == 4) heap_build(tab);
-                    }
-                    if (solver->verbose) {
-                        LP_LOG_STDOUT("Iter %d: Phase 2 stall detected, re-perturbing (attempt %d, scale %.1f)\n",
-                               iter, perturb_attempts_p2, scale);
-                    }
-                }
-                /* else: exhausted attempts, fall through to iteration limit */
-            }
-        } else {
-            stall_count_p2 = 0;
-            last_obj_p2 = tab->obj_value;
-        }
-        }  /* end stall detection block */
-
+        /* Zone 6: post-pivot (refactor policy, recompute, stall detection) */
+        zr = p2_zone_post_pivot(solver, tab, &st, iter);
+        if (zr == P2_ZONE_CONTINUE)    continue;
+        if (zr == P2_ZONE_RETURN_FAIL) return -1;
     }
 
     primal_remove_perturbation(tab);

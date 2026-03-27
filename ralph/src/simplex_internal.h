@@ -119,7 +119,21 @@ int simplex_pivot(SimplexTableau *tab, int entering, int leaving_pos,
 /* Heap rebuild for pricing strategy 4 */
 void heap_build(SimplexTableau *tab);
 
+/* Phase 2 optimality confirmation (refactorize + Dantzig recheck) */
+int phase2_confirm_optimality(SimplexSolver *solver, int iter, int *entering_out);
+
+/* Unbounded ray extraction */
+void extract_unbounded_ray(SimplexSolver *solver, int entering, double dir);
+
 /* No-pivot ladder, force relax plans, escape gate, soft LU cooldown
  * now in simplex_phase1_decision.h */
+
+/* ── Phase 2 degen-escape constants (shared with simplex_phase2_zones.c) ── */
+
+#define PHASE2_DEGEN_ESCAPE_MIN_M 1200
+#define PHASE2_DEGEN_ESCAPE_DEGEN_TRIGGER 120
+#define PHASE2_DEGEN_ESCAPE_POLICY_TRIGGER 200
+#define PHASE2_DEGEN_ESCAPE_MAX_ATTEMPTS 2
+#define PHASE2_DEGEN_ESCAPE_BLAND_HOLD_ITERS 16
 
 #endif /* SIMPLEX_INTERNAL_H */
