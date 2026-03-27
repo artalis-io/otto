@@ -3843,22 +3843,20 @@ function-scope locals.
 
 **Commits:** R4.1a–e, each gated by `make test` + NETLIB small gate.
 
-#### R4.2: Extract Shared Iteration Utilities
+#### R4.2 + R4.3: Assessed and Deferred
 
-Factor out building blocks used identically by both phase zone functions:
+Shared iteration utilities (R4.2) and constants consolidation (R4.3)
+were assessed post-R4.1 and found to provide insufficient value:
 
-1. `simplex_ratio_with_recovery()` — ratio test → refactorize → retry
-2. `simplex_pivot_with_recovery()` — pivot → failure → refactorize → repair
-3. `simplex_refactor_policy_evaluate()` — LU health + periodic + cost gate
+- The building blocks (`pricing_dispatch`, `simplex_pivot`,
+  `primal_ratio_test_with_policy`) are already shared functions. What
+  differs is the recovery orchestration, which is phase-specific by
+  design (Phase 1: 200-line exclusion/retry ladder; Phase 2: simple
+  refactorize-or-repair).
+- Phase 1 cycling thresholds are runtime-computed from `m`; Phase 2
+  uses fixed constants. No meaningful constant duplication exists.
 
-New file: `simplex_shared_iter.c/h` (~300-400 lines).
-
-**Commits:** R4.2a–d, each gated by NETLIB.
-
-#### R4.3: Constants Consolidation
-
-Rename identical `PHASE1_*`/`PHASE2_*` cycling constants to `SIMPLEX_*`.
-Remove dead constants. Single commit.
+R4 is complete with R4.1 alone — both loops are zone-based orchestrators.
 
 **After R4:** `simplex_phase1` ~100 lines, `simplex_phase2` ~100 lines,
 `simplex.c` ~3,500 lines. Both loops are zone-based orchestrators with
