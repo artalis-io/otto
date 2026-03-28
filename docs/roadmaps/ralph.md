@@ -67,23 +67,40 @@ The primal Phase 1 has 79 state variables and 15+ recovery mechanisms — more c
 machinery than typical production solvers. Most crisis recovery exists because the
 LU isn't stable enough. Fixing the LU reduces the need for crisis recovery.
 
-### N1: Adaptive LU Threshold Pivoting (~20 lines, Low Risk)
+### N1: Markowitz Shadow Retry for Ill-Conditioned Factorizations
 
-**Problem:** Markowitz threshold is fixed at 0.1. When the basis is ill-conditioned,
-this allows small pivots that amplify numerical error in FTRAN/BTRAN, causing
-direction norms to blow up (triggering the entire direction stabilization crisis
-machinery).
+**Problem:** Markowitz pivot selection is extremely sensitive. Naive adaptive
+threshold/search changes (tightening from 0.1→0.05, widening search 3→12)
+regressed wood1p, forplan, fit2p on NETLIB. Any parameter change alters the
+factorization path, cascading through the simplex iteration.
 
-**Fix:** Adaptive threshold: start at 0.1, tighten to 0.01 when `cond_estimate > 1e6`
-or `growth_factor > 100`. Both metrics are already tracked in the LU. This is what
-HiGHS does.
+**Approach:** Post-factorization quality gate + shadow retry. Keep the existing
+factorization untouched, then conditionally re-factorize with tighter parameters
+only when the result is bad. Zero risk on passing problems — gate never fires
+on well-conditioned bases.
 
-**Files:** `lu_sparse.c` (`lu_factorize_markowitz`), ~20 lines.
+1. Markowitz runs with existing parameters (threshold=0.1, max_search=3)
+2. Check `cond_estimate > 1e8` after factorization (quality gate)
+3. If gate triggers: re-run Markowitz with tighter params (threshold=0.3,
+   max_search=6) into shadow workspace (reuse `dense_work`/`A_struct` buffer)
+4. If shadow `cond < 0.1 × primary cond` (10x improvement): accept shadow
+5. Otherwise: keep primary, discard shadow
 
-**Expected effect:** Fewer direction blowups → fewer direction stabilization refactors
-→ less crisis machinery activation.
+**Phases:**
 
-**Gate:** NETLIB full gate PASS, no new timeouts.
+| Phase | What | Effort | Risk |
+|-------|------|--------|------|
+| A | Quality telemetry — track `diag_ratio` after Markowitz | 1-2 hrs | None |
+| B | Shadow retry — quality gate + shadow Markowitz + accept/reject | 4-6 hrs | Low |
+| C | Validation — run 5 timeout problems, measure crisis reduction | 2-3 hrs | None |
+| D | Runtime toggle — default OFF, enable after validation | 1 hr | None |
+| E | Profile graduation — promote shadow to 3rd Markowitz profile | Future | Low |
+
+**Files:** `lu_sparse.c` (lu_numeric_factorize ~line 3899), `lp.h` (LUFactorization
+struct fields).
+
+**Gate:** NETLIB identical on passing problems (gate never fires). Timeout problems
+measured separately.
 
 ### N2: LU Update Quality Tracking (~15 lines, Low Risk)
 
@@ -129,14 +146,16 @@ After profiling, prune mechanisms that fire on 0 NETLIB + 0 FuelWise/Surge probl
 
 ### Priority Order
 
-| # | Item | Lines | Risk | Impact |
-|---|------|-------|------|--------|
-| 1 | N1: Adaptive LU threshold | ~20 | Low | High — root cause reduction |
-| 2 | N2: LU update quality | ~15 | Low | Medium — early detection |
-| 3 | N3: Telemetry audit | ~100 (script) | None | High — data for pruning |
-| 4 | N4: Crisis profiling | ~200 | Medium | High — coherent framework |
+| # | Item | Effort | Risk | Impact |
+|---|------|--------|------|--------|
+| 1 | N1-A: Markowitz quality telemetry | 1-2 hrs | None | Enables N1-B |
+| 2 | N3: Crisis telemetry audit | ~100 lines (script) | None | Data for N4 |
+| 3 | N2: LU update quality tracking | ~15 lines | Low | Early degradation detection |
+| 4 | N1-B: Shadow retry infrastructure | 4-6 hrs | Low | Root cause reduction |
+| 5 | N4: Crisis recovery profiling | ~200 lines | Medium | Coherent framework |
 
-Items 1-3 are ~1 week. Item 4 depends on 3's data.
+N1-A and N3 are pure observation (no behavior change). N2 is additive.
+N1-B depends on N1-A data. N4 depends on N3 data.
 
 ---
 
