@@ -929,6 +929,8 @@ typedef struct {
     uint64_t mkz_affected_columns_total;
     uint64_t mkz_affected_columns_max;
     uint64_t mkz_col_max_scan_entries;
+    int mkz_high_cond_count;
+    double mkz_worst_cond;
 
     int sparse_dense_fallbacks;
     int used_dense_fallback_last;

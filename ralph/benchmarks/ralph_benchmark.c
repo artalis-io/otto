@@ -712,6 +712,8 @@ typedef struct {
     uint64_t lu_mkz_affected_columns_total;
     uint64_t lu_mkz_affected_columns_max;
     uint64_t lu_mkz_col_max_scan_entries;
+    int lu_mkz_high_cond_count;
+    double lu_mkz_worst_cond;
     int lu_sparse_dense_fallbacks;
     int lu_used_dense_fallback_last;
     int lu_sparse_fallback_last_reason;
@@ -2186,6 +2188,8 @@ static SolveResult solve_with_ralph(const char *problem_path, double time_limit_
                 result.lu_mkz_affected_columns_total = lu_tel.mkz_affected_columns_total;
                 result.lu_mkz_affected_columns_max = lu_tel.mkz_affected_columns_max;
                 result.lu_mkz_col_max_scan_entries = lu_tel.mkz_col_max_scan_entries;
+                result.lu_mkz_high_cond_count = lu_tel.mkz_high_cond_count;
+                result.lu_mkz_worst_cond = lu_tel.mkz_worst_cond;
                 result.lu_sparse_dense_fallbacks = lu_tel.sparse_dense_fallbacks;
                 result.lu_used_dense_fallback_last = lu_tel.used_dense_fallback_last;
                 result.lu_sparse_fallback_last_reason = lu_tel.sparse_fallback_last_reason;
@@ -4364,6 +4368,8 @@ static void print_json_result(const char *problem_name, const char *source,
             (unsigned long long)ralph->lu_mkz_affected_columns_max);
     fprintf(out, "    \"mkz_col_max_scan_entries\": %llu,\n",
             (unsigned long long)ralph->lu_mkz_col_max_scan_entries);
+    fprintf(out, "    \"mkz_high_cond_count\": %d,\n", ralph->lu_mkz_high_cond_count);
+    fprintf(out, "    \"mkz_worst_cond\": %.6e,\n", ralph->lu_mkz_worst_cond);
     fprintf(out, "    \"sparse_dense_fallbacks\": %d,\n", ralph->lu_sparse_dense_fallbacks);
     fprintf(out, "    \"used_dense_fallback_last\": %s,\n",
             ralph->lu_used_dense_fallback_last ? "true" : "false");
