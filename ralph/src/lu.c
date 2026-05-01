@@ -558,6 +558,7 @@ LUFactorization* lu_create(int m) {
     lu->max_diag_U = 0.0;
     lu->cond_estimate = 1.0;
     lu->growth_factor = 1.0;
+    lu->mkz_last_cond = 0.0;
 
     /* Initialize redundant row hints (set by caller before factorization) */
     lu->redundant_rows = NULL;

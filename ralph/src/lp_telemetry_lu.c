@@ -52,6 +52,8 @@ void lp_telemetry_reset_lu(LUFactorization *lu) {
     lu->telemetry.mkz_affected_columns_total = 0;
     lu->telemetry.mkz_affected_columns_max = 0;
     lu->telemetry.mkz_col_max_scan_entries = 0;
+    lu->telemetry.mkz_high_cond_count = 0;
+    lu->telemetry.mkz_worst_cond = 0.0;
     lu->telemetry.sparse_dense_fallbacks = 0;
     lu->telemetry.used_dense_fallback_last = 0;
     lu->telemetry.sparse_fallback_last_reason = LU_SPARSE_FALLBACK_NONE;
@@ -297,6 +299,8 @@ void lp_telemetry_snapshot_lu(const LUFactorization *lu,
     COPY_LU_TELEM_FIELD(mkz_affected_columns_total);
     COPY_LU_TELEM_FIELD(mkz_affected_columns_max);
     COPY_LU_TELEM_FIELD(mkz_col_max_scan_entries);
+    COPY_LU_TELEM_FIELD(mkz_high_cond_count);
+    COPY_LU_TELEM_FIELD(mkz_worst_cond);
 
     COPY_LU_TELEM_FIELD(sparse_dense_fallbacks);
     COPY_LU_TELEM_FIELD(used_dense_fallback_last);

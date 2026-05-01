@@ -3313,6 +3313,8 @@ int ralph_core_get_last_lu_telemetry(const RalphModel *model, RalphLUTelemetry *
     RALPH_LU_TELEM_COPY(mkz_affected_columns_total);
     RALPH_LU_TELEM_COPY(mkz_affected_columns_max);
     RALPH_LU_TELEM_COPY(mkz_col_max_scan_entries);
+    RALPH_LU_TELEM_COPY(mkz_high_cond_count);
+    RALPH_LU_TELEM_COPY(mkz_worst_cond);
 
     RALPH_LU_TELEM_COPY(sparse_dense_fallbacks);
     RALPH_LU_TELEM_COPY(used_dense_fallback_last);
