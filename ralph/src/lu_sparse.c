@@ -14,6 +14,7 @@
 #include <math.h>
 #include <limits.h>
 #include "lp.h"
+#include "lp_log.h"
 #include "lp_policy_glpk_compat.h"
 #include "lp_glpk_strict.h"
 #include "lu_update_backend.h"
@@ -2252,6 +2253,12 @@ static int lu_symbolic_analyze(LUFactorization *lu, const SparseMatrix *B) {
 #define MARKOWITZ_RESERVED_RELAX_RATIO 0.1 /* Keep non-reserved if within 10x of reserved best */
 #define MARKOWITZ_RETRY_THRESHOLD 0.02 /* Secondary retry profile threshold ratio */
 #define MARKOWITZ_RETRY_MAX_SEARCH 8   /* Secondary retry profile candidate budget */
+
+/* N1-B: Shadow stability retry — only fires when primary Markowitz succeeds
+ * but produces a poorly-conditioned U factor. Overwrites the primary result. */
+#define MKZ_SHADOW_COND_TRIGGER  1e8   /* Trigger shadow when cond > this */
+#define MKZ_SHADOW_THRESHOLD     0.3   /* Tighter pivot threshold for shadow */
+#define MKZ_SHADOW_MAX_SEARCH    6     /* Wider candidate search for shadow */
 #define MARKOWITZ_RETRY_SINGULAR_THRESHOLD 0.005 /* Retry profile singular scan threshold */
 #define MARKOWITZ_RETRY_RESERVED_RELAX_RATIO 0.05 /* Retry profile reserved-row relax */
 #define MARKOWITZ_CIRCUIT_BAD_STREAK 3 /* Trip breaker after this many bad outcomes */
@@ -3897,6 +3904,152 @@ static int lu_numeric_factorize(LUFactorization *lu, const SparseMatrix *B,
 
         rc = rc_final;
         if (rc == 0) {
+            /* N1-B: Shadow stability retry. Compute cond from U COO diagonals.
+             * If cond exceeds trigger, re-run Markowitz with tighter params.
+             * The primary was bad, so overwriting is acceptable. */
+            {
+                double mkz_min_diag = RALPH_INFINITY;
+                double mkz_max_diag = 0.0;
+                for (int i = 0; i < U_nnz; i++) {
+                    if (U_row[i] == U_col[i]) {
+                        double av = fabs(U_val[i]);
+                        if (av > RALPH_ZERO_TOL) {
+                            if (av < mkz_min_diag) mkz_min_diag = av;
+                            if (av > mkz_max_diag) mkz_max_diag = av;
+                        }
+                    }
+                }
+                double mkz_cond = (mkz_min_diag > RALPH_ZERO_TOL)
+                    ? mkz_max_diag / mkz_min_diag : RALPH_INFINITY;
+
+                if (mkz_cond > MKZ_SHADOW_COND_TRIGGER && !strict_dispatch_mode) {
+                    if (lu->telemetry_enabled) {
+                        lu->telemetry.mkz_high_cond_count++;
+                    }
+                    /* Save primary COO state before shadow overwrites it */
+                    int saved_L_nnz = L_nnz;
+                    int saved_U_nnz = U_nnz;
+                    int saved_mkz_reg = mkz_reg;
+                    size_t coo_save_size = (size_t)(L_nnz + U_nnz);
+                    int *saved_L_row = NULL, *saved_L_col = NULL;
+                    double *saved_L_val = NULL;
+                    int *saved_U_row = NULL, *saved_U_col = NULL;
+                    double *saved_U_val = NULL;
+                    int *saved_mkz_col_perm = NULL;
+                    int shadow_attempted = 0;
+
+                    if (coo_save_size > 0 && coo_save_size < (size_t)INT_MAX / 4) {
+                        saved_L_row = (int *)malloc((size_t)L_nnz * sizeof(int));
+                        saved_L_col = (int *)malloc((size_t)L_nnz * sizeof(int));
+                        saved_L_val = (double *)malloc((size_t)L_nnz * sizeof(double));
+                        saved_U_row = (int *)malloc((size_t)U_nnz * sizeof(int));
+                        saved_U_col = (int *)malloc((size_t)U_nnz * sizeof(int));
+                        saved_U_val = (double *)malloc((size_t)U_nnz * sizeof(double));
+                        saved_mkz_col_perm = (int *)malloc((size_t)k * sizeof(int));
+                    }
+                    int *saved_row_perm = (int *)malloc((size_t)m * sizeof(int));
+                    int *saved_row_pos = (int *)malloc((size_t)m * sizeof(int));
+                    if (saved_L_row && saved_L_col && saved_L_val &&
+                        saved_U_row && saved_U_col && saved_U_val &&
+                        saved_mkz_col_perm && saved_row_perm && saved_row_pos) {
+                        memcpy(saved_L_row, L_row, (size_t)L_nnz * sizeof(int));
+                        memcpy(saved_L_col, L_col, (size_t)L_nnz * sizeof(int));
+                        memcpy(saved_L_val, L_val, (size_t)L_nnz * sizeof(double));
+                        memcpy(saved_U_row, U_row, (size_t)U_nnz * sizeof(int));
+                        memcpy(saved_U_col, U_col, (size_t)U_nnz * sizeof(int));
+                        memcpy(saved_U_val, U_val, (size_t)U_nnz * sizeof(double));
+                        memcpy(saved_mkz_col_perm, mkz_col_perm, (size_t)k * sizeof(int));
+                        memcpy(saved_row_perm, row_perm, (size_t)m * sizeof(int));
+                        memcpy(saved_row_pos, row_pos, (size_t)m * sizeof(int));
+
+                        /* Re-populate A_struct for shadow Markowitz */
+                        memset(A_struct, 0, (size_t)k * k * sizeof(double));
+                        for (int jj = 0; jj < k; jj++) {
+                            int orig_col = col_order[jj];
+                            for (int p = B->colptr[orig_col]; p < B->colptr[orig_col + 1]; p++) {
+                                int orig_row = B->rowidx[p];
+                                int perm_row = row_pos[orig_row];
+                                if (perm_row >= 0 && perm_row < k) {
+                                    A_struct[(size_t)perm_row * k + jj] = B->values[p];
+                                }
+                            }
+                        }
+
+                        int shadow_pool_mult = pool_mult;
+                        if (shadow_pool_mult < MARKOWITZ_POOL_MULT)
+                            shadow_pool_mult = MARKOWITZ_POOL_MULT;
+                        size_t mkz_need = 0;
+                        int pool_cap_dummy = 0;
+                        if (mkz_compute_workspace_requirements(mkz_init_nnz, m, k, shadow_pool_mult,
+                                                               &pool_cap_dummy, &mkz_need) == 0 &&
+                            mkz_workspace_reserve(lu, mkz_perm_doubles + mkz_need) == 0) {
+                            int *shadow_mkz_perm = (int *)lu->mkz_work;
+                            double *shadow_ws = lu->mkz_work + mkz_perm_doubles;
+                            size_t shadow_ws_d = lu->mkz_work_capacity - mkz_perm_doubles;
+                            int shadow_L_nnz = 0, shadow_U_nnz = 0, shadow_reg = 0;
+                            shadow_attempted = 1;
+                            int shadow_rc = lu_factorize_markowitz(
+                                lu, B, col_order, m, k, mkz_init_nnz,
+                                row_perm, row_pos, lu->pivot_tol,
+                                row_is_identity,
+                                lu->redundant_rows, lu->num_redundant,
+                                lu->allow_regularization, lu->max_regularizations, &shadow_reg,
+                                L_row, L_col, L_val, &shadow_L_nnz, lu->coo_capacity,
+                                U_row, U_col, U_val, &shadow_U_nnz, lu->coo_capacity,
+                                shadow_mkz_perm, shadow_pool_mult,
+                                MKZ_SHADOW_THRESHOLD, MKZ_SHADOW_MAX_SEARCH,
+                                MARKOWITZ_SINGULAR_RETRY_THRESHOLD,
+                                MARKOWITZ_RESERVED_RELAX_RATIO,
+                                shadow_ws, shadow_ws_d);
+                            int accept_shadow = 0;
+                            if (shadow_rc == 0) {
+                                double shadow_min = RALPH_INFINITY, shadow_max = 0.0;
+                                for (int i = 0; i < shadow_U_nnz; i++) {
+                                    if (U_row[i] == U_col[i]) {
+                                        double av = fabs(U_val[i]);
+                                        if (av > RALPH_ZERO_TOL) {
+                                            if (av < shadow_min) shadow_min = av;
+                                            if (av > shadow_max) shadow_max = av;
+                                        }
+                                    }
+                                }
+                                double shadow_cond = (shadow_min > RALPH_ZERO_TOL)
+                                    ? shadow_max / shadow_min : RALPH_INFINITY;
+                                if (shadow_cond < mkz_cond) {
+                                    accept_shadow = 1;
+                                    L_nnz = shadow_L_nnz;
+                                    U_nnz = shadow_U_nnz;
+                                    mkz_reg = shadow_reg;
+                                    mkz_col_perm = shadow_mkz_perm;
+                                    LP_LOG_STDERR("[lu_sparse] N1-B shadow accepted: cond %.2e -> %.2e\n",
+                                            mkz_cond, shadow_cond);
+                                }
+                            }
+                            if (!accept_shadow) {
+                                /* Restore primary COO + row permutation */
+                                L_nnz = saved_L_nnz;
+                                U_nnz = saved_U_nnz;
+                                mkz_reg = saved_mkz_reg;
+                                memcpy(L_row, saved_L_row, (size_t)L_nnz * sizeof(int));
+                                memcpy(L_col, saved_L_col, (size_t)L_nnz * sizeof(int));
+                                memcpy(L_val, saved_L_val, (size_t)L_nnz * sizeof(double));
+                                memcpy(U_row, saved_U_row, (size_t)U_nnz * sizeof(int));
+                                memcpy(U_col, saved_U_col, (size_t)U_nnz * sizeof(int));
+                                memcpy(U_val, saved_U_val, (size_t)U_nnz * sizeof(double));
+                                memcpy(mkz_col_perm, saved_mkz_col_perm, (size_t)k * sizeof(int));
+                                memcpy(row_perm, saved_row_perm, (size_t)m * sizeof(int));
+                                memcpy(row_pos, saved_row_pos, (size_t)m * sizeof(int));
+                            }
+                        }
+                    }
+                    free(saved_L_row); free(saved_L_col); free(saved_L_val);
+                    free(saved_U_row); free(saved_U_col); free(saved_U_val);
+                    free(saved_mkz_col_perm);
+                    free(saved_row_perm); free(saved_row_pos);
+                    (void)shadow_attempted;
+                }
+            }
+
             lp_telemetry_lu_mark_mkz_success(lu);
             mkz_global_skip_note_reset(lu);
             lu_supernode_cost_gate_note_markowitz(lu, k, t_markowitz_numeric_ms);
