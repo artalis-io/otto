@@ -265,6 +265,10 @@ typedef struct {
     uint64_t mkz_affected_columns_max;    /* Max live pivot-row columns touched in one step */
     uint64_t mkz_col_max_scan_entries;    /* Entries scanned while recomputing col_max */
 
+    /* N1-A: Markowitz quality telemetry */
+    int mkz_high_cond_count;  /* Factorizations where mkz cond_estimate > 1e8 */
+    double mkz_worst_cond;    /* Worst mkz cond_estimate seen across all factorizations */
+
     /* Sparse-efficient fallback telemetry */
     int sparse_dense_fallbacks;  /* lu_factorize_sparse_efficient -> lu_factorize_dense */
     int used_dense_fallback_last;/* 1 if last lu_factorize call used dense fallback */
@@ -528,6 +532,7 @@ typedef struct {
     double max_diag_U;      /* Maximum |U[i,i]| at factorization */
     double cond_estimate;   /* Estimated condition number */
     double growth_factor;   /* Growth in U during updates */
+    double mkz_last_cond;   /* N1-A: cond_estimate from last Markowitz factorization (0 if non-Markowitz) */
     double growth_refactor_threshold; /* Growth threshold override (<=0 uses default) */
 
     /* Redundant row hints (for two-phase simplex with stuck artificials)
@@ -2009,6 +2014,8 @@ typedef struct {
     uint64_t mkz_affected_columns_total;
     uint64_t mkz_affected_columns_max;
     uint64_t mkz_col_max_scan_entries;
+    int mkz_high_cond_count;
+    double mkz_worst_cond;
 
     int sparse_dense_fallbacks;
     int used_dense_fallback_last;

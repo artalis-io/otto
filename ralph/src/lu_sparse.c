@@ -4527,6 +4527,21 @@ identity_placement:
     lu->num_updates = 0;
     lu_update_backend_reset(lu);
 
+    /* N1-A: Record Markowitz quality telemetry */
+    if (backend_used == LU_NUMERIC_BACKEND_MARKOWITZ) {
+        lu->mkz_last_cond = lu->cond_estimate;
+        if (lu->telemetry_enabled) {
+            if (lu->cond_estimate > 1e8) {
+                lu->telemetry.mkz_high_cond_count++;
+            }
+            if (lu->cond_estimate > lu->telemetry.mkz_worst_cond) {
+                lu->telemetry.mkz_worst_cond = lu->cond_estimate;
+            }
+        }
+    } else {
+        lu->mkz_last_cond = 0.0;
+    }
+
     if (mkz_used_this_call && !mkz_bad_outcome_this_call) {
         mkz_circuit_note_good_outcome(lu, mkz_fingerprint);
     }
