@@ -106,6 +106,7 @@ void lp_telemetry_reset_lu(LUFactorization *lu) {
     lu->telemetry.refactor_need_reason_cond_adaptive_limit = 0;
     lu->telemetry.refactor_need_reason_spike_pool_warn = 0;
     lu->telemetry.refactor_need_reason_spike_work = 0;
+    lu->telemetry.refactor_need_reason_spike_diag_quality = 0;
     lu->telemetry.update_fail_bad_input = 0;
     lu->telemetry.update_fail_max_updates = 0;
     lu->telemetry.update_fail_singular_update = 0;
@@ -354,6 +355,7 @@ void lp_telemetry_snapshot_lu(const LUFactorization *lu,
     COPY_LU_TELEM_FIELD(refactor_need_reason_cond_adaptive_limit);
     COPY_LU_TELEM_FIELD(refactor_need_reason_spike_pool_warn);
     COPY_LU_TELEM_FIELD(refactor_need_reason_spike_work);
+    COPY_LU_TELEM_FIELD(refactor_need_reason_spike_diag_quality);
     COPY_LU_TELEM_FIELD(update_fail_bad_input);
     COPY_LU_TELEM_FIELD(update_fail_max_updates);
     COPY_LU_TELEM_FIELD(update_fail_singular_update);
