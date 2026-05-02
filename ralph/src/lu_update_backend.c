@@ -114,6 +114,8 @@ void lu_update_backend_reset(LUFactorization *lu) {
     }
     lu->ft_num_updates = 0;
     lu->spike_pool_used = 0;
+    lu->ft_spike_diag_min = RALPH_INFINITY;
+    lu->ft_spike_diag_max = 0.0;
     for (int i = 0; i < lu->m; i++) {
         lu->ft_col_order[i] = i;
         lu->ft_col_order_inv[i] = i;
@@ -1009,6 +1011,29 @@ int lu_update_backend_store(LUFactorization *lu,
         }
         lu->spike_pool_used += off_diag_nnz;
         lu->ft_num_updates++;
+
+        /* N2: Track spike diagonal quality. When the ratio of max/min spike
+         * diagonals exceeds a threshold, signal refactorization need. This
+         * catches basis degradation between scheduled refactorizations. */
+        {
+            double abs_diag = fabs(spike[step_pos]);
+            if (abs_diag > RALPH_ZERO_TOL) {
+                if (abs_diag < lu->ft_spike_diag_min) lu->ft_spike_diag_min = abs_diag;
+                if (abs_diag > lu->ft_spike_diag_max) lu->ft_spike_diag_max = abs_diag;
+            }
+            if (lu->ft_spike_diag_min > RALPH_ZERO_TOL &&
+                lu->ft_spike_diag_max / lu->ft_spike_diag_min > 1e8 &&
+                lu->ft_num_updates >= 3) {
+                /* Force refactorization by exhausting the update budget.
+                 * lu_needs_refactorization() will return true on next check. */
+                if (lu->max_updates > 0 && lu->num_updates < lu->max_updates) {
+                    lu->num_updates = lu->max_updates;
+                    if (lu->telemetry_enabled) {
+                        lu->telemetry.refactor_need_reason_spike_diag_quality++;
+                    }
+                }
+            }
+        }
         return 0;
     }
 
