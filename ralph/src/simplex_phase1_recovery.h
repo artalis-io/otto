@@ -17,6 +17,12 @@
 
 #include "lp.h"
 
+/* Recovery profile: controls which crisis mechanisms are active */
+typedef enum {
+    P1_RECOVERY_PROFILE_AGGRESSIVE = 0,  /* All mechanisms active (legacy default) */
+    P1_RECOVERY_PROFILE_STANDARD = 1     /* Skip dead mechanisms */
+} P1RecoveryProfile;
+
 /* Phase-1 pivot-failure reasons (shared between simplex.c and recovery module) */
 enum {
     PHASE1_PIVOT_FAIL_NONE = 0,
@@ -165,6 +171,7 @@ typedef struct {
     P1BasisRepairState basis;
     P1ProgressState    progress;
     P1SharedState      shared;
+    P1RecoveryProfile  profile;
 } P1RecoveryState;
 
 /* Initialize all recovery state to defaults.

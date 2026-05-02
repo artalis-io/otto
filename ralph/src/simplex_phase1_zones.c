@@ -1620,18 +1620,21 @@ P1ZoneResult p1_zone_direction_guard(SimplexSolver *solver,
             }
             force_dir_refactor_guard_trigger =
                 (force_dir_refactor_lu_health || force_pivot_mode_active);
-            suppress_lu_health = phase1_dir_stabilize_escape_gate_plan(
-                tab->m,
-                rs->cycling.degenerate_count,
-                rs->numerical.dir_skip_event_streak,
-                rs->progress.no_pivot_no_progress_streak,
-                rs->progress.dir_escape_cooldown,
-                force_dir_refactor_extreme,
-                force_dir_refactor_guard_trigger,
-                lu_hard_trigger,
-                &rs->progress.dir_escape_cooldown,
-                &escape_triggered,
-                &escape_hard_bypass);
+            if (rs->profile == P1_RECOVERY_PROFILE_AGGRESSIVE) {
+                /* N4: dir_escape is dead on NETLIB — skip under STANDARD */
+                suppress_lu_health = phase1_dir_stabilize_escape_gate_plan(
+                    tab->m,
+                    rs->cycling.degenerate_count,
+                    rs->numerical.dir_skip_event_streak,
+                    rs->progress.no_pivot_no_progress_streak,
+                    rs->progress.dir_escape_cooldown,
+                    force_dir_refactor_extreme,
+                    force_dir_refactor_guard_trigger,
+                    lu_hard_trigger,
+                    &rs->progress.dir_escape_cooldown,
+                    &escape_triggered,
+                    &escape_hard_bypass);
+            }
             if (escape_triggered) {
                 lp_telemetry_record_phase1_dir_stabilize_escape_gate(
                     solver,
@@ -2329,7 +2332,9 @@ P1ZoneResult p1_zone_direction_guard(SimplexSolver *solver,
                 } else {
                     lp_telemetry_record_phase1_failed_stabilize_retry_shadow_guard_original_exclusion(
                         solver);
-                    arm_shadow_guard_followup_pending = 1;
+                    if (rs->profile == P1_RECOVERY_PROFILE_AGGRESSIVE) {
+                        arm_shadow_guard_followup_pending = 1; /* N4: dead on NETLIB */
+                    }
                 }
                 if (solver->verbose >= 2) {
                     LP_LOG_STDERR(
