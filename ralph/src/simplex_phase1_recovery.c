@@ -105,6 +105,9 @@ void p1_recovery_init(P1RecoveryState *rs,
     rs->shared.periodic_policy_cooldown = 0;
     rs->shared.periodic_policy_pressure_decay = 0.0;
     rs->shared.lu_soft_health_streak = 0;
+
+    /* ── Profile ──────────────────────────────────────────────────── */
+    rs->profile = P1_RECOVERY_PROFILE_STANDARD;
 }
 
 /* ========================================================================
