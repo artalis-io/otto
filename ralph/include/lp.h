@@ -322,6 +322,7 @@ typedef struct {
     int refactor_need_reason_cond_adaptive_limit;
     int refactor_need_reason_spike_pool_warn;
     int refactor_need_reason_spike_work;
+    int refactor_need_reason_spike_diag_quality; /* N2: spike diag ratio > 1e8 */
     int update_fail_bad_input;
     int update_fail_max_updates;
     int update_fail_singular_update;
@@ -533,6 +534,10 @@ typedef struct {
     double cond_estimate;   /* Estimated condition number */
     double growth_factor;   /* Growth in U during updates */
     double mkz_last_cond;   /* N1-A: cond_estimate from last Markowitz factorization (0 if non-Markowitz) */
+
+    /* N2: FT spike diagonal quality tracking */
+    double ft_spike_diag_min;  /* Min |spike_diag| across FT updates (reset on refactor) */
+    double ft_spike_diag_max;  /* Max |spike_diag| across FT updates (reset on refactor) */
     double growth_refactor_threshold; /* Growth threshold override (<=0 uses default) */
 
     /* Redundant row hints (for two-phase simplex with stuck artificials)
@@ -2069,6 +2074,7 @@ typedef struct {
     int refactor_need_reason_cond_adaptive_limit;
     int refactor_need_reason_spike_pool_warn;
     int refactor_need_reason_spike_work;
+    int refactor_need_reason_spike_diag_quality; /* N2: spike diag ratio > 1e8 */
     int update_fail_bad_input;
     int update_fail_max_updates;
     int update_fail_singular_update;
