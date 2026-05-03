@@ -2735,7 +2735,25 @@ int dual_simplex_solve_v2(SimplexSolver *solver) {
                                                "ratio_no_entering")) {
                     continue;
                 }
-                /* No entering variable — problem is infeasible */
+                /* Refactorize and retry before declaring infeasible.
+                 * Accumulated eta updates can corrupt the BTRAN row,
+                 * making all alpha_j values fall below pivot_floor.
+                 * A fresh factorization resolves numerical drift.
+                 * Guard: at most 3 refactorize-retry attempts per solve. */
+                if (quality.ratio_fail_streak <= 3) {
+                    double t_refactor_ms = lp_telemetry_timer_start();
+                    int rc_ref = tableau_refactorize(tab);
+                    lp_telemetry_add_refactor_runtime_timed(solver, t_refactor_ms);
+                    if (rc_ref == 0) {
+                        dual_quality_on_refactor(&quality, iter);
+                        tab->dse_initialized = 0;
+                        if (use_dse) dse_init_approx(tab);
+                        tableau_compute_solution(tab);
+                        tableau_compute_reduced_costs(tab);
+                        continue;
+                    }
+                }
+                /* No entering variable after fresh factorization — infeasible */
                 dual_perturb_state_disable(tab, &perturb_state);
                 extract_farkas_ray_dual(solver);
                 solver->status = RALPH_STATUS_INFEASIBLE;
