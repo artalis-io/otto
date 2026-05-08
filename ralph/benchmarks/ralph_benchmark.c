@@ -966,6 +966,7 @@ typedef struct {
     /* Solver method */
     int method;  /* 0=primal, 1=dual, 2=auto, 3=dualp */
     int pricing; /* -1=default, 0=Dantzig, 1=SE, 2=Devex, 3=Partial, 4=Heap */
+    int phase1_pricing; /* -1=default, 0=Dantzig, 1=SE, 2=Devex, 3=Partial, 4=Heap */
     int glpk_smcp_ratio; /* -1=default, 0=standard (--norelax), 1=harris (--relax) */
     int glpk_smcp_flip;  /* -1=default, 0=off (--noflip), 1=on (--flip) */
     int glpk_bfcp_backend; /* -1=default, 0=luf_ft, 1=cbg, 2=cgr */
@@ -1387,7 +1388,7 @@ static SolveResult solve_with_glpk(const char *problem_path, double time_limit_s
  * ============================================================================ */
 
 static SolveResult solve_with_ralph(const char *problem_path, double time_limit_sec,
-                                     int method, int pricing,
+                                     int method, int pricing, int phase1_pricing,
                                      int glpk_smcp_ratio, int glpk_smcp_flip,
                                      int glpk_bfcp_backend,
                                      int lu_supernode, int lp_basis_governor_mode,
@@ -1484,6 +1485,9 @@ static SolveResult solve_with_ralph(const char *problem_path, double time_limit_
     }
     if (pricing >= 0) {
         ralph_test_set_int_param(model, "pricing", pricing);
+    }
+    if (phase1_pricing >= 0) {
+        ralph_test_set_int_param(model, "phase1_pricing", phase1_pricing);
     }
     if (glpk_smcp_ratio >= 0 || glpk_smcp_flip >= 0 || glpk_bfcp_backend >= 0) {
         /* Route ratio/flip through GLPK-compat runtime mapping.
@@ -5017,6 +5021,7 @@ static int run_single_benchmark(const char *problem_path, const char *name,
     int num_vars = 0, num_cons = 0, nnz = 0, is_mip = 0;
     SolveResult ralph = solve_with_ralph(problem_path, ralph_time_limit,
                                           opts->method, opts->pricing,
+                                          opts->phase1_pricing,
                                           opts->glpk_smcp_ratio,
                                           opts->glpk_smcp_flip,
                                           opts->glpk_bfcp_backend,
@@ -5050,6 +5055,7 @@ static int run_single_benchmark(const char *problem_path, const char *name,
         free(ralph.solution);
         ralph = solve_with_ralph(problem_path, ralph_time_limit,
                                  opts->method, opts->pricing,
+                                 opts->phase1_pricing,
                                  opts->glpk_smcp_ratio,
                                  opts->glpk_smcp_flip,
                                  opts->glpk_bfcp_backend,
@@ -5082,6 +5088,7 @@ static int run_single_benchmark(const char *problem_path, const char *name,
         free(ralph.solution);
         ralph = solve_with_ralph(problem_path, ralph_time_limit,
                                  opts->method, opts->pricing,
+                                 opts->phase1_pricing,
                                  opts->glpk_smcp_ratio,
                                  opts->glpk_smcp_flip,
                                  opts->glpk_bfcp_backend,
@@ -5162,6 +5169,7 @@ static void test_alarm_handler(int sig) {
 static int test_solve_one(const char *path, const char *name,
                            const NetlibReference *ref,
                            int timeout_sec, int method, int pricing,
+                           int phase1_pricing,
                            int glpk_smcp_ratio, int glpk_smcp_flip,
                            int glpk_bfcp_backend,
                            int lu_supernode, int lp_basis_governor_mode,
@@ -5194,6 +5202,7 @@ static int test_solve_one(const char *path, const char *name,
         int num_vars = 0, num_cons = 0, nnz = 0, is_mip = 0;
         SolveResult result = solve_with_ralph(path, (double)timeout_sec,
                                                method, pricing,
+                                               phase1_pricing,
                                                glpk_smcp_ratio, glpk_smcp_flip,
                                                glpk_bfcp_backend,
                                                lu_supernode,
@@ -5319,6 +5328,7 @@ static int run_test_mode(const Options *opts) {
 
         int result = test_solve_one(problems[i].path, name, ref,
                                      timeout_sec, opts->method, opts->pricing,
+                                     opts->phase1_pricing,
                                      opts->glpk_smcp_ratio,
                                      opts->glpk_smcp_flip,
                                      opts->glpk_bfcp_backend,
@@ -5421,6 +5431,7 @@ static void print_help(const char *prog) {
     printf("\n");
     printf("Solver:\n");
     printf("  --method <N>                  LP method: 0=primal, 1=dual, 2=auto, 3=dualp (default: 0)\n");
+    printf("  --phase1-pricing <N>          Override Phase 1 pricing only: 0=Dantzig, 1=SE, 2=Devex, 3=Partial, 4=Heap\n");
     printf("  --steep                       Use steep pricing (alias for --pricing 1)\n");
     printf("  --nosteep                     Use standard pricing (alias for --pricing 0)\n");
     printf("  --relax                       Use Harris ratio test (GLPK-compat ratio=1)\n");
@@ -5487,6 +5498,7 @@ static int parse_args(int argc, char **argv, Options *opts) {
     opts->feas_tol = DEFAULT_FEAS_TOL;
     opts->lp_only = 1;  /* Default: LP only */
     opts->pricing = -1;  /* Default: solver default */
+    opts->phase1_pricing = -1;  /* Default: solver default */
     opts->glpk_smcp_ratio = -1;
     opts->glpk_smcp_flip = -1;
     opts->glpk_bfcp_backend = -1;
@@ -5552,6 +5564,14 @@ static int parse_args(int argc, char **argv, Options *opts) {
             }
         } else if (strcmp(arg, "--pricing") == 0 && i + 1 < argc) {
             opts->pricing = atoi(argv[++i]);
+        } else if (strcmp(arg, "--phase1-pricing") == 0 && i + 1 < argc) {
+            opts->phase1_pricing = atoi(argv[++i]);
+            if (opts->phase1_pricing < 0 || opts->phase1_pricing > 4) {
+                fprintf(stderr,
+                        "Invalid --phase1-pricing: %d (expected 0..4)\n",
+                        opts->phase1_pricing);
+                return -1;
+            }
         } else if (strcmp(arg, "--steep") == 0) {
             opts->pricing = 1;
         } else if (strcmp(arg, "--nosteep") == 0) {
