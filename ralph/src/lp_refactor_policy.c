@@ -268,6 +268,12 @@ static int lu_soft_min_update_age(int max_updates) {
 }
 
 static int lu_soft_cost_gate_min_degen(int phase, int m) {
+    if (phase == 1 && m >= LU_SOFT_COST_GATE_PHASE1_MIN_M) {
+        /* Large Phase 1 bases can pay heavily for soft LU-health refactors
+         * before degeneracy counters mature; let the cost/health envelope
+         * decide instead of requiring an additional degeneracy signal. */
+        return 0;
+    }
     if (phase == 2 && m >= LU_SOFT_COST_GATE_PHASE2_MIN_M) {
         return LU_SOFT_COST_GATE_PHASE2_LARGE_MIN_DEGEN;
     }
