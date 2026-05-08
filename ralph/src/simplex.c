@@ -4203,6 +4203,24 @@ static void simplex_reset_run_state(SimplexSolver *solver) {
     solver->verify_cond_estimate = 0.0;
 }
 
+static int simplex_should_use_dense_small_phase1_partial(const SimplexSolver *solver,
+                                                         const SimplexTableau *tab) {
+    if (!solver || !solver->model || !solver->model->A || !tab) return 0;
+    if (!tab->use_two_phase || tab->num_artificial <= 0) return 0;
+
+    int m = solver->model->num_cons;
+    int n = solver->model->num_vars;
+    int nnz = solver->model->A->nnz;
+    if (m <= 0 || n <= 0 || nnz <= 0) return 0;
+
+    double density = (double)nnz / ((double)m * (double)n);
+    /* Dense, small Phase-1 tableaus make full Devex scans disproportionately
+     * expensive while partial pricing still sees enough of the entering set.
+     * Keep this conservative: larger or sparser NETLIB cases showed new
+     * failures when partial Phase 1 was applied globally. */
+    return (m <= 220 && density >= 0.05);
+}
+
 static int simplex_finish_prepared_primal_solve(SimplexSolver *solver, clock_t start) {
     if (!solver || !solver->tableau) return -1;
 
@@ -4220,6 +4238,10 @@ static int simplex_finish_prepared_primal_solve(SimplexSolver *solver, clock_t s
         tab->pricing_strategy = solver->phase1_pricing;
         tab->use_steepest_edge = (solver->phase1_pricing == 1 || solver->phase1_pricing == 2
                                   || solver->phase1_pricing == 5);
+    } else if (simplex_should_use_dense_small_phase1_partial(solver, tab)) {
+        solver->pricing_strategy = 3;
+        tab->pricing_strategy = 3;
+        tab->use_steepest_edge = 0;
     } else if (tab->use_two_phase && (solver->pricing_strategy == 3 || solver->pricing_strategy == 4)) {
         solver->pricing_strategy = 2;  /* Devex for Phase 1 */
         tab->pricing_strategy = 2;
