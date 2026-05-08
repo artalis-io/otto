@@ -378,6 +378,9 @@ LPLUHealthRefactorDecision lp_refactor_policy_lu_health_refactor_decision(
     double growth_factor,
     int soft_breach_streak);
 
+int lp_refactor_policy_dense_spike_min_updates_override(int phase,
+                                                        int m);
+
 int lp_refactor_policy_soft_lu_cost_gate_should_defer(int phase,
                                                       int m,
                                                       int use_bland,

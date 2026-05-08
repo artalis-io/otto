@@ -120,6 +120,12 @@ static int solution_refine_iteration_budget(double max_residual, double feas_tol
     return 5;
 }
 
+static int simplex_dense_spike_min_updates_override(const SimplexTableau *tab) {
+    if (!tab) return 0;
+    return lp_refactor_policy_dense_spike_min_updates_override(tab->phase,
+                                                               tab->m);
+}
+
 int simplex_solution_refine_limit_for_test(double max_residual, double feas_tol) {
     return solution_refine_iteration_budget(max_residual, feas_tol);
 }
@@ -2228,6 +2234,9 @@ int simplex_pivot(SimplexTableau *tab,
         switch (action) {
             case LP_BASIS_ACTION_UPDATE:
                 sparse_get_column(tab->A_ext, entering, tab->work1);
+                lu_set_dense_spike_min_updates_override(
+                    tab->lu,
+                    simplex_dense_spike_min_updates_override(tab));
                 {
                     double t_lu_update_ms = lp_telemetry_timer_start();
                     lu_update_status = lu_update(tab->lu, leaving_pos, tab->work1);
