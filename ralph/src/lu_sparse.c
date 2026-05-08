@@ -2279,7 +2279,7 @@ static int lu_symbolic_analyze(LUFactorization *lu, const SparseMatrix *B) {
 #define MARKOWITZ_CIRCUIT_BAD_STREAK 3 /* Trip breaker after this many bad outcomes */
 #define MARKOWITZ_CIRCUIT_SKIP_BUDGET 128 /* Skip this many same-structure Markowitz attempts */
 #define MARKOWITZ_GLOBAL_SINGULAR_BAD_STREAK 6 /* Trip global skip after this many singular outcomes */
-#define MARKOWITZ_GLOBAL_SKIP_BUDGET 192 /* Skip this many Markowitz attempts globally after chronic singulars */
+#define MARKOWITZ_GLOBAL_SKIP_BUDGET 512 /* Skip this many Markowitz attempts globally after chronic singulars */
 #define MARKOWITZ_FILL_GAP    8     /* Extra slots per column/row for fill-in */
 #define MARKOWITZ_POOL_MULT   4     /* Pool = MULT × initial nnz */
 #define MARKOWITZ_POOL_RETRY_MULT 8 /* Legacy retry multiplier (first growth target) */
