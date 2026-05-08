@@ -320,6 +320,8 @@ static void test_solver_reset_and_refactor_accounting(void) {
     solver.policy.phase1_stagnation.last_recompute_dir_refactor = 3;
     solver.policy.phase1_stagnation.last_recompute_pivot_fail = 2;
     solver.policy.phase1_stagnation.last_recompute_perturb = 1;
+    solver.policy.soft_lu_cost_gate_enabled = 0;
+    solver.policy.periodic_cost_gate_enabled = 0;
     lp_basis_governor_set_mode(&solver.policy.basis_governor,
                                solver.policy.basis_governor_mode);
     solver.policy.basis_governor.shadow_refactor_yes_phase1 = 4;
@@ -729,8 +731,8 @@ static void test_solver_reset_and_refactor_accounting(void) {
     ASSERT_INT_EQ(solver.telemetry.perf_basis_fastpath_hits, 0, "reset: basis_fastpath_hits");
     ASSERT_DBL_EQ(solver.policy.periodic_feedback_phase2.bias, 0.0,
                   "reset: periodic feedback phase2");
-    ASSERT_INT_EQ(solver.policy.soft_lu_cost_gate_enabled, 1,
-                  "reset: soft lu cost gate enabled");
+    ASSERT_INT_EQ(solver.policy.soft_lu_cost_gate_enabled, 0,
+                  "reset: soft lu cost gate enabled preserved");
     ASSERT_INT_EQ(solver.policy.soft_lu_cost_gate_phase2.defers, 0,
                   "reset: soft lu defers phase2");
     ASSERT_INT_EQ(solver.policy.soft_lu_cost_gate_phase2.consecutive_defers, 0,
@@ -739,8 +741,8 @@ static void test_solver_reset_and_refactor_accounting(void) {
                   "reset: soft lu cap forced phase2");
     ASSERT_DBL_EQ(solver.policy.soft_lu_cost_gate_phase2.refactor_cost_ewma, 0.0,
                   "reset: soft lu refactor ewma phase2");
-    ASSERT_INT_EQ(solver.policy.periodic_cost_gate_enabled, 1,
-                  "reset: periodic cost gate enabled");
+    ASSERT_INT_EQ(solver.policy.periodic_cost_gate_enabled, 0,
+                  "reset: periodic cost gate enabled preserved");
     ASSERT_INT_EQ(solver.policy.periodic_cost_gate_phase2.defers, 0,
                   "reset: periodic cost gate defers phase2");
     ASSERT_INT_EQ(solver.policy.periodic_cost_gate_phase2.consecutive_defers, 0,

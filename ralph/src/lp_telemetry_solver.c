@@ -15,6 +15,8 @@ static int solver_telemetry_enabled(const SimplexSolver *solver) {
 void lp_telemetry_reset_solver(SimplexSolver *solver) {
     int governor_mode = LP_BASIS_GOV_MODE_OFF;
     int reinvert_mode = LP_REINVERT_MODE_SHADOW;
+    int soft_lu_cost_gate_enabled = 1;
+    int periodic_cost_gate_enabled = 1;
     if (!solver) return;
     governor_mode = solver->policy.basis_governor_mode;
     if (!lp_basis_governor_mode_is_valid(governor_mode)) {
@@ -24,6 +26,8 @@ void lp_telemetry_reset_solver(SimplexSolver *solver) {
     if (!lp_reinvert_controller_mode_is_valid(reinvert_mode)) {
         reinvert_mode = LP_REINVERT_MODE_SHADOW;
     }
+    soft_lu_cost_gate_enabled = solver->policy.soft_lu_cost_gate_enabled ? 1 : 0;
+    periodic_cost_gate_enabled = solver->policy.periodic_cost_gate_enabled ? 1 : 0;
     solver->telemetry.perf_primal_setup_ms = 0.0;
     solver->telemetry.perf_dual_ms = 0.0;
     solver->telemetry.perf_phase1_ms = 0.0;
@@ -432,14 +436,14 @@ void lp_telemetry_reset_solver(SimplexSolver *solver) {
     solver->policy.periodic_feedback_phase2.hint_interval = 0;
     solver->policy.periodic_feedback_phase1.hint_pressure = 0.0;
     solver->policy.periodic_feedback_phase2.hint_pressure = 0.0;
-    solver->policy.soft_lu_cost_gate_enabled = 1;
+    solver->policy.soft_lu_cost_gate_enabled = soft_lu_cost_gate_enabled;
     solver->policy.soft_lu_cost_gate_phase1.defers = 0;
     solver->policy.soft_lu_cost_gate_phase2.defers = 0;
     solver->policy.soft_lu_cost_gate_phase1.consecutive_defers = 0;
     solver->policy.soft_lu_cost_gate_phase2.consecutive_defers = 0;
     solver->policy.soft_lu_cost_gate_phase1.defer_cap_forced = 0;
     solver->policy.soft_lu_cost_gate_phase2.defer_cap_forced = 0;
-    solver->policy.periodic_cost_gate_enabled = 1;
+    solver->policy.periodic_cost_gate_enabled = periodic_cost_gate_enabled;
     solver->policy.periodic_cost_gate_phase1.defers = 0;
     solver->policy.periodic_cost_gate_phase2.defers = 0;
     solver->policy.periodic_cost_gate_phase1.consecutive_defers = 0;
