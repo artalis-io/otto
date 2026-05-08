@@ -4509,6 +4509,8 @@ static int simplex_finish_prepared_primal_solve(SimplexSolver *solver, clock_t s
      * Only for method=0 (explicit primal) to avoid circular chains with
      * method=2 (which already tried dual before falling back to primal). */
     if (two_phase_failed && solver->method == 0) {
+        int two_phase_status = solver->status;
+        int two_phase_iterations = solver->iterations;
         if (solver->verbose) {
             LP_LOG_STDOUT("[simplex_solve] Two-phase failed, trying dual simplex\n");
         }
@@ -4524,6 +4526,12 @@ static int simplex_finish_prepared_primal_solve(SimplexSolver *solver, clock_t s
         if (solver->tableau) {
             tableau_free(solver->tableau);
             solver->tableau = NULL;
+        }
+        if (dual_result != 0 &&
+            solver->status == RALPH_STATUS_UNKNOWN &&
+            two_phase_status != RALPH_STATUS_UNKNOWN) {
+            solver->status = two_phase_status;
+            solver->iterations = two_phase_iterations;
         }
         return dual_result;
     } else if (two_phase_failed) {
