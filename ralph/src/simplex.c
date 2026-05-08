@@ -3143,6 +3143,7 @@ static int simplex_transition_phase2(SimplexSolver *solver) {
      * 4. Track stuck artificials (redundant rows) for special handling */
     int art_in_basis = 0;
     int art_stuck = 0;
+    int art_stuck_zero_replacement = 0;
 
     /* Reset redundant row tracking.
      * Mark ALL rows that have artificial variables as potentially redundant.
@@ -3265,6 +3266,9 @@ static int simplex_transition_phase2(SimplexSolver *solver) {
                  * Note: We mark the original constraint row, not basis_pos,
                  * because the constraint row index is stable while basis_pos changes. */
                 art_stuck++;
+                if (fabs(best_coef) <= RALPH_PIVOT_TOL) {
+                    art_stuck_zero_replacement++;
+                }
                 int orig_row = (artificial_to_row && k >= 0 && k < tab->num_artificial) ?
                                artificial_to_row[k] : basis_pos;
                 if (orig_row >= 0 && orig_row < tab->m && !tab->redundant_rows[orig_row]) {
@@ -3289,7 +3293,12 @@ static int simplex_transition_phase2(SimplexSolver *solver) {
                 art_in_basis, art_stuck, tab->num_redundant);
     }
 
-    if (art_stuck > 0) {
+    /* If every stuck artificial row has a zero tableau coefficient against
+     * all eligible non-artificial columns, a full non-artificial basis is
+     * structurally unavailable.  The dense rebasis scan can only rediscover
+     * that rank deficiency, so keep the existing stuck-artificial Phase 2
+     * path and preserve the original rows below. */
+    if (art_stuck > 0 && art_stuck_zero_replacement < art_stuck) {
         if (transition_rebasis_without_artificials(solver) == 0) {
             art_stuck = 0;
             art_in_basis = 0;
