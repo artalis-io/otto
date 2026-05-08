@@ -4043,8 +4043,6 @@ static int lu_numeric_factorize(LUFactorization *lu, const SparseMatrix *B,
                                     U_nnz = shadow_U_nnz;
                                     mkz_reg = shadow_reg;
                                     mkz_col_perm = shadow_mkz_perm;
-                                    LP_LOG_STDERR("[lu_sparse] N1-B shadow accepted: cond %.2e -> %.2e\n",
-                                            mkz_cond, shadow_cond);
                                 }
                             }
                             if (!accept_shadow) {
