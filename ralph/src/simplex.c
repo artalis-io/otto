@@ -275,8 +275,9 @@ static int tableau_alloc_arrays(SimplexTableau *tab, int num_aux_vars, int num_a
         (size_t)(n - m) * sizeof(int) + (size_t)n * sizeof(VarStatus) +
         /* int arrays: cb_sparse_idx, aux_row, partial_candidates, dual_candidates */
         (size_t)m * sizeof(int) + (size_t)num_aux_vars * sizeof(int) + 100 * sizeof(int) + 200 * sizeof(int) +
-        /* int array: artificial_vars for two-phase */
+        /* int array: artificial_vars and byte bitmap for two-phase */
         (size_t)num_artificial * sizeof(int) +
+        (size_t)n * sizeof(unsigned char) +
         /* int array: redundant_rows for two-phase (m) */
         (size_t)m * sizeof(int) +
         /* double array: dse_weights for dual steepest edge (m) */
@@ -356,6 +357,8 @@ static int tableau_alloc_arrays(SimplexTableau *tab, int num_aux_vars, int num_a
     } else {
         tab->artificial_vars = NULL;
     }
+    tab->is_artificial_var = (unsigned char*)sh_arena_calloc(tab->arena, n, sizeof(unsigned char));
+    tab->artificial_basic_count = 0;
 
     /* Redundant row tracking (for handling singular basis from stuck artificials) */
     tab->redundant_rows = (int*)sh_arena_calloc(tab->arena, m, sizeof(int));
@@ -394,7 +397,7 @@ static int tableau_alloc_arrays(SimplexTableau *tab, int num_aux_vars, int num_a
         !tab->pivot_row || !tab->tau_work || !tab->se_weights ||
         !tab->cb_sparse_idx || !tab->cb_sparse_val ||
         !tab->aux_row || !tab->aux_coef || !tab->partial_candidates || !tab->dual_candidates ||
-        !tab->c_original || (num_artificial > 0 && !tab->artificial_vars) ||
+        !tab->c_original || !tab->is_artificial_var || (num_artificial > 0 && !tab->artificial_vars) ||
         !tab->redundant_rows || !tab->dse_weights || !tab->flip_list ||
         !tab->heap || !tab->heap_pos ||
         !tab->primal_basic_x_backup ||
@@ -403,6 +406,19 @@ static int tableau_alloc_arrays(SimplexTableau *tab, int num_aux_vars, int num_a
         return -1;
     }
     return 0;
+}
+
+static void tableau_refresh_artificial_basic_count(SimplexTableau *tab) {
+    int count = 0;
+    if (!tab || !tab->artificial_vars || !tab->var_status) return;
+    for (int k = 0; k < tab->num_artificial; k++) {
+        int art_j = tab->artificial_vars[k];
+        if (art_j >= 0 && art_j < tab->n &&
+            tab->var_status[art_j] == RALPH_BASIC) {
+            count++;
+        }
+    }
+    tab->artificial_basic_count = count;
 }
 
 /* Initialize steepest edge / Devex weights.
@@ -709,17 +725,18 @@ static SimplexTableau* tableau_create_ex(LPModel *model, int force_two_phase, in
     }
     free(ax_initial);
 
+    for (int k = 0; k < tab->num_artificial; k++) {
+        int art_j = tab->artificial_vars[k];
+        if (art_j >= 0 && art_j < tab->n) {
+            tab->is_artificial_var[art_j] = 1;
+        }
+    }
+
     /* Store original costs for auxiliary variables (for Phase 2 transition).
      * Slack/surplus have zero cost, artificials have cost 1.0 (Phase 1 objective). */
     for (int j = tab->num_structural_ext; j < tab->n; j++) {
         /* Check if this is an artificial variable */
-        int is_artificial = 0;
-        for (int k = 0; k < tab->num_artificial; k++) {
-            if (tab->artificial_vars[k] == j) {
-                is_artificial = 1;
-                break;
-            }
-        }
+        int is_artificial = tab->is_artificial_var[j] ? 1 : 0;
         if (is_artificial) {
             /* Artificial variables should have zero cost in Phase 2
              * (they should be driven to zero and removed from basis) */
@@ -814,6 +831,9 @@ static SimplexTableau* tableau_create_ex(LPModel *model, int force_two_phase, in
         tab->basis[i] = bv;
         tab->basis_pos[bv] = i;
         tab->var_status[bv] = RALPH_BASIC;
+        if (tab->is_artificial_var[bv]) {
+            tab->artificial_basic_count++;
+        }
     }
 
     /* Compute initial basic variable values: x_B = B^{-1} * (b - N * x_N)
@@ -2120,6 +2140,10 @@ int simplex_pivot(SimplexTableau *tab,
     int leaving = basis[leaving_pos];
     double x_leave_old = x[leaving];
     VarStatus entering_old_status = tab->var_status[entering];
+    int entering_is_artificial = tab->is_artificial_var && tab->is_artificial_var[entering];
+    int leaving_is_artificial = tab->is_artificial_var && tab->is_artificial_var[leaving];
+    int artificial_basic_after_pivot =
+        tab->artificial_basic_count + entering_is_artificial - leaving_is_artificial;
 
     /* Update basis */
     basis[leaving_pos] = entering;
@@ -2184,16 +2208,10 @@ int simplex_pivot(SimplexTableau *tab,
      *   artificials are driven out. Accuracy matters in Phase 1 for feasibility;
      *   speed matters in Phase 2 for the bulk of iterations.
      */
-    int artificials_in_basis = 0;
-    if (tab->pricing_strategy == 2 && tab->num_artificial > 0) {
-        for (int k = 0; k < tab->num_artificial; k++) {
-            if (tab->var_status[tab->artificial_vars[k]] == RALPH_BASIC) {
-                artificials_in_basis = 1;
-                break;
-            }
-        }
-    }
-    int use_true_se = (tab->pricing_strategy == 1 || tab->pricing_strategy == 5) || artificials_in_basis;
+    int artificials_in_basis =
+        (tab->pricing_strategy == 2 && artificial_basic_after_pivot > 0);
+    int use_true_se =
+        (tab->pricing_strategy == 1 || tab->pricing_strategy == 5) || artificials_in_basis;
     if (use_true_se && fabs(pivot_sq) > RALPH_ZERO_TOL) {
         double t_btran_ms = lp_telemetry_timer_start();
         lu_solve_transpose(tab->lu, tab->work2, tau_helper);
@@ -2333,6 +2351,7 @@ int simplex_pivot(SimplexTableau *tab,
     }
 
 basis_update_done:
+    tab->artificial_basic_count = artificial_basic_after_pivot;
     tab->obj_value += obj_delta;
 
     /* Update steepest edge pricing weights
@@ -3948,6 +3967,13 @@ static SimplexTableau *tableau_clone_with_augmented_rows(SimplexSolver *solver,
         }
     }
     dst->num_artificial = next_art;
+    memset(dst->is_artificial_var, 0, (size_t)dst->n * sizeof(unsigned char));
+    for (int k = 0; k < dst->num_artificial; k++) {
+        int art_j = dst->artificial_vars[k];
+        if (art_j >= 0 && art_j < dst->n) {
+            dst->is_artificial_var[art_j] = 1;
+        }
+    }
 
     dst->A_ext = triplets_to_csc(trips);
     triplets_free(trips);
@@ -3988,6 +4014,7 @@ static SimplexTableau *tableau_clone_with_augmented_rows(SimplexSolver *solver,
         tableau_free(dst);
         return NULL;
     }
+    tableau_refresh_artificial_basic_count(dst);
     solver->warm_basis_last_applied = 1;
 
     {

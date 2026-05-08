@@ -759,6 +759,8 @@ typedef struct {
     double *c_original;         /* Original objective coefficients (for Phase 2) */
     int *artificial_vars;       /* Indices of artificial variables */
     int num_artificial;         /* Count of artificial variables */
+    unsigned char *is_artificial_var; /* O(1) artificial variable membership */
+    int artificial_basic_count;  /* Number of artificial variables currently basic */
     int num_equalities;         /* Count of equality constraints */
     int *redundant_rows;        /* Bitmap: row[i]=1 if redundant (stuck artificial) */
     int num_redundant;          /* Count of redundant rows */
