@@ -527,6 +527,7 @@ typedef struct {
     double *spike_pool_val;     /* All spike values (contiguous) */
     int spike_pool_capacity;    /* Total allocated size of pool */
     int spike_pool_used;        /* Currently used entries in pool */
+    int dense_spike_min_updates_override; /* <=0 uses default dense-spike warmup */
 
     /* (B4: spike compaction removed — was O(m^2*N), worse than sparse application) */
 
@@ -2316,6 +2317,7 @@ void lu_set_pivot_tol(LUFactorization *lu, double tol);
 void lu_set_max_updates(LUFactorization *lu, int max);
 void lu_set_growth_refactor_threshold(LUFactorization *lu, double threshold);
 void lu_set_backend_policy(LUFactorization *lu, int policy);
+void lu_set_dense_spike_min_updates_override(LUFactorization *lu, int min_updates);
 void lu_set_telemetry_enabled(LUFactorization *lu, int enabled);
 void lu_set_owner(LUFactorization *lu, void *owner);
 void lu_set_basis_governor(LUFactorization *lu, void *governor);

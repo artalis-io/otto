@@ -179,6 +179,9 @@
 #define PERIODIC_COST_DAMPEN_UPDATE_RESERVE_MIN 6
 #define PERIODIC_COST_DAMPEN_MIN_ITER_SAMPLES 8
 #define PERIODIC_COST_DAMPEN_MIN_REFACTOR_SAMPLES 1
+#define DENSE_SPIKE_WARMUP_PHASE2_MEDIUM_MIN_M 300
+#define DENSE_SPIKE_WARMUP_PHASE2_MEDIUM_MAX_M 500
+#define DENSE_SPIKE_WARMUP_PHASE2_MEDIUM_MIN_UPDATES 16
 
 void lp_refactor_policy_config_defaults(LPRefactorPolicyConfig *cfg) {
     if (!cfg) return;
@@ -1731,6 +1734,16 @@ LPLUHealthRefactorDecision lp_refactor_policy_lu_health_refactor_decision(
     }
 
     return decision;
+}
+
+int lp_refactor_policy_dense_spike_min_updates_override(int phase,
+                                                        int m) {
+    if (phase == 2 &&
+        m >= DENSE_SPIKE_WARMUP_PHASE2_MEDIUM_MIN_M &&
+        m < DENSE_SPIKE_WARMUP_PHASE2_MEDIUM_MAX_M) {
+        return DENSE_SPIKE_WARMUP_PHASE2_MEDIUM_MIN_UPDATES;
+    }
+    return 0;
 }
 
 int lp_refactor_policy_soft_lu_cost_gate_should_defer(int phase,

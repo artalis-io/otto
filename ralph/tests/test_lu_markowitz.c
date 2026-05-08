@@ -1133,6 +1133,27 @@ static void test_ft_update_density_refactor_guard(void) {
     ASSERT_INT_EQ(lu->telemetry.refactor_need_reason_avg_spike_density, 2,
                   "ft-density guard: avg density reason count accumulates");
 
+    /* Caller policy can extend the density warmup window for phases where
+     * update-recovery reinversions are demonstrably more expensive. */
+    lu_set_dense_spike_min_updates_override(lu, 16);
+    lu->num_updates = 12;
+    lu->ft_num_updates = 12;
+    lu->spike_pool_used = 6000; /* avg = 500, ratio 1.25 but still in override warmup. */
+    ASSERT_INT_EQ(lu_needs_refactorization(lu), 0,
+                  "ft-density guard: override delays avg density refactor");
+    ASSERT_INT_EQ(lu->last_refactor_trigger_reason,
+                  LP_BFCP_REFACTOR_REASON_NONE,
+                  "ft-density guard: override warmup reason=none");
+
+    lu->num_updates = 16;
+    lu->ft_num_updates = 16;
+    lu->spike_pool_used = 6000; /* avg = 375, ratio 0.9375. */
+    ASSERT_INT_EQ(lu_needs_refactorization(lu), 1,
+                  "ft-density guard: override still triggers after warmup");
+    ASSERT_INT_EQ(lu->last_refactor_trigger_reason,
+                  LP_BFCP_REFACTOR_REASON_AVG_SPIKE_DENSITY,
+                  "ft-density guard: override post-warmup reason=avg_spike_density");
+
     lu_free(lu);
 }
 

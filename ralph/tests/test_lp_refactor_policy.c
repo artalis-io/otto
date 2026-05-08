@@ -130,6 +130,15 @@ int main(void) {
     TEST(lp_refactor_policy_phase2_cooldown_window_updates(200) == 96,
          "cooldown window clamps to maximum");
 
+    TEST(lp_refactor_policy_dense_spike_min_updates_override(2, 410) == 16,
+         "dense spike warmup override applies to medium Phase 2 basis");
+    TEST(lp_refactor_policy_dense_spike_min_updates_override(1, 410) == 0,
+         "dense spike warmup override does not apply to Phase 1");
+    TEST(lp_refactor_policy_dense_spike_min_updates_override(2, 250) == 0,
+         "dense spike warmup override does not apply below medium basis");
+    TEST(lp_refactor_policy_dense_spike_min_updates_override(2, 700) == 0,
+         "dense spike warmup override leaves large basis policy unchanged");
+
     TEST(fabs(lp_refactor_policy_periodic_pressure_effective(0, 0.9, 0.2) - 0.9) < 1e-12,
          "periodic pressure effective: cooldown-off keeps run pressure");
     TEST(fabs(lp_refactor_policy_periodic_pressure_effective(1, 0.9, 0.2) - 0.7) < 1e-12,

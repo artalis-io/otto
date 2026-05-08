@@ -274,7 +274,10 @@ static void lu_fill_bfcp_signals(const LUFactorization *lu,
     sig->spike_pool_used = lu->spike_pool_used;
     sig->spike_pool_capacity = lu->spike_pool_capacity;
     sig->update_aged = lu_update_is_aged(lu);
-    sig->min_ft_updates_for_avg_density = RALPH_SPIKE_DENSE_REJECT_MIN_UPDATES;
+    sig->min_ft_updates_for_avg_density =
+        (lu->dense_spike_min_updates_override > 0)
+            ? lu->dense_spike_min_updates_override
+            : RALPH_SPIKE_DENSE_REJECT_MIN_UPDATES;
     sig->spike_dense_reject_m_min = RALPH_SPIKE_DENSE_REJECT_M_MIN;
     sig->spike_avg_refactor_ratio = RALPH_SPIKE_AVG_REFACTOR_RATIO;
     sig->spike_avg_refactor_aged_ratio = RALPH_SPIKE_AVG_REFACTOR_AGED_RATIO;
@@ -311,6 +314,13 @@ static double lu_dense_spike_reject_ratio(const LUFactorization *lu) {
     if (ratio < 0.25) ratio = 0.25;
     if (ratio > 0.90) ratio = 0.90;
     return ratio;
+}
+
+static int lu_dense_spike_min_updates(const LUFactorization *lu) {
+    if (lu && lu->dense_spike_min_updates_override > 0) {
+        return lu->dense_spike_min_updates_override;
+    }
+    return RALPH_SPIKE_DENSE_REJECT_MIN_UPDATES;
 }
 
 static double lu_update_pivot_ratio_threshold(const LUFactorization *lu) {
@@ -558,6 +568,7 @@ LUFactorization* lu_create(int m) {
     lu->spike_pool_idx = (int*)calloc(lu->spike_pool_capacity, sizeof(int));
     lu->spike_pool_val = (double*)calloc(lu->spike_pool_capacity, sizeof(double));
     lu->spike_pool_used = 0;
+    lu->dense_spike_min_updates_override = 0;
 
     if (!lu->spike_pool_idx || !lu->spike_pool_val) {
         lu_free(lu);
@@ -2647,7 +2658,7 @@ LUFailureReason lu_update(LUFactorization *lu, int leaving_pos, const double *en
      * Keep an initial warmup window so updates do not immediately collapse into
      * update-fail -> reinvert loops before density policy can react. */
     if (lu_update_backend_is_ft(lu) &&
-        lu->ft_num_updates >= RALPH_SPIKE_DENSE_REJECT_MIN_UPDATES &&
+        lu->ft_num_updates >= lu_dense_spike_min_updates(lu) &&
         m >= RALPH_SPIKE_DENSE_REJECT_M_MIN &&
         m > 1) {
         double spike_ratio = (double)off_diag_nnz / (double)(m - 1);
@@ -2840,6 +2851,10 @@ void lu_set_growth_refactor_threshold(LUFactorization *lu, double threshold) {
 
 void lu_set_backend_policy(LUFactorization *lu, int policy) {
     if (lu) lu->backend_policy = policy;
+}
+
+void lu_set_dense_spike_min_updates_override(LUFactorization *lu, int min_updates) {
+    if (lu) lu->dense_spike_min_updates_override = (min_updates > 0) ? min_updates : 0;
 }
 
 void lu_set_telemetry_enabled(LUFactorization *lu, int enabled) {
