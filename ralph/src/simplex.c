@@ -4279,6 +4279,28 @@ static int simplex_should_use_sparse_midrow_phase1_partial(const SimplexSolver *
             density >= 0.004 && density <= 0.010);
 }
 
+static int simplex_should_use_sparse_bridge_phase1_partial(const SimplexSolver *solver,
+                                                           const SimplexTableau *tab) {
+    if (!solver || !solver->model || !solver->model->A || !tab) return 0;
+    if (!tab->use_two_phase || tab->num_artificial <= 0) return 0;
+
+    int m = solver->model->num_cons;
+    int n = solver->model->num_vars;
+    int nnz = solver->model->A->nnz;
+    if (m <= 0 || n <= 0 || nnz <= 0) return 0;
+
+    double density = (double)nnz / ((double)m * (double)n);
+    double width_ratio = (double)n / (double)m;
+    /* Mid/large sparse Phase-1 tableaus in this bridge band spend heavily on
+     * exact Devex/steepest-edge maintenance while partial pricing still keeps
+     * enough entering coverage. Keep the band away from nearby lower-width
+     * presolved cases and wider NETLIB models that regress under partial. */
+    return (m >= 780 && m <= 1350 &&
+            n >= 1550 && n <= 1750 &&
+            width_ratio >= 1.2 && width_ratio <= 2.1 &&
+            density >= 0.003 && density <= 0.010);
+}
+
 static int simplex_should_use_mid_sparse_phase1_dantzig(const SimplexSolver *solver,
                                                         const SimplexTableau *tab) {
     if (!solver || !solver->model || !solver->model->A || !tab) return 0;
@@ -4462,6 +4484,11 @@ static int simplex_finish_prepared_primal_solve(SimplexSolver *solver, clock_t s
         tab->pricing_strategy = 3;
         tab->use_steepest_edge = 0;
     } else if (simplex_should_use_sparse_midrow_phase1_partial(solver, tab)) {
+        solver->pricing_strategy = 3;
+        tab->pricing_strategy = 3;
+        tab->use_steepest_edge = 0;
+    } else if (simplex_should_use_sparse_bridge_phase1_partial(solver, tab)) {
+        solver->phase1_pricing = 3;
         solver->pricing_strategy = 3;
         tab->pricing_strategy = 3;
         tab->use_steepest_edge = 0;
