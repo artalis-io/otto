@@ -773,7 +773,51 @@ static void test_proportional_rows_infeasible(void) {
 }
 
 /* ============================================================================
- * Test 15: Proportional columns (dominated variable elimination)
+ * Test 15: Proportional rows with non-adjacent sparse patterns
+ *
+ * The proportional-row pass should compare rows by active sparsity pattern, not
+ * by dense adjacency or original row order. Rows 0 and 2 are scaled duplicates,
+ * while row 1 has the same nnz but a different pattern.
+ * ============================================================================ */
+static void test_proportional_rows_sparse_bucket(void) {
+    printf("\n=== Test: Proportional rows sparse bucket ===\n");
+
+    double obj[] = {1.0, 1.0, 1.0};
+    double lb[] = {0.0, 0.0, 0.0};
+    double ub[] = {100.0, 100.0, 100.0};
+    int row_starts[] = {0, 2, 4, 6, 8};
+    int col_idx[] = {
+        0, 2,  /* 2x + 6z <= 30 -> x + 3z <= 15 */
+        0, 1,  /* x + y <= 20 */
+        0, 2,  /* x + 3z <= 12, tighter duplicate of row 0 */
+        1, 2   /* y + z >= 1 */
+    };
+    double vals[] = {
+        2.0, 6.0,
+        1.0, 1.0,
+        1.0, 3.0,
+        1.0, 1.0
+    };
+    char sense[] = {'L', 'L', 'L', 'G'};
+    double rhs[] = {30.0, 20.0, 12.0, 1.0};
+
+    LPModel *m = build_model(3, 4, obj, 1, lb, ub, NULL,
+                             row_starts, col_idx, vals, sense, rhs);
+    ASSERT(m != NULL, "Sparse bucket model created");
+
+    PresolveResult *res = presolve_with_mask(m, PRESOLVE_PROPORTIONAL_ROWS);
+    ASSERT(res != NULL, "Sparse bucket presolve succeeded");
+    if (res && res->reduced_model) {
+        ASSERT(res->cons_removed == 1, "One proportional row removed");
+        ASSERT(res->reduced_model->num_cons == 3, "Reduced model keeps 3 constraints");
+    }
+
+    presolve_free(res);
+    lp_model_free(m);
+}
+
+/* ============================================================================
+ * Test 16: Proportional columns (dominated variable elimination)
  *
  * min x + y + z
  * s.t. x + y + 2z <= 10   (columns x and y have identical coefficients)
@@ -1524,6 +1568,7 @@ int main(void) {
     test_presolve_diet();
     test_proportional_rows();
     test_proportional_rows_infeasible();
+    test_proportional_rows_sparse_bucket();
     test_proportional_cols();
     test_proportional_cols_cost();
     test_proportional_cols_maximize();

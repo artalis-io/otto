@@ -13,6 +13,7 @@
 #include <string.h>
 #include <stdio.h>
 #include <math.h>
+#include <stdint.h>
 #include "presolve.h"
 
 /* Forward declarations */
@@ -1192,6 +1193,42 @@ int presolve_bound_tightening(PresolveContext *ctx) {
  * Proportional Row Detection
  * ============================================================================ */
 
+typedef struct {
+    int row;
+    int start;
+    int nnz;
+    int first_col;
+    char sense;
+    uint64_t pattern_hash;
+} ProportionalRowInfo;
+
+static uint64_t presolve_hash_int(uint64_t hash, int value) {
+    hash ^= (uint64_t)(uint32_t)value;
+    hash *= 1099511628211ULL;
+    return hash;
+}
+
+static int proportional_row_info_cmp(const void *a, const void *b) {
+    const ProportionalRowInfo *ra = (const ProportionalRowInfo*)a;
+    const ProportionalRowInfo *rb = (const ProportionalRowInfo*)b;
+    if (ra->nnz != rb->nnz) return ra->nnz - rb->nnz;
+    if (ra->first_col != rb->first_col) return ra->first_col - rb->first_col;
+    if (ra->sense != rb->sense) return (int)ra->sense - (int)rb->sense;
+    if (ra->pattern_hash < rb->pattern_hash) return -1;
+    if (ra->pattern_hash > rb->pattern_hash) return 1;
+    return ra->row - rb->row;
+}
+
+static int proportional_rows_same_pattern(const ProportionalRowInfo *a,
+                                          const ProportionalRowInfo *b,
+                                          const int *row_cols) {
+    if (a->nnz != b->nnz) return 0;
+    for (int p = 0; p < a->nnz; p++) {
+        if (row_cols[a->start + p] != row_cols[b->start + p]) return 0;
+    }
+    return 1;
+}
+
 /*
  * Detect and remove proportional (parallel) rows.
  *
@@ -1199,114 +1236,191 @@ int presolve_bound_tightening(PresolveContext *ctx) {
  * For <= constraints: keep the tighter one.
  * For = constraints: check RHS consistency (else infeasible).
  *
- * Algorithm: For each pair of rows with the same sparsity pattern,
- * check if coefficients are proportional.
+ * The model matrix is CSC, so build a compact active-row view once and bucket
+ * rows by sparse pattern before testing coefficient ratios. This keeps the
+ * original pairwise rules but avoids materializing dense rows for every pair.
  */
 int presolve_proportional_rows(PresolveContext *ctx) {
     LPModel *model = ctx->working;
+    SparseMatrix *A = model->A;
     int m = model->num_cons;
     int n = model->num_vars;
     int count = 0;
 
-    /* Allocate two dense row buffers */
-    double *row_i = (double*)calloc(n, sizeof(double));
-    double *row_j = (double*)calloc(n, sizeof(double));
-    if (!row_i || !row_j) {
-        free(row_i);
-        free(row_j);
+    int *row_counts = (int*)calloc((size_t)m, sizeof(int));
+    int *row_starts = (int*)calloc((size_t)m + 1, sizeof(int));
+    if (!row_counts || !row_starts) {
+        free(row_counts);
+        free(row_starts);
         return 0;
     }
 
-    for (int i = 0; i < m; i++) {
-        if (ctx->row_deleted[i]) continue;
-
-        sparse_get_row(model->A, i, row_i);
-
-        /* Find first non-zero for normalization */
-        int first_nz_i = -1;
-        for (int k = 0; k < n; k++) {
-            if (!ctx->col_deleted[k] && fabs(row_i[k]) > RALPH_ZERO_TOL) {
-                first_nz_i = k;
-                break;
+    int active_nnz = 0;
+    for (int col = 0; col < n; col++) {
+        if (ctx->col_deleted[col]) continue;
+        for (int p = A->colptr[col]; p < A->colptr[col + 1]; p++) {
+            int row = A->rowidx[p];
+            if (!ctx->row_deleted[row] && fabs(A->values[p]) > RALPH_ZERO_TOL) {
+                row_counts[row]++;
+                active_nnz++;
             }
-        }
-        if (first_nz_i < 0) continue;  /* Empty row handled elsewhere */
-
-        for (int j = i + 1; j < m; j++) {
-            if (ctx->row_deleted[j]) continue;
-
-            sparse_get_row(model->A, j, row_j);
-
-            /* Check first non-zero of row j */
-            double val_i = row_i[first_nz_i];
-            double val_j = row_j[first_nz_i];
-            if (fabs(val_j) < RALPH_ZERO_TOL) continue;  /* Different sparsity */
-
-            double ratio = val_i / val_j;
-
-            /* Check proportionality: row_i[k] == ratio * row_j[k] for all k */
-            int proportional = 1;
-            for (int k = 0; k < n && proportional; k++) {
-                if (ctx->col_deleted[k]) continue;
-                double diff = row_i[k] - ratio * row_j[k];
-                double scale = fmax(fabs(row_i[k]), fabs(row_j[k]));
-                double tol = fmax(RALPH_FEAS_TOL, RALPH_FEAS_TOL * scale);
-                if (fabs(diff) > tol) proportional = 0;
-            }
-            if (!proportional) continue;
-
-            /* Rows i and j are proportional: row_i = ratio * row_j
-             * Normalize both: row_i (sense_i) rhs_i  and  ratio*row_j (sense_j) ratio*rhs_j */
-            double rhs_i = model->b[i];
-            double rhs_j_scaled = ratio * model->b[j];
-
-            if (model->sense[i] == 'E' && model->sense[j] == 'E') {
-                /* Both equalities: must have same RHS (after scaling) */
-                if (fabs(rhs_i - rhs_j_scaled) > RALPH_FEAS_TOL * fmax(1.0, fabs(rhs_i))) {
-                    free(row_i);
-                    free(row_j);
-                    return -1;  /* Infeasible: inconsistent equalities */
-                }
-                /* Remove duplicate */
-                ctx->row_deleted[j] = 1;
-                count++;
-            } else if (model->sense[i] == 'L' && model->sense[j] == 'L') {
-                /* Both <=: keep the tighter one */
-                if (ratio > 0) {
-                    /* Same direction: row_i <= rhs_i, row_j <= rhs_j
-                     * After scaling: row_i <= rhs_i and row_i <= ratio*rhs_j
-                     * Keep the one with smaller RHS */
-                    if (rhs_i <= rhs_j_scaled + RALPH_FEAS_TOL) {
-                        ctx->row_deleted[j] = 1;  /* i is tighter */
-                    } else {
-                        ctx->row_deleted[i] = 1;  /* j is tighter */
-                    }
-                    count++;
-                } else {
-                    /* Opposite direction after scaling — not truly parallel for <= */
-                    /* ratio < 0 means row_i = ratio*row_j with sign flip.
-                     * row_j <= rhs_j becomes -row_j >= -rhs_j, i.e., (row_i/ratio) >= -rhs_j
-                     * This gives us a bound pair, not a redundancy. Skip. */
-                }
-            } else if (model->sense[i] == 'G' && model->sense[j] == 'G') {
-                /* Both >=: keep the tighter one */
-                if (ratio > 0) {
-                    if (rhs_i >= rhs_j_scaled - RALPH_FEAS_TOL) {
-                        ctx->row_deleted[j] = 1;  /* i is tighter */
-                    } else {
-                        ctx->row_deleted[i] = 1;  /* j is tighter */
-                    }
-                    count++;
-                }
-            }
-            /* Mixed sense (L/G, L/E, G/E): more complex, skip for now */
-
-            if (ctx->row_deleted[i]) break;  /* Row i was removed, move on */
         }
     }
 
-    free(row_i);
-    free(row_j);
+    row_starts[0] = 0;
+    for (int row = 0; row < m; row++) {
+        row_starts[row + 1] = row_starts[row] + row_counts[row];
+    }
+
+    int *row_cols = (int*)malloc((size_t)active_nnz * sizeof(int));
+    double *row_vals = (double*)malloc((size_t)active_nnz * sizeof(double));
+    int *fill_pos = (int*)malloc((size_t)m * sizeof(int));
+    ProportionalRowInfo *rows =
+        (ProportionalRowInfo*)malloc((size_t)m * sizeof(ProportionalRowInfo));
+    if ((active_nnz > 0 && (!row_cols || !row_vals)) || !fill_pos || !rows) {
+        free(row_counts);
+        free(row_starts);
+        free(row_cols);
+        free(row_vals);
+        free(fill_pos);
+        free(rows);
+        return 0;
+    }
+
+    memcpy(fill_pos, row_starts, (size_t)m * sizeof(int));
+    for (int col = 0; col < n; col++) {
+        if (ctx->col_deleted[col]) continue;
+        for (int p = A->colptr[col]; p < A->colptr[col + 1]; p++) {
+            int row = A->rowidx[p];
+            double val = A->values[p];
+            if (ctx->row_deleted[row] || fabs(val) <= RALPH_ZERO_TOL) continue;
+
+            int dst = fill_pos[row]++;
+            row_cols[dst] = col;
+            row_vals[dst] = val;
+        }
+    }
+
+    int num_rows = 0;
+    for (int row = 0; row < m; row++) {
+        int nnz = row_counts[row];
+        if (ctx->row_deleted[row] || nnz == 0) continue;  /* Empty row handled elsewhere */
+
+        uint64_t hash = 1469598103934665603ULL;
+        for (int p = row_starts[row]; p < row_starts[row + 1]; p++) {
+            hash = presolve_hash_int(hash, row_cols[p]);
+        }
+
+        rows[num_rows].row = row;
+        rows[num_rows].start = row_starts[row];
+        rows[num_rows].nnz = nnz;
+        rows[num_rows].first_col = row_cols[row_starts[row]];
+        rows[num_rows].sense = model->sense[row];
+        rows[num_rows].pattern_hash = hash;
+        num_rows++;
+    }
+
+    qsort(rows, (size_t)num_rows, sizeof(ProportionalRowInfo),
+          proportional_row_info_cmp);
+
+    for (int group_start = 0; group_start < num_rows; ) {
+        int group_end = group_start + 1;
+        while (group_end < num_rows &&
+               rows[group_end].nnz == rows[group_start].nnz &&
+               rows[group_end].first_col == rows[group_start].first_col &&
+               rows[group_end].sense == rows[group_start].sense &&
+               rows[group_end].pattern_hash == rows[group_start].pattern_hash) {
+            group_end++;
+        }
+
+        for (int ii = group_start; ii < group_end; ii++) {
+            int i = rows[ii].row;
+            if (ctx->row_deleted[i]) continue;
+
+            for (int jj = ii + 1; jj < group_end; jj++) {
+                int j = rows[jj].row;
+                if (ctx->row_deleted[j]) continue;
+                if (!proportional_rows_same_pattern(&rows[ii], &rows[jj], row_cols)) {
+                    continue;
+                }
+
+                double val_i = row_vals[rows[ii].start];
+                double val_j = row_vals[rows[jj].start];
+                if (fabs(val_j) < RALPH_ZERO_TOL) continue;
+
+                double ratio = val_i / val_j;
+
+                int proportional = 1;
+                for (int p = 0; p < rows[ii].nnz && proportional; p++) {
+                    double a = row_vals[rows[ii].start + p];
+                    double b = row_vals[rows[jj].start + p];
+                    double diff = a - ratio * b;
+                    double scale = fmax(fabs(a), fabs(b));
+                    double tol = fmax(RALPH_FEAS_TOL, RALPH_FEAS_TOL * scale);
+                    if (fabs(diff) > tol) proportional = 0;
+                }
+                if (!proportional) continue;
+
+                /* Rows i and j are proportional: row_i = ratio * row_j
+                 * Normalize both: row_i (sense_i) rhs_i and ratio*row_j
+                 * (sense_j) ratio*rhs_j. */
+                double rhs_i = model->b[i];
+                double rhs_j_scaled = ratio * model->b[j];
+
+                if (model->sense[i] == 'E' && model->sense[j] == 'E') {
+                    /* Both equalities: must have same RHS (after scaling) */
+                    if (fabs(rhs_i - rhs_j_scaled) >
+                        RALPH_FEAS_TOL * fmax(1.0, fabs(rhs_i))) {
+                        free(row_counts);
+                        free(row_starts);
+                        free(row_cols);
+                        free(row_vals);
+                        free(fill_pos);
+                        free(rows);
+                        return -1;  /* Infeasible: inconsistent equalities */
+                    }
+                    /* Remove duplicate */
+                    ctx->row_deleted[j] = 1;
+                    count++;
+                } else if (model->sense[i] == 'L' && model->sense[j] == 'L') {
+                    /* Both <=: keep the tighter one */
+                    if (ratio > 0) {
+                        /* Same direction: row_i <= rhs_i, row_j <= rhs_j
+                         * After scaling: row_i <= rhs_i and row_i <= ratio*rhs_j
+                         * Keep the one with smaller RHS */
+                        if (rhs_i <= rhs_j_scaled + RALPH_FEAS_TOL) {
+                            ctx->row_deleted[j] = 1;  /* i is tighter */
+                        } else {
+                            ctx->row_deleted[i] = 1;  /* j is tighter */
+                        }
+                        count++;
+                    }
+                } else if (model->sense[i] == 'G' && model->sense[j] == 'G') {
+                    /* Both >=: keep the tighter one */
+                    if (ratio > 0) {
+                        if (rhs_i >= rhs_j_scaled - RALPH_FEAS_TOL) {
+                            ctx->row_deleted[j] = 1;  /* i is tighter */
+                        } else {
+                            ctx->row_deleted[i] = 1;  /* j is tighter */
+                        }
+                        count++;
+                    }
+                }
+                /* Mixed sense (L/G, L/E, G/E): more complex, skip for now */
+
+                if (ctx->row_deleted[i]) break;  /* Row i was removed, move on */
+            }
+        }
+
+        group_start = group_end;
+    }
+
+    free(row_counts);
+    free(row_starts);
+    free(row_cols);
+    free(row_vals);
+    free(fill_pos);
+    free(rows);
     return count;
 }
 
