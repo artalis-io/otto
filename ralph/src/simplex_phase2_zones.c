@@ -107,6 +107,27 @@ static P2ZoneResult p2_finalize_optimal(SimplexSolver *solver,
             solver->reduced_costs = NULL;
             tab->phase = 2;
         } else {
+            tableau_compute_solution(tab);
+            if (!p2_bound_infeasibility_exceeds_scaled_tolerance(tab, 0)) {
+                tableau_compute_reduced_costs(tab);
+                tab->phase = 2;
+                solver->status = saved_solver_status;
+                if (st) {
+                    st->last_obj = tab->obj_value;
+                    st->stall_count = 0;
+                    st->perturb_attempts = 0;
+                    st->perturbation_active = 0;
+                    st->last_entering = -1;
+                    st->last_leaving = -1;
+                    st->repeat_entering_streak = 0;
+                    st->repeat_leaving_streak = 0;
+                }
+                free(saved_basis);
+                free(saved_basis_pos);
+                free(saved_status);
+                free(saved_x);
+                return P2_ZONE_CONTINUE;
+            }
             memcpy(tab->basis, saved_basis, (size_t)m * sizeof(int));
             memcpy(tab->basis_pos, saved_basis_pos, (size_t)n * sizeof(int));
             memcpy(tab->var_status, saved_status, (size_t)n * sizeof(VarStatus));
