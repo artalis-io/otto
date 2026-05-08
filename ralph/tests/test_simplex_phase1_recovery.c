@@ -475,6 +475,11 @@ static int test_failed_stabilize_entering_different(void) {
 
 /* ── p1_basis_exclude_entering (R3.4) ─────────────────────────────── */
 
+static void seed_exclusion(P1BasisRepairState *bs, int slot, int var, int ttl) {
+    bs->excluded_entering_pool[slot] = var;
+    bs->excluded_entering_pool_ttl[slot] = ttl;
+}
+
 static int test_exclude_entering_fills_slot_a(void) {
     P1BasisRepairState bs;
     memset(&bs, 0, sizeof(bs));
@@ -495,10 +500,7 @@ static int test_exclude_entering_fills_slot_a(void) {
 static int test_exclude_entering_fills_slot_b(void) {
     P1BasisRepairState bs;
     memset(&bs, 0, sizeof(bs));
-    bs.excluded_entering_a = 3;
-    bs.excluded_entering_ttl_a = 4;
-    bs.excluded_entering_b = -1;
-    bs.excluded_entering_ttl_b = 0;
+    seed_exclusion(&bs, 0, 3, 4);
 
     p1_basis_exclude_entering(NULL, 9, 6, &bs);
 
@@ -513,12 +515,13 @@ static int test_exclude_entering_fills_slot_b(void) {
 static int test_exclude_entering_evicts_lower_ttl(void) {
     P1BasisRepairState bs;
     memset(&bs, 0, sizeof(bs));
-    bs.excluded_entering_a = 1;
-    bs.excluded_entering_ttl_a = 2;
-    bs.excluded_entering_b = 2;
-    bs.excluded_entering_ttl_b = 5;
+    for (int k = 0; k < PHASE1_ENTERING_EXCLUSION_POOL_SIZE; k++) {
+        seed_exclusion(&bs, k, 100 + k, 5);
+    }
+    seed_exclusion(&bs, 0, 1, 2);
+    seed_exclusion(&bs, 1, 2, 5);
 
-    /* Slot A has lower TTL (2 < 5), so it gets evicted */
+    /* Full pool: slot 0 has lower TTL (2 < 5), so it gets evicted. */
     p1_basis_exclude_entering(NULL, 3, 8, &bs);
 
     ASSERT_INT_EQ(bs.excluded_entering_a, 3, "slot A evicted, now var 3");
@@ -532,10 +535,7 @@ static int test_exclude_entering_evicts_lower_ttl(void) {
 static int test_exclude_entering_repeated_slot(void) {
     P1BasisRepairState bs;
     memset(&bs, 0, sizeof(bs));
-    bs.excluded_entering_a = 5;
-    bs.excluded_entering_ttl_a = 3;
-    bs.excluded_entering_b = -1;
-    bs.excluded_entering_ttl_b = 0;
+    seed_exclusion(&bs, 0, 5, 3);
 
     /* Re-exclude same var — should refresh TTL */
     p1_basis_exclude_entering(NULL, 5, 10, &bs);

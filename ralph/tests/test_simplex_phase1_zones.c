@@ -70,6 +70,11 @@ static int test_iter_context_zero_init(void) {
 
 /* ── p1_zone_tick_cooldowns ──────────────────────────────────────── */
 
+static void seed_exclusion(P1BasisRepairState *bs, int slot, int var, int ttl) {
+    bs->excluded_entering_pool[slot] = var;
+    bs->excluded_entering_pool_ttl[slot] = ttl;
+}
+
 static int test_tick_cooldowns_decrements_all(void) {
     SimplexSolver solver;
     memset(&solver, 0, sizeof(solver));
@@ -79,10 +84,8 @@ static int test_tick_cooldowns_decrements_all(void) {
 
     P1RecoveryState rs;
     memset(&rs, 0, sizeof(rs));
-    rs.basis.excluded_entering_ttl_a = 3;
-    rs.basis.excluded_entering_a = 5;
-    rs.basis.excluded_entering_ttl_b = 1;
-    rs.basis.excluded_entering_b = 7;
+    seed_exclusion(&rs.basis, 0, 5, 3);
+    seed_exclusion(&rs.basis, 1, 7, 1);
     rs.numerical.dir_stabilize_cooldown = 2;
     rs.progress.no_pivot_force_cooldown = 4;
     rs.progress.no_pivot_ladder_rescue_cooldown = 1;
@@ -128,8 +131,7 @@ static int test_tick_cooldowns_ttl_a_clears_entering(void) {
 
     P1RecoveryState rs;
     memset(&rs, 0, sizeof(rs));
-    rs.basis.excluded_entering_ttl_a = 1;
-    rs.basis.excluded_entering_a = 42;
+    seed_exclusion(&rs.basis, 0, 42, 1);
 
     p1_zone_tick_cooldowns(&solver, &tab, &rs);
 
@@ -167,10 +169,8 @@ static int test_post_pivot_reset_clears_state(void) {
     rs.basis.last_failed_stabilize_retry_alt = 60;
     rs.basis.failed_stabilize_retry_alt_streak = 2;
     rs.basis.failed_stabilize_retry_alt_ratio_fail_streak = 1;
-    rs.basis.excluded_entering_a = 10;
-    rs.basis.excluded_entering_ttl_a = 5;
-    rs.basis.excluded_entering_b = 20;
-    rs.basis.excluded_entering_ttl_b = 3;
+    seed_exclusion(&rs.basis, 0, 10, 5);
+    seed_exclusion(&rs.basis, 1, 20, 3);
     rs.progress.dir_escape_cooldown = 4;
     rs.numerical.dir_stabilize_moderate_defer_pending = 1;
 
