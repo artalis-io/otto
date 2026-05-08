@@ -467,6 +467,16 @@ static int ralph_should_control_mid_sparse_reinvert(const LPModel *model) {
         return 1;
     }
 
+    /* Smaller column-heavy mid-sparse bases can spend most of Phase 1 on
+     * periodic reinversions.  Let the reinvert controller dampen cadence here,
+     * while keeping larger rows out of this automatic control path. */
+    if (n >= 1000 && n <= 1300 &&
+        m >= 600 && m <= 700 &&
+        n * 10 >= m * 17 &&
+        density >= 0.005 && density <= 0.009) {
+        return 1;
+    }
+
     if (n >= 800 && n <= 900 &&
         m >= 500 && m <= 550 &&
         density >= 0.012 && density <= 0.015) {
