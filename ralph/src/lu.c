@@ -26,8 +26,8 @@
 /* Reject extremely dense FT updates on large bases; they poison sparse solve cost. */
 #define RALPH_SPIKE_DENSE_REJECT_M_MIN 300
 #define RALPH_SPIKE_DENSE_REJECT_MIN_UPDATES 8
-#define RALPH_SPIKE_DENSE_BASE_RATIO 0.70
-#define RALPH_SPIKE_DENSE_AGED_RATIO 0.55
+#define RALPH_SPIKE_DENSE_BASE_RATIO 0.85
+#define RALPH_SPIKE_DENSE_AGED_RATIO 0.70
 /* Early reinversion when average stored spike density drifts too high. */
 #define RALPH_SPIKE_AVG_REFACTOR_RATIO 0.45
 #define RALPH_SPIKE_AVG_REFACTOR_AGED_RATIO 0.35
