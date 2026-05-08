@@ -4305,7 +4305,7 @@ static int simplex_should_use_mid_sparse_phase12_dantzig(const SimplexSolver *so
     /* Sparse mid-size cases in this band get cheaper Phase 1 and Phase 2
      * progress from Dantzig. Nearby lower-row shapes such as bnl1/pilot4
      * regress, so keep the row and density band tight. */
-    return (m >= 800 && m <= 900 &&
+    return (m >= 790 && m <= 900 &&
             n >= 1400 && n <= 1600 &&
             density >= 0.007 && density <= 0.009);
 }
