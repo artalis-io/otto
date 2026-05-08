@@ -1256,6 +1256,11 @@ static void bench_derive_termination_reason(SolveResult *result) {
         bench_set_termination_reason(result, BENCH_TERM_OBJ_LIMIT, "objective_limit");
         return;
     }
+    if (result->raw_status_code == (int)RALPH_STATUS_ERROR &&
+        result->iterations > 0) {
+        bench_set_termination_reason(result, BENCH_TERM_NUMERICAL, "numerical_breakdown");
+        return;
+    }
 
     if (result->dual_lu_hard_trigger > 0) {
         bench_set_termination_reason(result, BENCH_TERM_DUAL_LU_HARD, "dual_lu_hard_trigger");

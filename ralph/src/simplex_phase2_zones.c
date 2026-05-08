@@ -573,6 +573,7 @@ P2ZoneResult p2_zone_pivot(SimplexSolver *solver,
         }
         primal_remove_perturbation(tab);
         solver->status = RALPH_STATUS_ERROR;
+        solver->iterations = iter;
         return P2_ZONE_RETURN_FAIL;
     }
 
