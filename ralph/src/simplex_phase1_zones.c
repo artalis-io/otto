@@ -614,6 +614,22 @@ P1ZoneResult p1_zone_pricing(SimplexSolver *solver,
     double art_sum_pre = p1_artificial_sum(tab);
 
     if (art_sum_pre <= RALPH_FEAS_TOL) {
+        if (tab->primal_perturb_active || tab->artificial_basic_count > 0) {
+            primal_remove_perturbation(tab);
+            if (tableau_refactorize_with_reason(
+                    tab, RALPH_REFACTOR_REASON_INFEASIBILITY_CLEANUP) == 0) {
+                tab->phase1_compute_solution_context =
+                    LP_PHASE1_COMPUTE_CTX_NO_ENTERING_CLEANUP;
+                tab->phase1_compute_rc_context =
+                    LP_PHASE1_COMPUTE_CTX_NO_ENTERING_CLEANUP;
+                tableau_compute_solution(tab);
+                tableau_compute_reduced_costs(tab);
+                art_sum_pre = p1_artificial_sum(tab);
+            }
+            if (art_sum_pre > RALPH_FEAS_TOL) {
+                return P1_ZONE_CONTINUE;
+            }
+        }
         lp_telemetry_record_pricing_timed(solver, 1, t_pricing_ms);
         rs->progress.no_entering_cleanup_streak = 0;
         if (solver->verbose) {
