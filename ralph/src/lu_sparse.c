@@ -2263,7 +2263,7 @@ static int lu_symbolic_analyze(LUFactorization *lu, const SparseMatrix *B) {
 
 #define MARKOWITZ_MIN_K       40    /* Below this, dense GE is faster */
 #define MARKOWITZ_THRESHOLD   0.1   /* Threshold pivoting ratio */
-#define MARKOWITZ_MAX_SEARCH  3     /* Candidates per degree bucket */
+#define MARKOWITZ_MAX_SEARCH  2     /* Candidates per degree bucket */
 #define MARKOWITZ_SINGULAR_RETRY_THRESHOLD 0.02 /* Relaxed threshold for one singular micro-retry */
 #define MARKOWITZ_RESERVED_RELAX_RATIO 0.1 /* Keep non-reserved if within 10x of reserved best */
 #define MARKOWITZ_RETRY_THRESHOLD 0.02 /* Secondary retry profile threshold ratio */
