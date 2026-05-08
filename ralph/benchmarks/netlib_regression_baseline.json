@@ -72,9 +72,6 @@
     "fffff800.mps": {
       "method": 2
     },
-    "bnl1.mps": {
-      "lp_reinvert_controller_mode": 3
-    },
     "scsd8.mps": {
       "lp_reinvert_controller_mode": 3
     },

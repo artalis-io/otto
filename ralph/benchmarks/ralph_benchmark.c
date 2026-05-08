@@ -5444,7 +5444,7 @@ static int parse_args(int argc, char **argv, Options *opts) {
     opts->glpk_smcp_ratio = -1;
     opts->glpk_smcp_flip = -1;
     opts->glpk_bfcp_backend = -1;
-    opts->lp_reinvert_controller_mode = LP_REINVERT_MODE_CONTROL_ALL;
+    opts->lp_reinvert_controller_mode = LP_REINVERT_MODE_SHADOW;
     opts->random_seed = 0;
 
     for (int i = 1; i < argc; i++) {
