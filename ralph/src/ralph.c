@@ -1125,7 +1125,7 @@ RalphModel* ralph_core_create(void) {
     model->random_seed = 0;
     model->lp_threads = 0;
     model->lp_basis_governor_mode = LP_BASIS_GOV_MODE_OFF;
-    model->lp_reinvert_controller_mode = LP_REINVERT_MODE_CONTROL_ALL;
+    model->lp_reinvert_controller_mode = LP_REINVERT_MODE_SHADOW;
     {
         LPGLPKCompatConfig cfg;
         lp_policy_glpk_compat_init(&cfg);
@@ -5743,7 +5743,7 @@ static const RalphParamSpec* ralph_param_specs(void) {
             .name = "lp_reinvert_controller_mode",
             .scope = RALPH_PARAM_SCOPE_LP,
             .value_type = RALPH_PARAM_VALUE_INT,
-            .default_value = (double)LP_REINVERT_MODE_CONTROL_ALL,
+            .default_value = (double)LP_REINVERT_MODE_SHADOW,
             .has_min = 1,
             .min_value = (double)LP_REINVERT_MODE_OFF,
             .has_max = 1,

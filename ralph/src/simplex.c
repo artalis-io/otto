@@ -2566,7 +2566,7 @@ SimplexSolver* simplex_create(LPModel *model) {
     solver->unbounded_valid = 0;
     lp_refactor_policy_config_defaults(&solver->refactor_config);
     solver->policy.basis_governor_mode = LP_BASIS_GOV_MODE_OFF;
-    solver->policy.reinvert_controller_mode = LP_REINVERT_MODE_CONTROL_ALL;
+    solver->policy.reinvert_controller_mode = LP_REINVERT_MODE_SHADOW;
     lp_basis_governor_set_mode(&solver->policy.basis_governor,
                                solver->policy.basis_governor_mode);
     solver->policy.soft_lu_cost_gate_enabled = 1;
