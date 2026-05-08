@@ -4261,6 +4261,21 @@ static int simplex_should_use_dense_lowrow_phase2_dantzig(const SimplexSolver *s
     return (m <= 30 && n >= 1000 && density >= 0.30);
 }
 
+static int simplex_should_skip_auto_dual_startup(const SimplexSolver *solver) {
+    if (!solver || !solver->model) return 0;
+
+    int m = solver->model->num_cons;
+    if (m <= 0) return 0;
+
+    /* In auto mode the scratch dual solve is speculative: if it does not return
+     * a verified optimum, the solver pays the full dual startup cost and then
+     * runs the primal path anyway.  On NETLIB-scale models up through roughly
+     * 1300 rows that failed-dual toll dominates, while the larger sparse cases
+     * still have enough Phase 2 work for a dual attempt to be useful.  Explicit
+     * dual mode keeps the dual path; this only governs method=2 dispatch. */
+    return (m <= 1300);
+}
+
 static int simplex_finish_prepared_primal_solve(SimplexSolver *solver, clock_t start) {
     if (!solver || !solver->tableau) return -1;
 
@@ -4520,7 +4535,9 @@ int simplex_solve(SimplexSolver *solver) {
 
     /* T1.3: Method dispatch — dual simplex path.
      * For methods 1/2, avoid creating/factorizing a primal tableau up front. */
-    if (solver->method == 1 || solver->method == 2) {
+    int skip_auto_dual_startup =
+        (solver->method == 2 && simplex_should_skip_auto_dual_startup(solver));
+    if (solver->method == 1 || (solver->method == 2 && !skip_auto_dual_startup)) {
         if (solver->verbose)
             LP_LOG_STDOUT("[simplex_solve] Trying dual simplex path (method=%d)\n", solver->method);
 
@@ -4633,6 +4650,9 @@ int simplex_solve(SimplexSolver *solver) {
             return -1;
         }
     } else {
+        if (skip_auto_dual_startup && solver->verbose) {
+            LP_LOG_STDOUT("[simplex_solve] Skipping speculative dual startup in auto mode\n");
+        }
         double t_setup_ms = lp_telemetry_timer_start();
         if (setup_primal_tableau(solver, solver->crash && solver->method == 0) != 0) {
             return -1;
