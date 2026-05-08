@@ -4223,6 +4223,22 @@ static int simplex_should_use_dense_small_phase1_partial(const SimplexSolver *so
     return (m <= 220 && density >= 0.05);
 }
 
+static int simplex_should_use_dense_lowrow_phase2_dantzig(const SimplexSolver *solver,
+                                                          const SimplexTableau *tab) {
+    if (!solver || !solver->model || !solver->model->A || !tab) return 0;
+
+    int m = solver->model->num_cons;
+    int n = solver->model->num_vars;
+    int nnz = solver->model->A->nnz;
+    if (m <= 0 || n <= 0 || nnz <= 0) return 0;
+
+    double density = (double)nnz / ((double)m * (double)n);
+    /* Very low-row dense NETLIB LPs spend more in Devex weight maintenance than
+     * they recover from better pricing. Keep this selector narrow; blanket
+     * Dantzig pricing regresses wider sparse models such as fit1p. */
+    return (m <= 30 && n >= 1000 && density >= 0.30);
+}
+
 static int simplex_finish_prepared_primal_solve(SimplexSolver *solver, clock_t start) {
     if (!solver || !solver->tableau) return -1;
 
@@ -4277,6 +4293,13 @@ static int simplex_finish_prepared_primal_solve(SimplexSolver *solver, clock_t s
     tab->pricing_strategy = saved_tab_pricing;
     tab->use_steepest_edge = saved_tab_se;
     if (solver->verbose) LP_LOG_STDOUT("[simplex_solve] Phase 1 complete\n");
+
+    if (saved_pricing == 2 &&
+        simplex_should_use_dense_lowrow_phase2_dantzig(solver, tab)) {
+        solver->pricing_strategy = 0;
+        tab->pricing_strategy = 0;
+        tab->use_steepest_edge = 0;
+    }
 
     /* Transition to Phase 2 if using two-phase simplex */
     int two_phase_failed = 0;
