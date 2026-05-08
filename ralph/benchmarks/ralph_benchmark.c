@@ -969,6 +969,7 @@ typedef struct {
     int phase1_pricing; /* -1=default, 0=Dantzig, 1=SE, 2=Devex, 3=Partial, 4=Heap */
     int glpk_smcp_ratio; /* -1=default, 0=standard (--norelax), 1=harris (--relax) */
     int glpk_smcp_flip;  /* -1=default, 0=off (--noflip), 1=on (--flip) */
+    int glpk_smcp_shift; /* -1=default, 0=off, 1=on */
     int glpk_bfcp_backend; /* -1=default, 0=luf_ft, 1=cbg, 2=cgr */
     int lu_supernode; /* 0=off, 1=enable supernodal LU */
     int lp_basis_governor_mode; /* 0=off, 1=shadow, 2=control_phase2 */
@@ -5030,7 +5031,7 @@ static int run_single_benchmark(const char *problem_path, const char *name,
                                           opts->lp_reinvert_controller_mode,
                                           opts->random_seed,
                                           opts->external_glpk_oop,
-                                          -1,
+                                          opts->glpk_smcp_shift,
                                           opts->no_presolve,
                                           opts->presolve_mask_override,
                                           opts->crash,
@@ -5064,7 +5065,7 @@ static int run_single_benchmark(const char *problem_path, const char *name,
                                  opts->lp_reinvert_controller_mode,
                                  opts->random_seed,
                                  opts->external_glpk_oop,
-                                 0,
+                                 opts->glpk_smcp_shift >= 0 ? opts->glpk_smcp_shift : 0,
                                  opts->no_presolve,
                                  opts->presolve_mask_override,
                                  opts->crash,
@@ -5097,7 +5098,7 @@ static int run_single_benchmark(const char *problem_path, const char *name,
                                  opts->lp_reinvert_controller_mode,
                                  opts->random_seed,
                                  1,
-                                 -1,
+                                 opts->glpk_smcp_shift,
                                  opts->no_presolve,
                                  opts->presolve_mask_override,
                                  opts->crash,
@@ -5171,6 +5172,7 @@ static int test_solve_one(const char *path, const char *name,
                            int timeout_sec, int method, int pricing,
                            int phase1_pricing,
                            int glpk_smcp_ratio, int glpk_smcp_flip,
+                           int glpk_smcp_shift,
                            int glpk_bfcp_backend,
                            int lu_supernode, int lp_basis_governor_mode,
                            int lp_reinvert_controller_mode,
@@ -5210,7 +5212,7 @@ static int test_solve_one(const char *path, const char *name,
                                                lp_reinvert_controller_mode,
                                                random_seed,
                                                external_glpk_oop,
-                                               -1,
+                                               glpk_smcp_shift,
                                                0,
                                                -1,
                                                crash,
@@ -5331,6 +5333,7 @@ static int run_test_mode(const Options *opts) {
                                      opts->phase1_pricing,
                                      opts->glpk_smcp_ratio,
                                      opts->glpk_smcp_flip,
+                                     opts->glpk_smcp_shift,
                                      opts->glpk_bfcp_backend,
                                      opts->lu_supernode,
                                      opts->lp_basis_governor_mode,
@@ -5438,6 +5441,7 @@ static void print_help(const char *prog) {
     printf("  --norelax                     Use standard ratio test (GLPK-compat ratio=0)\n");
     printf("  --flip                        Enable dual bound flipping (GLPK-compat flip=1)\n");
     printf("  --noflip                      Disable dual bound flipping (GLPK-compat flip=0)\n");
+    printf("  --smcp-shift <N>              GLPK-compat bound shift: 0=off, 1=on\n");
     printf("  --bfcp-backend <N>            GLPK BFCP backend: 0=luf_ft, 1=cbg, 2=cgr\n");
     printf("  --lp-basis-governor-mode <N>  Basis governor: 0=off, 1=shadow, 2=control_phase2\n");
     printf("  --lp-reinvert-controller-mode <N> Reinvert controller: 0=off, 1=shadow, 2=control_phase1, 3=control_all\n");
@@ -5501,6 +5505,7 @@ static int parse_args(int argc, char **argv, Options *opts) {
     opts->phase1_pricing = -1;  /* Default: solver default */
     opts->glpk_smcp_ratio = -1;
     opts->glpk_smcp_flip = -1;
+    opts->glpk_smcp_shift = -1;
     opts->glpk_bfcp_backend = -1;
     opts->lp_reinvert_controller_mode = LP_REINVERT_MODE_SHADOW;
     opts->random_seed = 0;
@@ -5584,6 +5589,14 @@ static int parse_args(int argc, char **argv, Options *opts) {
             opts->glpk_smcp_flip = 1;
         } else if (strcmp(arg, "--noflip") == 0) {
             opts->glpk_smcp_flip = 0;
+        } else if (strcmp(arg, "--smcp-shift") == 0 && i + 1 < argc) {
+            opts->glpk_smcp_shift = atoi(argv[++i]);
+            if (opts->glpk_smcp_shift < 0 || opts->glpk_smcp_shift > 1) {
+                fprintf(stderr,
+                        "Invalid --smcp-shift: %d (expected 0 or 1)\n",
+                        opts->glpk_smcp_shift);
+                return -1;
+            }
         } else if (strcmp(arg, "--bfcp-backend") == 0 && i + 1 < argc) {
             opts->glpk_bfcp_backend = atoi(argv[++i]);
             if (opts->glpk_bfcp_backend < 0 || opts->glpk_bfcp_backend > 2) {
