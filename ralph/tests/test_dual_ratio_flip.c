@@ -370,9 +370,9 @@ static void test_dual_reinvert_effective_mode_mapping(void) {
 static void test_dual_phase1_rescue_progress_limit(void) {
     ASSERT_TRUE(dual_phase1_rescue_progress_limit_for_test(8) == 16,
                 "dual phase1 rescue progress limit clamps small systems");
-    ASSERT_TRUE(dual_phase1_rescue_progress_limit_for_test(120) == 60,
-                "dual phase1 rescue progress limit scales with system size");
-    ASSERT_TRUE(dual_phase1_rescue_progress_limit_for_test(800) == 128,
+    ASSERT_TRUE(dual_phase1_rescue_progress_limit_for_test(120) == 16,
+                "dual phase1 rescue progress limit keeps medium systems on short stall window");
+    ASSERT_TRUE(dual_phase1_rescue_progress_limit_for_test(800) == 16,
                 "dual phase1 rescue progress limit clamps large systems");
 }
 

@@ -2713,22 +2713,22 @@ int main(void) {
     const DirSkipRescueCadenceCase dir_skip_rescue_cadence_cases[] = {
         {
             .name = "phase1 dir-skip rescue cadence not due before threshold",
-            .dir_skip_event_streak = 15,
+            .dir_skip_event_streak = 63,
             .expected_due = 0
         },
         {
             .name = "phase1 dir-skip rescue cadence due at threshold multiple",
-            .dir_skip_event_streak = 16,
+            .dir_skip_event_streak = 64,
             .expected_due = 1
         },
         {
             .name = "phase1 dir-skip rescue cadence repeats on period",
-            .dir_skip_event_streak = 24,
+            .dir_skip_event_streak = 96,
             .expected_due = 1
         },
         {
             .name = "phase1 dir-skip rescue cadence off period",
-            .dir_skip_event_streak = 23,
+            .dir_skip_event_streak = 95,
             .expected_due = 0
         }
     };

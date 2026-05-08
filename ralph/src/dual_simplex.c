@@ -43,6 +43,7 @@ static void phase1_rescue_compute_reduced_costs(SimplexTableau *tab) {
 #define DUAL_CAND_RC_THRESH   1e-4   /* |rc| threshold for candidate inclusion */
 #define DUAL_REINVERT_HARD_BURST_WINDOW_ITERS 64
 #define DUAL_REINVERT_HARD_BURST_DEMOTE_COUNT 6
+#define DUAL_PHASE1_RESCUE_PROGRESS_LIMIT 16
 
 /* Bound perturbation for degeneracy prevention (defined below) */
 static void apply_bound_perturbation(SimplexTableau *tab);
@@ -901,10 +902,8 @@ static int dual_rc_recompute_interval_for_solver(const SimplexSolver *solver,
 }
 
 static int dual_phase1_rescue_progress_limit(int m) {
-    int limit = m / 2;
-    if (limit < 16) limit = 16;
-    if (limit > 128) limit = 128;
-    return limit;
+    (void)m;
+    return DUAL_PHASE1_RESCUE_PROGRESS_LIMIT;
 }
 
 int dual_phase1_rescue_progress_limit_for_test(int m) {

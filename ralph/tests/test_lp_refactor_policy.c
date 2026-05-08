@@ -433,11 +433,11 @@ int main(void) {
              "no-pivot ladder step: force refactor on sustained no-progress");
     }
 
-    TEST(lp_refactor_policy_phase1_dir_skip_ladder_rescue_due(15) == 0,
+    TEST(lp_refactor_policy_phase1_dir_skip_ladder_rescue_due(63) == 0,
          "dir-skip rescue cadence: below start");
-    TEST(lp_refactor_policy_phase1_dir_skip_ladder_rescue_due(16) == 1,
+    TEST(lp_refactor_policy_phase1_dir_skip_ladder_rescue_due(64) == 1,
          "dir-skip rescue cadence: start threshold");
-    TEST(lp_refactor_policy_phase1_dir_skip_ladder_rescue_due(24) == 1,
+    TEST(lp_refactor_policy_phase1_dir_skip_ladder_rescue_due(96) == 1,
          "dir-skip rescue cadence: periodic multiple");
 
     TEST(lp_refactor_policy_phase1_dir_skip_force_pivot_threshold(600, 0) == 64,
