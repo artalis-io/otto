@@ -3435,6 +3435,12 @@ static int lu_sparse_strict_prefer_dense_ge_numeric(const LUFactorization *lu) {
     return lu->owner->lu_strict_prefer_dense_ge_numeric ? 1 : 0;
 }
 
+static int lu_sparse_medium_dispatch_prefers_dense_ge(const LUFactorization *lu,
+                                                      const SparseMatrix *B) {
+    if (!lu || !B || lu_sparse_glpk_strict_mode(lu)) return 0;
+    return lu->m >= 340 && lu->m < 500 && B->nnz >= 8 * lu->m;
+}
+
 static int lu_sparse_strict_allow_supernode_lane(const LUFactorization *lu) {
     if (!lu || !lu->owner) return 1;
     return lu->owner->lu_strict_allow_supernode_lane ? 1 : 0;
@@ -3550,7 +3556,8 @@ static int lu_numeric_factorize(LUFactorization *lu, const SparseMatrix *B,
     int force_supernode_attempt = 0;
     int strict_dispatch_mode = (mode == LU_NUMERIC_MODE_STRICT_DISPATCH);
     int skip_sparse_numeric = strict_dispatch_mode &&
-        lu_sparse_strict_prefer_dense_ge_numeric(lu);
+        (lu_sparse_strict_prefer_dense_ge_numeric(lu) ||
+         lu_sparse_medium_dispatch_prefers_dense_ge(lu, B));
     int full_retry_mode = (mode == LU_NUMERIC_MODE_SYMBOLIC_FULL_RETRY);
     double t_a_struct_build_ms = 0.0;
     double t_markowitz_numeric_ms = 0.0;

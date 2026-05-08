@@ -34,6 +34,7 @@ int phase1_trace_reason_from_lu_failure(int lu_reason, int forced_refactor_path)
         case LU_FAIL_MAX_UPDATES:
             return PHASE1_PIVOT_FAIL_LU_MAX_UPDATES;
         case LU_FAIL_SPIKE_POOL_FULL:
+        case LU_FAIL_DENSE_SPIKE_REJECT:
             return PHASE1_PIVOT_FAIL_LU_SPIKE_POOL_FULL;
         case LU_FAIL_UPDATE_PIVOT_TOO_SMALL:
             return PHASE1_PIVOT_FAIL_LU_UPDATE_PIVOT_SMALL;
@@ -325,4 +326,3 @@ void phase1_trace_emit_summary(SimplexSolver *solver, RalphStatus phase1_status)
             solver->trace_phase1_last_fail_iter,
             solver->trace_phase1_signature);
 }
-

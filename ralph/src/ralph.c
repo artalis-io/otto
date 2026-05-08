@@ -841,7 +841,7 @@ static int ralph_build_row_primary_aux_map(const SimplexTableau *tab, int *row_a
     if (!tab || !row_aux || !tab->model) return -1;
 
     int m = tab->m;
-    int num_struct = tab->model->num_vars;
+    int num_struct = tab->num_structural_ext;
     if (num_struct < 0 || num_struct > tab->n) return -1;
 
     for (int i = 0; i < m; i++) row_aux[i] = -1;
@@ -1125,7 +1125,7 @@ RalphModel* ralph_core_create(void) {
     model->random_seed = 0;
     model->lp_threads = 0;
     model->lp_basis_governor_mode = LP_BASIS_GOV_MODE_OFF;
-    model->lp_reinvert_controller_mode = LP_REINVERT_MODE_SHADOW;
+    model->lp_reinvert_controller_mode = LP_REINVERT_MODE_CONTROL_ALL;
     {
         LPGLPKCompatConfig cfg;
         lp_policy_glpk_compat_init(&cfg);
@@ -1501,7 +1501,7 @@ static int ralph_optimize_with_mode(RalphModel *model, RalphSolveMode mode) {
     double lp_smcp_tol_dj = model->lp_model->opt_tol;
     double lp_smcp_tol_piv = model->lp_model->pivot_tol;
     int lp_smcp_excl = LP_GLPK_SMCP_EXCL_ON;
-    int lp_smcp_shift = LP_GLPK_SMCP_SHIFT_ON;
+    int lp_smcp_shift = model->glpk_smcp_shift;
     int lp_smcp_aorn = LP_GLPK_SMCP_AORN_USE_NT;
     int lp_crash_mode = model->crash;
     int lp_bfcp_backend = -1; /* -1=auto/default */
@@ -5743,7 +5743,7 @@ static const RalphParamSpec* ralph_param_specs(void) {
             .name = "lp_reinvert_controller_mode",
             .scope = RALPH_PARAM_SCOPE_LP,
             .value_type = RALPH_PARAM_VALUE_INT,
-            .default_value = (double)LP_REINVERT_MODE_SHADOW,
+            .default_value = (double)LP_REINVERT_MODE_CONTROL_ALL,
             .has_min = 1,
             .min_value = (double)LP_REINVERT_MODE_OFF,
             .has_max = 1,

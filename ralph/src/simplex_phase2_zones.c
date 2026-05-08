@@ -18,6 +18,135 @@
 #include "lp_log.h"
 
 #include <math.h>
+#include <stdlib.h>
+#include <string.h>
+
+#define P2_RATIO_ALT_ENTERING_LIMIT 16
+
+static void p2_reset_devex_reference(SimplexTableau *tab) {
+    if (!tab || tab->pricing_strategy != 2 || !tab->use_steepest_edge ||
+        !tab->se_weights || !tab->A_ext) {
+        return;
+    }
+
+    for (int j = 0; j < tab->n; j++) {
+        double col_norm_sq = 0.0;
+        for (int p = tab->A_ext->colptr[j]; p < tab->A_ext->colptr[j + 1]; p++) {
+            col_norm_sq += tab->A_ext->values[p] * tab->A_ext->values[p];
+        }
+        tab->se_weights[j] = (col_norm_sq > 1.0) ? col_norm_sq : 1.0;
+    }
+    tab->devex_refcount = 0;
+    tab->partial_price_pos = 0;
+}
+
+static int p2_bound_infeasibility_exceeds_scaled_tolerance(
+    const SimplexTableau *tab,
+    int basic_only) {
+    if (!tab) return 0;
+    int limit = basic_only ? tab->m : tab->n;
+    for (int k = 0; k < limit; k++) {
+        int j = basic_only ? tab->basis[k] : k;
+        double infeas = 0.0;
+        double bound_scale;
+        double allowed;
+        if (j < 0 || j >= tab->n) return 1;
+        bound_scale = fmax(1.0, fabs(tab->x[j]));
+        if (tab->x[j] < tab->lb_ext[j] - RALPH_FEAS_TOL) {
+            infeas = tab->lb_ext[j] - tab->x[j];
+            bound_scale = fmax(bound_scale, fabs(tab->lb_ext[j]));
+        } else if (tab->x[j] > tab->ub_ext[j] + RALPH_FEAS_TOL) {
+            infeas = tab->x[j] - tab->ub_ext[j];
+            bound_scale = fmax(bound_scale, fabs(tab->ub_ext[j]));
+        }
+        allowed = 2000.0 * RALPH_FEAS_TOL * bound_scale;
+        if (infeas > allowed) return 1;
+    }
+    return 0;
+}
+
+static P2ZoneResult p2_finalize_optimal(SimplexSolver *solver,
+                                        SimplexTableau *tab,
+                                        P2IterState *st,
+                                        int iter) {
+    primal_remove_perturbation(tab);
+    tableau_compute_solution(tab);
+
+    if (p2_bound_infeasibility_exceeds_scaled_tolerance(tab, 0)) {
+        /* Removing primal bound shifts can leave a dual-feasible basis that is
+         * slightly primal-infeasible under the original bounds.  Finish with
+         * dual simplex, the standard unshift cleanup for a perturbed primal
+         * optimum, before accepting OPTIMAL. */
+        int m = tab->m;
+        int n = tab->n;
+        int *saved_basis = (int*)malloc((size_t)m * sizeof(int));
+        int *saved_basis_pos = (int*)malloc((size_t)n * sizeof(int));
+        VarStatus *saved_status = (VarStatus*)malloc((size_t)n * sizeof(VarStatus));
+        double *saved_x = (double*)malloc((size_t)n * sizeof(double));
+        int saved_solver_status = solver->status;
+        if (!saved_basis || !saved_basis_pos || !saved_status || !saved_x) {
+            free(saved_basis);
+            free(saved_basis_pos);
+            free(saved_status);
+            free(saved_x);
+            return P2_ZONE_RETURN_FAIL;
+        }
+        memcpy(saved_basis, tab->basis, (size_t)m * sizeof(int));
+        memcpy(saved_basis_pos, tab->basis_pos, (size_t)n * sizeof(int));
+        memcpy(saved_status, tab->var_status, (size_t)n * sizeof(VarStatus));
+        memcpy(saved_x, tab->x, (size_t)n * sizeof(double));
+
+        tableau_compute_reduced_costs(tab);
+        if (dual_simplex_solve_v2(solver) == 0 &&
+            solver->status == RALPH_STATUS_OPTIMAL) {
+            free(solver->solution);
+            free(solver->dual_solution);
+            free(solver->reduced_costs);
+            solver->solution = NULL;
+            solver->dual_solution = NULL;
+            solver->reduced_costs = NULL;
+            tab->phase = 2;
+        } else {
+            memcpy(tab->basis, saved_basis, (size_t)m * sizeof(int));
+            memcpy(tab->basis_pos, saved_basis_pos, (size_t)n * sizeof(int));
+            memcpy(tab->var_status, saved_status, (size_t)n * sizeof(VarStatus));
+            memcpy(tab->x, saved_x, (size_t)n * sizeof(double));
+            tab->phase = 2;
+            solver->status = saved_solver_status;
+            tab->basis_cache_valid = 0;
+            tab->basis_cache_total_nnz = 0;
+            if (tableau_refactorize_with_reason(tab, RALPH_REFACTOR_REASON_PHASE_TRANSITION) != 0) {
+                free(saved_basis);
+                free(saved_basis_pos);
+                free(saved_status);
+                free(saved_x);
+                return P2_ZONE_RETURN_FAIL;
+            }
+            tableau_compute_solution(tab);
+            tableau_compute_reduced_costs(tab);
+            if (p2_bound_infeasibility_exceeds_scaled_tolerance(tab, 0)) {
+                solver->status = RALPH_STATUS_ERROR;
+                free(saved_basis);
+                free(saved_basis_pos);
+                free(saved_status);
+                free(saved_x);
+                return P2_ZONE_RETURN_FAIL;
+            }
+        }
+        free(saved_basis);
+        free(saved_basis_pos);
+        free(saved_status);
+        free(saved_x);
+    }
+
+    solver->current_phase = SIMPLEX_PHASE_OPTIMAL;
+    solver->status = RALPH_STATUS_OPTIMAL;
+    solver->iterations = iter;
+    solver->degenerate_pivots = st ? st->degenerate_count : 0;
+    tableau_compute_solution(tab);
+    solver->obj_value = tab->obj_value * solver->model->obj_sense + solver->model->obj_offset;
+    return P2_ZONE_RETURN_OPTIMAL;
+}
 
 /* ── Zone 1: Pre-iteration ─────────────────────────────────────────── */
 
@@ -84,15 +213,7 @@ P2ZoneResult p2_zone_pricing(SimplexSolver *solver,
             return P2_ZONE_RETURN_FAIL;
         }
         if (confirm > 0) {
-            /* Optimal - remove perturbation and finalize */
-            primal_remove_perturbation(tab);
-            solver->current_phase = SIMPLEX_PHASE_OPTIMAL;
-            solver->status = RALPH_STATUS_OPTIMAL;
-            solver->iterations = iter;
-            solver->degenerate_pivots = st->degenerate_count;
-            tableau_compute_solution(tab);
-            solver->obj_value = tab->obj_value * solver->model->obj_sense + solver->model->obj_offset;
-            return P2_ZONE_RETURN_OPTIMAL;
+            return p2_finalize_optimal(solver, tab, st, iter);
         }
     }
 
@@ -139,8 +260,12 @@ P2ZoneResult p2_zone_ratio(SimplexSolver *solver,
         }
         if (refactor_rc == 0) {
             tableau_compute_solution(tab);
-            tableau_compute_reduced_costs(tab);
-            if (solver->pricing_strategy == 4) heap_build(tab);
+            if (solver->pricing_strategy == 3) {
+                tableau_compute_duals(tab);
+            } else {
+                tableau_compute_reduced_costs(tab);
+                if (solver->pricing_strategy == 4) heap_build(tab);
+            }
 
             /* Re-price: the entering variable may no longer be eligible */
             t_ratio_ms = lp_telemetry_timer_start();
@@ -158,15 +283,7 @@ P2ZoneResult p2_zone_ratio(SimplexSolver *solver,
                     return P2_ZONE_RETURN_FAIL;
                 }
                 if (confirm > 0) {
-                    /* Actually optimal after refactorization */
-                    primal_remove_perturbation(tab);
-                    solver->current_phase = SIMPLEX_PHASE_OPTIMAL;
-                    solver->status = RALPH_STATUS_OPTIMAL;
-                    solver->iterations = iter;
-                    solver->degenerate_pivots = st->degenerate_count;
-                    tableau_compute_solution(tab);
-                    solver->obj_value = tab->obj_value * solver->model->obj_sense + solver->model->obj_offset;
-                    return P2_ZONE_RETURN_OPTIMAL;
+                    return p2_finalize_optimal(solver, tab, st, iter);
                 }
             }
 
@@ -180,6 +297,37 @@ P2ZoneResult p2_zone_ratio(SimplexSolver *solver,
                                                              &st->theta);
             {
                 lp_telemetry_record_ratio_timed(solver, 2, t_ratio_ms);
+            }
+        }
+
+        if (st->ratio_status != 0) {
+            if (st->use_bland) {
+                int excluded[P2_RATIO_ALT_ENTERING_LIMIT];
+                int excluded_count = 0;
+                int alt_entering = -1;
+
+                excluded[excluded_count++] = st->entering;
+                while (excluded_count < P2_RATIO_ALT_ENTERING_LIMIT &&
+                       pricing_bland_excluding_set(tab,
+                                                   excluded,
+                                                   excluded_count,
+                                                   &alt_entering) == 0) {
+                    st->entering = alt_entering;
+                    t_ratio_ms = lp_telemetry_timer_start();
+                    st->ratio_status = primal_ratio_test_with_policy(solver,
+                                                                     tab,
+                                                                     st->use_bland,
+                                                                     st->entering,
+                                                                     &st->leaving,
+                                                                     &st->theta);
+                    {
+                        lp_telemetry_record_ratio_timed(solver, 2, t_ratio_ms);
+                    }
+                    if (st->ratio_status == 0) {
+                        break;
+                    }
+                    excluded[excluded_count++] = alt_entering;
+                }
             }
         }
 
@@ -300,6 +448,7 @@ P2ZoneResult p2_zone_pre_pivot(SimplexSolver *solver,
         st->degenerate_count = 0;
         if (st->use_bland && st->non_degen_streak >= P2_NON_DEGEN_THRESHOLD) {
             st->use_bland = 0;
+            p2_reset_devex_reference(tab);
             if (solver->telemetry_enabled) {
                 solver->telemetry.perf_phase2_bland_exit_episodes++;
             }
@@ -742,7 +891,7 @@ P2ZoneResult p2_zone_post_pivot(SimplexSolver *solver,
      * active but making negligible progress (O(2^n) worst case).
      * Independent of the degeneracy counter — triggered by objective stagnation. */
     {
-    double obj_tol_p2 = 1e-4 * (1.0 + fabs(st->last_obj));
+    double obj_tol_p2 = fmax(1e-9, 10.0 * RALPH_OPT_TOL);
     double obj_change_p2 = fabs(tab->obj_value - st->last_obj);
     if (obj_change_p2 < obj_tol_p2) {
         st->stall_count++;

@@ -1042,6 +1042,43 @@ static void test_glpk_bfcp_btf_solves_cleanly(void) {
     ralph_test_free(model);
 }
 
+static void test_free_variable_primal_solution_reconstruction(void) {
+    RalphModel *model = ralph_test_create();
+    double x[1] = {0.0};
+
+    ASSERT_TRUE(model != NULL, "free-var: model created");
+    if (!model) return;
+
+    ralph_test_set_obj_sense(model, RALPH_MINIMIZE);
+    ralph_test_set_int_param(model, "detect_special", 0);
+    ralph_test_set_int_param(model, "presolve", 0);
+    ASSERT_INT_EQ(ralph_test_add_var(model, -RALPH_INFINITY, RALPH_INFINITY,
+                                     1.0, RALPH_CONTINUOUS),
+                  0,
+                  "free-var: add unrestricted variable");
+    {
+        int idx[] = {0};
+        double val[] = {1.0};
+        ASSERT_INT_EQ(ralph_test_add_constraint(model, 1, idx, val,
+                                                RALPH_EQUAL, -3.0),
+                      0,
+                      "free-var: add equality fixing negative value");
+    }
+
+    ASSERT_INT_EQ(ralph_test_optimize_lp(model), 0,
+                  "free-var: LP optimize succeeds");
+    ASSERT_INT_EQ((int)ralph_test_get_status(model), (int)RALPH_STATUS_OPTIMAL,
+                  "free-var: status optimal");
+    ASSERT_INT_EQ(ralph_test_get_solution(model, x), 0,
+                  "free-var: solution available");
+    ASSERT_TRUE(fabs(x[0] + 3.0) < 1e-7,
+                "free-var: reconstructed solution is original variable value");
+    ASSERT_TRUE(fabs(ralph_test_get_objval(model) + 3.0) < 1e-7,
+                "free-var: objective uses reconstructed original variable");
+
+    ralph_test_free(model);
+}
+
 int main(void) {
     printf("=== LP Algorithm API Tests ===\n");
 
@@ -1059,6 +1096,7 @@ int main(void) {
     test_glpk_basis_bib_reports_not_available();
     test_glpk_bfcp_btf_solves_cleanly();
     test_glpk_bfcp_unsupported_extra_control_reports_not_available();
+    test_free_variable_primal_solution_reconstruction();
 
     printf("Passed %d/%d tests\n", tests_passed, tests_run);
     return (tests_passed == tests_run) ? 0 : 1;

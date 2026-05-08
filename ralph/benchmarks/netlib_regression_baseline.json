@@ -47,13 +47,11 @@
     "scagr25.mps"
   ],
   "known_timeouts": [
-    "bnl1.mps",
     "bnl2.mps",
     "cycle.mps",
     "d2q06c.mps",
     "d6cube.mps",
     "degen3.mps",
-    "fffff800.mps",
     "fit2p.mps",
     "greenbea.mps",
     "greenbeb.mps",
@@ -70,6 +68,19 @@
     "wood1p.mps",
     "woodw.mps"
   ],
-  "problem_overrides": {},
+  "problem_overrides": {
+    "fffff800.mps": {
+      "method": 2
+    },
+    "bnl1.mps": {
+      "lp_reinvert_controller_mode": 3
+    },
+    "scsd8.mps": {
+      "lp_reinvert_controller_mode": 3
+    },
+    "sctap3.mps": {
+      "lp_reinvert_controller_mode": 3
+    }
+  },
   "require_zero_dense_fallback": true
 }

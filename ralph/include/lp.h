@@ -34,7 +34,7 @@ extern "C" {
 
 /* Numerical stabilization policy defaults */
 #define RALPH_FORCE_REFACTOR_PIVOT_TOL 1e-4
-#define RALPH_LU_UPDATE_PIVOT_THRESHOLD 1e-4
+#define RALPH_LU_UPDATE_PIVOT_THRESHOLD 1e-5
 #define RALPH_LU_GROWTH_REFACTOR_THRESHOLD 1e8
 #define RALPH_PHASE1_REPEAT_REFACTOR_TRIGGER 3
 #define RALPH_PHASE1_FAIL_REPEAT_LIMIT 20
@@ -119,6 +119,7 @@ typedef enum {
     LU_FAIL_SINGULAR_UPDATE,
     LU_FAIL_UPDATE_PIVOT_TOO_SMALL,
     LU_FAIL_SPIKE_POOL_FULL,
+    LU_FAIL_DENSE_SPIKE_REJECT,
     LU_FAIL_ETA_ALLOC,
     LU_FAIL_FACTOR_SINGULAR,
     LU_FAIL_FACTOR_ALLOC
@@ -328,6 +329,7 @@ typedef struct {
     int update_fail_singular_update;
     int update_fail_update_pivot_too_small;
     int update_fail_spike_pool_full;
+    int update_fail_dense_spike_reject;
     int update_fail_eta_alloc;
 
     /* Sparse factorization stage timing telemetry (aggregate + last call) */
@@ -646,8 +648,9 @@ typedef struct {
     struct SimplexSolver *owner;   /* Owning solver (NULL when detached) */
 
     /* Extended problem (with slacks) */
-    int n;                  /* Total variables (structural + slack) */
+    int n;                  /* Total variables (structural + split + slack) */
     int m;                  /* Number of constraints */
+    int num_structural_ext; /* Original structural columns plus generated split columns */
     SparseMatrix *A_ext;    /* Extended constraint matrix */
     SparseMatrix *basis_work; /* Reusable CSC workspace for basis extraction */
     int *basis_col_cache;   /* Basis-position -> A_ext column id from last basis build */
@@ -657,6 +660,8 @@ typedef struct {
     double *c_ext;          /* Extended objective */
     double *lb_ext;         /* Extended lower bounds */
     double *ub_ext;         /* Extended upper bounds */
+    int *free_split_col;    /* Original var -> generated negative-part column, or -1 */
+    int *free_split_orig;   /* Generated split column -> original var, or -1 */
 
     /* Basis information */
     int *basis;             /* Indices of basic variables (size m) */
@@ -744,7 +749,7 @@ typedef struct {
     int csr_use_scatter;    /* 1 if row-scatter is enabled (sparse enough to benefit) */
 
     /* Auxiliary variable mapping (for cut generation) */
-    int *aux_row;           /* For each aux var j >= num_vars: which constraint row */
+    int *aux_row;           /* For each aux var j >= num_structural_ext: which constraint row */
     double *aux_coef;       /* For each aux var: coefficient in that row (+1 or -1) */
     int num_aux;            /* Number of auxiliary variables */
 
@@ -780,6 +785,9 @@ typedef struct {
     /* Pre-allocated sparse workspace for reduced cost computation */
     int *cb_sparse_idx;     /* Sparse indices for c_B (size m) */
     double *cb_sparse_val;  /* Sparse values for c_B (size m) */
+
+    /* Pre-allocated backup for primal simplex pivot rollback */
+    double *primal_basic_x_backup; /* size m */
 
     /* Pre-allocated backup arrays for dual_simplex_pivot rollback (B2 fix) */
     double *dual_x_backup;          /* size n */
@@ -2080,6 +2088,7 @@ typedef struct {
     int update_fail_singular_update;
     int update_fail_update_pivot_too_small;
     int update_fail_spike_pool_full;
+    int update_fail_dense_spike_reject;
     int update_fail_eta_alloc;
 
     int sn_calls;
@@ -2273,6 +2282,7 @@ const char* lp_model_get_name(const LPModel *model);
 LUFactorization* lu_create(int m);
 void lu_free(LUFactorization *lu);
 LUFailureReason lu_factorize(LUFactorization *lu, const SparseMatrix *B);
+LUFailureReason lu_factorize_sparse_no_dense(LUFactorization *lu, const SparseMatrix *B);
 void lu_apply_backend_policy(LUFactorization *lu, int backend_policy);
 LUFailureReason lu_factorize_sparse(LUFactorization *lu, const SparseMatrix *B);  /* Sparse with Markowitz */
 LUFailureReason lu_factorize_dense(LUFactorization *lu, const SparseMatrix *B);   /* Dense fallback */

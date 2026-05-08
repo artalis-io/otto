@@ -60,6 +60,8 @@
 #define PHASE1_DIR_STABILIZE_FORCE_RATIO_BASE 100.0
 #define PHASE1_DIR_STABILIZE_FORCE_RATIO_COOLDOWN 1000.0
 #define PHASE1_DIR_STABILIZE_MODERATE_RATIO_MAX 30.0
+#define PHASE1_DIR_STABILIZE_SAFE_ACCEPT_RATIO_MAX PHASE1_DIR_STABILIZE_FORCE_RATIO_BASE
+#define PHASE1_DIR_STABILIZE_SAFE_PIVOT_RATIO_MIN 1e-4
 #define PHASE1_DIR_SKIP_RC_ONLY_MIN_M 700
 #define PHASE1_DIR_SKIP_RC_ONLY_MIN_N 2000
 #define PHASE1_DIR_SKIP_RC_ONLY_MIN_DEGEN 20
@@ -858,6 +860,19 @@ int lp_refactor_policy_phase1_dir_stabilize_should_defer_moderate(
     if (dir_inf_ratio > PHASE1_DIR_STABILIZE_MODERATE_RATIO_MAX) return 0;
     if (pending_repeat) return 0;
     return 1;
+}
+
+int lp_refactor_policy_phase1_dir_stabilize_accept_scaled_pivot(
+    double dir_inf_ratio,
+    double pivot_ratio,
+    int lu_health_triggered,
+    int lu_hard_triggered,
+    int force_extreme_triggered) {
+    if (!(dir_inf_ratio > 0.0)) return 0;
+    if (!(pivot_ratio > 0.0)) return 0;
+    if (lu_health_triggered || lu_hard_triggered || force_extreme_triggered) return 0;
+    if (dir_inf_ratio > PHASE1_DIR_STABILIZE_SAFE_ACCEPT_RATIO_MAX) return 0;
+    return pivot_ratio > PHASE1_DIR_STABILIZE_SAFE_PIVOT_RATIO_MIN;
 }
 
 int lp_refactor_policy_phase1_small_pivot_refactor_allowed(int force_refactor,

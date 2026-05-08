@@ -32,9 +32,25 @@ int is_artificial_var(const SimplexTableau *tab, int var_idx) {
     return 0;
 }
 
+int artificial_var_row(const SimplexTableau *tab, int var_idx) {
+    if (!tab || !tab->A_ext || var_idx < 0 || var_idx >= tab->n ||
+        !is_artificial_var(tab, var_idx)) {
+        return -1;
+    }
+    for (int p = tab->A_ext->colptr[var_idx];
+         p < tab->A_ext->colptr[var_idx + 1];
+         p++) {
+        if (fabs(tab->A_ext->values[p] - 1.0) <= RALPH_ZERO_TOL) {
+            return tab->A_ext->rowidx[p];
+        }
+    }
+    return -1;
+}
+
 /* Mark basic rows backed by artificial variables as redundant hints for LU.
- * If only_infeasible is non-zero, only rows with bound-infeasible basic
- * artificials are marked. */
+ * A basic artificial proves row redundancy only after Phase 1 has driven that
+ * artificial to zero. A positive artificial is evidence of remaining Phase 1
+ * infeasibility, not permission to zero the row. */
 int mark_basic_artificial_rows_redundant(SimplexTableau *tab, int only_infeasible) {
     if (!tab || !tab->redundant_rows) {
         return 0;
@@ -42,19 +58,16 @@ int mark_basic_artificial_rows_redundant(SimplexTableau *tab, int only_infeasibl
 
     int marked = 0;
     for (int k = 0; k < tab->m; k++) {
-        if (tab->redundant_rows[k]) continue;
-
         int bj = tab->basis[k];
         if (!is_artificial_var(tab, bj)) continue;
+        int row = artificial_var_row(tab, bj);
+        if (row < 0 || row >= tab->m) continue;
+        if (tab->redundant_rows[row]) continue;
 
-        if (only_infeasible) {
-            if (tab->x[bj] >= tab->lb_ext[bj] - RALPH_FEAS_TOL &&
-                tab->x[bj] <= tab->ub_ext[bj] + RALPH_FEAS_TOL) {
-                continue;
-            }
-        }
+        (void)only_infeasible;
+        if (fabs(tab->x[bj]) > RALPH_FEAS_TOL) continue;
 
-        tab->redundant_rows[k] = 1;
+        tab->redundant_rows[row] = 1;
         tab->num_redundant++;
         marked++;
     }
@@ -88,11 +101,9 @@ void primal_apply_perturbation(SimplexTableau *tab) {
 
     /* Apply perturbations to bounds only.
      * Non-basic variable x values stay at their current (original) bound values.
-     * This widens the feasible region so basic variables have positive slack.
-     * Note: Do NOT update x values here - that would change the RHS and
-     * potentially worsen numerical stability. The key insight is that
-     * for the ratio test, only basic variable slacks matter, and those
-     * are computed from (x_j - lb_j) where x_j is unchanged and lb_j is now lower. */
+     * This widens the feasible region without changing the current RHS. Primal
+     * ratio tests must therefore compute the entering bound-flip distance from
+     * the current non-basic x value, not from the widened lower/upper range. */
     for (int j = 0; j < n; j++) {
         /* In Phase 1, keep artificial bounds exact.
          * Perturbing artificials changes the feasibility objective geometry and

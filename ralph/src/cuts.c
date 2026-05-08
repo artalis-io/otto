@@ -474,6 +474,10 @@ static Cut* generate_gmi_cut_from_row(MIPSolver *solver,
                     printf("[GMI-row]   Adding to cut: x%d with coef %.6f\n", j, final_coef);
                 }
                 cut_coefs[j] += final_coef;
+            } else if (tab->free_split_orig && j < tab->num_structural_ext &&
+                       tab->free_split_orig[j] >= 0 &&
+                       tab->free_split_orig[j] < num_orig) {
+                cut_coefs[tab->free_split_orig[j]] -= final_coef;
             } else {
                 /* Auxiliary variable (slack/surplus): substitute using constraint row
                  *
@@ -488,7 +492,7 @@ static Cut* generate_gmi_cut_from_row(MIPSolver *solver,
                  * So: add -alpha * aux_coef * a_k to x_k coefficient
                  *     subtract alpha * aux_coef * b from RHS
                  */
-                int aux_idx = j - num_orig;
+                int aux_idx = j - tab->num_structural_ext;
                 if (aux_idx >= 0 && aux_idx < tab->num_aux && tab->aux_row && tab->aux_coef) {
                     int con_row = tab->aux_row[aux_idx];
                     double aux_c = tab->aux_coef[aux_idx];
@@ -883,9 +887,13 @@ static int cmir_extract_source_row(
                  * Rearrange: sum_NB a_ij x_j <= beta
                  */
                 row_coefs[j] += a_ij;
+            } else if (tab->free_split_orig && j < tab->num_structural_ext &&
+                       tab->free_split_orig[j] >= 0 &&
+                       tab->free_split_orig[j] < num_orig) {
+                row_coefs[tab->free_split_orig[j]] -= a_ij;
             } else {
                 /* Slack variable: substitute using constraint mapping */
-                int aux_idx = j - num_orig;
+                int aux_idx = j - tab->num_structural_ext;
                 if (aux_idx >= 0 && aux_idx < tab->num_aux &&
                     tab->aux_row && tab->aux_coef) {
                     int con_row = tab->aux_row[aux_idx];

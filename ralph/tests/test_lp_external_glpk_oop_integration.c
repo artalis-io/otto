@@ -122,6 +122,44 @@ static void test_dual_external_route(void) {
     ralph_test_free(model);
 }
 
+static void test_column_order_roundtrip(void) {
+    RalphModel *model = ralph_test_create();
+    double x[12];
+
+    ASSERT_TRUE(model != NULL, "integration/column-order: model created");
+    if (!model) return;
+
+    memset(x, 0, sizeof(x));
+    ralph_test_set_obj_sense(model, RALPH_MINIMIZE);
+    ralph_test_set_int_param(model, "detect_special", 0);
+    ralph_test_set_int_param(model, "presolve", 0);
+    for (int j = 0; j < 12; j++) {
+        ralph_test_add_var(model, 0.0, RALPH_INFINITY, (double)(j + 1), RALPH_CONTINUOUS);
+    }
+    for (int j = 0; j < 12; j++) {
+        int idx[] = {j};
+        double val[] = {1.0};
+        ralph_test_add_constraint(model, 1, idx, val, RALPH_EQUAL, (double)(j + 1));
+    }
+
+    ASSERT_INT_EQ(configure_external_glpk(model, (int)RALPH_LP_ALGORITHM_PRIMAL_SIMPLEX_EXTERNAL),
+                  0,
+                  "integration/column-order: configure external primal");
+    ASSERT_INT_EQ(ralph_test_optimize_lp(model), 0,
+                  "integration/column-order: solve succeeds");
+    ASSERT_INT_EQ((int)ralph_test_get_status(model), (int)RALPH_STATUS_OPTIMAL,
+                  "integration/column-order: status optimal");
+    ASSERT_INT_EQ(ralph_test_get_solution(model, x), 0,
+                  "integration/column-order: primal solution available");
+    for (int j = 0; j < 12; j++) {
+        char msg[96];
+        snprintf(msg, sizeof(msg), "integration/column-order: x[%d]", j);
+        ASSERT_DBL_CLOSE(x[j], (double)(j + 1), 1e-9, msg);
+    }
+
+    ralph_test_free(model);
+}
+
 static void test_infeasible_mapping(void) {
     RalphModel *model = ralph_test_create();
     ASSERT_TRUE(model != NULL, "integration/infeasible: model created");
@@ -190,6 +228,7 @@ int main(void) {
 
     test_optimal_duals_and_rc();
     test_dual_external_route();
+    test_column_order_roundtrip();
     test_infeasible_mapping();
     test_unbounded_mapping();
 

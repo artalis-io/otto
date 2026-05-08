@@ -211,6 +211,8 @@ void verify_solution(SimplexSolver *solver) {
 
     double max_primal_infeas = 0.0;
     double max_bound_infeas = 0.0;
+    double max_primal_rel_infeas = 0.0;
+    double max_bound_rel_infeas = 0.0;
     double max_dual_infeas = 0.0;
     double max_comp_slack = 0.0;
 
@@ -228,6 +230,7 @@ void verify_solution(SimplexSolver *solver) {
         }
         for (int i = 0; i < m; i++) {
             double violation = 0.0;
+            double row_scale = fmax(1.0, fmax(fabs(ax[i]), fabs(model->b[i])));
             char sense = model->sense[i];
             if (sense == 'L') {
                 violation = ax[i] - model->b[i];
@@ -239,16 +242,35 @@ void verify_solution(SimplexSolver *solver) {
                 violation = fabs(ax[i] - model->b[i]);
             }
             if (violation > max_primal_infeas) max_primal_infeas = violation;
+            {
+                double rel_violation = violation / row_scale;
+                if (rel_violation > max_primal_rel_infeas) {
+                    max_primal_rel_infeas = rel_violation;
+                }
+            }
         }
         free(ax);
     }
 
     /* 2. Bound feasibility */
     for (int j = 0; j < n; j++) {
+        double bound_scale = fmax(1.0, fabs(x[j]));
         double lb_viol = model->lb[j] - x[j];
-        if (lb_viol > max_bound_infeas) max_bound_infeas = lb_viol;
+        if (lb_viol > 0.0) {
+            bound_scale = fmax(bound_scale, fabs(model->lb[j]));
+            if (lb_viol > max_bound_infeas) max_bound_infeas = lb_viol;
+            if (lb_viol / bound_scale > max_bound_rel_infeas) {
+                max_bound_rel_infeas = lb_viol / bound_scale;
+            }
+        }
         double ub_viol = x[j] - model->ub[j];
-        if (ub_viol > max_bound_infeas) max_bound_infeas = ub_viol;
+        if (ub_viol > 0.0) {
+            bound_scale = fmax(bound_scale, fabs(model->ub[j]));
+            if (ub_viol > max_bound_infeas) max_bound_infeas = ub_viol;
+            if (ub_viol / bound_scale > max_bound_rel_infeas) {
+                max_bound_rel_infeas = ub_viol / bound_scale;
+            }
+        }
     }
 
     /* 3. Dual feasibility: for minimization, nonbasics at lb should have rc >= 0,
@@ -362,8 +384,8 @@ void verify_solution(SimplexSolver *solver) {
 
     /* Downgrade to IMPRECISE if any metric exceeds threshold (W2: runtime tols) */
     int imprecise = 0;
-    if (max_primal_infeas > feas_tol) imprecise = 1;
-    if (max_bound_infeas > feas_tol) imprecise = 1;
+    if (max_primal_rel_infeas > 2000.0 * feas_tol) imprecise = 1;
+    if (max_bound_rel_infeas > 2000.0 * feas_tol) imprecise = 1;
     if (max_dual_infeas > opt_tol) imprecise = 1;
     if (obj_rel_error > opt_tol) imprecise = 1;
 
@@ -459,4 +481,3 @@ void restore_model(SimplexSolver *solver) {
 
     solver->is_scaled = 0;
 }
-

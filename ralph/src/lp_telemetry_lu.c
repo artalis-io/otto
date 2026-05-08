@@ -112,6 +112,7 @@ void lp_telemetry_reset_lu(LUFactorization *lu) {
     lu->telemetry.update_fail_singular_update = 0;
     lu->telemetry.update_fail_update_pivot_too_small = 0;
     lu->telemetry.update_fail_spike_pool_full = 0;
+    lu->telemetry.update_fail_dense_spike_reject = 0;
     lu->telemetry.update_fail_eta_alloc = 0;
     lu->telemetry.perf_factorize_calls = 0;
     lu->telemetry.perf_last_basis_nnz = 0;
@@ -361,6 +362,7 @@ void lp_telemetry_snapshot_lu(const LUFactorization *lu,
     COPY_LU_TELEM_FIELD(update_fail_singular_update);
     COPY_LU_TELEM_FIELD(update_fail_update_pivot_too_small);
     COPY_LU_TELEM_FIELD(update_fail_spike_pool_full);
+    COPY_LU_TELEM_FIELD(update_fail_dense_spike_reject);
     COPY_LU_TELEM_FIELD(update_fail_eta_alloc);
 
     COPY_LU_FIELD(sn_calls);

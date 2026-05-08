@@ -40,6 +40,7 @@ enum {
 /* Pivot-fail recovery exclusion thresholds */
 #define PHASE1_PIVOT_FAIL_RECOVERY_EXCLUDE_TRIGGER 2
 #define PHASE1_PIVOT_FAIL_RECOVERY_EXCLUDE_ITERS RALPH_PHASE1_ENTERING_EXCLUDE_ITERS
+#define PHASE1_ENTERING_EXCLUSION_POOL_SIZE 16
 
 /* No-pivot ladder step decisions */
 enum {
@@ -108,11 +109,16 @@ typedef struct {
     int ratio_breakdown_last_entering;
     int ratio_breakdown_same_entering_streak;
 
-    /* Entering exclusion (2 slots) */
+    /* Entering exclusion.
+     *
+     * The first two slots are retained for existing telemetry/logging; the
+     * pool is the authoritative Phase 1 numerical tabu set. */
     int excluded_entering_a;
     int excluded_entering_ttl_a;
     int excluded_entering_b;
     int excluded_entering_ttl_b;
+    int excluded_entering_pool[PHASE1_ENTERING_EXCLUSION_POOL_SIZE];
+    int excluded_entering_pool_ttl[PHASE1_ENTERING_EXCLUSION_POOL_SIZE];
 
     /* Failed stabilize retry */
     int last_failed_stabilize_entering;
@@ -278,10 +284,13 @@ void p1_numerical_record_extreme_direction(SimplexSolver *solver,
 
 /* ── Basis repair: entering exclusion ─────────────────────────────── */
 
-/* Exclude an entering variable from pricing for ttl iterations (2-slot TTL). */
+/* Exclude an entering variable from pricing for ttl iterations. */
 void p1_basis_exclude_entering(SimplexSolver *solver,
                                int var, int ttl,
                                P1BasisRepairState *bs);
+int p1_basis_is_entering_excluded(const P1BasisRepairState *bs, int var);
+void p1_basis_tick_entering_exclusions(P1BasisRepairState *bs);
+void p1_basis_clear_entering_exclusions(P1BasisRepairState *bs);
 
 /* Conditionally exclude entering after repeated pivot failures. */
 void p1_basis_pivot_fail_maybe_exclude(SimplexSolver *solver,

@@ -84,6 +84,17 @@ int simplex_smcp_excl_skip_var(const SimplexTableau *tab, int j) {
     int smcp_shift = 1;
     double tol_bnd = 1e-7;
     if (!tab || j < 0 || j >= tab->n) return 0;
+    if (tab->model && tab->free_split_col && tab->free_split_orig) {
+        int mate = -1;
+        if (j < tab->model->num_vars) {
+            mate = tab->free_split_col[j];
+        } else if (j < tab->num_structural_ext) {
+            mate = tab->free_split_orig[j];
+        }
+        if (mate >= 0 && mate < tab->n && tab->var_status[mate] == RALPH_BASIC) {
+            return 1;
+        }
+    }
     if (tab->owner) {
         smcp_excl = tab->owner->smcp_excl;
         smcp_shift = tab->owner->smcp_shift;
@@ -241,6 +252,8 @@ static int tableau_alloc_arrays(SimplexTableau *tab, int num_aux_vars, int num_a
     size_t arena_size =
         /* double arrays: c_ext, lb_ext, ub_ext (n each) */
         3 * (size_t)n * sizeof(double) +
+        /* int arrays: free split mappings (n each) */
+        2 * (size_t)n * sizeof(int) +
         /* double arrays: x, rc, se_weights, work3 (n each) */
         4 * (size_t)n * sizeof(double) +
         /* double arrays: y, work1, work2, work4, rhs, row_sign, pivot_row, tau_work (m each) */
@@ -266,10 +279,12 @@ static int tableau_alloc_arrays(SimplexTableau *tab, int num_aux_vars, int num_a
         (size_t)n * sizeof(int) +
         /* int arrays: heap, heap_pos for heap pricing (n each) */
         2 * (size_t)n * sizeof(int) +
+        /* primal pivot rollback: basic x(m dbl) */
+        (size_t)m * sizeof(double) +
         /* dual pivot backup: x(n dbl), rc(n dbl), basis(m int), basis_pos(n int), status(n VarStatus) */
         2 * (size_t)n * sizeof(double) + (size_t)m * sizeof(int) + (size_t)n * sizeof(int) + (size_t)n * sizeof(VarStatus) +
-        /* Alignment padding (37 allocations * 8 bytes) */
-        296;
+        /* Alignment padding (38 allocations * 8 bytes) */
+        304;
 
     /* Create arena */
     tab->arena = sh_arena_create(arena_size);
@@ -281,6 +296,10 @@ static int tableau_alloc_arrays(SimplexTableau *tab, int num_aux_vars, int num_a
     tab->c_ext = (double*)sh_arena_calloc(tab->arena, n, sizeof(double));
     tab->lb_ext = (double*)sh_arena_calloc(tab->arena, n, sizeof(double));
     tab->ub_ext = (double*)sh_arena_calloc(tab->arena, n, sizeof(double));
+    tab->free_split_col = (int*)sh_arena_alloc(tab->arena, n * sizeof(int));
+    tab->free_split_orig = (int*)sh_arena_alloc(tab->arena, n * sizeof(int));
+    if (tab->free_split_col) memset(tab->free_split_col, -1, n * sizeof(int));
+    if (tab->free_split_orig) memset(tab->free_split_orig, -1, n * sizeof(int));
 
     tab->basis = (int*)sh_arena_alloc(tab->arena, m * sizeof(int));
     tab->nonbasis = (int*)sh_arena_alloc(tab->arena, (n - m) * sizeof(int));
@@ -352,6 +371,7 @@ static int tableau_alloc_arrays(SimplexTableau *tab, int num_aux_vars, int num_a
     if (tab->heap_pos) memset(tab->heap_pos, -1, n * sizeof(int));
 
     /* Pre-allocated backup arrays for dual_simplex_pivot rollback (B2 fix) */
+    tab->primal_basic_x_backup = (double*)sh_arena_alloc(tab->arena, m * sizeof(double));
     tab->dual_x_backup = (double*)sh_arena_alloc(tab->arena, n * sizeof(double));
     tab->dual_rc_backup = (double*)sh_arena_alloc(tab->arena, n * sizeof(double));
     tab->dual_basis_backup = (int*)sh_arena_alloc(tab->arena, m * sizeof(int));
@@ -360,6 +380,7 @@ static int tableau_alloc_arrays(SimplexTableau *tab, int num_aux_vars, int num_a
 
     /* Single check for all allocations */
     if (!tab->c_ext || !tab->lb_ext || !tab->ub_ext ||
+        !tab->free_split_col || !tab->free_split_orig ||
         !tab->basis || !tab->nonbasis || !tab->var_status || !tab->basis_pos ||
         !tab->basis_col_cache || !tab->basis_col_nnz_cache ||
         !tab->x || !tab->y || !tab->rc ||
@@ -370,6 +391,7 @@ static int tableau_alloc_arrays(SimplexTableau *tab, int num_aux_vars, int num_a
         !tab->c_original || (num_artificial > 0 && !tab->artificial_vars) ||
         !tab->redundant_rows || !tab->dse_weights || !tab->flip_list ||
         !tab->heap || !tab->heap_pos ||
+        !tab->primal_basic_x_backup ||
         !tab->dual_x_backup || !tab->dual_rc_backup ||
         !tab->dual_basis_backup || !tab->dual_basis_pos_backup || !tab->dual_status_backup) {
         return -1;
@@ -432,6 +454,14 @@ static SimplexTableau* tableau_create_ex(LPModel *model, int force_two_phase, in
         return NULL;
     }
 
+    int num_free_splits = 0; /* One generated negative-part column per unrestricted var */
+    for (int j = 0; j < model->num_vars; j++) {
+        if (model->lb[j] <= -0.5 * RALPH_INFINITY &&
+            model->ub[j] >= 0.5 * RALPH_INFINITY) {
+            num_free_splits++;
+        }
+    }
+
     int num_aux_vars = 0;  /* Count slack + surplus + artificial */
     int num_artificial = 0;  /* Count artificial variables only */
     int num_equalities = 0;  /* Count equality constraints */
@@ -467,7 +497,8 @@ static SimplexTableau* tableau_create_ex(LPModel *model, int force_two_phase, in
         }
     }
 
-    tab->n = model->num_vars + num_aux_vars;
+    tab->num_structural_ext = model->num_vars + num_free_splits;
+    tab->n = tab->num_structural_ext + num_aux_vars;
     tab->num_aux = num_aux_vars;
     tab->num_equalities = num_equalities;
 
@@ -488,9 +519,15 @@ static SimplexTableau* tableau_create_ex(LPModel *model, int force_two_phase, in
         return NULL;
     }
 
-    /* Copy structural variable data */
+    int next_split_col = model->num_vars;
+
+    /* Copy structural variable data. Unrestricted variables are represented
+     * internally as x = x_pos - x_neg with both generated columns >= 0. This
+     * keeps the primal tableau finite without changing the public model. */
     for (int j = 0; j < model->num_vars; j++) {
         double orig_cost = model->c[j] * model->obj_sense;  /* Convert to minimization */
+        int is_free = (model->lb[j] <= -0.5 * RALPH_INFINITY &&
+                       model->ub[j] >= 0.5 * RALPH_INFINITY);
         tab->c_original[j] = orig_cost;
         if (use_two_phase) {
             /* Phase 1 objective: structural variables have zero cost */
@@ -498,13 +535,22 @@ static SimplexTableau* tableau_create_ex(LPModel *model, int force_two_phase, in
         } else {
             tab->c_ext[j] = orig_cost;
         }
-        tab->lb_ext[j] = model->lb[j];
-        tab->ub_ext[j] = model->ub[j];
+        tab->lb_ext[j] = is_free ? 0.0 : model->lb[j];
+        tab->ub_ext[j] = is_free ? RALPH_INFINITY : model->ub[j];
+        if (is_free) {
+            int split_col = next_split_col++;
+            tab->free_split_col[j] = split_col;
+            tab->free_split_orig[split_col] = j;
+            tab->c_original[split_col] = -orig_cost;
+            tab->c_ext[split_col] = use_two_phase ? 0.0 : -orig_cost;
+            tab->lb_ext[split_col] = 0.0;
+            tab->ub_ext[split_col] = RALPH_INFINITY;
+        }
     }
 
     /* Build extended constraint matrix with slacks/surplus/artificial */
     SparseTriplets *trips = triplets_create(tab->m, tab->n,
-                                            model->A->nnz + num_aux_vars);
+                                            model->A->nnz * (num_free_splits > 0 ? 2 : 1) + num_aux_vars);
     if (!trips) {
         free(norm_sense);
         free(norm_sign);
@@ -518,6 +564,10 @@ static SimplexTableau* tableau_create_ex(LPModel *model, int force_two_phase, in
             int row = model->A->rowidx[p];
             double val = model->A->values[p] * norm_sign[row];
             triplets_add(trips, row, j, val);
+            int split_col = tab->free_split_col[j];
+            if (split_col >= 0) {
+                triplets_add(trips, row, split_col, -val);
+            }
         }
     }
 
@@ -545,10 +595,11 @@ static SimplexTableau* tableau_create_ex(LPModel *model, int force_two_phase, in
             return NULL;
         }
         for (int j = 0; j < model->num_vars; j++) {
+            double xj0 = (tab->free_split_col[j] >= 0) ? 0.0 : model->lb[j];
             for (int p = model->A->colptr[j]; p < model->A->colptr[j + 1]; p++) {
                 int row = model->A->rowidx[p];
                 double val = model->A->values[p] * norm_sign[row];
-                ax_initial[row] += val * model->lb[j];
+                ax_initial[row] += val * xj0;
             }
         }
     }
@@ -557,7 +608,7 @@ static SimplexTableau* tableau_create_ex(LPModel *model, int force_two_phase, in
      * Artificial variable costs are 1.0 (Phase 1 objective).
      * For dual_mode: no artificials — one aux per constraint with zero cost. */
     double artificial_cost = 1.0;
-    int aux_idx = model->num_vars;
+    int aux_idx = tab->num_structural_ext;
     int aux_map_idx = 0;  /* Index into aux_row/aux_coef arrays */
     int art_idx = 0;  /* Index into artificial_vars array */
     for (int i = 0; i < model->num_cons; i++) {
@@ -654,7 +705,7 @@ static SimplexTableau* tableau_create_ex(LPModel *model, int force_two_phase, in
 
     /* Store original costs for auxiliary variables (for Phase 2 transition).
      * Slack/surplus have zero cost, artificials have cost 1.0 (Phase 1 objective). */
-    for (int j = model->num_vars; j < tab->n; j++) {
+    for (int j = tab->num_structural_ext; j < tab->n; j++) {
         /* Check if this is an artificial variable */
         int is_artificial = 0;
         for (int k = 0; k < tab->num_artificial; k++) {
@@ -769,7 +820,7 @@ static SimplexTableau* tableau_create_ex(LPModel *model, int force_two_phase, in
         double val = tab->rhs[i];
 
         /* Subtract A[i,j] * x[j] for nonbasic structural variables j */
-        for (int j = 0; j < model->num_vars; j++) {
+        for (int j = 0; j < tab->num_structural_ext; j++) {
             if (tab->var_status[j] != RALPH_BASIC && fabs(tab->x[j]) > RALPH_ZERO_TOL) {
                 /* Get A[i,j] from sparse matrix */
                 for (int p = tab->A_ext->colptr[j]; p < tab->A_ext->colptr[j + 1]; p++) {
@@ -977,6 +1028,8 @@ void tableau_free(SimplexTableau *tab) {
     tab->c_ext = NULL;
     tab->lb_ext = NULL;
     tab->ub_ext = NULL;
+    tab->free_split_col = NULL;
+    tab->free_split_orig = NULL;
     tab->basis = NULL;
     tab->nonbasis = NULL;
     tab->var_status = NULL;
@@ -1003,6 +1056,7 @@ void tableau_free(SimplexTableau *tab) {
     tab->aux_coef = NULL;
     tab->partial_candidates = NULL;
     tab->redundant_rows = NULL;
+    tab->primal_basic_x_backup = NULL;
     tab->dual_x_backup = NULL;
     tab->dual_rc_backup = NULL;
     tab->dual_basis_backup = NULL;
@@ -1321,18 +1375,25 @@ full_rebuild_basis:
 int repair_singular_basis(SimplexTableau *tab) {
     int m = tab->m;
     int n = tab->n;
-    int num_struct = tab->model->num_vars;
+    int num_struct = tab->num_structural_ext;
     int repairs = 0;
     const int MAX_REPAIRS = 100;
+    const int sparse_only_repair = (m >= 700);
 
     /* Build a copy of the basis for analysis */
     SparseMatrix *B = build_basis_matrix(tab);
     if (!B) return -1;
 
+    if (sparse_only_repair) {
+        goto crash_basis_repair;
+    }
+
     /* Strategy 1: Try swapping structural variables with any non-basic slack */
     for (int attempt = 0; attempt < MAX_REPAIRS && repairs < MAX_REPAIRS; attempt++) {
         /* Try factorization */
-        int status = lu_factorize(tab->lu, B);
+        int status = sparse_only_repair
+            ? lu_factorize_sparse_no_dense(tab->lu, B)
+            : lu_factorize(tab->lu, B);
         if (status == 0) {
             return 0;  /* Success */
         }
@@ -1376,7 +1437,9 @@ int repair_singular_basis(SimplexTableau *tab) {
                 if (!B) return -1;
 
                 /* Test if this improved things */
-                int test_status = lu_factorize(tab->lu, B);
+                int test_status = sparse_only_repair
+                    ? lu_factorize_sparse_no_dense(tab->lu, B)
+                    : lu_factorize(tab->lu, B);
                 if (test_status == 0) {
                     return 0;  /* Success */
                 }
@@ -1390,6 +1453,7 @@ int repair_singular_basis(SimplexTableau *tab) {
     }
 
     /* Strategy 2: Crash basis - try to use all slacks */
+crash_basis_repair:
     /* Reset basis to logical basis (all slacks where possible) */
     for (int k = 0; k < m; k++) {
         int old_j = tab->basis[k];
@@ -1423,9 +1487,193 @@ int repair_singular_basis(SimplexTableau *tab) {
     B = build_basis_matrix(tab);
     if (!B) return -1;
 
-    int status = lu_factorize(tab->lu, B);
+    int status = sparse_only_repair
+        ? lu_factorize_sparse_no_dense(tab->lu, B)
+        : lu_factorize(tab->lu, B);
 
     return status;
+}
+
+static void column_to_dense(const SimplexTableau *tab, int col, double *out) {
+    vec_set_zero(out, tab->m);
+    if (!tab || !tab->A_ext || col < 0 || col >= tab->A_ext->ncols) return;
+    for (int p = tab->A_ext->colptr[col]; p < tab->A_ext->colptr[col + 1]; p++) {
+        out[tab->A_ext->rowidx[p]] = tab->A_ext->values[p];
+    }
+}
+
+static int transition_column_independent(double *q,
+                                         int m,
+                                         int rank,
+                                         const double *col,
+                                         double *work) {
+    double norm0 = 0.0;
+    for (int i = 0; i < m; i++) {
+        work[i] = col[i];
+        norm0 += work[i] * work[i];
+    }
+    norm0 = sqrt(norm0);
+    if (norm0 <= RALPH_PIVOT_TOL) return 0;
+
+    for (int r = 0; r < rank; r++) {
+        double dot = 0.0;
+        double *qr = q + (size_t)r * (size_t)m;
+        for (int i = 0; i < m; i++) dot += work[i] * qr[i];
+        for (int i = 0; i < m; i++) work[i] -= dot * qr[i];
+    }
+
+    double norm = 0.0;
+    for (int i = 0; i < m; i++) norm += work[i] * work[i];
+    norm = sqrt(norm);
+    if (norm <= fmax(1e-10, 1e-9 * norm0)) {
+        return 0;
+    }
+
+    double *qnew = q + (size_t)rank * (size_t)m;
+    for (int i = 0; i < m; i++) {
+        qnew[i] = work[i] / norm;
+    }
+    return 1;
+}
+
+static int transition_rebasis_without_artificials(SimplexSolver *solver) {
+    SimplexTableau *tab = solver ? solver->tableau : NULL;
+    if (!tab || !tab->A_ext || tab->num_artificial <= 0) return -1;
+
+    int m = tab->m;
+    int n = tab->n;
+    int *saved_basis = (int*)malloc((size_t)m * sizeof(int));
+    int *saved_basis_pos = (int*)malloc((size_t)n * sizeof(int));
+    VarStatus *saved_status = (VarStatus*)malloc((size_t)n * sizeof(VarStatus));
+    double *saved_x = (double*)malloc((size_t)n * sizeof(double));
+    int *selected = (int*)malloc((size_t)m * sizeof(int));
+    int *used = (int*)calloc((size_t)n, sizeof(int));
+    double *q = (double*)calloc((size_t)m * (size_t)m, sizeof(double));
+    double *col = (double*)malloc((size_t)m * sizeof(double));
+    double *work = (double*)malloc((size_t)m * sizeof(double));
+    if (!saved_basis || !saved_basis_pos || !saved_status || !saved_x ||
+        !selected || !used || !q || !col || !work) {
+        free(saved_basis); free(saved_basis_pos); free(saved_status); free(saved_x);
+        free(selected); free(used); free(q); free(col); free(work);
+        return -1;
+    }
+
+    memcpy(saved_basis, tab->basis, (size_t)m * sizeof(int));
+    memcpy(saved_basis_pos, tab->basis_pos, (size_t)n * sizeof(int));
+    memcpy(saved_status, tab->var_status, (size_t)n * sizeof(VarStatus));
+    memcpy(saved_x, tab->x, (size_t)n * sizeof(double));
+
+    int rank = 0;
+    for (int k = 0; k < m; k++) {
+        int j = saved_basis[k];
+        if (is_artificial_var(tab, j)) continue;
+        column_to_dense(tab, j, col);
+        if (transition_column_independent(q, m, rank, col, work)) {
+            selected[rank++] = j;
+            used[j] = 1;
+        }
+    }
+
+    for (int j = 0; j < n && rank < m; j++) {
+        if (used[j]) continue;
+        if (is_artificial_var(tab, j)) continue;
+        if (tab->var_status[j] == RALPH_FIXED) continue;
+        column_to_dense(tab, j, col);
+        if (transition_column_independent(q, m, rank, col, work)) {
+            selected[rank++] = j;
+            used[j] = 1;
+        }
+    }
+
+    if (rank < m) {
+        if (solver && solver->trace_phase1) {
+            LP_LOG_STDERR("[phase1_trace] transition_rebasis rank_short rank=%d m=%d\n", rank, m);
+        }
+        goto fail;
+    }
+
+    for (int j = 0; j < n; j++) {
+        tab->basis_pos[j] = -1;
+        if (is_artificial_var(tab, j)) {
+            tab->var_status[j] = RALPH_FIXED;
+            tab->x[j] = 0.0;
+        } else if (used[j]) {
+            tab->var_status[j] = RALPH_BASIC;
+        } else {
+            if (tab->var_status[j] == RALPH_NONBASIC_UPPER) {
+                tab->x[j] = tab->ub_ext[j];
+            } else {
+                tab->var_status[j] = RALPH_NONBASIC_LOWER;
+                tab->x[j] = tab->lb_ext[j];
+            }
+        }
+    }
+    for (int k = 0; k < m; k++) {
+        int j = selected[k];
+        tab->basis[k] = j;
+        tab->basis_pos[j] = k;
+        tab->var_status[j] = RALPH_BASIC;
+    }
+    tab->basis_cache_valid = 0;
+    tab->basis_cache_total_nnz = 0;
+
+    if (tableau_refactorize_with_reason(tab, RALPH_REFACTOR_REASON_PHASE_TRANSITION) != 0) {
+        goto fail;
+    }
+    tableau_compute_solution(tab);
+
+    double max_basic_violation = 0.0;
+    int worst_basic = -1;
+    for (int k = 0; k < m; k++) {
+        int j = tab->basis[k];
+        double viol = 0.0;
+        if (tab->x[j] < tab->lb_ext[j]) {
+            viol = tab->lb_ext[j] - tab->x[j];
+        } else if (tab->x[j] > tab->ub_ext[j]) {
+            viol = tab->x[j] - tab->ub_ext[j];
+        }
+        if (viol > max_basic_violation) {
+            max_basic_violation = viol;
+            worst_basic = j;
+        }
+        if (viol > 1e-4) {
+            if (solver && solver->trace_phase1) {
+                LP_LOG_STDERR("[phase1_trace] transition_rebasis infeasible max_basic=%.17g worst=%d rank=%d\n",
+                        max_basic_violation, worst_basic, rank);
+            }
+            goto fail;
+        }
+    }
+    for (int k = 0; k < tab->num_artificial; k++) {
+        int j = tab->artificial_vars[k];
+        if (tab->var_status[j] == RALPH_BASIC || fabs(tab->x[j]) > RALPH_FEAS_TOL) {
+            if (solver && solver->trace_phase1) {
+                LP_LOG_STDERR("[phase1_trace] transition_rebasis artificial_alive var=%d x=%.17g basic=%d rank=%d\n",
+                        j, tab->x[j], tab->var_status[j] == RALPH_BASIC, rank);
+            }
+            goto fail;
+        }
+    }
+
+    if (solver && solver->trace_phase1) {
+        LP_LOG_STDERR("[phase1_trace] transition_rebasis accepted rank=%d max_basic=%.17g\n",
+                rank, max_basic_violation);
+    }
+
+    free(saved_basis); free(saved_basis_pos); free(saved_status); free(saved_x);
+    free(selected); free(used); free(q); free(col); free(work);
+    return 0;
+
+fail:
+    memcpy(tab->basis, saved_basis, (size_t)m * sizeof(int));
+    memcpy(tab->basis_pos, saved_basis_pos, (size_t)n * sizeof(int));
+    memcpy(tab->var_status, saved_status, (size_t)n * sizeof(VarStatus));
+    memcpy(tab->x, saved_x, (size_t)n * sizeof(double));
+    tab->basis_cache_valid = 0;
+    tab->basis_cache_total_nnz = 0;
+    free(saved_basis); free(saved_basis_pos); free(saved_status); free(saved_x);
+    free(selected); free(used); free(q); free(col); free(work);
+    return -1;
 }
 
 int tableau_refactorize(SimplexTableau *tab) {
@@ -1435,11 +1683,11 @@ int tableau_refactorize(SimplexTableau *tab) {
     int updates_before = (tab && tab->lu) ? lu_get_num_updates(tab->lu) : 0;
     lp_telemetry_begin_refactor(owner, &reason);
 
-    /* When Phase 2 has stuck artificials on redundant rows, move them to
-     * the FIRST basis positions so LU processes their identity columns first.
-     * This prevents partial pivoting from consuming the redundant rows
-     * for structural columns before the artificial columns need them. */
-    if (tab->phase == 2 && tab->num_redundant > 0 && tab->num_artificial > 0) {
+    /* Legacy zeroed-row Phase 2 bases need artificial identity columns first.
+     * With original rows preserved, do not reorder around unproven redundant
+     * rows. */
+    if (tab->phase == 2 && tab->num_redundant > 0 &&
+        tab->redundant_rows_zeroed && tab->num_artificial > 0) {
         int next_pos = 0;
         for (int k = 0; k < tab->num_artificial && next_pos < tab->m; k++) {
             int art_j = tab->artificial_vars[k];
@@ -1462,14 +1710,19 @@ int tableau_refactorize(SimplexTableau *tab) {
 
     /* Pass redundant row hints and regularization config to LU.
      * Phase 1: many artificial variables create near-singular bases.
-     * Phase 2 with redundant rows: always allow (even after zeroing A_ext).
-     * After zeroing, the sparse LU may still encounter zero pivots at zeroed
-     * rows if its column ordering doesn't process artificials first. */
+     * Phase 2: only permit redundant-row regularization if those rows have
+     * actually been zeroed into explicit artificial identities.  When Phase 2
+     * preserves original rows, regularizing those rows changes the linear
+     * system being solved and can certify a solution that violates the
+     * original constraints. */
     {
         int allow = 0;
         int reg_limit = 0;
-        if (tab->use_two_phase && (tab->phase == 1 ||
-            (tab->phase == 2 && tab->num_redundant > 0))) {
+        if (tab->use_two_phase && ((tab->phase == 1 &&
+             tab->num_redundant > 0) ||
+            (tab->phase == 2 &&
+             tab->num_redundant > 0 &&
+             tab->redundant_rows_zeroed))) {
             allow = 1;
             reg_limit = RALPH_PHASE1_MAX_REGULARIZATIONS;
             if (tab->num_redundant > reg_limit) {
@@ -1483,11 +1736,11 @@ int tableau_refactorize(SimplexTableau *tab) {
                                     tab->redundant_rows, tab->num_redundant);
     }
 
-    /* When Phase 2 has redundant rows (not yet zeroed), relax pivot tolerance
-     * to accept small but valid structural pivots. After zeroing, use normal
-     * tolerance since the basis is well-conditioned. */
+    /* The old zeroed-row Phase 2 path used a relaxed tolerance for redundant
+     * row identities.  With original rows preserved, use the normal tolerance:
+     * accepting tiny pivots here risks solving a numerically different basis. */
     double saved_tol = lu_get_pivot_tol(tab->lu);
-    if (tab->phase == 2 && tab->num_redundant > 0 && !tab->redundant_rows_zeroed) {
+    if (tab->phase == 2 && tab->num_redundant > 0 && tab->redundant_rows_zeroed) {
         lu_set_pivot_tol(tab->lu, 1e-15);
     }
 
@@ -1798,7 +2051,7 @@ int simplex_pivot(SimplexTableau *tab,
     const double *work2 = tab->work2;
     double step = theta * dir;
     double gamma_e = 0.0;
-
+    double obj_delta = 0.0;
     if (tab->trace_phase1_enabled) {
         tab->trace_last_entering = entering;
         tab->trace_last_leaving_pos = leaving_pos;
@@ -1814,17 +2067,27 @@ int simplex_pivot(SimplexTableau *tab,
         }
     }
 
+    double *x_basic_backup = tab->primal_basic_x_backup;
+    if (!x_basic_backup) return -1;
+    for (int k = 0; k < tab->m; k++) {
+        x_basic_backup[k] = x[basis[k]];
+    }
+
     /* Update entering variable */
     if (tab->var_status[entering] == RALPH_NONBASIC_LOWER) {
         x[entering] += theta;
     } else {
         x[entering] -= theta;
     }
+    obj_delta += tab->c_ext[entering] * (x[entering] - x_enter_old);
 
     /* Update basic variables and accumulate ||d_entering||^2 in one pass. */
     for (int k = 0; k < tab->m; k++) {
         double dk = work2[k];
-        x[basis[k]] -= step * dk;
+        int basic_var = basis[k];
+        double dx = -step * dk;
+        x[basic_var] += dx;
+        obj_delta += tab->c_ext[basic_var] * dx;
         gamma_e += dk * dk;
     }
 
@@ -1837,6 +2100,9 @@ int simplex_pivot(SimplexTableau *tab,
             tab->var_status[entering] = RALPH_NONBASIC_LOWER;
             tab->x[entering] = tab->lb_ext[entering];
         }
+        obj_delta += tab->c_ext[entering] * (tab->x[entering] - x_enter_old -
+                                             step);
+        tab->obj_value += obj_delta;
         /* Status changed → heap score changed; re-sift to correct position */
         if (tab->pricing_strategy == 4) heap_update(tab, entering);
         return 0;
@@ -1858,9 +2124,11 @@ int simplex_pivot(SimplexTableau *tab,
     /* Leaving goes to appropriate bound */
     if (tab->work2[leaving_pos] * dir > 0) {
         tab->var_status[leaving] = RALPH_NONBASIC_LOWER;
+        obj_delta += tab->c_ext[leaving] * (tab->lb_ext[leaving] - x[leaving]);
         x[leaving] = tab->lb_ext[leaving];
     } else {
         tab->var_status[leaving] = RALPH_NONBASIC_UPPER;
+        obj_delta += tab->c_ext[leaving] * (tab->ub_ext[leaving] - x[leaving]);
         x[leaving] = tab->ub_ext[leaving];
     }
 
@@ -2054,6 +2322,7 @@ int simplex_pivot(SimplexTableau *tab,
     }
 
 basis_update_done:
+    tab->obj_value += obj_delta;
 
     /* Update steepest edge pricing weights
      *
@@ -2225,6 +2494,9 @@ pivot_fail_rollback:
     tab->basis_pos[entering] = -1;
     tab->var_status[leaving] = RALPH_BASIC;
     tab->var_status[entering] = entering_old_status;
+    for (int k = 0; k < tab->m; k++) {
+        tab->x[tab->basis[k]] = x_basic_backup[k];
+    }
     tab->x[entering] = x_enter_old;
     tab->x[leaving] = x_leave_old;
     tab->duals_valid = 0;
@@ -2294,7 +2566,7 @@ SimplexSolver* simplex_create(LPModel *model) {
     solver->unbounded_valid = 0;
     lp_refactor_policy_config_defaults(&solver->refactor_config);
     solver->policy.basis_governor_mode = LP_BASIS_GOV_MODE_OFF;
-    solver->policy.reinvert_controller_mode = LP_REINVERT_MODE_SHADOW;
+    solver->policy.reinvert_controller_mode = LP_REINVERT_MODE_CONTROL_ALL;
     lp_basis_governor_set_mode(&solver->policy.basis_governor,
                                solver->policy.basis_governor_mode);
     solver->policy.soft_lu_cost_gate_enabled = 1;
@@ -2512,6 +2784,18 @@ void extract_unbounded_ray(SimplexSolver *solver, int entering, double dir) {
  * Phase 1: Minimize sum of artificial variables.
  * Returns 0 if feasible (all artificials driven to zero), -1 if infeasible.
  */
+static double simplex_phase1_artificial_sum(const SimplexTableau *tab) {
+    double art_sum = 0.0;
+
+    if (!tab || !tab->x || !tab->artificial_vars) return RALPH_INFINITY;
+    for (int k = 0; k < tab->num_artificial; k++) {
+        int j = tab->artificial_vars[k];
+        if (j < 0 || j >= tab->n) return RALPH_INFINITY;
+        art_sum += fabs(tab->x[j]);
+    }
+    return art_sum;
+}
+
 static int simplex_phase1(SimplexSolver *solver) {
     solver->current_phase = SIMPLEX_PHASE_1;
     SimplexTableau *tab = solver->tableau;
@@ -2651,11 +2935,7 @@ static int simplex_phase1(SimplexSolver *solver) {
     tableau_compute_solution(tab);
 
     /* Check if we're already feasible (all artificials at zero) */
-    double art_sum = 0.0;
-    for (int k = 0; k < tab->num_artificial; k++) {
-        int j = tab->artificial_vars[k];
-        art_sum += fabs(tab->x[j]);
-    }
+    double art_sum = simplex_phase1_artificial_sum(tab);
 
     if (art_sum < RALPH_FEAS_TOL) {
         if (solver->verbose) {
@@ -2701,8 +2981,43 @@ static int simplex_phase1(SimplexSolver *solver) {
     for (int iter = 0; iter < solver->max_iterations; iter++) {
         tab->iterations = iter;
         tab->trace_phase1_iter = iter;
+        if (solver->trace_phase1 && (iter == 0 || (iter % 1000) == 0)) {
+            double trace_art_sum = 0.0;
+            double trace_art_max = 0.0;
+            int trace_art_basic = 0;
+            for (int kk = 0; kk < tab->num_artificial; kk++) {
+                int aj = tab->artificial_vars[kk];
+                double abs_x = fabs(tab->x[aj]);
+                trace_art_sum += abs_x;
+                if (abs_x > trace_art_max) trace_art_max = abs_x;
+                if (tab->var_status[aj] == RALPH_BASIC) trace_art_basic++;
+            }
+            LP_LOG_STDERR("[phase1_trace] iter=%d obj=%.17g art_sum=%.17g art_max=%.17g art_basic=%d pivots=%d no_pivot=%d refactors=%d\n",
+                          iter,
+                          tab->obj_value,
+                          trace_art_sum,
+                          trace_art_max,
+                          trace_art_basic,
+                          solver->telemetry.perf_phase1_pivot_calls,
+                          solver->telemetry.perf_phase1_no_pivot_events,
+                          solver->telemetry.perf_phase1_refactor_calls);
+        }
         if (lp_run_user_callbacks(solver, tab, RALPH_LP_PROGRESS_PHASE_1, iter, 0, 1) != 0) {
             primal_remove_perturbation(tab);
+            if (tableau_refactorize_with_reason(
+                    tab, RALPH_REFACTOR_REASON_INFEASIBILITY_CLEANUP) == 0) {
+                tab->phase1_compute_solution_context =
+                    LP_PHASE1_COMPUTE_CTX_NO_ENTERING_CLEANUP;
+                tab->phase1_compute_rc_context =
+                    LP_PHASE1_COMPUTE_CTX_NO_ENTERING_CLEANUP;
+                tableau_compute_solution(tab);
+                tableau_compute_reduced_costs(tab);
+                if (simplex_phase1_artificial_sum(tab) <= RALPH_FEAS_TOL) {
+                    solver->iterations = iter;
+                    phase1_trace_emit_summary(solver, RALPH_STATUS_OPTIMAL);
+                    return 0;
+                }
+            }
             solver->status = RALPH_STATUS_TIME_LIMIT;
             solver->iterations = iter;
             phase1_trace_emit_summary(solver, RALPH_STATUS_TIME_LIMIT);
@@ -2881,7 +3196,7 @@ static int simplex_transition_phase2(SimplexSolver *solver) {
             double best_coef = 0.0;
 
             /* Pass 1: Structural variables (prefer these) */
-            for (int j = 0; j < tab->model->num_vars && !found_replacement; j++) {
+            for (int j = 0; j < tab->num_structural_ext && !found_replacement; j++) {
                 if (tab->var_status[j] == RALPH_BASIC) continue;
                 if (tab->var_status[j] == RALPH_FIXED) continue;
 
@@ -2902,7 +3217,7 @@ static int simplex_transition_phase2(SimplexSolver *solver) {
 
             /* Pass 2: Slack variables (if no good structural found) */
             if (!found_replacement) {
-                for (int j = tab->model->num_vars; j < tab->n; j++) {
+                for (int j = tab->num_structural_ext; j < tab->n; j++) {
                     /* Skip artificial variables */
                     int is_artificial = 0;
                     for (int kk = 0; kk < tab->num_artificial; kk++) {
@@ -2974,13 +3289,23 @@ static int simplex_transition_phase2(SimplexSolver *solver) {
                 art_in_basis, art_stuck, tab->num_redundant);
     }
 
+    if (art_stuck > 0) {
+        if (transition_rebasis_without_artificials(solver) == 0) {
+            art_stuck = 0;
+            art_in_basis = 0;
+            memset(tab->redundant_rows, 0, tab->m * sizeof(int));
+            tab->num_redundant = 0;
+            if (solver->verbose) {
+                LP_LOG_STDERR("[simplex_transition] Rebuilt full-rank Phase 2 basis without artificial columns\n");
+            }
+        }
+    }
+
     /* Handle all artificial variables for Phase 2:
      * - Non-basic: fix at [0,0] (FIXED status)
-     * - Basic (stuck): set cost=0, bounds=[0,0]. The artificial stays in
-     *   basis at value 0. Fixing bounds to [0,0] ensures the ratio test
-     *   treats it as a degenerate variable that blocks unbounded steps
-     *   (prevents spurious UNBOUNDED from regularized LU giving non-zero
-     *   FTRAN values in redundant rows). */
+     * - Basic (stuck): set cost=0, bounds=[0,0]. The following Phase 2
+     *   feasibility check rejects the transition if the preserved original
+     *   rows require any stuck artificial to become nonzero. */
     for (int k = 0; k < tab->num_artificial; k++) {
         int art_j = tab->artificial_vars[k];
         tab->lb_ext[art_j] = 0.0;
@@ -2992,66 +3317,12 @@ static int simplex_transition_phase2(SimplexSolver *solver) {
         }
     }
 
-    /* Zero redundant rows in A_ext and RHS.
-     * Stuck artificials indicate truly redundant constraints (linearly dependent
-     * on other constraints). By zeroing the row in A_ext (except the artificial's
-     * own 1.0 coefficient) and zeroing the RHS, we make the basis well-conditioned:
-     *   - Artificial column has identity-like structure: 1.0 at its row, 0 elsewhere
-     *   - All other columns have 0 at redundant rows
-     * This eliminates the need for LU regularization and prevents garbage values
-     * in FTRAN/BTRAN results for redundant row positions. */
-    if (tab->num_redundant > 0) {
-        /* Build a quick lookup for artificial variable columns */
-        int *is_art_col = (int*)calloc(tab->n, sizeof(int));
-        if (is_art_col) {
-            for (int k = 0; k < tab->num_artificial; k++) {
-                is_art_col[tab->artificial_vars[k]] = 1;
-            }
+    /* Preserve original constraint rows through Phase 2. A stuck artificial
+     * at zero is not, by itself, a certificate that the corresponding row is
+     * linearly redundant; zeroing such rows can change the feasible region. */
+    tab->redundant_rows_zeroed = 0;
 
-            /* Zero redundant rows in A_ext for non-artificial columns */
-            for (int j = 0; j < tab->n; j++) {
-                if (is_art_col[j]) continue;  /* Keep artificial 1.0 entries */
-                for (int p = tab->A_ext->colptr[j]; p < tab->A_ext->colptr[j + 1]; p++) {
-                    int row = tab->A_ext->rowidx[p];
-                    if (tab->redundant_rows[row]) {
-                        tab->A_ext->values[p] = 0.0;
-                    }
-                }
-            }
-
-            free(is_art_col);
-        }
-
-        /* Zero RHS for redundant rows */
-        for (int i = 0; i < tab->m; i++) {
-            if (tab->redundant_rows[i]) {
-                tab->rhs[i] = 0.0;
-            }
-        }
-
-        if (solver->verbose) {
-            LP_LOG_STDERR("[simplex_transition] Zeroed %d redundant rows in A_ext and RHS\n",
-                    tab->num_redundant);
-        }
-
-        /* Mark that redundant rows have been zeroed. This tells tableau_refactorize
-         * to skip the relaxed pivot tolerance (which would corrupt non-zeroed rows).
-         * Regularization is still allowed — if the sparse LU processes columns out
-         * of order, it may need to regularize a zeroed row, which is correct
-         * (diagonal=1.0 encodes "x_art = 0" for the artificial at that row). */
-        tab->redundant_rows_zeroed = 1;
-
-        /* Invalidate LU symbolic analysis cache. The A_ext values changed (zeroed
-         * rows) but the CSC structure didn't, so the fingerprint would still match.
-         * Without invalidation, the sparse LU reuses a stale elimination order. */
-        lu_invalidate_symbolic_cache(tab->lu);
-        tab->basis_cache_valid = 0;
-        tab->basis_cache_total_nnz = 0;
-    }
-
-    /* Refactorize basis for Phase 2.
-     * With redundant rows zeroed in A_ext, stuck artificial columns provide
-     * identity-like structure that makes the basis well-conditioned. */
+    /* Refactorize basis for Phase 2 with original rows preserved. */
     if (tableau_refactorize_with_reason(tab, RALPH_REFACTOR_REASON_PHASE_TRANSITION) != 0) {
         if (solver->verbose) {
             LP_LOG_STDERR("[simplex_transition] Refactorization failed, attempting basis repair...\n");
@@ -3123,8 +3394,7 @@ static int simplex_phase2(SimplexSolver *solver) {
     tab->phase = 2;
 
     /* For two-phase problems, force early refactorization to reset numerical
-     * state after the transition. Redundant rows were zeroed in A_ext during
-     * the transition, so the basis matrix is now well-conditioned. */
+     * state after the transition. */
     if (tab->use_two_phase) {
         lu_force_refactorization(tab->lu);
         {
@@ -3152,6 +3422,19 @@ static int simplex_phase2(SimplexSolver *solver) {
 
     /* Compute initial solution for Phase 2 */
     tableau_compute_solution(tab);
+    if (tab->use_two_phase && tab->num_artificial > 0) {
+        double art_max = 0.0;
+        for (int k = 0; k < tab->num_artificial; k++) {
+            int art_j = tab->artificial_vars[k];
+            double ax = fabs(tab->x[art_j]);
+            if (ax > art_max) art_max = ax;
+        }
+        if (art_max > RALPH_FEAS_TOL) {
+            solver->status = RALPH_STATUS_ERROR;
+            solver->iterations = 0;
+            return -1;
+        }
+    }
 
     st.last_obj = tab->obj_value;
     st.last_entering = -1;
@@ -3495,6 +3778,7 @@ static SimplexTableau *tableau_clone_with_augmented_rows(SimplexSolver *solver,
     dst->model = model;
     dst->m = src->m + num_rows;
     dst->n = src->n + extra_aux;
+    dst->num_structural_ext = src->num_structural_ext;
     dst->num_aux = src->num_aux + extra_aux;
     dst->num_equalities = src->num_equalities + extra_eq;
     dst->use_two_phase = (src->use_two_phase || extra_art > 0) ? 1 : 0;
@@ -3506,6 +3790,8 @@ static SimplexTableau *tableau_clone_with_augmented_rows(SimplexSolver *solver,
 
     memcpy(dst->lb_ext, src->lb_ext, (size_t)src->n * sizeof(double));
     memcpy(dst->ub_ext, src->ub_ext, (size_t)src->n * sizeof(double));
+    memcpy(dst->free_split_col, src->free_split_col, (size_t)src->n * sizeof(int));
+    memcpy(dst->free_split_orig, src->free_split_orig, (size_t)src->n * sizeof(int));
     memcpy(dst->c_original, src->c_original, (size_t)src->n * sizeof(double));
     memcpy(dst->rhs, src->rhs, (size_t)src->m * sizeof(double));
     memcpy(dst->row_sign, src->row_sign, (size_t)src->m * sizeof(double));
@@ -3568,6 +3854,13 @@ static SimplexTableau *tableau_clone_with_augmented_rows(SimplexSolver *solver,
             double value = rows[i].values[k] * row_sign;
             if (fabs(value) <= RALPH_ZERO_TOL) continue;
             if (triplets_add(trips, row_idx, col, value) != 0) {
+                triplets_free(trips);
+                tableau_free(dst);
+                return NULL;
+            }
+            int split_col = dst->free_split_col[col];
+            if (split_col >= 0 &&
+                triplets_add(trips, row_idx, split_col, -value) != 0) {
                 triplets_free(trips);
                 tableau_free(dst);
                 return NULL;
@@ -4008,7 +4301,12 @@ static int simplex_finish_prepared_primal_solve(SimplexSolver *solver, clock_t s
     if (solver->status == RALPH_STATUS_OPTIMAL) {
         double true_obj = 0.0;
         for (int j = 0; j < solver->model->num_vars; j++) {
-            true_obj += tab->c_ext[j] * tab->x[j];
+            double xj = tab->x[j];
+            int split_col = tab->free_split_col ? tab->free_split_col[j] : -1;
+            if (split_col >= 0) {
+                xj -= tab->x[split_col];
+            }
+            true_obj += tab->c_ext[j] * xj;
         }
         solver->obj_value = true_obj * solver->model->obj_sense + solver->model->obj_offset;
     }
@@ -4022,6 +4320,10 @@ static int simplex_finish_prepared_primal_solve(SimplexSolver *solver, clock_t s
         if (solver->solution && solver->dual_solution && solver->reduced_costs) {
             for (int j = 0; j < solver->model->num_vars; j++) {
                 solver->solution[j] = tab->x[j];
+                int split_col = tab->free_split_col ? tab->free_split_col[j] : -1;
+                if (split_col >= 0) {
+                    solver->solution[j] -= tab->x[split_col];
+                }
                 solver->reduced_costs[j] = tab->rc[j] * solver->model->obj_sense;
             }
             for (int i = 0; i < solver->model->num_cons; i++) {
@@ -4043,6 +4345,14 @@ static int simplex_finish_prepared_primal_solve(SimplexSolver *solver, clock_t s
 
     /* Restore original model if scaling was applied */
     restore_model(solver);
+
+    if (solver->status == RALPH_STATUS_OPTIMAL && solver->solution) {
+        double true_obj = 0.0;
+        for (int j = 0; j < solver->model->num_vars; j++) {
+            true_obj += solver->model->c[j] * solver->solution[j];
+        }
+        solver->obj_value = true_obj * solver->model->obj_sense + solver->model->obj_offset;
+    }
 
     /* Post-solve verification (T2.3 + T3.6) — runs on original-space solution */
     if (solver->verify && solver->status == RALPH_STATUS_OPTIMAL) {
@@ -4169,6 +4479,13 @@ int simplex_solve(SimplexSolver *solver) {
             solver->solve_time = (double)(clock() - start) / CLOCKS_PER_SEC;
             unscale_solution(solver);
             restore_model(solver);
+            if (solver->status == RALPH_STATUS_OPTIMAL && solver->solution) {
+                double true_obj = 0.0;
+                for (int j = 0; j < solver->model->num_vars; j++) {
+                    true_obj += solver->model->c[j] * solver->solution[j];
+                }
+                solver->obj_value = true_obj * solver->model->obj_sense + solver->model->obj_offset;
+            }
 
             /* Auto mode: always verify to flag suboptimal dual solutions.
              * Dual can terminate with feasible but non-optimal basis. */

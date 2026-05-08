@@ -164,11 +164,10 @@ int crash_triangular(SimplexTableau *tab, int verbose) {
     free(row_claimed);
     free(col_used);
 
-    if (verbose && placed > 0) {
+    if (verbose) {
         LP_LOG_STDOUT("[crash] Placed %d structural columns in basis (of %d rows)\n",
                placed, m);
     }
 
     return placed;
 }
-

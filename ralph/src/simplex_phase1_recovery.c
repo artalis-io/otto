@@ -7,6 +7,8 @@
 
 #include <math.h>
 #include <limits.h>
+#include <stdlib.h>
+#include <string.h>
 #include "simplex_phase1_recovery.h"
 #include "simplex_internal.h"
 #include "lp_refactor_policy.h"
@@ -19,6 +21,79 @@
 #define PHASE1_NO_PIVOT_PROGRESS_REL_IMPROVE_MIN 1e-4
 #define PHASE1_NO_PIVOT_PROGRESS_ABS_IMPROVE_MIN 1e-8
 #define PHASE1_NO_PIVOT_LADDER_RESCUE_COOLDOWN_ITERS 16
+
+typedef struct {
+    int m;
+    int n;
+    int *basis;
+    VarStatus *var_status;
+    double *x;
+} P1TableauSnapshot;
+
+static int p1_tableau_snapshot_take(SimplexTableau *tab,
+                                     P1TableauSnapshot *snap) {
+    if (!tab || !snap) return -1;
+    memset(snap, 0, sizeof(*snap));
+    snap->m = tab->m;
+    snap->n = tab->n;
+    snap->basis = (int*)malloc((size_t)tab->m * sizeof(int));
+    snap->var_status = (VarStatus*)malloc((size_t)tab->n * sizeof(VarStatus));
+    snap->x = (double*)malloc((size_t)tab->n * sizeof(double));
+    if (!snap->basis || !snap->var_status || !snap->x) {
+        free(snap->basis);
+        free(snap->var_status);
+        free(snap->x);
+        memset(snap, 0, sizeof(*snap));
+        return -1;
+    }
+    memcpy(snap->basis, tab->basis, (size_t)tab->m * sizeof(int));
+    memcpy(snap->var_status, tab->var_status, (size_t)tab->n * sizeof(VarStatus));
+    memcpy(snap->x, tab->x, (size_t)tab->n * sizeof(double));
+    return 0;
+}
+
+static void p1_tableau_snapshot_free(P1TableauSnapshot *snap) {
+    if (!snap) return;
+    free(snap->basis);
+    free(snap->var_status);
+    free(snap->x);
+    memset(snap, 0, sizeof(*snap));
+}
+
+static int p1_tableau_snapshot_restore(SimplexTableau *tab,
+                                       P1TableauSnapshot *snap) {
+    if (!tab || !snap || !snap->basis || !snap->var_status || !snap->x) {
+        return -1;
+    }
+    if (snap->m != tab->m || snap->n != tab->n) {
+        return -1;
+    }
+
+    memcpy(tab->basis, snap->basis, (size_t)tab->m * sizeof(int));
+    memcpy(tab->var_status, snap->var_status, (size_t)tab->n * sizeof(VarStatus));
+    memcpy(tab->x, snap->x, (size_t)tab->n * sizeof(double));
+    for (int j = 0; j < tab->n; j++) {
+        tab->basis_pos[j] = -1;
+    }
+    for (int k = 0; k < tab->m; k++) {
+        int j = tab->basis[k];
+        if (j < 0 || j >= tab->n) {
+            return -1;
+        }
+        tab->basis_pos[j] = k;
+        tab->var_status[j] = RALPH_BASIC;
+    }
+    tab->duals_valid = 0;
+    tab->rc_all_valid = 0;
+    tab->basis_cache_valid = 0;
+    tab->basis_cache_total_nnz = 0;
+    if (tableau_refactorize(tab) != 0) {
+        return -1;
+    }
+    tableau_compute_solution(tab);
+    tableau_compute_reduced_costs(tab);
+    return 0;
+}
 
 void p1_recovery_init(P1RecoveryState *rs,
                       const SimplexSolver *solver,
@@ -70,6 +145,10 @@ void p1_recovery_init(P1RecoveryState *rs,
     rs->basis.excluded_entering_ttl_a = 0;
     rs->basis.excluded_entering_b = -1;
     rs->basis.excluded_entering_ttl_b = 0;
+    for (int k = 0; k < PHASE1_ENTERING_EXCLUSION_POOL_SIZE; k++) {
+        rs->basis.excluded_entering_pool[k] = -1;
+        rs->basis.excluded_entering_pool_ttl[k] = 0;
+    }
     rs->basis.last_failed_stabilize_entering = -1;
     rs->basis.failed_stabilize_same_entering_streak = 0;
     rs->basis.last_failed_stabilize_retry_alt = -1;
@@ -308,11 +387,14 @@ int p1_progress_attempt_ladder_rescue(
         !lp_glpk_strict_allow_phase1_dual_rescue(solver->glpk_strict_mode)) {
         return 0;
     }
+    P1TableauSnapshot snapshot;
+    int have_snapshot = (p1_tableau_snapshot_take(tab, &snapshot) == 0);
     int rescue_status = dual_simplex_phase1_rescue(
         solver, tab->m * RALPH_PHASE1_DUAL_RESCUE_MULT);
     ps->no_pivot_ladder_rescue_cooldown =
         PHASE1_NO_PIVOT_LADDER_RESCUE_COOLDOWN_ITERS;
     if (rescue_status == 0) {
+        if (have_snapshot) p1_tableau_snapshot_free(&snapshot);
         ps->no_pivot_ladder_rescue_fail_streak = 0;
         lp_telemetry_record_phase1_no_pivot_ladder_dual_rescue(
             solver, reason, 1);
@@ -325,10 +407,18 @@ int p1_progress_attempt_ladder_rescue(
         return 1;
     }
     if (solver->status == RALPH_STATUS_TIME_LIMIT) {
+        if (have_snapshot) p1_tableau_snapshot_free(&snapshot);
         primal_remove_perturbation(tab);
         solver->iterations = iter;
         phase1_trace_emit_summary(solver, RALPH_STATUS_TIME_LIMIT);
         return -1;
+    }
+    if (have_snapshot) {
+        if (p1_tableau_snapshot_restore(tab, &snapshot) != 0) {
+            p1_tableau_snapshot_free(&snapshot);
+            return -1;
+        }
+        p1_tableau_snapshot_free(&snapshot);
     }
     if (ps->no_pivot_ladder_rescue_fail_streak < INT_MAX) {
         (ps->no_pivot_ladder_rescue_fail_streak)++;
@@ -550,30 +640,88 @@ void p1_numerical_record_extreme_direction(SimplexSolver *solver,
  * Basis repair: entering exclusion (R3.4)
  * ======================================================================== */
 
-/* Internal 2-slot TTL exclusion logic (no telemetry). */
-static void exclude_entering_var_impl(int var, int ttl,
-                                      int *exclude_a, int *ttl_a,
-                                      int *exclude_b, int *ttl_b) {
-    if (var < 0 || ttl <= 0 || !exclude_a || !ttl_a || !exclude_b || !ttl_b) return;
+static void p1_basis_sync_exclusion_compat_slots(P1BasisRepairState *bs) {
+    int out = 0;
 
-    if (*exclude_a == var || *ttl_a <= 0) {
-        *exclude_a = var;
-        *ttl_a = ttl;
-        return;
+    if (!bs) return;
+    bs->excluded_entering_a = -1;
+    bs->excluded_entering_ttl_a = 0;
+    bs->excluded_entering_b = -1;
+    bs->excluded_entering_ttl_b = 0;
+    for (int k = 0; k < PHASE1_ENTERING_EXCLUSION_POOL_SIZE && out < 2; k++) {
+        if (bs->excluded_entering_pool_ttl[k] <= 0 ||
+            bs->excluded_entering_pool[k] < 0) {
+            continue;
+        }
+        if (out == 0) {
+            bs->excluded_entering_a = bs->excluded_entering_pool[k];
+            bs->excluded_entering_ttl_a = bs->excluded_entering_pool_ttl[k];
+        } else {
+            bs->excluded_entering_b = bs->excluded_entering_pool[k];
+            bs->excluded_entering_ttl_b = bs->excluded_entering_pool_ttl[k];
+        }
+        out++;
     }
-    if (*exclude_b == var || *ttl_b <= 0) {
-        *exclude_b = var;
-        *ttl_b = ttl;
-        return;
-    }
+}
 
-    if (*ttl_a <= *ttl_b) {
-        *exclude_a = var;
-        *ttl_a = ttl;
-    } else {
-        *exclude_b = var;
-        *ttl_b = ttl;
+int p1_basis_is_entering_excluded(const P1BasisRepairState *bs, int var) {
+    if (!bs || var < 0) return 0;
+    for (int k = 0; k < PHASE1_ENTERING_EXCLUSION_POOL_SIZE; k++) {
+        if (bs->excluded_entering_pool_ttl[k] > 0 &&
+            bs->excluded_entering_pool[k] == var) {
+            return 1;
+        }
     }
+    return 0;
+}
+
+void p1_basis_tick_entering_exclusions(P1BasisRepairState *bs) {
+    if (!bs) return;
+    for (int k = 0; k < PHASE1_ENTERING_EXCLUSION_POOL_SIZE; k++) {
+        if (bs->excluded_entering_pool_ttl[k] > 0) {
+            bs->excluded_entering_pool_ttl[k]--;
+            if (bs->excluded_entering_pool_ttl[k] == 0) {
+                bs->excluded_entering_pool[k] = -1;
+            }
+        }
+    }
+    p1_basis_sync_exclusion_compat_slots(bs);
+}
+
+void p1_basis_clear_entering_exclusions(P1BasisRepairState *bs) {
+    if (!bs) return;
+    for (int k = 0; k < PHASE1_ENTERING_EXCLUSION_POOL_SIZE; k++) {
+        bs->excluded_entering_pool[k] = -1;
+        bs->excluded_entering_pool_ttl[k] = 0;
+    }
+    p1_basis_sync_exclusion_compat_slots(bs);
+}
+
+static void p1_basis_exclude_entering_impl(int var, int ttl,
+                                           P1BasisRepairState *bs) {
+    int replace = -1;
+
+    if (!bs || var < 0 || ttl <= 0) return;
+    for (int k = 0; k < PHASE1_ENTERING_EXCLUSION_POOL_SIZE; k++) {
+        if (bs->excluded_entering_pool_ttl[k] > 0 &&
+            bs->excluded_entering_pool[k] == var) {
+            bs->excluded_entering_pool_ttl[k] = ttl;
+            p1_basis_sync_exclusion_compat_slots(bs);
+            return;
+        }
+        if (bs->excluded_entering_pool_ttl[k] <= 0) {
+            replace = k;
+            break;
+        }
+        if (replace < 0 ||
+            bs->excluded_entering_pool_ttl[k] <
+                bs->excluded_entering_pool_ttl[replace]) {
+            replace = k;
+        }
+    }
+    bs->excluded_entering_pool[replace] = var;
+    bs->excluded_entering_pool_ttl[replace] = ttl;
+    p1_basis_sync_exclusion_compat_slots(bs);
 }
 
 void p1_basis_exclude_entering(SimplexSolver *solver,
@@ -582,13 +730,10 @@ void p1_basis_exclude_entering(SimplexSolver *solver,
     int repeated_slot = 0;
 
     if (var < 0 || ttl <= 0 || !bs) return;
-    if ((bs->excluded_entering_ttl_a > 0 && bs->excluded_entering_a == var) ||
-        (bs->excluded_entering_ttl_b > 0 && bs->excluded_entering_b == var)) {
+    if (p1_basis_is_entering_excluded(bs, var)) {
         repeated_slot = 1;
     }
-    exclude_entering_var_impl(var, ttl,
-                              &bs->excluded_entering_a, &bs->excluded_entering_ttl_a,
-                              &bs->excluded_entering_b, &bs->excluded_entering_ttl_b);
+    p1_basis_exclude_entering_impl(var, ttl, bs);
     lp_telemetry_record_phase1_entering_exclusion(solver, repeated_slot);
 }
 
@@ -619,6 +764,8 @@ int p1_progress_attempt_direct_rescue(SimplexSolver *solver,
         return 0;
     }
 
+    P1TableauSnapshot snapshot;
+    int have_snapshot = (p1_tableau_snapshot_take(tab, &snapshot) == 0);
     rescue_status = dual_simplex_phase1_rescue(
         solver, tab->m * RALPH_PHASE1_DUAL_RESCUE_MULT);
     if (ps) {
@@ -626,15 +773,24 @@ int p1_progress_attempt_direct_rescue(SimplexSolver *solver,
             PHASE1_NO_PIVOT_LADDER_RESCUE_COOLDOWN_ITERS;
     }
     if (rescue_status == 0) {
+        if (have_snapshot) p1_tableau_snapshot_free(&snapshot);
         if (ps) ps->no_pivot_ladder_rescue_fail_streak = 0;
         lp_telemetry_record_phase1_direct_dual_rescue(solver, 1);
         return 1;
     }
     if (solver->status == RALPH_STATUS_TIME_LIMIT) {
+        if (have_snapshot) p1_tableau_snapshot_free(&snapshot);
         primal_remove_perturbation(tab);
         solver->iterations = iter;
         phase1_trace_emit_summary(solver, RALPH_STATUS_TIME_LIMIT);
         return -1;
+    }
+    if (have_snapshot) {
+        if (p1_tableau_snapshot_restore(tab, &snapshot) != 0) {
+            p1_tableau_snapshot_free(&snapshot);
+            return -1;
+        }
+        p1_tableau_snapshot_free(&snapshot);
     }
     if (ps && ps->no_pivot_ladder_rescue_fail_streak < INT_MAX) {
         (ps->no_pivot_ladder_rescue_fail_streak)++;

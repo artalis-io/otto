@@ -48,11 +48,31 @@ static void phase1_rescue_compute_reduced_costs(SimplexTableau *tab) {
 static void apply_bound_perturbation(SimplexTableau *tab);
 static void remove_bound_perturbation(SimplexTableau *tab);
 static void dse_init_approx(SimplexTableau *tab);
-static int phase1_rescue_ratio_test(SimplexTableau *tab, int leaving,
-                                    int *entering, double *theta);
 
 /* Forward declaration for dual feasibility function (non-static for simplex.c access) */
 int make_dual_feasible(SimplexTableau *tab, int obj_sense, int allow_bound_flip);
+
+static double dual_max_reduced_cost_violation(const SimplexTableau *tab) {
+    double max_viol = 0.0;
+
+    if (!tab) return RALPH_INFINITY;
+    for (int j = 0; j < tab->n; j++) {
+        double viol = 0.0;
+        if (tab->var_status[j] == RALPH_BASIC) continue;
+        if (tab->var_status[j] == RALPH_NONBASIC_LOWER &&
+            tab->rc[j] < -RALPH_OPT_TOL) {
+            viol = -tab->rc[j];
+        } else if (tab->var_status[j] == RALPH_NONBASIC_UPPER &&
+                   tab->rc[j] > RALPH_OPT_TOL) {
+            viol = tab->rc[j];
+        } else if (tab->var_status[j] == RALPH_NONBASIC_FREE &&
+                   fabs(tab->rc[j]) > RALPH_OPT_TOL) {
+            viol = fabs(tab->rc[j]);
+        }
+        if (viol > max_viol) max_viol = viol;
+    }
+    return max_viol;
+}
 
 static void configure_dual_tableau_for_solver(SimplexSolver *solver, SimplexTableau *tab) {
     int update_cap = 0;
@@ -819,6 +839,17 @@ static int dual_smcp_excl_skip_var(const SimplexTableau *tab, int var) {
     VarStatus st;
     if (!tab || var < 0 || var >= tab->n) return 0;
     st = tab->var_status[var];
+    if (tab->model && tab->free_split_col && tab->free_split_orig) {
+        int mate = -1;
+        if (var < tab->model->num_vars) {
+            mate = tab->free_split_col[var];
+        } else if (var < tab->num_structural_ext) {
+            mate = tab->free_split_orig[var];
+        }
+        if (mate >= 0 && mate < tab->n && tab->var_status[mate] == RALPH_BASIC) {
+            return 1;
+        }
+    }
     if (tab->owner) {
         smcp_excl = tab->owner->smcp_excl;
         smcp_shift = tab->owner->smcp_shift;
@@ -1103,6 +1134,7 @@ static int dual_ratio_test_core(SimplexTableau *tab,
 
         double rc_j = tab->rc[j];
         double ratio = RALPH_INFINITY;
+        int ratio_valid = 0;
 
         /* Dual ratio test depends on direction and variable bound status.
          *
@@ -1123,10 +1155,12 @@ static int dual_ratio_test_core(SimplexTableau *tab,
                 /* Increasing x_j from lower bound increases x_B[leaving] - good! */
                 /* x_j at lower has rc_j >= 0, alpha_j < 0, so -rc_j/alpha_j >= 0 */
                 ratio = -rc_j / alpha_j;
+                ratio_valid = 1;
             } else if (alpha_j > pivot_floor && tab->var_status[j] == RALPH_NONBASIC_UPPER) {
                 /* Decreasing x_j from upper bound increases x_B[leaving] - good! */
                 /* x_j at upper has rc_j <= 0, alpha_j > 0, so -rc_j/alpha_j >= 0 */
                 ratio = -rc_j / alpha_j;
+                ratio_valid = 1;
             }
         } else {
             /* Leaving variable needs to decrease (currently above upper bound)
@@ -1139,12 +1173,15 @@ static int dual_ratio_test_core(SimplexTableau *tab,
             if (alpha_j > pivot_floor && tab->var_status[j] == RALPH_NONBASIC_LOWER) {
                 /* Increasing x_j from lower bound decreases x_B[leaving] - good! */
                 ratio = rc_j / alpha_j;
+                ratio_valid = 1;
             } else if (alpha_j < -pivot_floor && tab->var_status[j] == RALPH_NONBASIC_UPPER) {
                 /* Decreasing x_j from upper bound decreases x_B[leaving] - good! */
                 ratio = rc_j / alpha_j;
+                ratio_valid = 1;
             }
         }
 
+        if (!ratio_valid || !isfinite(ratio)) continue;
         if (ratio < theta_floor) continue;
 
         int can_flip = prefer_flip_candidates ? dual_candidate_can_flip(tab, j) : 0;
@@ -1454,8 +1491,11 @@ int dual_ratio_test(SimplexTableau *tab, int leaving, int *entering, double *the
                               cfg.base_pivot_floor, cfg.permissive_theta_floor);
     if (rc == 0) goto dual_ratio_done;
 
-    /* Unified final fallback: row-wise rescue in the same ratio kernel. */
-    rc = phase1_rescue_ratio_test(tab, leaving, entering, theta);
+    /* Clean dual simplex must preserve dual feasibility.  The row-wise
+     * Phase-1 rescue selector does not require a globally dual-feasible basis,
+     * so using it here can corrupt the dual invariant and turn later ratio
+     * failures into false infeasibility certificates. */
+    rc = -1;
 
 dual_ratio_done:
     if (rc != 0) {
@@ -1844,12 +1884,17 @@ pivot_fail_rollback:
 /* [Phase E] dual_simplex_solve() deleted — replaced by dual_simplex_solve_v2() */
 
 /*
- * Fallback ratio test used by Phase-1 rescue when strict dual-ratio selection
- * fails for a leaving row. This mirrors the robust row-wise dual-pivot logic
- * used in primal Phase-1 recovery and does not require global dual feasibility.
+ * Repair ratio test for dual Phase-1 rescue on an existing primal Phase-1
+ * tableau.  Unlike clean dual simplex, this rescue path does not assume global
+ * dual feasibility; it only needs a numerically valid entering column that moves
+ * the selected infeasible basic variable toward its violated bound.  Keeping
+ * this selector separate prevents non-dual-preserving repair pivots from being
+ * used as infeasibility certificates in clean dual Phase 2.
  */
-static int phase1_rescue_ratio_test(SimplexTableau *tab, int leaving,
-                                    int *entering, double *theta) {
+static int dual_phase1_rescue_ratio_test(SimplexTableau *tab,
+                                         int leaving,
+                                         int *entering,
+                                         double *theta) {
     if (!tab || !entering || !theta || leaving < 0 || leaving >= tab->m) {
         return -1;
     }
@@ -1892,16 +1937,16 @@ static int phase1_rescue_ratio_test(SimplexTableau *tab, int leaving,
 
         double ratio = RALPH_INFINITY;
 
-        if (dir > 0 && alpha > RALPH_PIVOT_TOL &&
+        if (dir > 0 && alpha < -RALPH_PIVOT_TOL &&
             tab->var_status[j] == RALPH_NONBASIC_LOWER) {
             ratio = -rc / alpha;
-        } else if (dir > 0 && alpha < -RALPH_PIVOT_TOL &&
+        } else if (dir > 0 && alpha > RALPH_PIVOT_TOL &&
                    tab->var_status[j] == RALPH_NONBASIC_UPPER) {
-            ratio = rc / (-alpha);
-        } else if (dir < 0 && alpha < -RALPH_PIVOT_TOL &&
-                   tab->var_status[j] == RALPH_NONBASIC_LOWER) {
-            ratio = -rc / (-alpha);
+            ratio = -rc / alpha;
         } else if (dir < 0 && alpha > RALPH_PIVOT_TOL &&
+                   tab->var_status[j] == RALPH_NONBASIC_LOWER) {
+            ratio = rc / alpha;
+        } else if (dir < 0 && alpha < -RALPH_PIVOT_TOL &&
                    tab->var_status[j] == RALPH_NONBASIC_UPPER) {
             ratio = rc / alpha;
         }
@@ -2110,7 +2155,8 @@ int dual_simplex_phase1_rescue(SimplexSolver *solver, int max_iters) {
 
             tried_rows[candidate] = 1;
 
-            if (dual_ratio_test(tab, candidate, &entering, &theta) == 0 && entering >= 0) {
+            if (dual_phase1_rescue_ratio_test(tab, candidate, &entering, &theta) == 0 &&
+                entering >= 0) {
                 leaving = candidate;
                 break;
             } else if (entering == -2) {
@@ -2315,6 +2361,12 @@ static void apply_bound_perturbation(SimplexTableau *tab) {
         if (!is_mip && tab->lb_ext[j] > -RALPH_INFINITY / 2) {
             double eps = base * (1.0 + fabs(tab->lb_ext[j]));
             tab->lb_ext[j] -= eps * (1.0 + (j * 11) % 17);
+        }
+
+        if (tab->var_status[j] == RALPH_NONBASIC_UPPER) {
+            tab->x[j] = tab->ub_ext[j];
+        } else if (tab->var_status[j] == RALPH_NONBASIC_LOWER) {
+            tab->x[j] = tab->lb_ext[j];
         }
     }
 }
@@ -2735,6 +2787,12 @@ int dual_simplex_solve_v2(SimplexSolver *solver) {
                                                "ratio_no_entering")) {
                     continue;
                 }
+                tableau_compute_reduced_costs(tab);
+                if (dual_max_reduced_cost_violation(tab) > RALPH_OPT_TOL) {
+                    dual_perturb_state_disable(tab, &perturb_state);
+                    solver->status = RALPH_STATUS_ERROR;
+                    return -1;
+                }
                 /* No entering variable — problem is infeasible */
                 dual_perturb_state_disable(tab, &perturb_state);
                 extract_farkas_ray_dual(solver);
@@ -2773,7 +2831,6 @@ int dual_simplex_solve_v2(SimplexSolver *solver) {
                 continue;
             }
         }
-
         /* Degeneracy detection */
         if (fabs(theta) < RALPH_FEAS_TOL) {
             degenerate_count++;
@@ -2814,6 +2871,7 @@ int dual_simplex_solve_v2(SimplexSolver *solver) {
             }
         } else {
             stall_count = 0;
+            perturb_attempts = 0;
             last_obj = tab->obj_value;
         }
 
@@ -2966,7 +3024,6 @@ int dual_phase1(SimplexSolver *solver) {
     if (use_dse) dse_init_exact(tab);
 
     int max_phase1_iters = 200 * tab->m;
-    int succeeded = 0;
     int dual_refactor_base_interval = dual_refactor_base_interval_for_solver(solver);
     DualRefactorQualityState quality;
     dual_quality_init(&quality);
@@ -3059,7 +3116,6 @@ int dual_phase1(SimplexSolver *solver) {
         if (iter % 5 == 0 || iter > max_phase1_iters - 10) {
             int orig_infeas = count_orig_dual_infeas(tab, c_saved);
             if (orig_infeas == 0) {
-                succeeded = 1;
                 if (solver->verbose) {
                     LP_LOG_STDOUT("[dual_phase1] Original dual feasibility achieved at iter %d\n", iter);
                 }
@@ -3103,7 +3159,7 @@ int dual_phase1(SimplexSolver *solver) {
         }
     }
 
-    if (still_infeasible && !succeeded) {
+    if (still_infeasible) {
         if (solver->verbose) {
             LP_LOG_STDOUT("[dual_phase1] Failed to achieve dual feasibility\n");
         }

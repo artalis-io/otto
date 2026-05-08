@@ -421,6 +421,53 @@ static void test_dual_phase1_rescue_progress_gate(void) {
                 "dual phase1 rescue progress aborts after repeated stalls");
 }
 
+static void test_primal_ratio_uses_current_entering_value_for_bound_flip(void) {
+    LPModel *model = NULL;
+    SimplexSolver *solver = NULL;
+    SimplexTableau *tab = NULL;
+    int idx[1] = {0};
+    double val[1] = {1.0};
+    int leaving = -99;
+    double theta = -1.0;
+
+    model = lp_model_create();
+    ASSERT_TRUE(model != NULL, "primal ratio fixture model allocation");
+    if (!model) return;
+
+    model->obj_sense = RALPH_MINIMIZE;
+    ASSERT_TRUE(lp_model_add_var(model, 0.0, 1.0, -1.0, 'C') == 0,
+                "primal ratio fixture variable");
+    ASSERT_TRUE(lp_model_add_constraint(model, 1, idx, val, RALPH_LESS_EQUAL, 100.0) == 0,
+                "primal ratio fixture constraint");
+    ASSERT_TRUE(lp_model_finalize(model) == 0, "primal ratio fixture finalize");
+
+    solver = simplex_create(model);
+    tab = tableau_create(model);
+    ASSERT_TRUE(solver != NULL && tab != NULL, "primal ratio fixture tableau allocation");
+    if (!solver || !tab) goto done;
+    solver->tableau = tab;
+    tab->owner = solver;
+
+    ASSERT_TRUE(tableau_refactorize(tab) == 0, "primal ratio fixture refactor");
+    ASSERT_TRUE(tableau_compute_solution(tab) == 0, "primal ratio fixture solution");
+
+    tab->var_status[0] = RALPH_NONBASIC_LOWER;
+    tab->x[0] = 0.1; /* Perturbed-bound state: status lower, value at old bound. */
+    tab->lb_ext[0] = 0.0;
+    tab->ub_ext[0] = 1.0;
+
+    ASSERT_TRUE(ratio_test_harris(tab, 0, &leaving, &theta) == 0,
+                "primal ratio harris succeeds");
+    ASSERT_TRUE(leaving == -2, "primal ratio chooses entering bound flip");
+    ASSERT_TRUE(fabs(theta - 0.9) < 1e-12,
+                "primal ratio bound-flip theta uses current entering value");
+
+done:
+    if (solver) simplex_free(solver);
+    else if (tab) tableau_free(tab);
+    if (model) lp_model_free(model);
+}
+
 int main(void) {
     printf("=== Dual Ratio Flip Tests ===\n");
     test_flip_mode_applies_flip_only_step();
@@ -437,6 +484,7 @@ int main(void) {
     test_dual_reinvert_effective_mode_mapping();
     test_dual_phase1_rescue_progress_limit();
     test_dual_phase1_rescue_progress_gate();
+    test_primal_ratio_uses_current_entering_value_for_bound_flip();
     printf("Passed %d/%d tests\n", tests_passed, tests_run);
     return (tests_passed == tests_run) ? 0 : 1;
 }
