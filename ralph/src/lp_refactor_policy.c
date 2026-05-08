@@ -174,6 +174,8 @@
 #define PERIODIC_COST_DAMPEN_PHASE1_MIN_M 700
 #define PERIODIC_COST_DAMPEN_PHASE2_MIN_M 700
 #define PERIODIC_COST_DAMPEN_MIN_REFACTOR_MS 1.0
+#define PERIODIC_COST_DAMPEN_PHASE1_MEDIUM_MAX_M 1600
+#define PERIODIC_COST_DAMPEN_PHASE1_MEDIUM_MIN_REFACTOR_MS 0.25
 #define PERIODIC_COST_DAMPEN_RATIO_TRIGGER 6.0
 #define PERIODIC_COST_DAMPEN_UPDATE_RESERVE_NUM 1
 #define PERIODIC_COST_DAMPEN_UPDATE_RESERVE_DEN 10
@@ -1836,6 +1838,7 @@ LPPeriodicCostDampenReason lp_refactor_policy_periodic_cost_dampen_decision(
     int iter_cost_samples) {
     int min_m;
     int update_reserve;
+    double min_refactor_ms;
     double ratio;
 
     (void)use_bland;
@@ -1847,8 +1850,12 @@ LPPeriodicCostDampenReason lp_refactor_policy_periodic_cost_dampen_decision(
 
     if (phase == 1) {
         min_m = PERIODIC_COST_DAMPEN_PHASE1_MIN_M;
+        min_refactor_ms = (m <= PERIODIC_COST_DAMPEN_PHASE1_MEDIUM_MAX_M)
+                              ? PERIODIC_COST_DAMPEN_PHASE1_MEDIUM_MIN_REFACTOR_MS
+                              : PERIODIC_COST_DAMPEN_MIN_REFACTOR_MS;
     } else if (phase == 2) {
         min_m = PERIODIC_COST_DAMPEN_PHASE2_MIN_M;
+        min_refactor_ms = PERIODIC_COST_DAMPEN_MIN_REFACTOR_MS;
     } else {
         return LP_PERIODIC_COST_DAMPEN_BLOCK_INVALID_PHASE;
     }
@@ -1862,7 +1869,7 @@ LPPeriodicCostDampenReason lp_refactor_policy_periodic_cost_dampen_decision(
     if (!isfinite(refactor_cost_ewma_ms) || !isfinite(iter_cost_ewma_ms)) {
         return LP_PERIODIC_COST_DAMPEN_BLOCK_INVALID_COST;
     }
-    if (refactor_cost_ewma_ms < PERIODIC_COST_DAMPEN_MIN_REFACTOR_MS) {
+    if (refactor_cost_ewma_ms < min_refactor_ms) {
         return LP_PERIODIC_COST_DAMPEN_BLOCK_INVALID_COST;
     }
     if (!(iter_cost_ewma_ms > 0.0)) return LP_PERIODIC_COST_DAMPEN_BLOCK_INVALID_COST;
