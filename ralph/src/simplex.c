@@ -4223,6 +4223,28 @@ static int simplex_should_use_dense_small_phase1_partial(const SimplexSolver *so
     return (m <= 220 && density >= 0.05);
 }
 
+static int simplex_should_use_mid_sparse_phase1_dantzig(const SimplexSolver *solver,
+                                                        const SimplexTableau *tab) {
+    if (!solver || !solver->model || !solver->model->A || !tab) return 0;
+    if (!tab->use_two_phase || tab->num_artificial <= 0) return 0;
+
+    int m = solver->model->num_cons;
+    int n = solver->model->num_vars;
+    int nnz = solver->model->A->nnz;
+    if (m <= 0 || n <= 0 || nnz <= 0) return 0;
+
+    double density = (double)nnz / ((double)m * (double)n);
+    double width_ratio = (double)n / (double)m;
+    /* Mid-row sparse Phase-1 tableaus can spend more maintaining Devex weights
+     * than they gain from the stronger pivot score. Keep the selector bounded
+     * to the observed shape class; smaller near-square cases regress under
+     * Dantzig, and very wide cases have different numerical behavior. */
+    return (m >= 350 && m <= 600 &&
+            n >= 800 && n <= 1200 &&
+            width_ratio >= 1.5 &&
+            density >= 0.01 && density <= 0.03);
+}
+
 static int simplex_should_use_dense_lowrow_phase2_dantzig(const SimplexSolver *solver,
                                                           const SimplexTableau *tab) {
     if (!solver || !solver->model || !solver->model->A || !tab) return 0;
@@ -4259,6 +4281,10 @@ static int simplex_finish_prepared_primal_solve(SimplexSolver *solver, clock_t s
     } else if (simplex_should_use_dense_small_phase1_partial(solver, tab)) {
         solver->pricing_strategy = 3;
         tab->pricing_strategy = 3;
+        tab->use_steepest_edge = 0;
+    } else if (simplex_should_use_mid_sparse_phase1_dantzig(solver, tab)) {
+        solver->pricing_strategy = 0;
+        tab->pricing_strategy = 0;
         tab->use_steepest_edge = 0;
     } else if (tab->use_two_phase && (solver->pricing_strategy == 3 || solver->pricing_strategy == 4)) {
         solver->pricing_strategy = 2;  /* Devex for Phase 1 */
