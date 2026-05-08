@@ -136,8 +136,12 @@ int main(void) {
          "dense spike warmup override does not apply to Phase 1");
     TEST(lp_refactor_policy_dense_spike_min_updates_override(2, 250) == 0,
          "dense spike warmup override does not apply below medium basis");
-    TEST(lp_refactor_policy_dense_spike_min_updates_override(2, 700) == 0,
-         "dense spike warmup override leaves large basis policy unchanged");
+    TEST(lp_refactor_policy_dense_spike_min_updates_override(2, 700) == 16,
+         "dense spike warmup override applies to mid-row Phase 2 basis");
+    TEST(lp_refactor_policy_dense_spike_min_updates_override(2, 759) == 16,
+         "dense spike warmup override includes upper mid-row Phase 2 basis");
+    TEST(lp_refactor_policy_dense_spike_min_updates_override(2, 760) == 0,
+         "dense spike warmup override leaves gap before large basis policy");
     TEST(lp_refactor_policy_dense_spike_min_updates_override(2, 3000) == 32,
          "dense spike warmup override extends large Phase 2 warmup");
     TEST(lp_refactor_policy_dense_spike_min_updates_override(1, 3000) == 0,
