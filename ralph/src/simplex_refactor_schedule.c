@@ -16,7 +16,7 @@
 /* ── Constants (previously in simplex.c, only used by moved functions) ── */
 
 #define SOFT_LU_COST_EWMA_ALPHA 0.20
-#define SOFT_LU_MAX_CONSEC_DEFER_PHASE1 6
+#define SOFT_LU_MAX_CONSEC_DEFER_PHASE1 12
 #define SOFT_LU_MAX_CONSEC_DEFER_PHASE2 4
 #define PERIODIC_COST_MAX_CONSEC_DEFER_PHASE1 2
 #define PERIODIC_COST_MAX_CONSEC_DEFER_PHASE2 3

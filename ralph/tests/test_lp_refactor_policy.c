@@ -748,7 +748,7 @@ int main(void) {
     TEST(should_run == 0, "periodic cost dampen requires high cost ratio");
 
     should_run = lp_refactor_policy_periodic_cost_dampen_should_defer(2,
-                                                                       500,
+                                                                       499,
                                                                        0,
                                                                        80,
                                                                        60,
@@ -761,7 +761,7 @@ int main(void) {
                                                                        1.0,
                                                                        2,
                                                                        16);
-    TEST(should_run == 0, "periodic cost dampen requires large basis");
+    TEST(should_run == 0, "periodic cost dampen requires minimum phase2 basis");
 
     should_run = lp_refactor_policy_periodic_cost_dampen_should_defer(2,
                                                                        1503,
@@ -796,7 +796,7 @@ int main(void) {
     TEST(periodic_reason == LP_PERIODIC_COST_DAMPEN_DEFER,
          "periodic cost dampen decision returns defer");
     periodic_reason = lp_refactor_policy_periodic_cost_dampen_decision(2,
-                                                                        500,
+                                                                        499,
                                                                         0,
                                                                         80,
                                                                         60,
@@ -810,7 +810,7 @@ int main(void) {
                                                                         2,
                                                                         16);
     TEST(periodic_reason == LP_PERIODIC_COST_DAMPEN_BLOCK_SMALL_M,
-         "periodic cost dampen decision reports small-m block");
+         "periodic cost dampen decision reports below-minimum phase2 basis");
     periodic_reason = lp_refactor_policy_periodic_cost_dampen_decision(2,
                                                                         1503,
                                                                         0,

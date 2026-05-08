@@ -172,8 +172,9 @@
 #define LU_SOFT_COST_GATE_MAX_COND 1e7
 #define LU_SOFT_COST_GATE_MAX_GROWTH 1e5
 #define PERIODIC_COST_DAMPEN_PHASE1_MIN_M 700
-#define PERIODIC_COST_DAMPEN_PHASE2_MIN_M 700
+#define PERIODIC_COST_DAMPEN_PHASE2_MIN_M 500
 #define PERIODIC_COST_DAMPEN_MIN_REFACTOR_MS 1.0
+#define PERIODIC_COST_DAMPEN_PHASE2_MIN_REFACTOR_MS 0.25
 #define PERIODIC_COST_DAMPEN_PHASE1_MEDIUM_MAX_M 1600
 #define PERIODIC_COST_DAMPEN_PHASE1_MEDIUM_MIN_REFACTOR_MS 0.25
 #define PERIODIC_COST_DAMPEN_RATIO_TRIGGER 6.0
@@ -203,7 +204,7 @@ void lp_refactor_policy_config_defaults(LPRefactorPolicyConfig *cfg) {
     cfg->degen_escape_trigger             = 120;   /* PHASE2_DEGEN_ESCAPE_DEGEN_TRIGGER (simplex.c) */
     cfg->phase1_auto_dantzig_min_m        = 700;   /* PHASE1_AUTO_DANTZIG_MIN_M (simplex.c) */
     cfg->lu_cost_ewma_alpha               = 0.20;  /* SOFT_LU_COST_EWMA_ALPHA (simplex.c) */
-    cfg->lu_max_consec_defer_phase1       = 6;     /* SOFT_LU_MAX_CONSEC_DEFER_PHASE1 (simplex.c) */
+    cfg->lu_max_consec_defer_phase1       = 12;    /* SOFT_LU_MAX_CONSEC_DEFER_PHASE1 (simplex.c) */
     cfg->lu_max_consec_defer_phase2       = 4;     /* SOFT_LU_MAX_CONSEC_DEFER_PHASE2 (simplex.c) */
     cfg->lu_cost_gate_ratio               = LU_SOFT_COST_GATE_RATIO_TRIGGER;        /* 8.0 */
     cfg->lu_spike_warn_pct                = LU_HEALTH_SOFT_SPIKE_WARN_PCT;           /* 85 */
@@ -1861,7 +1862,7 @@ LPPeriodicCostDampenReason lp_refactor_policy_periodic_cost_dampen_decision(
                               : PERIODIC_COST_DAMPEN_MIN_REFACTOR_MS;
     } else if (phase == 2) {
         min_m = PERIODIC_COST_DAMPEN_PHASE2_MIN_M;
-        min_refactor_ms = PERIODIC_COST_DAMPEN_MIN_REFACTOR_MS;
+        min_refactor_ms = PERIODIC_COST_DAMPEN_PHASE2_MIN_REFACTOR_MS;
     } else {
         return LP_PERIODIC_COST_DAMPEN_BLOCK_INVALID_PHASE;
     }
