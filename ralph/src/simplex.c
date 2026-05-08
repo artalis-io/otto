@@ -2182,41 +2182,35 @@ int simplex_pivot(SimplexTableau *tab,
     /* gamma_e already computed with the basic-variable update loop above. */
     if (gamma_e < 1.0) gamma_e = 1.0;
 
-    /* Always compute pivot row for incremental reduced cost updates
-     * pivot_row = e_r^T * B^{-1}
-     * This is also used for steepest edge weight updates
-     * Use pre-allocated workspace to avoid malloc in hot path
-     */
     double *pivot_row = tab->pivot_row;
     double *tau_helper = tab->tau_work;
+    int artificials_in_basis =
+        (tab->pricing_strategy == 2 && artificial_basic_after_pivot > 0);
+    int use_true_se =
+        (tab->pricing_strategy == 1 || tab->pricing_strategy == 5) || artificials_in_basis;
+    int use_lazy_rc_update = (tab->pricing_strategy == 3);
 
-    /* Use sparse BTRAN since e_leaving has only 1 non-zero */
-    int rhs_idx = leaving_pos;
-    double rhs_val = 1.0;
-    {
+    if (tab->rc_all_valid && !use_lazy_rc_update) {
+        /* Compute pivot row for incremental reduced cost updates using the old
+         * basis: pivot_row = e_r^T * B^{-1}. */
+        int rhs_idx = leaving_pos;
+        double rhs_val = 1.0;
         double t_btran_ms = lp_telemetry_timer_start();
         lu_solve_transpose_sparse(tab->lu, 1, &rhs_idx, &rhs_val, pivot_row);
         if (tab->owner) {
             lp_telemetry_add_btran_timed(tab->owner, t_btran_ms);
         }
-    }
 
-    /* Weight update strategy:
-     * - SE (pricing_strategy==1): always use exact tau BTRAN
-     * - Devex (pricing_strategy==2): use exact tau BTRAN while artificials remain
-     *   in the basis (Phase 1), then switch to cheap Devex formula once all
-     *   artificials are driven out. Accuracy matters in Phase 1 for feasibility;
-     *   speed matters in Phase 2 for the bulk of iterations.
-     */
-    int artificials_in_basis =
-        (tab->pricing_strategy == 2 && artificial_basic_after_pivot > 0);
-    int use_true_se =
-        (tab->pricing_strategy == 1 || tab->pricing_strategy == 5) || artificials_in_basis;
-    if (use_true_se && fabs(pivot_sq) > RALPH_ZERO_TOL) {
-        double t_btran_ms = lp_telemetry_timer_start();
-        lu_solve_transpose(tab->lu, tab->work2, tau_helper);
-        if (tab->owner) {
-            lp_telemetry_add_btran_timed(tab->owner, t_btran_ms);
+        /* Weight update strategy:
+         * - SE (pricing_strategy==1): always use exact tau BTRAN
+         * - Devex (pricing_strategy==2): use exact tau BTRAN while artificials
+         *   remain in the basis (Phase 1), then switch to cheap Devex formula. */
+        if (use_true_se && fabs(pivot_sq) > RALPH_ZERO_TOL) {
+            t_btran_ms = lp_telemetry_timer_start();
+            lu_solve_transpose(tab->lu, tab->work2, tau_helper);
+            if (tab->owner) {
+                lp_telemetry_add_btran_timed(tab->owner, t_btran_ms);
+            }
         }
     }
 
@@ -2360,6 +2354,16 @@ basis_update_done:
     }
     tab->obj_value += obj_delta;
 
+    /* In lazy RC mode, partial pricing recomputes requested reduced costs from
+     * fresh duals on demand.  No incremental RC or steepest-edge update will be
+     * applied below, so avoid the pivot-row BTRAN entirely. */
+    if (!tab->rc_all_valid || use_lazy_rc_update) {
+        tab->duals_valid = 0;
+        tab->rc_all_valid = 0;
+        tab->rc[entering] = 0.0;  /* Basic variables have rc = 0 */
+        return 0;
+    }
+
     /* Update steepest edge pricing weights
      *
      * True Steepest Edge (exact formula):
@@ -2400,20 +2404,6 @@ basis_update_done:
             tab->devex_refcount = 0;
             skip_se_update = 1;  /* Don't overwrite fresh reset values */
         }
-    }
-
-    /* Update reduced costs and weights in a single merged loop.
-     *
-     * In lazy RC mode (rc_all_valid == 0), skip the O(n) incremental update
-     * and just invalidate duals. This saves O(n * avg_col_nnz) per iteration
-     * at the cost of O(m²) BTRAN to recompute duals next iteration.
-     * For large n with partial pricing (examining ~200-500 vars), this is faster.
-     */
-    if (!tab->rc_all_valid) {
-        /* Lazy RC mode: skip incremental updates, invalidate duals */
-        tab->duals_valid = 0;
-        tab->rc[entering] = 0.0;  /* Basic variables have rc = 0 */
-        return 0;
     }
 
     if (fabs(pivot) > RALPH_PIVOT_TOL) {
