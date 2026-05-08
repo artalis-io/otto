@@ -418,13 +418,23 @@ static int ralph_should_skip_sparse_mid_presolve(const LPModel *model) {
     if (n <= 0 || m <= 0 || nnz <= 0) return 0;
 
     double density = (double)nnz / ((double)n * (double)m);
-    /* In this sparse mid-size band the safe presolve pass removes little useful
+    /* In these sparse bands the safe presolve pass removes little useful
      * structure but changes the simplex path enough to cost more downstream.
      * Larger sparse cases and denser mid-size cases still benefit or need the
      * existing presolve behavior, so keep the bypass narrow. */
-    return (n >= 3300 && n <= 3700 &&
-            m >= 850 && m <= 1050 &&
-            density >= 0.0025 && density <= 0.0045);
+    if (n >= 3300 && n <= 3700 &&
+        m >= 850 && m <= 1050 &&
+        density >= 0.0025 && density <= 0.0045) {
+        return 1;
+    }
+
+    if (n >= 800 && n <= 900 &&
+        m >= 500 && m <= 550 &&
+        density >= 0.012 && density <= 0.015) {
+        return 1;
+    }
+
+    return 0;
 }
 
 static int ralph_set_requested_lp_algorithm_internal(RalphModel *model, int value) {
