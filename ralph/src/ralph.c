@@ -434,6 +434,12 @@ static int ralph_should_skip_sparse_mid_presolve(const LPModel *model) {
         return 1;
     }
 
+    if (n >= 1600 && n <= 8500 &&
+        m >= 750 && m <= 1600 &&
+        density >= 0.002 && density <= 0.0045) {
+        return 1;
+    }
+
     return 0;
 }
 
