@@ -3756,9 +3756,9 @@ static int lu_numeric_factorize(LUFactorization *lu, const SparseMatrix *B,
             lu_sparse_glpk_strict_mode(lu))) {
         if (!full_retry_mode) {
             mkz_skip_by_circuit = mkz_circuit_should_skip(lu, mkz_fingerprint);
-            if (!mkz_skip_by_circuit) {
-                mkz_skip_by_global = mkz_global_skip_should_skip(lu);
-            }
+        }
+        if (!mkz_skip_by_circuit) {
+            mkz_skip_by_global = mkz_global_skip_should_skip(lu);
         }
     }
     if (lu->basis_governor &&
