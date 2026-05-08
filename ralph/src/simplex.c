@@ -2236,6 +2236,7 @@ int simplex_pivot(SimplexTableau *tab,
     int update_reason = LU_FAIL_NONE;
     int refactor_forced_path = 0;
     int skip_se_update = 0;  /* Flag to skip SE update after reset */
+    int artificial_count_refreshed = 0;
     double growth_factor = (tab->lu) ? lu_get_growth_factor(tab->lu) : 0.0;
     int lu_num_updates = (tab->lu) ? lu_get_num_updates(tab->lu) : 0;
     double growth_threshold = (tab->lu && lu_get_growth_refactor_threshold(tab->lu) > 0.0)
@@ -2316,6 +2317,9 @@ int simplex_pivot(SimplexTableau *tab,
 
             case LP_BASIS_ACTION_REPAIR:
                 if (repair_singular_basis(tab) == 0) {
+                    tableau_refresh_artificial_basic_count(tab);
+                    artificial_basic_after_pivot = tab->artificial_basic_count;
+                    artificial_count_refreshed = 1;
                     goto basis_update_done;
                 }
                 lu_update_status = -3;
@@ -2351,7 +2355,9 @@ int simplex_pivot(SimplexTableau *tab,
     }
 
 basis_update_done:
-    tab->artificial_basic_count = artificial_basic_after_pivot;
+    if (!artificial_count_refreshed) {
+        tab->artificial_basic_count = artificial_basic_after_pivot;
+    }
     tab->obj_value += obj_delta;
 
     /* Update steepest edge pricing weights
