@@ -2600,14 +2600,19 @@ PresolveResult* presolve_with_mask(LPModel *model, unsigned int technique_mask) 
 
     unsigned int mask = ctx->technique_mask;
 
+    const int max_bound_only_rounds = 4;
+    int bound_only_rounds = 0;
     while (changed && ctx->current_round < ctx->max_rounds && status >= 0) {
         changed = 0;
+        int structural_changed = 0;
+        int bound_changed = 0;
         ctx->current_round++;
 
         if (ctx->remove_fixed_vars && (mask & PRESOLVE_FIXED_VARS)) {
             int n = presolve_remove_fixed_vars(ctx);
             if (n < 0) { status = -1; break; }
             changed += n;
+            structural_changed += n;
             result->vars_removed += n;
         }
 
@@ -2615,6 +2620,7 @@ PresolveResult* presolve_with_mask(LPModel *model, unsigned int technique_mask) 
             int n = presolve_remove_empty_rows(ctx);
             if (n < 0) { status = -1; break; }
             changed += n;
+            structural_changed += n;
             result->cons_removed += n;
         }
 
@@ -2622,6 +2628,7 @@ PresolveResult* presolve_with_mask(LPModel *model, unsigned int technique_mask) 
             int n = presolve_remove_empty_cols(ctx);
             if (n < 0) { status = -1; break; }
             changed += n;
+            structural_changed += n;
             result->vars_removed += n;
         }
 
@@ -2629,6 +2636,7 @@ PresolveResult* presolve_with_mask(LPModel *model, unsigned int technique_mask) 
             int n = presolve_singleton_rows(ctx);
             if (n < 0) { status = -1; break; }
             changed += n;
+            structural_changed += n;
             result->cons_removed += n;
         }
 
@@ -2636,6 +2644,7 @@ PresolveResult* presolve_with_mask(LPModel *model, unsigned int technique_mask) 
             int n = presolve_singleton_cols(ctx);
             if (n < 0) { status = -1; break; }
             changed += n;
+            bound_changed += n;
             result->bounds_tightened += n;
         }
 
@@ -2643,6 +2652,7 @@ PresolveResult* presolve_with_mask(LPModel *model, unsigned int technique_mask) 
             int n = presolve_implied_free(ctx);
             if (n < 0) { status = -1; break; }
             changed += n;
+            bound_changed += n;
             result->bounds_tightened += n;
         }
 
@@ -2650,6 +2660,7 @@ PresolveResult* presolve_with_mask(LPModel *model, unsigned int technique_mask) 
             int n = presolve_doubleton_equality(ctx, result);
             if (n < 0) { status = -1; break; }
             changed += n;
+            structural_changed += n;
             result->vars_removed += n;
             result->cons_removed += n;
         }
@@ -2658,6 +2669,7 @@ PresolveResult* presolve_with_mask(LPModel *model, unsigned int technique_mask) 
             int n = presolve_forcing_constraints(ctx);
             if (n < 0) { status = -1; break; }
             changed += n;
+            structural_changed += n;
             result->cons_removed += n;
         }
 
@@ -2665,6 +2677,7 @@ PresolveResult* presolve_with_mask(LPModel *model, unsigned int technique_mask) 
             int n = presolve_bound_tightening(ctx);
             if (n < 0) { status = -1; break; }
             changed += n;
+            bound_changed += n;
             result->bounds_tightened += n;
         }
 
@@ -2672,6 +2685,7 @@ PresolveResult* presolve_with_mask(LPModel *model, unsigned int technique_mask) 
             int n = presolve_proportional_rows(ctx);
             if (n < 0) { status = -1; break; }
             changed += n;
+            structural_changed += n;
             result->cons_removed += n;
         }
 
@@ -2679,6 +2693,7 @@ PresolveResult* presolve_with_mask(LPModel *model, unsigned int technique_mask) 
             int n = presolve_proportional_cols(ctx);
             if (n < 0) { status = -1; break; }
             changed += n;
+            structural_changed += n;
             result->vars_removed += n;
         }
 
@@ -2686,7 +2701,15 @@ PresolveResult* presolve_with_mask(LPModel *model, unsigned int technique_mask) 
             int n = presolve_probing(ctx);
             if (n < 0) { status = -1; break; }
             changed += n;
+            structural_changed += n;
             result->vars_removed += n;
+        }
+
+        if (changed > 0 && structural_changed == 0 && bound_changed > 0) {
+            bound_only_rounds++;
+            if (bound_only_rounds >= max_bound_only_rounds) break;
+        } else if (structural_changed > 0) {
+            bound_only_rounds = 0;
         }
     }
     result->rounds = ctx->current_round;
