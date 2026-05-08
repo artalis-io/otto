@@ -4317,6 +4317,28 @@ static int simplex_should_use_very_sparse_large_dantzig(const SimplexSolver *sol
     return (m >= 1500 && n >= 8000 && density <= 0.0015);
 }
 
+static int simplex_should_use_large_sparse_phase1_dantzig(const SimplexSolver *solver,
+                                                          const SimplexTableau *tab) {
+    if (!solver || !solver->model || !solver->model->A || !tab) return 0;
+    if (!tab->use_two_phase || tab->num_artificial <= 0) return 0;
+
+    int m = solver->model->num_cons;
+    int n = solver->model->num_vars;
+    int nnz = solver->model->A->nnz;
+    if (m <= 0 || n <= 0 || nnz <= 0) return 0;
+
+    double density = (double)nnz / ((double)m * (double)n);
+    double width_ratio = (double)n / (double)m;
+    /* Large, very sparse Phase-1 tableaus with only moderate width can spend
+     * heavily on Devex maintenance before feasibility.  Dantzig is limited to
+     * this high-row sparse band; lower-row sparse cases such as bnl1 still need
+     * Devex to avoid Phase-1 stalls. */
+    return (m >= 1800 && m <= 2800 &&
+            n >= 2500 && n <= 4500 &&
+            width_ratio >= 1.2 && width_ratio <= 2.0 &&
+            density >= 0.001 && density <= 0.003);
+}
+
 static int simplex_should_use_large_moderate_sparse_phase1_dantzig(const SimplexSolver *solver,
                                                                    const SimplexTableau *tab) {
     if (!solver || !solver->model || !solver->model->A || !tab) return 0;
@@ -4427,6 +4449,7 @@ static int simplex_finish_prepared_primal_solve(SimplexSolver *solver, clock_t s
      * can miss improving directions for artificial variables. Default to Devex
      * for Phase 1 when partial/heap pricing is selected. */
     int saved_pricing = solver->pricing_strategy;
+    int saved_phase1_pricing = solver->phase1_pricing;
     int saved_tab_pricing = tab->pricing_strategy;
     int saved_tab_se = tab->use_steepest_edge;
     if (solver->phase1_pricing >= 0) {
@@ -4447,6 +4470,11 @@ static int simplex_finish_prepared_primal_solve(SimplexSolver *solver, clock_t s
         tab->pricing_strategy = 0;
         tab->use_steepest_edge = 0;
     } else if (simplex_should_use_very_sparse_large_dantzig(solver, tab)) {
+        solver->pricing_strategy = 0;
+        tab->pricing_strategy = 0;
+        tab->use_steepest_edge = 0;
+    } else if (simplex_should_use_large_sparse_phase1_dantzig(solver, tab)) {
+        solver->phase1_pricing = 0;
         solver->pricing_strategy = 0;
         tab->pricing_strategy = 0;
         tab->use_steepest_edge = 0;
@@ -4472,6 +4500,7 @@ static int simplex_finish_prepared_primal_solve(SimplexSolver *solver, clock_t s
         double t_phase1_ms = lp_telemetry_timer_start();
         if (simplex_phase1(solver) != 0) {
             lp_telemetry_add_solver_stage_timed(solver, LP_SOLVER_STAGE_PHASE1, t_phase1_ms);
+            solver->phase1_pricing = saved_phase1_pricing;
             solver->pricing_strategy = saved_pricing;
             tab->pricing_strategy = saved_tab_pricing;
             tab->use_steepest_edge = saved_tab_se;
@@ -4489,6 +4518,7 @@ static int simplex_finish_prepared_primal_solve(SimplexSolver *solver, clock_t s
         }
         lp_telemetry_add_solver_stage_timed(solver, LP_SOLVER_STAGE_PHASE1, t_phase1_ms);
     }
+    solver->phase1_pricing = saved_phase1_pricing;
     solver->pricing_strategy = saved_pricing;
     tab->pricing_strategy = saved_tab_pricing;
     tab->use_steepest_edge = saved_tab_se;
