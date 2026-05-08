@@ -3248,7 +3248,13 @@ static int simplex_transition_phase2(SimplexSolver *solver) {
 
             /* Try to pivot if we found any candidate */
             if (best_j >= 0 && fabs(best_coef) > RALPH_PIVOT_TOL) {
-                /* Pivot with zero theta since artificial is at zero value */
+                /* The replacement search uses a BTRAN row to compute
+                 * coefficients. simplex_pivot expects work2 to hold the
+                 * FTRAN direction B^{-1} A[:,best_j]. */
+                sparse_get_column(tab->A_ext, best_j, tab->work1);
+                lu_solve(tab->lu, tab->work1, tab->work2);
+
+                /* Pivot with zero theta since artificial is at zero value. */
                 if (simplex_pivot(tab, best_j, basis_pos, 0.0, 0) == 0) {
                     found_replacement = 1;
                     if (solver->verbose) {
