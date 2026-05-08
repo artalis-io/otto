@@ -29,6 +29,14 @@
 /* Forward declarations */
 int lp_model_finalize(LPModel *model);
 
+static int ralph_model_has_conflicting_bounds(const LPModel *model) {
+    if (!model || !model->lb || !model->ub) return 0;
+    for (int j = 0; j < model->num_vars; j++) {
+        if (model->lb[j] > model->ub[j] + RALPH_FEAS_TOL) return 1;
+    }
+    return 0;
+}
+
 /* ============================================================================
  * Internal Model Structure
  * ============================================================================ */
@@ -1776,6 +1784,16 @@ static int ralph_optimize_with_mode(RalphModel *model, RalphSolveMode mode) {
 
     int n_orig = model->lp_model->num_vars;
     int m_orig = model->lp_model->num_cons;
+
+    if (ralph_model_has_conflicting_bounds(model->lp_model)) {
+        model->status = RALPH_STATUS_INFEASIBLE;
+        model->iteration_count = 0;
+        if (lp_algorithm_report_ready) {
+            ralph_store_lp_algorithm_report(model, &lp_algorithm_report);
+        }
+        return 0;
+    }
+
     if (!solve_as_mip &&
         lp_reinvert_controller_mode == LP_REINVERT_MODE_SHADOW &&
         ralph_should_control_mid_sparse_reinvert(model->lp_model)) {
