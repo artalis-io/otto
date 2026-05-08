@@ -689,7 +689,18 @@ typedef struct {
 
 typedef struct {
     const char *name;
+    double dir_inf_ratio;
+    double pivot_ratio;
+    int lu_health_triggered;
+    int lu_hard_triggered;
+    int force_extreme_triggered;
+    int expected_accept;
+} DirStabilizeScaledPivotCase;
+
+typedef struct {
+    const char *name;
     int m;
+    int n;
     int degenerate_count;
     int streak;
     int cooldown;
@@ -859,6 +870,7 @@ typedef struct {
 typedef struct {
     const char *name;
     int m;
+    int n;
     int degenerate_count;
     int no_progress_streak;
     double dir_inf_ratio;
@@ -1125,6 +1137,23 @@ static int run_dir_stabilize_moderate_case(const DirStabilizeModerateCase *tc) {
     if (defer != tc->expected_defer) {
         fprintf(stderr, "FAIL: %s (expected defer=%d got=%d)\n",
                 tc->name, tc->expected_defer, defer);
+        return 0;
+    }
+    printf("PASS: %s\n", tc->name);
+    return 1;
+}
+
+static int run_dir_stabilize_scaled_pivot_case(const DirStabilizeScaledPivotCase *tc) {
+    int accept =
+        lp_refactor_policy_phase1_dir_stabilize_accept_scaled_pivot(
+            tc->dir_inf_ratio,
+            tc->pivot_ratio,
+            tc->lu_health_triggered,
+            tc->lu_hard_triggered,
+            tc->force_extreme_triggered);
+    if (accept != tc->expected_accept) {
+        fprintf(stderr, "FAIL: %s (expected accept=%d got=%d)\n",
+                tc->name, tc->expected_accept, accept);
         return 0;
     }
     printf("PASS: %s\n", tc->name);
@@ -2416,6 +2445,53 @@ int main(void) {
             .expected_defer = 0
         }
     };
+    const DirStabilizeScaledPivotCase dir_stabilize_scaled_pivot_cases[] = {
+        {
+            .name = "phase1 scaled dir accepts moderate strong pivot",
+            .dir_inf_ratio = 20.0,
+            .pivot_ratio = 2e-4,
+            .lu_health_triggered = 0,
+            .lu_hard_triggered = 0,
+            .force_extreme_triggered = 0,
+            .expected_accept = 1
+        },
+        {
+            .name = "phase1 scaled dir rejects weak pivot",
+            .dir_inf_ratio = 20.0,
+            .pivot_ratio = 1e-6,
+            .lu_health_triggered = 0,
+            .lu_hard_triggered = 0,
+            .force_extreme_triggered = 0,
+            .expected_accept = 0
+        },
+        {
+            .name = "phase1 scaled dir rejects unhealthy LU",
+            .dir_inf_ratio = 20.0,
+            .pivot_ratio = 2e-4,
+            .lu_health_triggered = 1,
+            .lu_hard_triggered = 0,
+            .force_extreme_triggered = 0,
+            .expected_accept = 0
+        },
+        {
+            .name = "phase1 scaled dir rejects extreme direction",
+            .dir_inf_ratio = 120.0,
+            .pivot_ratio = 2e-4,
+            .lu_health_triggered = 0,
+            .lu_hard_triggered = 0,
+            .force_extreme_triggered = 0,
+            .expected_accept = 0
+        },
+        {
+            .name = "phase1 scaled dir accepts strong pivot below force threshold",
+            .dir_inf_ratio = 80.0,
+            .pivot_ratio = 2e-4,
+            .lu_health_triggered = 0,
+            .lu_hard_triggered = 0,
+            .force_extreme_triggered = 0,
+            .expected_accept = 1
+        }
+    };
     const NoPivotForceCase no_pivot_force_cases[] = {
         {
             .name = "phase1 no-pivot force triggers on large degenerate streak",
@@ -3661,6 +3737,9 @@ int main(void) {
               sizeof(dir_skip_no_recompute_cases[0]));
     int total_dir_force = (int)(sizeof(dir_stabilize_force_cases) / sizeof(dir_stabilize_force_cases[0]));
     int total_dir_moderate = (int)(sizeof(dir_stabilize_moderate_cases) / sizeof(dir_stabilize_moderate_cases[0]));
+    int total_dir_scaled_pivot =
+        (int)(sizeof(dir_stabilize_scaled_pivot_cases) /
+              sizeof(dir_stabilize_scaled_pivot_cases[0]));
     int total_no_pivot = (int)(sizeof(no_pivot_force_cases) / sizeof(no_pivot_force_cases[0]));
     int total_no_pivot_ladder = (int)(sizeof(no_pivot_ladder_cases) / sizeof(no_pivot_ladder_cases[0]));
     int total_no_pivot_ladder_guard = (int)(sizeof(no_pivot_ladder_guard_cases) / sizeof(no_pivot_ladder_guard_cases[0]));
@@ -3721,7 +3800,8 @@ int main(void) {
     int total_window_pressure_force_pivot = 1;
     int total = total_policy + total_sched + total_lu_health + total_soft_lu_defer +
                 total_periodic_cost_defer + total_dir_stabilize + total_dir_force +
-                total_dir_moderate + total_no_pivot + total_no_pivot_ladder +
+                total_dir_moderate + total_dir_scaled_pivot +
+                total_no_pivot + total_no_pivot_ladder +
                 total_no_pivot_ladder_guard +
                 total_direct_dual_rescue_guard +
                 total_dir_skip_rescue_cadence +
@@ -3779,6 +3859,10 @@ int main(void) {
     }
     for (int i = 0; i < total_dir_moderate; i++) {
         pass += run_dir_stabilize_moderate_case(&dir_stabilize_moderate_cases[i]);
+    }
+    for (int i = 0; i < total_dir_scaled_pivot; i++) {
+        pass += run_dir_stabilize_scaled_pivot_case(
+            &dir_stabilize_scaled_pivot_cases[i]);
     }
     for (int i = 0; i < total_no_pivot; i++) {
         pass += run_no_pivot_force_case(&no_pivot_force_cases[i]);

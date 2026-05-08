@@ -8,6 +8,22 @@
 #include "lp.h"
 #include "simplex_ratio.h"
 
+static double entering_bound_flip_distance(const SimplexTableau *tab, int entering) {
+    double dist;
+    if (tab->var_status[entering] == RALPH_NONBASIC_UPPER) {
+        if (tab->lb_ext[entering] <= -RALPH_INFINITY / 2.0) {
+            return RALPH_INFINITY;
+        }
+        dist = tab->x[entering] - tab->lb_ext[entering];
+    } else {
+        if (tab->ub_ext[entering] >= RALPH_INFINITY / 2.0) {
+            return RALPH_INFINITY;
+        }
+        dist = tab->ub_ext[entering] - tab->x[entering];
+    }
+    return dist > 0.0 ? dist : 0.0;
+}
+
 /* Bland's ratio test: among ties, choose smallest index leaving variable */
 int ratio_test_bland(SimplexTableau *tab, int entering, int *leaving, double *theta) {
     /* Compute entering column in basis representation */
@@ -59,7 +75,13 @@ int ratio_test_bland(SimplexTableau *tab, int entering, int *leaving, double *th
     if (tab->owner) {
         lp_telemetry_record_ftran_nnz(tab->owner, col_nnz, ftran_nnz);
     }
-    double pivot_tol = fmax(RALPH_PIVOT_TOL, 1e-7 * max_abs_dk);
+    /* Phase 1 is the bound-feasibility gate.  On ill-scaled Phase-1 bases, a
+     * component that is small relative to the largest FTRAN entry can still be
+     * the active row protecting a basic variable from crossing its bound.  In
+     * Phase 2, keep the relative filter to avoid numerically fragile pivots. */
+    double pivot_tol = (tab->phase == 1)
+        ? RALPH_PIVOT_TOL
+        : fmax(RALPH_PIVOT_TOL, 1e-7 * max_abs_dk);
 
     *leaving = -1;
     *theta = RALPH_INFINITY;
@@ -89,7 +111,7 @@ int ratio_test_bland(SimplexTableau *tab, int entering, int *leaving, double *th
     }
 
     /* Check bound flip */
-    double enter_range = tab->ub_ext[entering] - tab->lb_ext[entering];
+    double enter_range = entering_bound_flip_distance(tab, entering);
     if (enter_range < *theta && enter_range < RALPH_INFINITY/2) {
         *theta = enter_range;
         *leaving = -2;
@@ -149,7 +171,11 @@ int ratio_test_standard(SimplexTableau *tab, int entering, int *leaving, double 
     if (tab->owner) {
         lp_telemetry_record_ftran_nnz(tab->owner, col_nnz, ftran_nnz);
     }
-    double pivot_tol = fmax(RALPH_PIVOT_TOL, 1e-7 * max_abs_dk);
+    /* See ratio_test_bland: Phase 1 uses the absolute floor for bound
+     * protection; Phase 2 keeps the relative numerical filter. */
+    double pivot_tol = (tab->phase == 1)
+        ? RALPH_PIVOT_TOL
+        : fmax(RALPH_PIVOT_TOL, 1e-7 * max_abs_dk);
 
     *leaving = -1;
     *theta = RALPH_INFINITY;
@@ -172,7 +198,7 @@ int ratio_test_standard(SimplexTableau *tab, int entering, int *leaving, double 
     }
 
     {
-        double enter_range = tab->ub_ext[entering] - tab->lb_ext[entering];
+        double enter_range = entering_bound_flip_distance(tab, entering);
         if (enter_range <= *theta && enter_range < RALPH_INFINITY / 2) {
             *theta = enter_range;
             *leaving = -2;
@@ -254,7 +280,11 @@ int ratio_test_harris(SimplexTableau *tab, int entering, int *leaving, double *t
     if (tab->owner) {
         lp_telemetry_record_ftran_nnz(tab->owner, col_nnz, ftran_nnz);
     }
-    double pivot_tol = fmax(RALPH_PIVOT_TOL, 1e-7 * max_abs_dk);
+    /* See ratio_test_bland: Phase 1 uses the absolute floor for bound
+     * protection; Phase 2 keeps the relative numerical filter. */
+    double pivot_tol = (tab->phase == 1)
+        ? RALPH_PIVOT_TOL
+        : fmax(RALPH_PIVOT_TOL, 1e-7 * max_abs_dk);
 
     /* Single-pass Harris ratio test (merged from two passes)
      *
@@ -272,7 +302,7 @@ int ratio_test_harris(SimplexTableau *tab, int entering, int *leaving, double *t
     *theta = RALPH_INFINITY;
 
     /* Check bound on entering variable first (contributes to theta_max) */
-    double enter_range = tab->ub_ext[entering] - tab->lb_ext[entering];
+    double enter_range = entering_bound_flip_distance(tab, entering);
     if (enter_range < RALPH_INFINITY/2) {
         theta_max = enter_range;
     }
@@ -412,7 +442,9 @@ int ratio_test_harris_excluding_current(SimplexTableau *tab, int entering,
             max_abs_dk = abs_dk;
         }
     }
-    double pivot_tol = fmax(RALPH_PIVOT_TOL, 1e-7 * max_abs_dk);
+    double pivot_tol = (tab->phase == 1)
+        ? RALPH_PIVOT_TOL
+        : fmax(RALPH_PIVOT_TOL, 1e-7 * max_abs_dk);
 
     double theta_max = RALPH_INFINITY;
     double best_pivot = 0.0;
@@ -420,7 +452,7 @@ int ratio_test_harris_excluding_current(SimplexTableau *tab, int entering,
     *leaving = -1;
     *theta = RALPH_INFINITY;
 
-    double enter_range = tab->ub_ext[entering] - tab->lb_ext[entering];
+    double enter_range = entering_bound_flip_distance(tab, entering);
     if (enter_range < RALPH_INFINITY / 2) {
         theta_max = enter_range;
     }

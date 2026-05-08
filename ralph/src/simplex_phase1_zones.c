@@ -28,6 +28,165 @@ typedef enum {
     P1_DIR_DEFER_LADDER       /* updates cooldown only */
 } P1DirDeferReason;
 
+static double p1_max_bound_infeasibility(const SimplexTableau *tab) {
+    double max_infeas = 0.0;
+
+    if (!tab || !tab->x || !tab->lb_ext || !tab->ub_ext) return 0.0;
+
+    for (int j = 0; j < tab->n; j++) {
+        double infeas = 0.0;
+        if (tab->x[j] < tab->lb_ext[j] - RALPH_FEAS_TOL) {
+            infeas = tab->lb_ext[j] - tab->x[j];
+        } else if (tab->x[j] > tab->ub_ext[j] + RALPH_FEAS_TOL) {
+            infeas = tab->x[j] - tab->ub_ext[j];
+        }
+        if (infeas > max_infeas) max_infeas = infeas;
+    }
+
+    return max_infeas;
+}
+
+static int p1_tableau_valid_for_infeasibility_certificate(
+    const SimplexTableau *tab,
+    double art_sum,
+    double *max_bound_infeas_out,
+    double *obj_art_gap_out)
+{
+    double max_bound_infeas = p1_max_bound_infeasibility(tab);
+    double obj_art_gap = fabs(tab->obj_value - art_sum);
+    double obj_scale = fmax(1.0, fmax(fabs(tab->obj_value), fabs(art_sum)));
+
+    if (max_bound_infeas_out) {
+        *max_bound_infeas_out = max_bound_infeas;
+    }
+    if (obj_art_gap_out) {
+        *obj_art_gap_out = obj_art_gap;
+    }
+
+    if (max_bound_infeas > 2000.0 * RALPH_FEAS_TOL) return 0;
+    if (obj_art_gap > 2000.0 * RALPH_FEAS_TOL * obj_scale) return 0;
+    return 1;
+}
+
+static int p1_pricing_bland_excluding_basis(SimplexTableau *tab,
+                                            const P1BasisRepairState *bs,
+                                            int extra_a,
+                                            int extra_b,
+                                            int *entering) {
+    int excluded[PHASE1_ENTERING_EXCLUSION_POOL_SIZE + 2];
+    int count = 0;
+
+    if (bs) {
+        for (int k = 0; k < PHASE1_ENTERING_EXCLUSION_POOL_SIZE; k++) {
+            int var = bs->excluded_entering_pool[k];
+            if (bs->excluded_entering_pool_ttl[k] > 0 && var >= 0) {
+                excluded[count++] = var;
+            }
+        }
+    }
+    if (extra_a >= 0) excluded[count++] = extra_a;
+    if (extra_b >= 0 && extra_b != extra_a) excluded[count++] = extra_b;
+    return pricing_bland_excluding_set(tab, excluded, count, entering);
+}
+
+static int p1_entering_still_improves(const SimplexTableau *tab, int entering) {
+    double rc;
+
+    if (!tab || entering < 0 || entering >= tab->n) return 0;
+    if (tab->var_status[entering] == RALPH_BASIC) return 0;
+
+    rc = tab->rc[entering];
+    if (tab->var_status[entering] == RALPH_NONBASIC_LOWER) {
+        return rc < -RALPH_OPT_TOL;
+    }
+    if (tab->var_status[entering] == RALPH_NONBASIC_UPPER) {
+        return rc > RALPH_OPT_TOL;
+    }
+    if (tab->var_status[entering] == RALPH_NONBASIC_FREE) {
+        return fabs(rc) > RALPH_OPT_TOL;
+    }
+    return 0;
+}
+
+static int p1_scaled_direction_preserves_artificial_progress(
+    const SimplexTableau *tab,
+    int entering,
+    int leaving,
+    double theta)
+{
+    double current_art_sum = 0.0;
+    double predicted_art_sum = 0.0;
+    double dir;
+    double step;
+
+    if (!tab || entering < 0 || entering >= tab->n ||
+        !isfinite(theta) || theta < 0.0) {
+        return 0;
+    }
+
+    dir = (tab->var_status[entering] == RALPH_NONBASIC_UPPER) ? -1.0 : 1.0;
+    step = theta * dir;
+
+    for (int a = 0; a < tab->num_artificial; a++) {
+        int j = tab->artificial_vars[a];
+        double x_new;
+        int pos;
+
+        if (j < 0 || j >= tab->n) return 0;
+        current_art_sum += fabs(tab->x[j]);
+        x_new = tab->x[j];
+
+        if (j == entering) {
+            if (tab->var_status[entering] == RALPH_NONBASIC_LOWER) {
+                x_new += theta;
+            } else {
+                x_new -= theta;
+            }
+        }
+
+        pos = tab->basis_pos[j];
+        if (pos >= 0 && pos < tab->m) {
+            x_new += -step * tab->work2[pos];
+        }
+
+        if (leaving == -2 && j == entering) {
+            if (tab->var_status[entering] == RALPH_NONBASIC_LOWER) {
+                x_new = tab->ub_ext[entering];
+            } else {
+                x_new = tab->lb_ext[entering];
+            }
+        } else if (leaving >= 0 && leaving < tab->m &&
+                   j == tab->basis[leaving]) {
+            if (tab->work2[leaving] * dir > 0.0) {
+                x_new = tab->lb_ext[j];
+            } else {
+                x_new = tab->ub_ext[j];
+            }
+        }
+
+        if (!isfinite(x_new)) return 0;
+        predicted_art_sum += fabs(x_new);
+    }
+
+    {
+        double scale = fmax(1.0, current_art_sum);
+        double tol = fmax(1000.0 * RALPH_FEAS_TOL, 1e-9 * scale);
+        return predicted_art_sum <= current_art_sum + tol;
+    }
+}
+
+static double p1_artificial_sum(const SimplexTableau *tab) {
+    double art_sum = 0.0;
+
+    if (!tab || !tab->x || !tab->artificial_vars) return RALPH_INFINITY;
+    for (int k = 0; k < tab->num_artificial; k++) {
+        int j = tab->artificial_vars[k];
+        if (j < 0 || j >= tab->n) return RALPH_INFINITY;
+        art_sum += fabs(tab->x[j]);
+    }
+    return art_sum;
+}
+
 /* Core defer logic shared by 3 paths in p1_zone_direction_guard():
  * moderate-defer, cooldown-skip, and no-pivot ladder-defer.
  * Encapsulates: note_dir_skip → exclude_entering → bump streak →
@@ -44,14 +203,14 @@ static void p1_dir_skip_defer_core(SimplexSolver *solver,
     if (reason == P1_DIR_DEFER_MODERATE) {
         rs->numerical.dir_stabilize_moderate_defer_pending = 1;
     } else if (reason == P1_DIR_DEFER_COOLDOWN) {
-        rs->numerical.dir_stabilize_moderate_defer_pending = 0;
-        if (dir_stabilize_cooldown_target > rs->numerical.dir_stabilize_cooldown) {
-            rs->numerical.dir_stabilize_cooldown = dir_stabilize_cooldown_target;
-        }
+        /* A cooldown skip spends the current cooldown.  Refreshing it here
+         * traps Phase 1 in a no-pivot loop when every candidate direction is
+         * moderately above the stabilization threshold.  Keep the one-shot
+         * moderate-defer marker armed so the next post-cooldown event
+         * escalates instead of starting a fresh defer cycle. */
+        (void)dir_stabilize_cooldown_target;
     } else { /* P1_DIR_DEFER_LADDER */
-        if (dir_stabilize_cooldown_target > rs->numerical.dir_stabilize_cooldown) {
-            rs->numerical.dir_stabilize_cooldown = dir_stabilize_cooldown_target;
-        }
+        (void)dir_stabilize_cooldown_target;
     }
 
     p1_numerical_note_dir_skip_entering(solver, entering, &rs->numerical);
@@ -276,18 +435,7 @@ void p1_zone_tick_cooldowns(SimplexSolver *solver,
                             SimplexTableau *tab,
                             P1RecoveryState *rs)
 {
-    if (rs->basis.excluded_entering_ttl_a > 0) {
-        rs->basis.excluded_entering_ttl_a--;
-        if (rs->basis.excluded_entering_ttl_a == 0) {
-            rs->basis.excluded_entering_a = -1;
-        }
-    }
-    if (rs->basis.excluded_entering_ttl_b > 0) {
-        rs->basis.excluded_entering_ttl_b--;
-        if (rs->basis.excluded_entering_ttl_b == 0) {
-            rs->basis.excluded_entering_b = -1;
-        }
-    }
+    p1_basis_tick_entering_exclusions(&rs->basis);
     if (rs->numerical.dir_stabilize_cooldown > 0) {
         rs->numerical.dir_stabilize_cooldown--;
     }
@@ -440,18 +588,53 @@ P1ZoneResult p1_zone_pricing(SimplexSolver *solver,
     int entering;
     int price_status;
     double t_pricing_ms = lp_telemetry_timer_start();
+    double art_sum_pre = p1_artificial_sum(tab);
+
+    if (art_sum_pre <= RALPH_FEAS_TOL) {
+        lp_telemetry_record_pricing_timed(solver, 1, t_pricing_ms);
+        rs->progress.no_entering_cleanup_streak = 0;
+        if (solver->verbose) {
+            LP_LOG_STDERR("[simplex_phase1] Phase 1 complete: artificial sum %g within feasibility tolerance at iter %d\n",
+                    art_sum_pre, iter);
+        }
+        solver->iterations = iter;
+        phase1_trace_emit_summary(solver, RALPH_STATUS_OPTIMAL);
+        return P1_ZONE_RETURN_OK;
+    }
+    if (art_sum_pre <= 1e-4) {
+        primal_remove_perturbation(tab);
+        if (tableau_refactorize_with_reason(
+                tab, RALPH_REFACTOR_REASON_INFEASIBILITY_CLEANUP) == 0) {
+            tab->phase1_compute_solution_context =
+                LP_PHASE1_COMPUTE_CTX_NO_ENTERING_CLEANUP;
+            tab->phase1_compute_rc_context =
+                LP_PHASE1_COMPUTE_CTX_NO_ENTERING_CLEANUP;
+            tableau_compute_solution(tab);
+            tableau_compute_reduced_costs(tab);
+            art_sum_pre = p1_artificial_sum(tab);
+            if (art_sum_pre <= RALPH_FEAS_TOL) {
+                lp_telemetry_record_pricing_timed(solver, 1, t_pricing_ms);
+                rs->progress.no_entering_cleanup_streak = 0;
+                if (solver->verbose) {
+                    LP_LOG_STDERR("[simplex_phase1] Phase 1 cleanup complete: artificial sum %g within feasibility tolerance at iter %d\n",
+                            art_sum_pre, iter);
+                }
+                solver->iterations = iter;
+                phase1_trace_emit_summary(solver, RALPH_STATUS_OPTIMAL);
+                return P1_ZONE_RETURN_OK;
+            }
+        }
+    }
 
     price_status = pricing_dispatch(tab, rs->cycling.pricing_strategy, rs->cycling.use_bland,
                                     0, iter, &entering);
 
-    if ((rs->basis.excluded_entering_ttl_a > 0 || rs->basis.excluded_entering_ttl_b > 0) &&
-        entering >= 0 &&
-        (entering == rs->basis.excluded_entering_a || entering == rs->basis.excluded_entering_b)) {
+    if (entering >= 0 && p1_basis_is_entering_excluded(&rs->basis, entering)) {
         int alt_entering = -1;
         int rerouted = 0;
         int exclude_a = (rs->basis.excluded_entering_ttl_a > 0) ? rs->basis.excluded_entering_a : -1;
         int exclude_b = (rs->basis.excluded_entering_ttl_b > 0) ? rs->basis.excluded_entering_b : -1;
-        if (pricing_bland_excluding_two(tab, exclude_a, exclude_b, &alt_entering) == 0) {
+        if (p1_pricing_bland_excluding_basis(tab, &rs->basis, -1, -1, &alt_entering) == 0) {
             if (solver->verbose >= 2) {
                 LP_LOG_STDERR("[simplex_phase1] Excluding unstable entering (%d,%d), using %d instead\n",
                         exclude_a, exclude_b, alt_entering);
@@ -478,11 +661,7 @@ P1ZoneResult p1_zone_pricing(SimplexSolver *solver,
         tableau_compute_solution(tab);
 
         /* Check if all artificial variables are zero */
-        art_sum = 0.0;
-        for (int k = 0; k < tab->num_artificial; k++) {
-            int j = tab->artificial_vars[k];
-            art_sum += fabs(tab->x[j]);
-        }
+        art_sum = p1_artificial_sum(tab);
 
         if (art_sum > RALPH_FEAS_TOL) {
             /* Small residual might be fixable with a few more iterations.
@@ -500,11 +679,7 @@ P1ZoneResult p1_zone_pricing(SimplexSolver *solver,
                     tableau_compute_solution(tab);
                     tableau_compute_reduced_costs(tab);
 
-                    double refined_art_sum = 0.0;
-                    for (int k = 0; k < tab->num_artificial; k++) {
-                        int j = tab->artificial_vars[k];
-                        refined_art_sum += fabs(tab->x[j]);
-                    }
+                    double refined_art_sum = p1_artificial_sum(tab);
 
                     if (refined_art_sum <= 1e-4) {
                         if (solver->verbose) {
@@ -514,10 +689,53 @@ P1ZoneResult p1_zone_pricing(SimplexSolver *solver,
                         return P1_ZONE_CONTINUE;
                     }
                     art_sum = refined_art_sum;
+
+                    {
+                        int cleanup_entering = -1;
+                        int cleanup_price_status = pricing_dispatch(
+                            tab,
+                            rs->cycling.pricing_strategy,
+                            rs->cycling.use_bland,
+                            0,
+                            iter,
+                            &cleanup_entering);
+                        if (cleanup_price_status == 0 && cleanup_entering >= 0) {
+                            if (solver->verbose >= 2) {
+                                LP_LOG_STDERR("[simplex_phase1] Refactorized cleanup found improving column %d after stale no-entering result at iter %d\n",
+                                        cleanup_entering, iter);
+                            }
+                            return P1_ZONE_CONTINUE;
+                        }
+                    }
                 }
 
-                /* Truly infeasible - extract Farkas ray from Phase 1 duals.
-                 * The Phase 1 duals y = c_B^T * B^{-1} provide the certificate. */
+                /* Truly infeasible only if the final Phase 1 tableau is still
+                 * a coherent primal tableau.  If bounds are violated or the
+                 * stored Phase 1 objective no longer matches the artificial
+                 * sum, the no-entering result is numerical breakdown, not a
+                 * valid infeasibility certificate. */
+                {
+                    double max_bound_infeas = 0.0;
+                    double obj_art_gap = 0.0;
+                    if (!p1_tableau_valid_for_infeasibility_certificate(
+                            tab,
+                            art_sum,
+                            &max_bound_infeas,
+                            &obj_art_gap)) {
+                        if (solver->verbose) {
+                            LP_LOG_STDERR("[simplex_phase1] NUMERICAL: cannot certify infeasible with art_sum=%g, bound_infeas=%g, obj_art_gap=%g at iter %d\n",
+                                    art_sum, max_bound_infeas, obj_art_gap, iter);
+                        }
+                        solver->current_phase = SIMPLEX_PHASE_INFEASIBLE;
+                        solver->status = RALPH_STATUS_ERROR;
+                        solver->iterations = iter;
+                        phase1_trace_emit_summary(solver, RALPH_STATUS_ERROR);
+                        return P1_ZONE_RETURN_FAIL;
+                    }
+                }
+
+                /* Extract Farkas ray from Phase 1 duals.  The Phase 1 duals
+                 * y = c_B^T * B^{-1} provide the certificate. */
                 if (solver->verbose) {
                     LP_LOG_STDERR("[simplex_phase1] INFEASIBLE: artificial sum = %g after %d iterations\n",
                             art_sum, iter);
@@ -700,7 +918,7 @@ P1ZoneResult p1_zone_ratio_breakdown(SimplexSolver *solver,
 
     int rescue_status = p1_progress_attempt_direct_rescue(
         solver, tab, iter, &rs->progress);
-    if (rescue_status == 0) {
+    if (rescue_status == 1) {
         if (solver->verbose) {
             LP_LOG_STDERR("[simplex_phase1] Dual rescue recovered after ratio-test breakdown at iter %d\n", iter);
         }
@@ -968,14 +1186,18 @@ P1ZoneResult p1_zone_pivot(SimplexSolver *solver,
          * redundant and allow LU regularization to proceed. */
         if (leaving >= 0 && leaving < tab->m) {
             int leave_var = tab->basis[leaving];
+            int redundant_row = artificial_var_row(tab, leave_var);
             if (is_artificial_var(tab, leave_var) &&
                 tab->redundant_rows &&
-                !tab->redundant_rows[leaving]) {
-                tab->redundant_rows[leaving] = 1;
+                redundant_row >= 0 &&
+                redundant_row < tab->m &&
+                !tab->redundant_rows[redundant_row] &&
+                fabs(tab->x[leave_var]) <= RALPH_FEAS_TOL) {
+                tab->redundant_rows[redundant_row] = 1;
                 tab->num_redundant++;
                 if (solver->verbose >= 2) {
-                    LP_LOG_STDERR("[simplex_phase1] Marking row %d as redundant due to stuck artificial %d\n",
-                            leaving, leave_var);
+                    LP_LOG_STDERR("[simplex_phase1] Marking row %d as redundant due to stuck artificial %d at basis position %d\n",
+                            redundant_row, leave_var, leaving);
                 }
                 if (tableau_refactorize_with_reason(tab, RALPH_REFACTOR_REASON_PIVOT_RECOVERY) == 0) {
                     p1_basis_pivot_fail_maybe_exclude(solver,
@@ -1017,7 +1239,7 @@ P1ZoneResult p1_zone_pivot(SimplexSolver *solver,
          * rescue on the current tableau (no recursion to primal simplex). */
         int rescue_status = p1_progress_attempt_direct_rescue(
             solver, tab, iter, &rs->progress);
-        if (rescue_status == 0) {
+        if (rescue_status == 1) {
             if (solver->verbose) {
                 LP_LOG_STDERR("[simplex_phase1] Dual rescue restored feasibility progress at iter %d\n", iter);
             }
@@ -1084,10 +1306,7 @@ void p1_zone_post_pivot_reset(SimplexSolver *solver,
     rs->basis.last_failed_stabilize_retry_alt = -1;
     rs->basis.failed_stabilize_retry_alt_streak = 0;
     rs->basis.failed_stabilize_retry_alt_ratio_fail_streak = 0;
-    rs->basis.excluded_entering_a = -1;
-    rs->basis.excluded_entering_ttl_a = 0;
-    rs->basis.excluded_entering_b = -1;
-    rs->basis.excluded_entering_ttl_b = 0;
+    p1_basis_clear_entering_exclusions(&rs->basis);
 }
 
 /* ── Zone 7b: Stall detection ──────────────────────────────────────── */
@@ -1469,7 +1688,7 @@ P1ZoneResult p1_zone_periodic_refactor(SimplexSolver *solver,
 
             int rescue_status = p1_progress_attempt_direct_rescue(
                 solver, tab, iter, &rs->progress);
-            if (rescue_status == 0) {
+            if (rescue_status == 1) {
                 if (solver->verbose) {
                     LP_LOG_STDERR("[simplex_phase1] Dual rescue recovered after refactorization failure at iter %d\n", iter);
                 }
@@ -1774,6 +1993,7 @@ P1ZoneResult p1_zone_direction_guard(SimplexSolver *solver,
         }
         int force_dir_refactor = force_dir_refactor_extreme ||
                                  force_dir_refactor_lu_health;
+        int accept_scaled_direction = 0;
         int moderate_defer =
             lp_refactor_policy_phase1_dir_stabilize_should_defer_moderate(
                 dir_inf_ratio,
@@ -1786,6 +2006,29 @@ P1ZoneResult p1_zone_direction_guard(SimplexSolver *solver,
         dir_stabilize_cooldown_target =
             lp_refactor_policy_phase1_dir_stabilize_cooldown_updates(
                 tab->m, rs->cycling.degenerate_count, rs->numerical.dir_stabilize_repeat_count);
+
+        accept_scaled_direction =
+            (leaving >= 0) &&
+            lp_refactor_policy_phase1_dir_stabilize_accept_scaled_pivot(
+                dir_inf_ratio,
+                current_pivot_ratio,
+                force_dir_refactor_lu_health,
+                lu_hard_trigger,
+                force_dir_refactor_extreme) &&
+            p1_entering_still_improves(tab, entering) &&
+            p1_scaled_direction_preserves_artificial_progress(
+                tab, entering, leaving, theta);
+        if (accept_scaled_direction) {
+            rs->numerical.dir_stabilize_moderate_defer_pending = 0;
+            if (solver->verbose >= 2) {
+                LP_LOG_STDERR("[simplex_phase1] Accepting scaled Phase 1 direction %.2e with pivot ratio %.3e at iter %d\n",
+                        dir_inf, current_pivot_ratio, iter);
+            }
+            ctx->entering = entering;
+            ctx->leaving = leaving;
+            ctx->theta = theta;
+            return P1_ZONE_PROCEED;
+        }
 
         if (cooldown_active) {
             lp_telemetry_record_phase1_dir_stabilize_cooldown_candidate(
@@ -1993,6 +2236,15 @@ P1ZoneResult p1_zone_direction_guard(SimplexSolver *solver,
             if (tableau_refactorize_with_reason(tab, RALPH_REFACTOR_REASON_DIRECTION_STABILIZE) != 0) {
                 break;
             }
+            tableau_compute_reduced_costs(tab);
+            if (!p1_entering_still_improves(tab, entering)) {
+                if (solver->verbose >= 2) {
+                    LP_LOG_STDERR("[simplex_phase1] Refactored direction candidate %d no longer improves Phase 1, retrying pricing at iter %d\n",
+                            entering, iter);
+                }
+                phase1_trace_record_no_entering(solver, iter, 1);
+                return P1_ZONE_CONTINUE;
+            }
             rs->numerical.dir_stabilize_cooldown = dir_stabilize_cooldown_target;
             ratio_status = primal_ratio_test_with_policy(solver,
                                                          tab,
@@ -2025,6 +2277,25 @@ P1ZoneResult p1_zone_direction_guard(SimplexSolver *solver,
                 LP_LOG_STDERR("[simplex_phase1] Direction norm after re-factorization: %.2e\n",
                         dir_inf);
             }
+            {
+                double refactored_pivot_abs = 0.0;
+                phase1_failed_stabilize_retry_direction_shape(
+                    tab,
+                    leaving,
+                    NULL,
+                    NULL,
+                    &refactored_pivot_abs);
+                if (force_pivot_mode_active &&
+                    isfinite(refactored_pivot_abs) &&
+                    refactored_pivot_abs >= RALPH_PIVOT_TOL) {
+                    if (solver->verbose >= 2) {
+                        LP_LOG_STDERR("[simplex_phase1] Force-pivot budget accepting refactored direction %.2e with pivot %.2e\n",
+                                dir_inf, refactored_pivot_abs);
+                    }
+                    stabilized = 1;
+                    break;
+                }
+            }
             if (dir_inf <= RALPH_PHASE1_DIR_INF_REFACTOR_TRIGGER) {
                 if (force_extreme_followup_tracked) {
                     lp_telemetry_record_phase1_force_extreme_followup_stabilized(
@@ -2049,10 +2320,12 @@ P1ZoneResult p1_zone_direction_guard(SimplexSolver *solver,
                     original_entering,
                     rs->basis.last_failed_stabilize_entering,
                     &rs->basis.failed_stabilize_retry_pool_sample_counter);
-                if (pricing_bland_excluding_two(tab,
-                                                original_entering,
-                                                rs->basis.last_failed_stabilize_entering,
-                                                &entering) != 0) {
+                if (p1_pricing_bland_excluding_basis(
+                        tab,
+                        &rs->basis,
+                        original_entering,
+                        rs->basis.last_failed_stabilize_entering,
+                        &entering) != 0) {
                     lp_telemetry_record_phase1_failed_stabilize_retry_penalty_no_alt(
                         solver);
                     break;
@@ -2105,10 +2378,12 @@ P1ZoneResult p1_zone_direction_guard(SimplexSolver *solver,
                                     retry_local_memory_used_guarded_selector ? "guarded" : "bland",
                                     entering);
                         }
-                    } else if (pricing_bland_excluding_two(tab,
-                                                           original_entering,
-                                                           rs->basis.last_failed_stabilize_retry_alt,
-                                                           &entering) == 0) {
+                    } else if (p1_pricing_bland_excluding_basis(
+                                   tab,
+                                   &rs->basis,
+                                   original_entering,
+                                   rs->basis.last_failed_stabilize_retry_alt,
+                                   &entering) == 0) {
                         if (phase1_failed_stabilize_retry_eval_candidates(
                             solver,
                             tab,
@@ -2141,7 +2416,9 @@ P1ZoneResult p1_zone_direction_guard(SimplexSolver *solver,
                         retry_local_memory_used_guarded_selector = 0;
                         lp_telemetry_record_phase1_failed_stabilize_retry_local_memory_no_alt(
                             solver);
-                        if (pricing_bland_excluding(tab, original_entering, &entering) != 0) {
+                        if (p1_pricing_bland_excluding_basis(
+                                tab, &rs->basis, original_entering, -1,
+                                &entering) != 0) {
                             break;
                         }
                         if (entering == rs->basis.last_failed_stabilize_retry_alt) {
@@ -2156,7 +2433,9 @@ P1ZoneResult p1_zone_direction_guard(SimplexSolver *solver,
                         original_entering,
                         -1,
                         &rs->basis.failed_stabilize_retry_pool_sample_counter);
-                    if (pricing_bland_excluding(tab, original_entering, &entering) != 0) {
+                    if (p1_pricing_bland_excluding_basis(
+                            tab, &rs->basis, original_entering, -1,
+                            &entering) != 0) {
                         break;
                     }
                 }
@@ -2351,6 +2630,15 @@ P1ZoneResult p1_zone_direction_guard(SimplexSolver *solver,
                 lp_telemetry_record_phase1_force_extreme_followup_failed_stabilize(
                     solver);
                 arm_force_extreme_followup_pending = 1;
+            }
+            if (force_pivot_mode_active &&
+                rs->progress.force_pivot_attempt_budget > 0) {
+                /* The force-pivot budget represents attempts to escape
+                 * no-pivot pressure, not only completed pivots.  Spending a
+                 * failed stabilization attempt prevents a stale budget from
+                 * pinning Phase 1 to forced refactors after the direction
+                 * geometry has already shown that path is not productive. */
+                rs->progress.force_pivot_attempt_budget--;
             }
             lp_telemetry_record_phase1_failed_stabilize_site(
                 solver, retry_consumed_alternate);

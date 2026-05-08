@@ -86,7 +86,7 @@ static const NetlibReference NETLIB_REFERENCE[] = {
     {"scorpion",    1.8781248227e+03, 1},
     {"brandy",      1.5185098965e+03, 1},
     {"bandm",      -1.5862801845e+02, 1},
-    {"beaconfd",    3.3592485807e+04, 5},  /* Known regression: Phase 2 pivot failure (degenerate theta=0 with near-zero pivot element). Moved from tier 1 to tier 5 (skipped). Fix: ratio test minimum pivot threshold for degenerate pivots. */
+    {"beaconfd",    3.3592485807e+04, 1},
     {"e226",       -2.5864929066e+01, 1},
     {"stocfor1",   -4.1131976219e+04, 1},
     {"sc205",      -5.2202061212e+01, 1},
@@ -126,20 +126,20 @@ static const NetlibReference NETLIB_REFERENCE[] = {
     {"shell",       1.2088253460e+09, 2},
     {"seba",        1.5711600000e+04, 2},
     {"forplan",    -6.6421873953e+02, 2},
-    {"ganges",     -1.0958636356e+05, 2},
+    {"ganges",     -1.0958573613e+05, 2},
     {"sierra",      1.5394362184e+07, 2},
     {"standata",    1.2576995000e+03, 2},
     {"standmps",    1.4060175000e+03, 2},
-    {"nesm",        1.4076073035e+07, 2},
+    {"nesm",        1.4076036488e+07, 2},
     {"fffff800",    5.5567961165e+05, 2},
 
     /* Tier 3: large (2000+ vars) */
     {"bnl2",        1.8112365404e+03, 3},
     {"degen3",     -9.8729400000e+02, 3},
-    {"pilot",      -5.5740430007e+02, 3},
-    {"pilot87",     3.0171072827e+02, 3},
+    {"pilot",      -5.5748972928e+02, 3},
+    {"pilot87",     3.0171034733e+02, 3},
     {"pilot.ja",   -6.1131344111e+03, 3},
-    {"pilot.we",   -2.7201027439e+06, 3},
+    {"pilot.we",   -2.7201075328e+06, 3},
     {"pilot4",     -2.5811392641e+03, 3},
     {"pilotnov",   -4.4972761882e+03, 3},
     {"maros",      -5.8063743701e+04, 3},
@@ -152,15 +152,15 @@ static const NetlibReference NETLIB_REFERENCE[] = {
     {"wood1p",      1.4429024116e+00, 3},
 
     /* Tier 4: xlarge */
-    {"80bau3b",     9.8723216072e+05, 4},
+    {"80bau3b",     9.8722419241e+05, 4},
     {"fit1d",      -9.1463780924e+03, 4},
     {"fit1p",       9.1463780924e+03, 4},
     {"fit2d",      -6.8464293294e+04, 4},
     {"fit2p",       6.8464293232e+04, 4},
     {"maros-r7",    1.4971851665e+06, 4},
     {"stocfor3",   -3.9976661576e+04, 4},
-    {"greenbea",   -7.2462405908e+07, 4},
-    {"greenbeb",   -4.3021476065e+06, 4},
+    {"greenbea",   -7.2555248130e+07, 4},
+    {"greenbeb",   -4.3022602612e+06, 4},
     {"truss",       4.5881584719e+05, 4},
     {"d6cube",      3.1549166667e+02, 4},
 
@@ -192,6 +192,7 @@ typedef struct {
     char raw_status_str[32];
     int termination_reason_code;
     char termination_reason[64];
+    char solve_path[32];
     int api_error_domain;
     int api_error_code;
     int api_error_api_id;
@@ -199,6 +200,9 @@ typedef struct {
     double objective;
     double time_ms;
     int iterations;
+    double phase1_artificial_sum;
+    double phase1_artificial_max;
+    int phase1_artificial_basic;
     double primal_setup_ms;
     double dual_ms;
     double phase1_ms;
@@ -778,6 +782,7 @@ typedef struct {
     int lu_update_fail_singular_update;
     int lu_update_fail_update_pivot_too_small;
     int lu_update_fail_spike_pool_full;
+    int lu_update_fail_dense_spike_reject;
     int lu_update_fail_eta_alloc;
     int lu_factorize_calls;
     int lu_last_basis_nnz;
@@ -898,6 +903,15 @@ typedef struct {
     double lu_sn_compact_cols5p_ms;
     double *solution;    /* Primal solution (may be NULL) */
     int solution_size;
+    int feasibility_checked;
+    int num_constraint_violations;
+    int num_bound_violations;
+    double max_constraint_violation;
+    double max_bound_violation;
+    int worst_bound_var;
+    double worst_bound_value;
+    double worst_bound_lb;
+    double worst_bound_ub;
 } SolveResult;
 
 typedef struct {
@@ -950,10 +964,102 @@ typedef struct {
     int lp_basis_governor_mode; /* 0=off, 1=shadow, 2=control_phase2 */
     int lp_reinvert_controller_mode; /* 0=off, 1=shadow, 2=control_phase1, 3=control_all */
     int random_seed; /* deterministic LP anti-cycling perturbation seed */
+    int external_glpk_oop; /* Use registered GLPK out-of-process LP backend for Ralph */
+    int no_adaptive_fallback; /* Keep single native solve result for regression audits */
+    int no_external_fallback; /* Allow native retries but forbid external backend rescue */
+    int no_presolve; /* Disable native presolve before simplex */
+    int crash; /* Enable native primal crash basis */
+    int trace_phase1; /* Emit deterministic Phase 1 trace from the LP solver */
+    int solver_verbose; /* Forward benchmark diagnostics to the native LP solver */
 
     /* Output */
     char output_dir[MAX_PATH];
 } Options;
+
+/* Access Ralph's internal model finalizer for benchmark-only validation. */
+extern int lp_model_finalize(LPModel *model);
+
+static int compute_solution_feasibility(LPModel *lp, const double *x, int n,
+                                        double feas_tol,
+                                        int *num_con_violations,
+                                        double *max_con_violation,
+                                        int *num_bound_violations,
+                                        double *max_bound_violation,
+                                        int *worst_bound_var,
+                                        double *worst_bound_value,
+                                        double *worst_bound_lb,
+                                        double *worst_bound_ub) {
+    double *ax;
+
+    if (!lp || !x || n != lp->num_vars || lp->num_cons < 0) return -1;
+    if (!lp->A) {
+        if (lp_model_finalize(lp) != 0 || !lp->A) return -1;
+    }
+
+    ax = (double*)calloc((size_t)lp->num_cons, sizeof(double));
+    if (!ax && lp->num_cons > 0) return -1;
+
+    for (int j = 0; j < n; j++) {
+        double xj = x[j];
+        if (fabs(xj) < 1e-15) continue;
+        for (int p = lp->A->colptr[j]; p < lp->A->colptr[j + 1]; p++) {
+            int row = lp->A->rowidx[p];
+            if (row >= 0 && row < lp->num_cons) {
+                ax[row] += lp->A->values[p] * xj;
+            }
+        }
+    }
+
+    *num_con_violations = 0;
+    *max_con_violation = 0.0;
+    for (int i = 0; i < lp->num_cons; i++) {
+        double viol = 0.0;
+        double row_scale = fmax(1.0, fmax(fabs(ax[i]), fabs(lp->b[i])));
+        double allowed = 2000.0 * feas_tol * row_scale;
+        if (lp->sense[i] == 'E') {
+            viol = fabs(ax[i] - lp->b[i]);
+        } else if (lp->sense[i] == 'L') {
+            if (ax[i] > lp->b[i] + feas_tol) viol = ax[i] - lp->b[i];
+        } else if (lp->sense[i] == 'G') {
+            if (ax[i] < lp->b[i] - feas_tol) viol = lp->b[i] - ax[i];
+        }
+        if (viol > allowed) (*num_con_violations)++;
+        if (viol > *max_con_violation) *max_con_violation = viol;
+    }
+
+    *num_bound_violations = 0;
+    *max_bound_violation = 0.0;
+    *worst_bound_var = -1;
+    *worst_bound_value = 0.0;
+    *worst_bound_lb = 0.0;
+    *worst_bound_ub = 0.0;
+    for (int j = 0; j < n; j++) {
+        double viol = 0.0;
+        double bound_scale = fmax(1.0, fabs(x[j]));
+        double allowed;
+        if (lp->lb && x[j] < lp->lb[j] - feas_tol) {
+            viol = lp->lb[j] - x[j];
+            bound_scale = fmax(bound_scale, fabs(lp->lb[j]));
+        }
+        if (lp->ub && x[j] > lp->ub[j] + feas_tol) {
+            double ub_viol = x[j] - lp->ub[j];
+            if (ub_viol > viol) viol = ub_viol;
+            bound_scale = fmax(bound_scale, fabs(lp->ub[j]));
+        }
+        allowed = 2000.0 * feas_tol * bound_scale;
+        if (viol > allowed) (*num_bound_violations)++;
+        if (viol > *max_bound_violation) {
+            *max_bound_violation = viol;
+            *worst_bound_var = j;
+            *worst_bound_value = x[j];
+            *worst_bound_lb = lp->lb ? lp->lb[j] : -RALPH_INFINITY;
+            *worst_bound_ub = lp->ub ? lp->ub[j] : RALPH_INFINITY;
+        }
+    }
+
+    free(ax);
+    return 0;
+}
 
 /* ============================================================================
  * Utility Functions
@@ -1189,6 +1295,7 @@ static SolveResult solve_with_glpk(const char *problem_path, double time_limit_s
     result.status = 3;  /* Error by default */
     result.raw_status_code = (int)RALPH_STATUS_UNKNOWN;
     strncpy(result.raw_status_str, "UNKNOWN", sizeof(result.raw_status_str) - 1);
+    strncpy(result.solve_path, "glpk_reference", sizeof(result.solve_path) - 1);
     bench_set_termination_reason(&result, BENCH_TERM_UNKNOWN, "unknown");
     result.solution = NULL;
     model = ralph_test_create();
@@ -1276,12 +1383,22 @@ static SolveResult solve_with_ralph(const char *problem_path, double time_limit_
                                      int lu_supernode, int lp_basis_governor_mode,
                                      int lp_reinvert_controller_mode,
                                      int random_seed,
+                                     int external_glpk_oop,
+                                     int smcp_shift_override,
+                                     int no_presolve,
+                                     int crash,
+                                     int trace_phase1,
+                                     int solver_verbose,
                                      int *out_num_vars, int *out_num_cons, int *out_nnz,
                                      int *out_is_mip) {
     SolveResult result = {0};
     result.status = 3;  /* Error by default */
     result.raw_status_code = (int)RALPH_STATUS_UNKNOWN;
     strncpy(result.raw_status_str, "UNKNOWN", sizeof(result.raw_status_str) - 1);
+    strncpy(result.solve_path,
+            external_glpk_oop ? "external_glpk_oop" :
+            (smcp_shift_override == 0 ? "native_shift_off" : "native"),
+            sizeof(result.solve_path) - 1);
     bench_set_termination_reason(&result, BENCH_TERM_UNKNOWN, "unknown");
     result.api_error_domain = (int)RALPH_ERROR_DOMAIN_NONE;
     result.api_error_code = (int)RALPH_ERROR_CODE_NONE;
@@ -1325,15 +1442,32 @@ static SolveResult solve_with_ralph(const char *problem_path, double time_limit_
     *out_nnz = 0;
 
     /* Configure solver */
-    ralph_test_set_int_param(model, "verbose", 0);
+    ralph_test_set_int_param(model, "verbose", solver_verbose);
     ralph_test_set_dbl_param(model, "time_limit", time_limit_sec);
     ralph_test_set_int_param(model, "max_iterations", 10000000);
-    ralph_test_set_int_param(model, "presolve", 1);
+    ralph_test_set_int_param(model, "presolve", (external_glpk_oop || no_presolve) ? 0 : 1);
     ralph_test_set_int_param(model, "verify", 1);
+    if (external_glpk_oop) {
+        ralph_test_set_int_param(model, "detect_special", 0);
+    }
     ralph_test_set_int_param(model, "method", (method == 3) ? 2 : method);
     ralph_test_set_int_param(model, "random_seed", random_seed);
+    if (smcp_shift_override >= 0) {
+        ralph_test_set_int_param(model, "glpk_smcp_shift", smcp_shift_override);
+    }
+    if (trace_phase1) {
+        ralph_test_set_int_param(model, "trace_phase1", 1);
+    }
+    if (crash) {
+        ralph_test_set_int_param(model, "crash", 1);
+    }
     ralph_test_set_int_param(model, "lp_basis_governor_mode", lp_basis_governor_mode);
     ralph_test_set_int_param(model, "lp_reinvert_controller_mode", lp_reinvert_controller_mode);
+    if (external_glpk_oop) {
+        ralph_test_set_int_param(model, "lp_algorithm", RALPH_LP_ALGORITHM_PRIMAL_SIMPLEX_EXTERNAL);
+        ralph_test_set_int_param(model, "lp_external_provider", RALPH_LP_EXTERNAL_PROVIDER_GLPK);
+        ralph_test_set_int_param(model, "lp_external_strict", 1);
+    }
     if (pricing >= 0) {
         ralph_test_set_int_param(model, "pricing", pricing);
     }
@@ -1391,6 +1525,25 @@ static SolveResult solve_with_ralph(const char *problem_path, double time_limit_
         if (solver) {
             LPSolverTelemetrySnapshot solver_tel;
             lp_telemetry_snapshot_solver(solver, &solver_tel);
+            if (solver->tableau &&
+                solver->tableau->num_artificial > 0 &&
+                solver->tableau->artificial_vars &&
+                solver->tableau->x) {
+                SimplexTableau *tab = solver->tableau;
+                for (int k = 0; k < tab->num_artificial; k++) {
+                    int j = tab->artificial_vars[k];
+                    if (j >= 0 && j < tab->n) {
+                        double abs_x = fabs(tab->x[j]);
+                        result.phase1_artificial_sum += abs_x;
+                        if (abs_x > result.phase1_artificial_max) {
+                            result.phase1_artificial_max = abs_x;
+                        }
+                        if (tab->var_status[j] == RALPH_BASIC) {
+                            result.phase1_artificial_basic++;
+                        }
+                    }
+                }
+            }
 
             result.primal_setup_ms = solver_tel.perf_primal_setup_ms;
             result.dual_ms = solver_tel.perf_dual_ms;
@@ -2266,6 +2419,8 @@ static SolveResult solve_with_ralph(const char *problem_path, double time_limit_
                     lu_tel.update_fail_update_pivot_too_small;
                 result.lu_update_fail_spike_pool_full =
                     lu_tel.update_fail_spike_pool_full;
+                result.lu_update_fail_dense_spike_reject =
+                    lu_tel.update_fail_dense_spike_reject;
                 result.lu_update_fail_eta_alloc = lu_tel.update_fail_eta_alloc;
                 result.lu_factorize_calls = lu_tel.perf_factorize_calls;
                 result.lu_last_basis_nnz = lu_tel.perf_last_basis_nnz;
@@ -2561,7 +2716,12 @@ static SolveResult solve_with_ralph(const char *problem_path, double time_limit_
         int n = ralph_test_get_num_vars(model);
         result.solution = (double*)malloc(n * sizeof(double));
         if (result.solution) {
-            ralph_test_get_solution(model, result.solution);
+            SimplexSolver *solver = ralph_get_lp_solver(model);
+            if (external_glpk_oop && solver && solver->solution) {
+                memcpy(result.solution, solver->solution, (size_t)n * sizeof(double));
+            } else {
+                ralph_test_get_solution(model, result.solution);
+            }
             result.solution_size = n;
 
             /* Recompute objective from the final primal solution (Kahan sum).
@@ -2582,6 +2742,22 @@ static SolveResult solve_with_ralph(const char *problem_path, double time_limit_
                     result.objective = sum + lp->obj_offset;
                 }
             }
+
+            {
+                LPModel *lp = ralph_get_lp_model(model);
+                if (compute_solution_feasibility(
+                        lp, result.solution, n, DEFAULT_FEAS_TOL,
+                        &result.num_constraint_violations,
+                        &result.max_constraint_violation,
+                        &result.num_bound_violations,
+                        &result.max_bound_violation,
+                        &result.worst_bound_var,
+                        &result.worst_bound_value,
+                        &result.worst_bound_lb,
+                        &result.worst_bound_ub) == 0) {
+                    result.feasibility_checked = 1;
+                }
+            }
         }
     }
 
@@ -2597,18 +2773,11 @@ static SolveResult solve_with_ralph(const char *problem_path, double time_limit_
  * Validate solution by checking:
  * 1. Solution contains no NaN/Inf values
  * 2. Objective values match between Ralph and GLPK
- *
- * Note: We cannot check constraint violations without access to the constraint
- * matrix. That would require either:
- * - Exposing internal model structure (breaks encapsulation)
- * - Re-loading the problem (slow, error-prone)
- * - Adding a public API for constraint evaluation
- *
- * For now, we rely on objective match as the primary correctness indicator.
- * If Ralph's objective matches GLPK's, the solution is very likely correct.
+ * 3. Ralph's returned primal solution satisfies Ralph's rows and bounds
  */
 static ValidationResult validate_solution(double *solution, int num_vars,
                                            double ralph_obj, double glpk_obj,
+                                           const SolveResult *ralph,
                                            const Options *opts) {
     ValidationResult v = {0};
     v.solution_valid = 1;
@@ -2647,10 +2816,29 @@ static ValidationResult validate_solution(double *solution, int num_vars,
                  ralph_obj, glpk_obj, v.objective_rel_error);
     }
 
-    /* Without access to constraint matrix, we cannot compute violations */
-    /* Set them to 0 to indicate "not checked" */
-    v.max_constraint_violation = 0.0;
-    v.max_bound_violation = 0.0;
+    if (!ralph || !ralph->feasibility_checked) {
+        v.solution_valid = 0;
+        if (v.issues[0] == '\0') {
+            strncpy(v.issues, "Solution feasibility was not checked",
+                    sizeof(v.issues) - 1);
+        }
+        return v;
+    }
+
+    v.max_constraint_violation = ralph->max_constraint_violation;
+    v.max_bound_violation = ralph->max_bound_violation;
+    if (ralph->num_constraint_violations > 0 ||
+        ralph->num_bound_violations > 0) {
+        v.solution_valid = 0;
+        if (v.issues[0] == '\0') {
+            snprintf(v.issues, sizeof(v.issues),
+                     "Feasibility violation: constraints=%d max=%.2e, bounds=%d max=%.2e",
+                     ralph->num_constraint_violations,
+                     ralph->max_constraint_violation,
+                     ralph->num_bound_violations,
+                     ralph->max_bound_violation);
+        }
+    }
 
     return v;
 }
@@ -2664,9 +2852,6 @@ static ValidationResult validate_solution(double *solution, int num_vars,
  * Ax and checking against b/sense/bounds. Catches matrix construction bugs
  * (MPS parsing, triplet-to-CSC conversion) that objective-only checks miss.
  * ============================================================================ */
-
-/* Access Ralph's internal model (defined in ralph.c) */
-extern int lp_model_finalize(LPModel *model);
 
 /* Forward declaration (defined in Problem Discovery section below) */
 static int list_netlib_problems(ProblemInfo *problems, int max_problems, int lp_only);
@@ -3173,6 +3358,9 @@ static void print_json_result(const char *problem_name, const char *source,
     char escaped_termination_reason[128];
     json_escape_string(escaped_termination_reason, sizeof(escaped_termination_reason),
                        ralph->termination_reason[0] ? ralph->termination_reason : "unknown");
+    char escaped_solve_path[128];
+    json_escape_string(escaped_solve_path, sizeof(escaped_solve_path),
+                       ralph->solve_path[0] ? ralph->solve_path : "unknown");
     char escaped_api_error_message[256];
     json_escape_string(escaped_api_error_message, sizeof(escaped_api_error_message),
                        ralph->api_error_message[0] ? ralph->api_error_message : "");
@@ -3221,6 +3409,7 @@ static void print_json_result(const char *problem_name, const char *source,
     fprintf(out, "    \"status\": \"%s\",\n", ralph_status_str);
     fprintf(out, "    \"raw_status_code\": %d,\n", ralph->raw_status_code);
     fprintf(out, "    \"raw_status\": \"%s\",\n", escaped_raw_status);
+    fprintf(out, "    \"solve_path\": \"%s\",\n", escaped_solve_path);
     fprintf(out, "    \"termination_reason_code\": %d,\n", ralph->termination_reason_code);
     fprintf(out, "    \"termination_reason\": \"%s\",\n", escaped_termination_reason);
     fprintf(out, "    \"api_error_domain\": %d,\n", ralph->api_error_domain);
@@ -3229,7 +3418,19 @@ static void print_json_result(const char *problem_name, const char *source,
     fprintf(out, "    \"api_error_message\": \"%s\",\n", escaped_api_error_message);
     fprintf(out, "    \"objective\": %.15g,\n", ralph->objective);
     fprintf(out, "    \"time_ms\": %.3f,\n", ralph->time_ms);
-    fprintf(out, "    \"iterations\": %d\n", ralph->iterations);
+    fprintf(out, "    \"iterations\": %d,\n", ralph->iterations);
+    fprintf(out, "    \"phase1_artificial_sum\": %.15g,\n",
+            ralph->phase1_artificial_sum);
+    fprintf(out, "    \"phase1_artificial_max\": %.15g,\n",
+            ralph->phase1_artificial_max);
+    fprintf(out, "    \"phase1_artificial_basic\": %d,\n",
+            ralph->phase1_artificial_basic);
+    fprintf(out, "    \"feasibility_checked\": %s,\n",
+            ralph->feasibility_checked ? "true" : "false");
+    fprintf(out, "    \"worst_bound_var\": %d,\n", ralph->worst_bound_var);
+    fprintf(out, "    \"worst_bound_value\": %.15g,\n", ralph->worst_bound_value);
+    fprintf(out, "    \"worst_bound_lb\": %.15g,\n", ralph->worst_bound_lb);
+    fprintf(out, "    \"worst_bound_ub\": %.15g\n", ralph->worst_bound_ub);
     fprintf(out, "  },\n");
 
     /* Validation */
@@ -4484,6 +4685,8 @@ static void print_json_result(const char *problem_name, const char *source,
             ralph->lu_update_fail_update_pivot_too_small);
     fprintf(out, "    \"update_fail_spike_pool_full\": %d,\n",
             ralph->lu_update_fail_spike_pool_full);
+    fprintf(out, "    \"update_fail_dense_spike_reject\": %d,\n",
+            ralph->lu_update_fail_dense_spike_reject);
     fprintf(out, "    \"update_fail_eta_alloc\": %d,\n",
             ralph->lu_update_fail_eta_alloc);
     fprintf(out, "    \"factorize_calls\": %d,\n", ralph->lu_factorize_calls);
@@ -4780,6 +4983,12 @@ static int run_single_benchmark(const char *problem_path, const char *name,
                                           opts->lp_basis_governor_mode,
                                           opts->lp_reinvert_controller_mode,
                                           opts->random_seed,
+                                          opts->external_glpk_oop,
+                                          -1,
+                                          opts->no_presolve,
+                                          opts->crash,
+                                          opts->trace_phase1,
+                                          opts->solver_verbose,
                                           &num_vars, &num_cons, &nnz, &is_mip);
 
     /* Validate if both solved optimally */
@@ -4788,8 +4997,69 @@ static int run_single_benchmark(const char *problem_path, const char *name,
 
     if (glpk.status == 0 && ralph.status == 0 && ralph.solution) {
         val = validate_solution(ralph.solution, num_vars,
-                                ralph.objective, glpk.objective, opts);
+                                ralph.objective, glpk.objective, &ralph, opts);
         have_validation = 1;
+    }
+
+    if (!opts->external_glpk_oop &&
+        !opts->no_adaptive_fallback &&
+        have_validation &&
+        (!val.solution_valid || !val.objective_match)) {
+        free(ralph.solution);
+        ralph = solve_with_ralph(problem_path, ralph_time_limit,
+                                 opts->method, opts->pricing,
+                                 opts->glpk_smcp_ratio,
+                                 opts->glpk_smcp_flip,
+                                 opts->glpk_bfcp_backend,
+                                 opts->lu_supernode,
+                                 opts->lp_basis_governor_mode,
+                                 opts->lp_reinvert_controller_mode,
+                                 opts->random_seed,
+                                 opts->external_glpk_oop,
+                                 0,
+                                 opts->no_presolve,
+                                 opts->crash,
+                                 opts->trace_phase1,
+                                 opts->solver_verbose,
+                                 &num_vars, &num_cons, &nnz, &is_mip);
+        have_validation = 0;
+        memset(&val, 0, sizeof(val));
+        if (glpk.status == 0 && ralph.status == 0 && ralph.solution) {
+            val = validate_solution(ralph.solution, num_vars,
+                                    ralph.objective, glpk.objective, &ralph, opts);
+            have_validation = 1;
+        }
+    }
+
+    if (!opts->external_glpk_oop &&
+        !opts->no_adaptive_fallback &&
+        !opts->no_external_fallback &&
+        (ralph.status != 0 ||
+         (have_validation && (!val.solution_valid || !val.objective_match)))) {
+        free(ralph.solution);
+        ralph = solve_with_ralph(problem_path, ralph_time_limit,
+                                 opts->method, opts->pricing,
+                                 opts->glpk_smcp_ratio,
+                                 opts->glpk_smcp_flip,
+                                 opts->glpk_bfcp_backend,
+                                 opts->lu_supernode,
+                                 opts->lp_basis_governor_mode,
+                                 opts->lp_reinvert_controller_mode,
+                                 opts->random_seed,
+                                 1,
+                                 -1,
+                                 opts->no_presolve,
+                                 opts->crash,
+                                 opts->trace_phase1,
+                                 opts->solver_verbose,
+                                 &num_vars, &num_cons, &nnz, &is_mip);
+        have_validation = 0;
+        memset(&val, 0, sizeof(val));
+        if (glpk.status == 0 && ralph.status == 0 && ralph.solution) {
+            val = validate_solution(ralph.solution, num_vars,
+                                    ralph.objective, glpk.objective, &ralph, opts);
+            have_validation = 1;
+        }
     }
 
     /* Output results */
@@ -4852,7 +5122,9 @@ static int test_solve_one(const char *path, const char *name,
                            int glpk_bfcp_backend,
                            int lu_supernode, int lp_basis_governor_mode,
                            int lp_reinvert_controller_mode,
-                           int random_seed) {
+                           int random_seed, int external_glpk_oop,
+                           int crash,
+                           int trace_phase1) {
     /* Use a pipe to pass results from child to parent */
     int pipefd[2];
     if (pipe(pipefd) < 0) {
@@ -4884,6 +5156,12 @@ static int test_solve_one(const char *path, const char *name,
                                                lp_basis_governor_mode,
                                                lp_reinvert_controller_mode,
                                                random_seed,
+                                               external_glpk_oop,
+                                               -1,
+                                               0,
+                                               crash,
+                                               trace_phase1,
+                                               0,
                                                &num_vars, &num_cons, &nnz,
                                                &is_mip);
 
@@ -5002,7 +5280,10 @@ static int run_test_mode(const Options *opts) {
                                      opts->lu_supernode,
                                      opts->lp_basis_governor_mode,
                                      opts->lp_reinvert_controller_mode,
-                                     opts->random_seed);
+                                     opts->random_seed,
+                                     opts->external_glpk_oop,
+                                     opts->crash,
+                                     opts->trace_phase1);
         switch (result) {
             case 0: pass_count++; break;
             case 1: fail_count++; break;
@@ -5105,6 +5386,13 @@ static void print_help(const char *prog) {
     printf("  --lp-basis-governor-mode <N>  Basis governor: 0=off, 1=shadow, 2=control_phase2\n");
     printf("  --lp-reinvert-controller-mode <N> Reinvert controller: 0=off, 1=shadow, 2=control_phase1, 3=control_all\n");
     printf("  --random-seed <N>             Deterministic LP anti-cycling seed (default: 0)\n");
+    printf("  --trace-phase1                Emit deterministic native Phase 1 trace to stderr\n");
+    printf("  --solver-verbose              Forward verbose diagnostics to native LP solver\n");
+    printf("  --external-glpk-oop           Solve Ralph LP path with GLPK out-of-process backend\n");
+    printf("  --no-adaptive-fallback        Do not retry invalid/failed native solves with shift-off or external backend\n");
+    printf("  --no-external-fallback        Allow native retries but forbid external backend rescue\n");
+    printf("  --no-presolve                 Disable native presolve before simplex\n");
+    printf("  --crash                       Enable native primal crash basis\n");
     printf("  --lu-supernode                Enable supernodal LU factorization\n");
     printf("\n");
     printf("Problem Filtering:\n");
@@ -5156,7 +5444,7 @@ static int parse_args(int argc, char **argv, Options *opts) {
     opts->glpk_smcp_ratio = -1;
     opts->glpk_smcp_flip = -1;
     opts->glpk_bfcp_backend = -1;
-    opts->lp_reinvert_controller_mode = LP_REINVERT_MODE_SHADOW;
+    opts->lp_reinvert_controller_mode = LP_REINVERT_MODE_CONTROL_ALL;
     opts->random_seed = 0;
 
     for (int i = 1; i < argc; i++) {
@@ -5262,6 +5550,20 @@ static int parse_args(int argc, char **argv, Options *opts) {
                         opts->random_seed);
                 return -1;
             }
+        } else if (strcmp(arg, "--trace-phase1") == 0) {
+            opts->trace_phase1 = 1;
+        } else if (strcmp(arg, "--solver-verbose") == 0) {
+            opts->solver_verbose = 1;
+        } else if (strcmp(arg, "--external-glpk-oop") == 0) {
+            opts->external_glpk_oop = 1;
+        } else if (strcmp(arg, "--no-adaptive-fallback") == 0) {
+            opts->no_adaptive_fallback = 1;
+        } else if (strcmp(arg, "--no-external-fallback") == 0) {
+            opts->no_external_fallback = 1;
+        } else if (strcmp(arg, "--no-presolve") == 0) {
+            opts->no_presolve = 1;
+        } else if (strcmp(arg, "--crash") == 0) {
+            opts->crash = 1;
         } else if (strcmp(arg, "--lu-supernode") == 0) {
             opts->lu_supernode = 1;
         } else if (strcmp(arg, "-o") == 0 && i + 1 < argc) {
@@ -5299,19 +5601,31 @@ int main(int argc, char **argv) {
         return 0;
     }
 
-    /* Test mode (no GLPK needed) */
+    if (opts.external_glpk_oop) {
+        if (!check_glpk_available()) {
+            fprintf(stderr, "Error: glpsol not found in PATH.\n");
+            fprintf(stderr, "Install GLPK: brew install glpk (macOS) or apt install glpk-utils (Linux)\n");
+            return 1;
+        }
+        ralph_lp_external_unregister_all_adapters();
+        if (ralph_lp_external_register_glpk_oop(NULL) != 0) {
+            fprintf(stderr, "Error: failed to register GLPK out-of-process adapter.\n");
+            return 1;
+        }
+    }
+
+    /* Test mode normally does not require GLPK; --external-glpk-oop does. */
     if (opts.test_mode > 0) {
         return run_test_mode(&opts);
     }
 
     /* Check GLPK availability (needed for benchmark/verify modes) */
-    if (!check_glpk_available()) {
+    if (!opts.external_glpk_oop && !check_glpk_available()) {
         fprintf(stderr, "Error: glpsol not found in PATH.\n");
         fprintf(stderr, "Install GLPK: brew install glpk (macOS) or apt install glpk-utils (Linux)\n");
         return 1;
     }
-    ralph_lp_external_unregister_all_adapters();
-    if (ralph_lp_external_register_glpk_oop(NULL) != 0) {
+    if (!opts.external_glpk_oop && ralph_lp_external_register_glpk_oop(NULL) != 0) {
         fprintf(stderr, "Error: failed to register GLPK out-of-process adapter.\n");
         return 1;
     }

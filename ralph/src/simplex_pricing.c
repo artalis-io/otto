@@ -251,6 +251,40 @@ int pricing_bland_excluding_two(SimplexTableau *tab,
     return 1;
 }
 
+int pricing_bland_excluding_set(SimplexTableau *tab,
+                                const int *excluded_vars,
+                                int excluded_count,
+                                int *entering) {
+    *entering = -1;
+
+    for (int j = 0; j < tab->n; j++) {
+        int excluded = 0;
+        for (int k = 0; k < excluded_count; k++) {
+            if (excluded_vars[k] == j) {
+                excluded = 1;
+                break;
+            }
+        }
+        if (excluded) continue;
+        if (tab->var_status[j] == RALPH_BASIC || simplex_smcp_excl_skip_var(tab, j)) continue;
+
+        double rc = tab->rc[j];
+
+        if (tab->var_status[j] == RALPH_NONBASIC_LOWER && rc < -RALPH_OPT_TOL) {
+            *entering = j;
+            return 0;
+        } else if (tab->var_status[j] == RALPH_NONBASIC_UPPER && rc > RALPH_OPT_TOL) {
+            *entering = j;
+            return 0;
+        } else if (tab->var_status[j] == RALPH_NONBASIC_FREE && fabs(rc) > RALPH_OPT_TOL) {
+            *entering = j;
+            return 0;
+        }
+    }
+
+    return 1;
+}
+
 int pricing_steepest_edge(SimplexTableau *tab, int *entering) {
     /* Steepest edge pricing: max |rc_j| / sqrt(gamma_j)
      * Uses exact weights updated with the formula:

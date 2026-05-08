@@ -172,6 +172,13 @@ int lp_refactor_policy_phase1_dir_stabilize_should_defer_moderate(
     int lu_health_triggered,
     int pending_repeat);
 
+int lp_refactor_policy_phase1_dir_stabilize_accept_scaled_pivot(
+    double dir_inf_ratio,
+    double pivot_ratio,
+    int lu_health_triggered,
+    int lu_hard_triggered,
+    int force_extreme_triggered);
+
 int lp_refactor_policy_phase1_small_pivot_refactor_allowed(int force_refactor,
                                                            int repeat_pattern,
                                                            int lu_num_updates);

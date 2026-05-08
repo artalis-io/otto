@@ -78,7 +78,7 @@ typedef struct {
 #define P2_NON_DEGEN_THRESHOLD 100
 #define P2_STALL_THRESHOLD 50
 #define P2_MAX_PERTURB_ATTEMPTS 15
-#define P2_NEAR_DEGEN_TOL 1e-3
+#define P2_NEAR_DEGEN_TOL RALPH_FEAS_TOL
 #define P2_PERTURB_THRESHOLD 30
 
 /* ── Zone 1: Pre-iteration ─────────────────────────────────────────── */

@@ -19,6 +19,7 @@ int simplex_smcp_shift_allows_perturb(const SimplexTableau *tab);
 
 /* Artificial variable detection */
 int is_artificial_var(const SimplexTableau *tab, int var_idx);
+int artificial_var_row(const SimplexTableau *tab, int var_idx);
 
 /* Mark basic artificial rows as redundant for LU */
 int mark_basic_artificial_rows_redundant(SimplexTableau *tab, int only_infeasible);

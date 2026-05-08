@@ -943,11 +943,11 @@ static void test_lu_update_pivot_threshold_adaptive(void) {
     double degraded = lu_update_pivot_ratio_threshold_for_test(
         90, 120, 1e8, 1e4);
 
-    ASSERT_NEAR(healthy_early, 1.25e-5, 1e-12,
+    ASSERT_NEAR(healthy_early, 1.25e-6, 1e-12,
                 "adaptive threshold: healthy early state");
-    ASSERT_NEAR(moderate, 5.0e-5, 1e-12,
+    ASSERT_NEAR(moderate, 5.0e-6, 1e-12,
                 "adaptive threshold: moderate health state");
-    ASSERT_NEAR(degraded, 2.0e-4, 1e-12,
+    ASSERT_NEAR(degraded, 2.0e-5, 1e-12,
                 "adaptive threshold: degraded health state");
     ASSERT(healthy_early < moderate,
            "adaptive threshold: healthy threshold is looser than moderate");

@@ -45,6 +45,24 @@ static void phase1_zero_redundant_direction_entries(const SimplexTableau *tab,
     }
 }
 
+static double phase1_entering_bound_flip_distance(const SimplexTableau *tab,
+                                                  int entering) {
+    double dist;
+    if (!tab || entering < 0 || entering >= tab->n) return RALPH_INFINITY;
+    if (tab->var_status[entering] == RALPH_NONBASIC_UPPER) {
+        if (tab->lb_ext[entering] <= -RALPH_INFINITY / 2.0) {
+            return RALPH_INFINITY;
+        }
+        dist = tab->x[entering] - tab->lb_ext[entering];
+    } else {
+        if (tab->ub_ext[entering] >= RALPH_INFINITY / 2.0) {
+            return RALPH_INFINITY;
+        }
+        dist = tab->ub_ext[entering] - tab->x[entering];
+    }
+    return dist > 0.0 ? dist : 0.0;
+}
+
 static int phase1_ratio_test_harris_on_direction(const SimplexTableau *tab,
                                                  int entering,
                                                  const double *dirvec,
@@ -69,12 +87,16 @@ static int phase1_ratio_test_harris_on_direction(const SimplexTableau *tab,
 
     *leaving = -1;
     *theta = RALPH_INFINITY;
-    if (tab->ub_ext[entering] - tab->lb_ext[entering] < RALPH_INFINITY / 2) {
-        theta_max = tab->ub_ext[entering] - tab->lb_ext[entering];
+    {
+        double enter_range = phase1_entering_bound_flip_distance(tab, entering);
+        if (enter_range < RALPH_INFINITY / 2) {
+            theta_max = enter_range;
+        }
     }
 
     {
-        double pivot_tol = fmax(RALPH_PIVOT_TOL, 1e-7 * max_abs_dk);
+        (void)max_abs_dk;
+        double pivot_tol = RALPH_PIVOT_TOL;
         for (int k = 0; k < tab->m; k++) {
             double dk = (dir > 0.0) ? dirvec[k] : -dirvec[k];
             double ratio_harris;
@@ -161,10 +183,12 @@ static int phase1_ratio_test_harris_on_direction(const SimplexTableau *tab,
         *theta = RALPH_INFINITY;
         return -1;
     }
-    if (tab->ub_ext[entering] - tab->lb_ext[entering] <= theta_max &&
-        tab->ub_ext[entering] - tab->lb_ext[entering] < RALPH_INFINITY / 2) {
-        if (*leaving < 0 || tab->ub_ext[entering] - tab->lb_ext[entering] < *theta) {
-            *theta = tab->ub_ext[entering] - tab->lb_ext[entering];
+    {
+        double enter_range = phase1_entering_bound_flip_distance(tab, entering);
+        if (enter_range <= theta_max &&
+            enter_range < RALPH_INFINITY / 2 &&
+            (*leaving < 0 || enter_range < *theta)) {
+            *theta = enter_range;
             *leaving = -2;
         }
     }

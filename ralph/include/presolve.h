@@ -24,8 +24,10 @@
 #define PRESOLVE_REDUNDANT_ROWS    (1u << 13)
 /* Safe presolve mask: lightweight techniques that are numerically reliable.
  * FIXED_VARS + EMPTY_ROWS + EMPTY_COLS + SINGLETON_ROWS + BOUND_TIGHTENING
- * + SHIFT_BOUNDS + REDUNDANT_ROWS (equality-only, safe after fix) */
-#define PRESOLVE_SAFE              0x310Fu
+ * + SHIFT_BOUNDS. Redundant-row detection is intentionally excluded from the
+ * default safe mask because a false redundant-row classification changes the
+ * feasible region and postsolve cannot reconstruct the removed row. */
+#define PRESOLVE_SAFE              0x110Fu
 
 /* PRESOLVE_ALL includes all techniques. Use with caution — some combinations
  * (IMPLIED_FREE, PROPORTIONAL_COLS) have known correctness issues on certain

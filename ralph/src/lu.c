@@ -73,6 +73,16 @@ static int lu_strict_allow_top_level_dense_fallback(const LUFactorization *lu) {
     return lu->owner->lu_strict_allow_top_level_dense_fallback ? 1 : 0;
 }
 
+static int lu_should_use_medium_one_shot_dispatch(const LUFactorization *lu,
+                                                  const SparseMatrix *B) {
+    int m;
+    if (!lu || !B || lu_strict_lane_active(lu)) return 0;
+    m = lu->m;
+    if (m < 340 || m >= 500) return 0;
+    if (B->nnz < 8 * m) return 0;
+    return 1;
+}
+
 static void lu_record_ftran_base_ms(const LUFactorization *lu, double elapsed_ms) {
     if (!lu || !lu->owner) return;
     lp_telemetry_add_ftran_base_ms(lu->owner, elapsed_ms);
@@ -193,6 +203,9 @@ static void lu_mark_update_failure(LUFactorization *lu, int reason) {
             break;
         case LU_FAIL_SPIKE_POOL_FULL:
             lu->telemetry.update_fail_spike_pool_full++;
+            break;
+        case LU_FAIL_DENSE_SPIKE_REJECT:
+            lu->telemetry.update_fail_dense_spike_reject++;
             break;
         case LU_FAIL_ETA_ALLOC:
             lu->telemetry.update_fail_eta_alloc++;
@@ -334,8 +347,8 @@ static double lu_update_pivot_ratio_threshold(const LUFactorization *lu) {
         threshold *= 0.85;
     }
 
-    if (threshold < 1e-5) threshold = 1e-5;
-    if (threshold > 5e-4) threshold = 5e-4;
+    if (threshold < 1e-6) threshold = 1e-6;
+    if (threshold > 5e-5) threshold = 5e-5;
     return threshold;
 }
 
@@ -790,7 +803,7 @@ int lu_factorize_sparse_strict_dispatch(LUFactorization *lu, const SparseMatrix 
  * Uses the efficient sparse implementation with AMD ordering for fill-in
  * reduction. Falls back to dense if sparse fails.
  */
-LUFailureReason lu_factorize(LUFactorization *lu, const SparseMatrix *B) {
+LUFailureReason lu_factorize_sparse_no_dense(LUFactorization *lu, const SparseMatrix *B) {
     if (!lu || !B) {
         lu_set_failure(lu, LU_FAIL_BAD_INPUT);
         return LU_FAIL_BAD_INPUT;
@@ -801,7 +814,8 @@ LUFailureReason lu_factorize(LUFactorization *lu, const SparseMatrix *B) {
 
     /* Try sparse factorization first. Strict GLPK-like lane uses a dedicated
      * one-shot dispatch path rather than the adaptive default sparse retries. */
-    int result = lu_strict_lane_active(lu)
+    int result = (lu_strict_lane_active(lu) ||
+                  lu_should_use_medium_one_shot_dispatch(lu, B))
         ? lu_factorize_sparse_strict_dispatch(lu, B)
         : lu_factorize_sparse_efficient(lu, B);
     if (result == 0) {
@@ -810,7 +824,19 @@ LUFailureReason lu_factorize(LUFactorization *lu, const SparseMatrix *B) {
         return 0;
     }
 
+    return result;
+}
+
+LUFailureReason lu_factorize(LUFactorization *lu, const SparseMatrix *B) {
+    LUFailureReason result = lu_factorize_sparse_no_dense(lu, B);
+    if (result == 0 || !lu || !B) {
+        return result;
+    }
+
     if (!lu_strict_allow_top_level_dense_fallback(lu)) {
+        return result;
+    }
+    if (lu->m >= 700) {
         return result;
     }
 
@@ -2627,9 +2653,9 @@ LUFailureReason lu_update(LUFactorization *lu, int leaving_pos, const double *en
         double spike_ratio = (double)off_diag_nnz / (double)(m - 1);
         double reject_ratio = lu_dense_spike_reject_ratio(lu);
         if (spike_ratio > reject_ratio) {
-            lu_set_failure(lu, LU_FAIL_SPIKE_POOL_FULL);
-            lu_mark_update_failure(lu, LU_FAIL_SPIKE_POOL_FULL);
-            return LU_FAIL_SPIKE_POOL_FULL;
+            lu_set_failure(lu, LU_FAIL_DENSE_SPIKE_REJECT);
+            lu_mark_update_failure(lu, LU_FAIL_DENSE_SPIKE_REJECT);
+            return LU_FAIL_DENSE_SPIKE_REJECT;
         }
     }
 
@@ -2696,6 +2722,7 @@ const char* lu_failure_reason_string(int reason) {
         case LU_FAIL_SINGULAR_UPDATE: return "singular_update";
         case LU_FAIL_UPDATE_PIVOT_TOO_SMALL: return "update_pivot_too_small";
         case LU_FAIL_SPIKE_POOL_FULL: return "spike_pool_full";
+        case LU_FAIL_DENSE_SPIKE_REJECT: return "dense_spike_reject";
         case LU_FAIL_ETA_ALLOC: return "eta_alloc";
         case LU_FAIL_FACTOR_SINGULAR: return "factor_singular";
         case LU_FAIL_FACTOR_ALLOC: return "factor_alloc";

@@ -1,5 +1,6 @@
 #include <ctype.h>
 #include <limits.h>
+#include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -37,212 +38,82 @@ static int glpk_oop_is_pos_inf(double x) {
     return x >= RALPH_INFINITY / 2.0;
 }
 
-static int glpk_oop_format_lp_coef(double val, int first, char *buf, size_t buf_size) {
-    char sign = val >= 0.0 ? '+' : '-';
-    double abs_val = val >= 0.0 ? val : -val;
-
-    if (buf_size == 0) return 0;
-    if (val == 0.0) {
-        buf[0] = '\0';
-        return 0;
-    }
-
-    if (first) {
-        if (abs_val == 1.0) {
-            if (val < 0.0) {
-                snprintf(buf, buf_size, "-");
-            } else {
-                buf[0] = '\0';
-            }
-        } else {
-            snprintf(buf, buf_size, "%.17g ", val);
-        }
-    } else {
-        if (abs_val == 1.0) {
-            snprintf(buf, buf_size, " %c ", sign);
-        } else {
-            snprintf(buf, buf_size, " %c %.17g ", sign, abs_val);
-        }
-    }
-
-    return 1;
-}
-
-static int glpk_oop_build_rowwise(const LPModel *lp,
-                                  int **row_start_out,
-                                  int **row_idx_out,
-                                  double **row_val_out) {
-    int *row_start = NULL;
-    int *row_pos = NULL;
-    int *row_idx = NULL;
-    double *row_val = NULL;
-    int nnz;
-
-    if (!lp || !lp->A || !row_start_out || !row_idx_out || !row_val_out) return -1;
-    nnz = lp->A->nnz;
-
-    row_start = (int*)calloc((size_t)lp->num_cons + 1, sizeof(int));
-    row_pos = (int*)calloc((size_t)lp->num_cons, sizeof(int));
-    row_idx = (int*)calloc((size_t)nnz, sizeof(int));
-    row_val = (double*)calloc((size_t)nnz, sizeof(double));
-    if (!row_start || !row_pos || !row_idx || !row_val) {
-        free(row_start);
-        free(row_pos);
-        free(row_idx);
-        free(row_val);
-        return -1;
-    }
-
-    for (int p = 0; p < nnz; p++) {
-        int row = lp->A->rowidx[p];
-        if (row >= 0 && row < lp->num_cons) row_start[row + 1]++;
-    }
-    for (int i = 1; i <= lp->num_cons; i++) row_start[i] += row_start[i - 1];
-
-    for (int j = 0; j < lp->num_vars; j++) {
-        for (int p = lp->A->colptr[j]; p < lp->A->colptr[j + 1]; p++) {
-            int row = lp->A->rowidx[p];
-            int pos;
-            if (row < 0 || row >= lp->num_cons) continue;
-            pos = row_start[row] + row_pos[row];
-            row_idx[pos] = j;
-            row_val[pos] = lp->A->values[p];
-            row_pos[row]++;
-        }
-    }
-
-    free(row_pos);
-    *row_start_out = row_start;
-    *row_idx_out = row_idx;
-    *row_val_out = row_val;
-    return 0;
-}
-
-static int glpk_oop_write_lp(const LPModel *lp, const char *filename) {
+static int glpk_oop_write_mps_relaxation(const LPModel *lp, const char *filename) {
     FILE *f = NULL;
-    int *row_start = NULL;
-    int *row_idx = NULL;
-    double *row_val = NULL;
-    char coef_buf[64];
 
     if (!lp || !lp->A || !filename) return -1;
-    if (glpk_oop_build_rowwise(lp, &row_start, &row_idx, &row_val) != 0) return -1;
 
     f = fopen(filename, "w");
-    if (!f) {
-        free(row_start);
-        free(row_idx);
-        free(row_val);
-        return -1;
-    }
+    if (!f) return -1;
 
-    fprintf(f, "%s\n", lp->obj_sense == -1 ? "Maximize" : "Minimize");
-    fprintf(f, " obj:");
-    {
-        int first = 1;
-        for (int j = 0; j < lp->num_vars; j++) {
-            double c = lp->c ? lp->c[j] : 0.0;
-            if (c == 0.0) continue;
-            if (!glpk_oop_format_lp_coef(c, first, coef_buf, sizeof(coef_buf))) continue;
-            fprintf(f, "%sx%d", coef_buf, j + 1);
-            first = 0;
-        }
-        if (first) {
-            if (lp->num_vars > 0) {
-                fprintf(f, " 0 x1");
-            } else {
-                fprintf(f, " 0");
-            }
-        }
-    }
-    fprintf(f, "\n");
-
-    fprintf(f, "Subject To\n");
+    fprintf(f, "NAME          RALPH\n");
+    fprintf(f, "ROWS\n");
+    fprintf(f, " N OBJ\n");
     for (int i = 0; i < lp->num_cons; i++) {
-        int first = 1;
-        fprintf(f, " c%d:", i + 1);
-        for (int p = row_start[i]; p < row_start[i + 1]; p++) {
-            int j = row_idx[p];
-            double v = row_val[p];
-            if (v == 0.0) continue;
-            if (!glpk_oop_format_lp_coef(v, first, coef_buf, sizeof(coef_buf))) continue;
-            fprintf(f, "%sx%d", coef_buf, j + 1);
-            first = 0;
-        }
-        if (first) {
-            if (lp->num_vars > 0) {
-                fprintf(f, " 0 x1");
-            } else {
-                fprintf(f, " 0");
-            }
-        }
-
-        if (lp->sense && lp->sense[i] == 'G') {
-            fprintf(f, " >= %.17g", lp->b ? lp->b[i] : 0.0);
-        } else if (lp->sense && lp->sense[i] == 'E') {
-            fprintf(f, " = %.17g", lp->b ? lp->b[i] : 0.0);
-        } else {
-            fprintf(f, " <= %.17g", lp->b ? lp->b[i] : 0.0);
-        }
-        fprintf(f, "\n");
+        char sense = (lp->sense && lp->sense[i]) ? lp->sense[i] : 'L';
+        if (sense != 'L' && sense != 'G' && sense != 'E') sense = 'L';
+        fprintf(f, " %c R%07d\n", sense, i + 1);
     }
 
-    fprintf(f, "Bounds\n");
+    fprintf(f, "COLUMNS\n");
+    for (int j = 0; j < lp->num_vars; j++) {
+        if (lp->c && fabs(lp->c[j]) > 1e-15) {
+            fprintf(f, " X%07d OBJ %.17g\n", j + 1, lp->c[j]);
+        }
+        for (int p = lp->A->colptr[j]; p < lp->A->colptr[j + 1]; p++) {
+            int row = lp->A->rowidx[p];
+            double val = lp->A->values[p];
+            if (row < 0 || row >= lp->num_cons) continue;
+            if (fabs(val) <= 1e-15) continue;
+            fprintf(f, " X%07d R%07d %.17g\n", j + 1, row + 1, val);
+        }
+    }
+
+    fprintf(f, "RHS\n");
+    for (int i = 0; i < lp->num_cons; i++) {
+        double rhs = lp->b ? lp->b[i] : 0.0;
+        if (fabs(rhs) <= 1e-15) continue;
+        fprintf(f, " RHS1 R%07d %.17g\n", i + 1, rhs);
+    }
+
+    fprintf(f, "BOUNDS\n");
     for (int j = 0; j < lp->num_vars; j++) {
         double lb = lp->lb ? lp->lb[j] : 0.0;
         double ub = lp->ub ? lp->ub[j] : RALPH_INFINITY;
         char vt = lp->var_type ? lp->var_type[j] : 'C';
 
+        /* This adapter is registered as an LP backend.  If it is used for a
+         * MIP node relaxation, integer markers must not leak into the exported
+         * model; binary variables are continuous variables with 0/1 bounds. */
         if (vt == 'B') {
-            fprintf(f, " 0 <= x%d <= 1\n", j + 1);
-            continue;
+            lb = 0.0;
+            ub = 1.0;
         }
 
         if (glpk_oop_is_neg_inf(lb) && glpk_oop_is_pos_inf(ub)) {
-            fprintf(f, " x%d free\n", j + 1);
-        } else if (!glpk_oop_is_neg_inf(lb) && !glpk_oop_is_pos_inf(ub) && lb == ub) {
-            fprintf(f, " x%d = %.17g\n", j + 1, lb);
-        } else if (!glpk_oop_is_neg_inf(lb) && !glpk_oop_is_pos_inf(ub)) {
-            fprintf(f, " %.17g <= x%d <= %.17g\n", lb, j + 1, ub);
-        } else if (!glpk_oop_is_neg_inf(lb)) {
-            fprintf(f, " x%d >= %.17g\n", j + 1, lb);
+            fprintf(f, " FR BND1 X%07d\n", j + 1);
+            continue;
+        }
+        if (!glpk_oop_is_neg_inf(lb) && !glpk_oop_is_pos_inf(ub) && lb == ub) {
+            fprintf(f, " FX BND1 X%07d %.17g\n", j + 1, lb);
+            continue;
+        }
+        if (glpk_oop_is_neg_inf(lb)) {
+            fprintf(f, " MI BND1 X%07d\n", j + 1);
+        } else if (fabs(lb) > 1e-15) {
+            fprintf(f, " LO BND1 X%07d %.17g\n", j + 1, lb);
+        }
+        if (glpk_oop_is_pos_inf(ub)) {
+            if (glpk_oop_is_neg_inf(lb)) {
+                fprintf(f, " PL BND1 X%07d\n", j + 1);
+            }
         } else {
-            fprintf(f, " x%d <= %.17g\n", j + 1, ub);
+            fprintf(f, " UP BND1 X%07d %.17g\n", j + 1, ub);
         }
     }
 
-    {
-        int has_general = 0;
-        int has_binary = 0;
-
-        for (int j = 0; j < lp->num_vars; j++) {
-            char vt = lp->var_type ? lp->var_type[j] : 'C';
-            if (vt == 'I') has_general = 1;
-            else if (vt == 'B') has_binary = 1;
-        }
-
-        if (has_general) {
-            fprintf(f, "Generals\n");
-            for (int j = 0; j < lp->num_vars; j++) {
-                char vt = lp->var_type ? lp->var_type[j] : 'C';
-                if (vt == 'I') fprintf(f, " x%d\n", j + 1);
-            }
-        }
-
-        if (has_binary) {
-            fprintf(f, "Binary\n");
-            for (int j = 0; j < lp->num_vars; j++) {
-                char vt = lp->var_type ? lp->var_type[j] : 'C';
-                if (vt == 'B') fprintf(f, " x%d\n", j + 1);
-            }
-        }
-    }
-
-    fprintf(f, "End\n");
+    fprintf(f, "ENDATA\n");
     fclose(f);
-    free(row_start);
-    free(row_idx);
-    free(row_val);
     return 0;
 }
 
@@ -618,7 +489,7 @@ static int glpk_oop_solve(LPExternalBackendKind backend,
         return RALPH_LP_EXTERNAL_ADAPTER_RC_ERROR;
     }
 
-    if (glpk_oop_write_lp(model, model_file) != 0) {
+    if (glpk_oop_write_mps_relaxation(model, model_file) != 0) {
         lp_external_oop_cleanup_file(model_file);
         lp_external_oop_cleanup_file(write_file);
         return RALPH_LP_EXTERNAL_ADAPTER_RC_ERROR;
@@ -652,8 +523,9 @@ static int glpk_oop_solve(LPExternalBackendKind backend,
         if (backend == LP_EXTERNAL_BACKEND_DUAL_SIMPLEX) {
             argv[argc++] = "--dual";
         }
-        argv[argc++] = "--lp";
+        argv[argc++] = "--freemps";
         argv[argc++] = model_file;
+        argv[argc++] = (model->obj_sense == -1) ? "--max" : "--min";
         if (solver->time_limit > 0.0 && solver->time_limit < RALPH_INFINITY / 2.0) {
             int tlim = (int)(solver->time_limit + 0.5);
             if (tlim < 1) tlim = 1;

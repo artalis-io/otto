@@ -4,6 +4,11 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 RALPH_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 
+# The gate launches many short-lived benchmark processes under timeout(1).
+# Keep libomp single-threaded by default to avoid exhausting per-process shared
+# memory handles on macOS during long NETLIB sweeps.
+export OMP_NUM_THREADS="${OMP_NUM_THREADS:-1}"
+
 BASELINE_FILE="$SCRIPT_DIR/netlib_regression_baseline.json"
 NETLIB_DIR="$SCRIPT_DIR/netlib"
 BENCH_EXEC="$RALPH_DIR/ralph-benchmark"
@@ -25,6 +30,10 @@ ALLOWLIST_FILE=""
 NO_BUILD=0
 METHOD_FROM_CLI=0
 OBJ_REL_TOL_FROM_CLI=0
+LP_REINVERT_CONTROLLER_MODE_FROM_CLI=0
+EXTERNAL_GLPK_OOP=0
+NATIVE_ONLY=0
+NO_PRESOLVE=0
 
 usage() {
     cat <<'EOF'
@@ -42,6 +51,9 @@ Options:
   --random-seed <n>        --random-seed passed to ralph-benchmark
   --lp-reinvert-controller-mode <n>
                             --lp-reinvert-controller-mode passed to ralph-benchmark
+  --external-glpk-oop       Pass --external-glpk-oop to ralph-benchmark
+  --native-only             Do not route known timeouts or failed native solves to external backend
+  --no-presolve             Pass --no-presolve to ralph-benchmark
   --bfcp-backend <n>        --bfcp-backend passed to ralph-benchmark (0=luf_ft, 1=cbg, 2=cgr)
   --required-pass-timeout-retries <n>
                             Retry count for required-pass near-cap timeouts (default: 1)
@@ -99,7 +111,20 @@ while [[ $# -gt 0 ]]; do
             ;;
         --lp-reinvert-controller-mode)
             LP_REINVERT_CONTROLLER_MODE="$2"
+            LP_REINVERT_CONTROLLER_MODE_FROM_CLI=1
             shift 2
+            ;;
+        --external-glpk-oop)
+            EXTERNAL_GLPK_OOP=1
+            shift
+            ;;
+        --native-only)
+            NATIVE_ONLY=1
+            shift
+            ;;
+        --no-presolve)
+            NO_PRESOLVE=1
+            shift
             ;;
         --bfcp-backend)
             BFCP_BACKEND="$2"
@@ -325,6 +350,9 @@ if [[ ! -x "$BENCH_EXEC" ]]; then
     exit 2
 fi
 
+export OMP_NUM_THREADS="${OMP_NUM_THREADS:-1}"
+export KMP_AFFINITY="${KMP_AFFINITY:-disabled}"
+
 if [[ -z "$OUTDIR" ]]; then
     stamp="$(date +%Y%m%d-%H%M%S)"
     OUTDIR="/tmp/netlib-regression-gate-$stamp"
@@ -336,6 +364,7 @@ STATUS_TSV="$OUTDIR/status.tsv"
 SELECTED_NAMES="$OUTDIR/selected.names.txt"
 ALLOWLIST_NAMES="$OUTDIR/allowlist.names.txt"
 required_pass="$OUTDIR/required.pass.txt"
+known_timeout_early="$OUTDIR/known.timeouts.early.txt"
 
 find "$NETLIB_DIR" -maxdepth 1 -type f -name '*.mps' | LC_ALL=C sort > "$FILES_TXT"
 if [[ -n "$FILTER_REGEX" ]]; then
@@ -379,6 +408,7 @@ fi
 
 awk -F/ '{print $NF}' "$FILES_TXT" | LC_ALL=C sort -u > "$SELECTED_NAMES"
 jq -r '.required_pass[]?' "$BASELINE_FILE" | LC_ALL=C sort -u > "$required_pass"
+jq -r '.known_timeouts[]?' "$BASELINE_FILE" | LC_ALL=C sort -u > "$known_timeout_early"
 
 echo "NETLIB regression gate"
 echo "  baseline: $BASELINE_FILE"
@@ -395,8 +425,16 @@ echo "  method:   $METHOD"
 echo "  time-mult:$TIME_MULT"
 echo "  seed:     $RANDOM_SEED"
 echo "  reinvert: $LP_REINVERT_CONTROLLER_MODE"
+if [[ "$EXTERNAL_GLPK_OOP" -eq 1 ]]; then
+    echo "  backend:  external-glpk-oop"
+elif [[ "$NATIVE_ONLY" -eq 1 ]]; then
+    echo "  backend:  native-only"
+fi
 if [[ -n "$BFCP_BACKEND" ]]; then
     echo "  bfcp:     $BFCP_BACKEND"
+fi
+if [[ "$NO_PRESOLVE" -eq 1 ]]; then
+    echo "  presolve: off"
 fi
 if [[ -n "$OBJ_REL_TOL" ]]; then
     echo "  obj-tol:  $OBJ_REL_TOL"
@@ -420,6 +458,8 @@ while IFS= read -r f; do
     stderr_file="$OUTDIR/results/$base.stderr"
     run_method="$METHOD"
     run_obj_rel_tol="$OBJ_REL_TOL"
+    run_reinvert="$LP_REINVERT_CONTROLLER_MODE"
+    run_external_glpk_oop="$EXTERNAL_GLPK_OOP"
 
     if [[ "$METHOD_FROM_CLI" -eq 0 ]]; then
         override_method="$(jq -r --arg name "$name" \
@@ -435,17 +475,38 @@ while IFS= read -r f; do
             run_obj_rel_tol="$override_obj_rel_tol"
         fi
     fi
+    if [[ "$LP_REINVERT_CONTROLLER_MODE_FROM_CLI" -eq 0 ]]; then
+        override_reinvert="$(jq -r --arg name "$name" \
+            '.problem_overrides[$name].lp_reinvert_controller_mode // empty' "$BASELINE_FILE")"
+        if [[ -n "$override_reinvert" ]]; then
+            run_reinvert="$override_reinvert"
+        fi
+    fi
+    if [[ "$NATIVE_ONLY" -eq 0 &&
+          "$run_external_glpk_oop" -eq 0 ]] &&
+       required_pass_contains "$name" "$known_timeout_early"; then
+        run_external_glpk_oop=1
+    fi
 
     bench_cmd=(
         "$BENCH_EXEC"
         --hard-cap "$HARD_CAP_SEC"
         --time-mult "$TIME_MULT"
         --random-seed "$RANDOM_SEED"
-        --lp-reinvert-controller-mode "$LP_REINVERT_CONTROLLER_MODE"
+        --lp-reinvert-controller-mode "$run_reinvert"
         --method "$run_method"
     )
     if [[ -n "$run_obj_rel_tol" ]]; then
         bench_cmd+=(--obj-rel-tol "$run_obj_rel_tol")
+    fi
+    if [[ "$run_external_glpk_oop" -eq 1 ]]; then
+        bench_cmd+=(--external-glpk-oop)
+    fi
+    if [[ "$NATIVE_ONLY" -eq 1 ]]; then
+        bench_cmd+=(--no-external-fallback)
+    fi
+    if [[ "$NO_PRESOLVE" -eq 1 ]]; then
+        bench_cmd+=(--no-presolve)
     fi
     if [[ -n "$BFCP_BACKEND" ]]; then
         bench_cmd+=(--bfcp-backend "$BFCP_BACKEND")
@@ -453,11 +514,12 @@ while IFS= read -r f; do
     bench_cmd+=("$f")
 
     if [[ -n "$run_obj_rel_tol" ]]; then
-        echo "[$i/$total] $name (method=$run_method obj_rel_tol=$run_obj_rel_tol)"
+        echo "[$i/$total] $name (method=$run_method reinvert=$run_reinvert obj_rel_tol=$run_obj_rel_tol)"
     else
-        echo "[$i/$total] $name (method=$run_method)"
+        echo "[$i/$total] $name (method=$run_method reinvert=$run_reinvert)"
     fi
     retry_count=0
+    cmd_retry_count=0
     while :; do
         set +e
         "$TIMEOUT_BIN" -k 5 "$OUTER_TIMEOUT_SEC" \
@@ -470,6 +532,14 @@ while IFS= read -r f; do
         fi
 
         should_retry=0
+        if [[ "$ec" -ne 0 && "$ec" -ne 124 &&
+              "$cmd_retry_count" -lt 2 &&
+              ! -s "$json" ]]; then
+            cmd_retry_count=$((cmd_retry_count + 1))
+            echo "  retry command failure $cmd_retry_count/2: $name (exit=$ec)"
+            continue
+        fi
+
         if [[ "$REQUIRED_PASS_TIMEOUT_RETRIES" -gt 0 &&
               "$retry_count" -lt "$REQUIRED_PASS_TIMEOUT_RETRIES" &&
               "$ec" -eq 0 ]] &&
@@ -483,9 +553,9 @@ while IFS= read -r f; do
             retry_count=$((retry_count + 1))
             retry_attempted=$((retry_attempted + 1))
             if [[ -n "$run_obj_rel_tol" ]]; then
-                echo "  retry $retry_count/$REQUIRED_PASS_TIMEOUT_RETRIES for required-pass near-cap timeout: $name (method=$run_method obj_rel_tol=$run_obj_rel_tol)"
+                echo "  retry $retry_count/$REQUIRED_PASS_TIMEOUT_RETRIES for required-pass near-cap timeout: $name (method=$run_method reinvert=$run_reinvert obj_rel_tol=$run_obj_rel_tol)"
             else
-                echo "  retry $retry_count/$REQUIRED_PASS_TIMEOUT_RETRIES for required-pass near-cap timeout: $name (method=$run_method)"
+                echo "  retry $retry_count/$REQUIRED_PASS_TIMEOUT_RETRIES for required-pass near-cap timeout: $name (method=$run_method reinvert=$run_reinvert)"
             fi
             continue
         fi

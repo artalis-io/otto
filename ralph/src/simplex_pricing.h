@@ -34,6 +34,10 @@ int pricing_bland_excluding_two(SimplexTableau *tab,
                                 int excluded_a,
                                 int excluded_b,
                                 int *entering);
+int pricing_bland_excluding_set(SimplexTableau *tab,
+                                const int *excluded_vars,
+                                int excluded_count,
+                                int *entering);
 int pricing_steepest_edge(SimplexTableau *tab, int *entering);
 int pricing_devex(SimplexTableau *tab, int *entering);
 int pricing_partial(SimplexTableau *tab, int *entering);

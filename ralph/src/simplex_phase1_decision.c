@@ -494,4 +494,3 @@ int simplex_phase1_soft_lu_policy_cooldown_plan_for_test(
     if (next_cooldown_out) *next_cooldown_out = next_cooldown;
     return next_cooldown > periodic_policy_cooldown;
 }
-
