@@ -162,6 +162,7 @@
 #define LU_SOFT_COST_GATE_PHASE1_MIN_M 1200
 #define LU_SOFT_COST_GATE_PHASE2_MIN_M 700
 #define LU_SOFT_COST_GATE_MIN_DEGEN 20
+#define LU_SOFT_COST_GATE_PHASE2_LARGE_MIN_DEGEN 0
 #define LU_SOFT_COST_GATE_MIN_REFACTOR_MS 1.0
 #define LU_SOFT_COST_GATE_RATIO_TRIGGER 8.0
 #define LU_SOFT_COST_GATE_UPDATE_RESERVE_NUM 1
@@ -257,6 +258,13 @@ static int lu_soft_min_update_age(int max_updates) {
     return clamp_int_range(min_age,
                            LU_HEALTH_SOFT_MIN_UPDATE_AGE_MIN,
                            LU_HEALTH_SOFT_MIN_UPDATE_AGE_MAX);
+}
+
+static int lu_soft_cost_gate_min_degen(int phase, int m) {
+    if (phase == 2 && m >= LU_SOFT_COST_GATE_PHASE2_MIN_M) {
+        return LU_SOFT_COST_GATE_PHASE2_LARGE_MIN_DEGEN;
+    }
+    return LU_SOFT_COST_GATE_MIN_DEGEN;
 }
 
 static int periodic_interval_bounds(int phase, int *min_interval, int *max_interval) {
@@ -1772,7 +1780,7 @@ int lp_refactor_policy_soft_lu_cost_gate_should_defer(int phase,
 
     if (m < min_m) return 0;
     if (use_bland) return 0;
-    if (degenerate_count < LU_SOFT_COST_GATE_MIN_DEGEN) return 0;
+    if (degenerate_count < lu_soft_cost_gate_min_degen(phase, m)) return 0;
     if (max_updates <= 0 || num_updates < 0) return 0;
     if (!isfinite(refactor_cost_ewma_ms) || !isfinite(iter_cost_ewma_ms)) return 0;
     if (refactor_cost_ewma_ms < LU_SOFT_COST_GATE_MIN_REFACTOR_MS) return 0;
