@@ -450,17 +450,18 @@ int ratio_test_harris_excluding_current(SimplexTableau *tab, int entering,
         dir = -1.0;
     }
 
-    double max_abs_dk = 0.0;
-    for (int k = 0; k < tab->m; k++) {
-        if (k == exclude_pos) continue;
-        double abs_dk = fabs(tab->work2[k] * dir);
-        if (abs_dk > max_abs_dk) {
-            max_abs_dk = abs_dk;
+    double pivot_tol = RALPH_PIVOT_TOL;
+    if (tab->phase != 1) {
+        double max_abs_dk = 0.0;
+        for (int k = 0; k < tab->m; k++) {
+            if (k == exclude_pos) continue;
+            double abs_dk = fabs(tab->work2[k] * dir);
+            if (abs_dk > max_abs_dk) {
+                max_abs_dk = abs_dk;
+            }
         }
+        pivot_tol = fmax(RALPH_PIVOT_TOL, 1e-7 * max_abs_dk);
     }
-    double pivot_tol = (tab->phase == 1)
-        ? RALPH_PIVOT_TOL
-        : fmax(RALPH_PIVOT_TOL, 1e-7 * max_abs_dk);
 
     double theta_max = RALPH_INFINITY;
     double best_pivot = 0.0;
