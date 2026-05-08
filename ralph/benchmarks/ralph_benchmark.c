@@ -1208,6 +1208,7 @@ typedef enum {
     BENCH_TERM_TIME_LIMIT = 4,
     BENCH_TERM_ITERATION_LIMIT = 5,
     BENCH_TERM_OBJ_LIMIT = 6,
+    BENCH_TERM_IMPRECISE = 7,
     BENCH_TERM_DUAL_RATIO_NO_ENTERING = 100,
     BENCH_TERM_DUAL_PIVOT_SMALL = 101,
     BENCH_TERM_DUAL_LU_HARD = 102,
@@ -1230,9 +1231,12 @@ static void bench_set_termination_reason(SolveResult *result,
 static void bench_derive_termination_reason(SolveResult *result) {
     if (!result) return;
 
-    if (result->raw_status_code == (int)RALPH_STATUS_OPTIMAL ||
-        result->raw_status_code == (int)RALPH_STATUS_IMPRECISE) {
+    if (result->raw_status_code == (int)RALPH_STATUS_OPTIMAL) {
         bench_set_termination_reason(result, BENCH_TERM_OPTIMAL, "optimal");
+        return;
+    }
+    if (result->raw_status_code == (int)RALPH_STATUS_IMPRECISE) {
+        bench_set_termination_reason(result, BENCH_TERM_IMPRECISE, "imprecise");
         return;
     }
     if (result->raw_status_code == (int)RALPH_STATUS_INFEASIBLE) {
@@ -3471,11 +3475,15 @@ static void print_json_result(const char *problem_name, const char *source,
     /* Ralph result */
     fprintf(out, "  \"ralph\": {\n");
     const char *ralph_status_str = "error";
-    switch (ralph->status) {
-        case 0: ralph_status_str = "optimal"; break;
-        case 1: ralph_status_str = "infeasible"; break;
-        case 2: ralph_status_str = "unbounded"; break;
-        case 4: ralph_status_str = "timeout"; break;
+    if (ralph->raw_status_code == (int)RALPH_STATUS_IMPRECISE) {
+        ralph_status_str = "imprecise";
+    } else {
+        switch (ralph->status) {
+            case 0: ralph_status_str = "optimal"; break;
+            case 1: ralph_status_str = "infeasible"; break;
+            case 2: ralph_status_str = "unbounded"; break;
+            case 4: ralph_status_str = "timeout"; break;
+        }
     }
     fprintf(out, "    \"status\": \"%s\",\n", ralph_status_str);
     fprintf(out, "    \"raw_status_code\": %d,\n", ralph->raw_status_code);
