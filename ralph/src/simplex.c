@@ -2074,9 +2074,11 @@ int simplex_pivot(SimplexTableau *tab,
     }
 
     double *x_basic_backup = tab->primal_basic_x_backup;
-    if (!x_basic_backup) return -1;
-    for (int k = 0; k < tab->m; k++) {
-        x_basic_backup[k] = x[basis[k]];
+    if (leaving_pos != -2) {
+        if (!x_basic_backup) return -1;
+        for (int k = 0; k < tab->m; k++) {
+            x_basic_backup[k] = x[basis[k]];
+        }
     }
 
     /* Update entering variable */
