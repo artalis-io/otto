@@ -11,6 +11,7 @@
 #include "ralph_test_mod_api.h"
 #include "lp.h"
 #include "mip.h"
+#include "sparse.h"
 
 #define TOLERANCE 1e-4
 
@@ -41,6 +42,31 @@ MIPSolver* ralph_get_mip_solver(const RalphModel *model);
         printf("  FAIL: %s (%.6f != %.6f)\n", msg, (double)(a), (double)(b)); \
     } \
 } while(0)
+
+void test_sparse_triplet_duplicate_order(void) {
+    printf("\n=== Test: Sparse Triplet Duplicate Order ===\n");
+
+    SparseTriplets *trips = triplets_create(2, 2, 4);
+    ASSERT(trips != NULL, "Triplet builder created");
+
+    ASSERT(triplets_add(trips, 0, 1, 1e16) == 0, "First duplicate added");
+    ASSERT(triplets_add(trips, 0, 1, 1.0) == 0, "Second duplicate added");
+    ASSERT(triplets_add(trips, 0, 1, -1e16) == 0, "Third duplicate added");
+    ASSERT(triplets_add(trips, 1, 0, 2.0) == 0, "Distinct entry added");
+
+    SparseMatrix *mat = triplets_to_csc(trips);
+    ASSERT(mat != NULL, "Triplets converted to CSC");
+    ASSERT(mat->nnz == 2, "Duplicate entries merged");
+    ASSERT(mat->colptr[0] == 0 && mat->colptr[1] == 1 && mat->colptr[2] == 2,
+           "Column pointers are deterministic");
+    ASSERT(mat->rowidx[0] == 1 && fabs(mat->values[0] - 2.0) <= 1e-12,
+           "Distinct entry preserved");
+    ASSERT(mat->rowidx[1] == 0 && fabs(mat->values[1]) <= 1e-12,
+           "Duplicate sum follows insertion order");
+
+    sparse_free(mat);
+    triplets_free(trips);
+}
 
 /* ============================================================================
  * Test: Simple 2-variable LP
@@ -6471,6 +6497,9 @@ int main(int argc, char **argv) {
     test_scaling_disabled();
     test_scaling_no_regression();
     test_scaling_roundtrip();
+
+    /* Sparse matrix assembly tests */
+    test_sparse_triplet_duplicate_order();
 
     /* Crash basis tests */
     test_crash_basis_structural();

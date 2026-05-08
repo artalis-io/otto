@@ -169,7 +169,10 @@ static int triplet_key_cmp(const void *a, const void *b) {
     if (ka->col != kb->col) {
         return ka->col - kb->col;
     }
-    return ka->row - kb->row;
+    if (ka->row != kb->row) {
+        return ka->row - kb->row;
+    }
+    return ka->orig_idx - kb->orig_idx;
 }
 
 SparseMatrix* triplets_to_csc(SparseTriplets *trips) {
