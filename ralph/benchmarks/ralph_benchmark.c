@@ -2913,7 +2913,7 @@ typedef struct {
     char detail[2048];          /* Human-readable detail */
 } MatrixVerifyResult;
 
-/* Parse GLPK --output file to extract column activity values.
+/* Parse GLPK --write file to extract high-precision column activity values.
  * Returns number of columns parsed, or -1 on error.
  * Sets *status_ok to 1 if solution status is OPTIMAL, 0 otherwise.
  *
@@ -2930,6 +2930,38 @@ static int parse_glpk_solution_vector(const char *sol_file, double *x, int max_v
     if (status_ok) *status_ok = 0;
 
     while (fgets(line, sizeof(line), f)) {
+        if (line[0] == 'c' && strstr(line, "Status:") &&
+            strstr(line, "OPTIMAL")) {
+            if (status_ok) *status_ok = 1;
+            continue;
+        }
+        if (line[0] == 's') {
+            char row_status[8];
+            char col_status[8];
+            double obj;
+            if (sscanf(line, "s %*s %*d %*d %7s %7s %lf",
+                       row_status, col_status, &obj) == 3) {
+                if (obj_out) *obj_out = obj;
+                if (status_ok && row_status[0] == 'f' && col_status[0] == 'f') {
+                    *status_ok = 1;
+                }
+            }
+            continue;
+        }
+        if (line[0] == 'j') {
+            int col_num;
+            char status[8];
+            double activity;
+            if (sscanf(line, "j %d %7s %lf", &col_num, status, &activity) >= 3 &&
+                col_num >= 1 && col_num <= max_vars) {
+                (void)status;
+                x[col_num - 1] = activity;
+                parsed++;
+            }
+            continue;
+        }
+
+        /* Backward-compatible fallback for old printable -o files. */
         if (strncmp(line, "Status:", 7) == 0) {
             if (status_ok && strstr(line, "OPTIMAL")) *status_ok = 1;
         }
@@ -3018,7 +3050,7 @@ static MatrixVerifyResult verify_matrix_single(const char *problem_path,
 
     snprintf(sol_file, sizeof(sol_file), "/tmp/ralph_verify_%d.txt", getpid());
     if (ext && strcasecmp(ext, ".lp") == 0) fmt_flag = "--lp";
-    snprintf(cmd, sizeof(cmd), "glpsol %s '%s' -o '%s' >/dev/null 2>&1",
+    snprintf(cmd, sizeof(cmd), "glpsol %s '%s' -w '%s' >/dev/null 2>&1",
              fmt_flag, problem_path, sol_file);
 
     ret = system(cmd);
@@ -3127,12 +3159,13 @@ static MatrixVerifyResult verify_matrix_single(const char *problem_path,
     for (int j = 0; j < n; j++) {
         r.ralph_obj += lp->c[j] * x[j];
     }
-    /* Apply obj_sense: Ralph stores c in original sense, GLPK reports in original sense */
+    r.ralph_obj += lp->obj_offset;
+    /* Ralph stores c and obj_offset in original sense; GLPK reports original sense. */
     r.obj_error = fabs(r.ralph_obj - glpk_obj);
 
     /* 7. Overall pass/fail
-     * Thresholds are generous because GLPK's --output format has ~6 significant
-     * digits, causing truncation noise in the parsed solution vector.
+     * Thresholds are generous because this verifies an independently solved
+     * GLPK vector against Ralph's parsed matrix, not Ralph's own solution.
      * The goal is catching matrix construction bugs (violations >> 100),
      * not numerical precision issues.  Scale constraint threshold by the
      * magnitude of the objective: problems with |obj| ~ 10^7 can easily
