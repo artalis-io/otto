@@ -2094,9 +2094,12 @@ static int lu_symbolic_analyze(LUFactorization *lu, const SparseMatrix *B) {
     }
 
     int num_identity = 0;
+    uint64_t initial_fingerprint = FNV_OFFSET_BASIS;
     for (int j = 0; j < m; j++) {
         int nnz = B->colptr[j + 1] - B->colptr[j];
         struct_nnz[j] = nnz;
+        initial_fingerprint ^= (uint64_t)nnz;
+        initial_fingerprint *= FNV_PRIME;
 
         if (nnz == 1) {
             int p = B->colptr[j];
@@ -2109,6 +2112,8 @@ static int lu_symbolic_analyze(LUFactorization *lu, const SparseMatrix *B) {
                 row_used[row] = 1;
                 row_identity_col[row] = j;
                 num_identity++;
+                initial_fingerprint ^= (uint64_t)row;
+                initial_fingerprint *= FNV_PRIME;
             }
         }
     }
@@ -2119,6 +2124,16 @@ static int lu_symbolic_analyze(LUFactorization *lu, const SparseMatrix *B) {
         return lu_symbolic_finalize_full_structural(lu, B) == 0
             ? 0
             : LU_SYMBOLIC_FAIL_WORKSPACE;
+    }
+
+    /* If the cheap identity scan exactly reproduces the cached split, the
+     * matching/BTF symbolic plan is still valid and can be reused directly. */
+    if (lu->sym_valid &&
+        lu->sym_fingerprint == initial_fingerprint &&
+        lu->sym_num_identity == num_identity &&
+        lu->sym_factorization_type == factorization_type) {
+        lp_telemetry_lu_record_symbolic_cache_hit(lu);
+        return 0;
     }
 
     /* Ensure structural columns can be matched to non-identity rows.
