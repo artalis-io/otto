@@ -4532,7 +4532,7 @@ static int simplex_finish_prepared_primal_solve(SimplexSolver *solver, clock_t s
         for (int j = 0; j < solver->model->num_vars; j++) {
             true_obj += solver->model->c[j] * solver->solution[j];
         }
-        solver->obj_value = true_obj * solver->model->obj_sense + solver->model->obj_offset;
+        solver->obj_value = true_obj + solver->model->obj_offset;
     }
 
     /* Post-solve verification (T2.3 + T3.6) — runs on original-space solution */
