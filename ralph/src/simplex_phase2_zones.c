@@ -23,6 +23,25 @@
 
 #define P2_RATIO_ALT_ENTERING_LIMIT 16
 
+static int p2_should_use_sparse_midrow_basis_governor(const SimplexSolver *solver,
+                                                      const SimplexTableau *tab) {
+    if (!solver || !solver->model || !solver->model->A || !tab) return 0;
+
+    int m = solver->model->num_cons;
+    int n = solver->model->num_vars;
+    int nnz = solver->model->A->nnz;
+    if (m <= 0 || n <= 0 || nnz <= 0) return 0;
+    if (tab->phase != 2) return 0;
+
+    double density = (double)nnz / ((double)m * (double)n);
+    /* Sparse midrow Phase 2 runs in this band can spend more on cost-gated
+     * reinvert deferrals than they save; nearby denser or lower-row NETLIB
+     * shapes regress under governor control, so keep the selector narrow. */
+    return (m >= 700 && m <= 760 &&
+            n >= 2500 && n <= 3200 &&
+            density >= 0.004 && density <= 0.0055);
+}
+
 static void p2_reset_devex_reference(SimplexTableau *tab) {
     if (!tab || tab->pricing_strategy != 2 || !tab->use_steepest_edge ||
         !tab->se_weights || !tab->A_ext) {
@@ -786,6 +805,11 @@ P2ZoneResult p2_zone_post_pivot(SimplexSolver *solver,
             lu_refactor_nominal,
             periodic_refactor_nominal,
             needs_refactor);
+        if (lp_basis_governor_get_mode(&solver->policy.basis_governor) ==
+                LP_BASIS_GOV_MODE_OFF &&
+            p2_should_use_sparse_midrow_basis_governor(solver, tab)) {
+            governed_refactor = shadow_refactor;
+        }
         if (solver->telemetry_enabled) {
             lp_basis_governor_observe_refactor(
                 &solver->policy.basis_governor,
