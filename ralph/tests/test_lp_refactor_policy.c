@@ -654,8 +654,8 @@ int main(void) {
                                                                     100.0,
                                                                     12.0,
                                                                     1.0);
-    TEST(should_run == 0,
-         "soft lu cost gate keeps phase1 nondegenerate threshold");
+    TEST(should_run == 1,
+         "soft lu cost gate defers large phase1 nondegenerate health refactors");
 
     should_run = lp_refactor_policy_soft_lu_cost_gate_should_defer(2,
                                                                     1503,
