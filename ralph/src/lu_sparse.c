@@ -2144,15 +2144,30 @@ static int lu_symbolic_analyze(LUFactorization *lu, const SparseMatrix *B) {
             row_match_col[i] = -1;
             row_seen[i] = 0;
         }
+        for (int j = 0; j < m; j++) {
+            col_order_inv[j] = is_identity_col[j] ? 1 : 0;
+        }
+        for (int j = 0; j < m; j++) {
+            if (is_identity_col[j]) continue;
+            for (int p = B->colptr[j]; p < B->colptr[j + 1]; p++) {
+                int row = B->rowidx[p];
+                if (row_used[row] || row_match_col[row] >= 0) continue;
+                row_match_col[row] = j;
+                col_order_inv[j] = 1;
+                break;
+            }
+        }
 
         int seen_token = 1;
         int unmatched_col = -1;
         for (int j = 0; j < m; j++) {
             if (is_identity_col[j]) continue;
+            if (col_order_inv[j]) continue;
             if (!symbolic_match_col(B, j, row_used, row_match_col, row_seen, seen_token++)) {
                 unmatched_col = j;
                 break;
             }
+            col_order_inv[j] = 1;
         }
         if (unmatched_col < 0) {
             break;
