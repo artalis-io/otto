@@ -200,6 +200,15 @@ typedef struct {
     double objective;
     double time_ms;
     int iterations;
+    int presolve_used;
+    unsigned int presolve_mask;
+    int presolve_rounds;
+    int presolve_vars_removed;
+    int presolve_cons_removed;
+    int presolve_bounds_tightened;
+    int presolve_matrix_rank;
+    int presolve_redundant_rows_found;
+    double presolve_time_ms;
     double phase1_artificial_sum;
     double phase1_artificial_max;
     int phase1_artificial_basic;
@@ -968,6 +977,7 @@ typedef struct {
     int no_adaptive_fallback; /* Keep single native solve result for regression audits */
     int no_external_fallback; /* Allow native retries but forbid external backend rescue */
     int no_presolve; /* Disable native presolve before simplex */
+    int presolve_mask_override; /* -1=default, otherwise native presolve technique mask */
     int crash; /* Enable native primal crash basis */
     int trace_phase1; /* Emit deterministic Phase 1 trace from the LP solver */
     int solver_verbose; /* Forward benchmark diagnostics to the native LP solver */
@@ -1386,6 +1396,7 @@ static SolveResult solve_with_ralph(const char *problem_path, double time_limit_
                                      int external_glpk_oop,
                                      int smcp_shift_override,
                                      int no_presolve,
+                                     int presolve_mask_override,
                                      int crash,
                                      int trace_phase1,
                                      int solver_verbose,
@@ -1446,6 +1457,9 @@ static SolveResult solve_with_ralph(const char *problem_path, double time_limit_
     ralph_test_set_dbl_param(model, "time_limit", time_limit_sec);
     ralph_test_set_int_param(model, "max_iterations", 10000000);
     ralph_test_set_int_param(model, "presolve", (external_glpk_oop || no_presolve) ? 0 : 1);
+    if (presolve_mask_override >= 0) {
+        ralph_test_set_int_param(model, "presolve_mask", presolve_mask_override);
+    }
     ralph_test_set_int_param(model, "verify", 1);
     if (external_glpk_oop) {
         ralph_test_set_int_param(model, "detect_special", 0);
@@ -1510,6 +1524,20 @@ static SolveResult solve_with_ralph(const char *problem_path, double time_limit_
 
     result.time_ms = end_time - start_time;
     result.iterations = ralph_test_get_iterations(model);
+    {
+        RalphPresolveReport presolve_report;
+        if (ralph_core_get_last_presolve_report(model, &presolve_report) == 0) {
+            result.presolve_used = presolve_report.used;
+            result.presolve_mask = presolve_report.mask;
+            result.presolve_rounds = presolve_report.rounds;
+            result.presolve_vars_removed = presolve_report.vars_removed;
+            result.presolve_cons_removed = presolve_report.cons_removed;
+            result.presolve_bounds_tightened = presolve_report.bounds_tightened;
+            result.presolve_matrix_rank = presolve_report.matrix_rank;
+            result.presolve_redundant_rows_found = presolve_report.redundant_rows_found;
+            result.presolve_time_ms = presolve_report.presolve_time_ms;
+        }
+    }
     {
         LPModel *lp = ralph_get_lp_model(model);
         if (lp) {
@@ -3513,6 +3541,19 @@ static void print_json_result(const char *problem_name, const char *source,
         fprintf(out, "  },\n");
     }
 
+    fprintf(out, "  \"presolve\": {\n");
+    fprintf(out, "    \"used\": %d,\n", ralph->presolve_used);
+    fprintf(out, "    \"mask\": %u,\n", ralph->presolve_mask);
+    fprintf(out, "    \"rounds\": %d,\n", ralph->presolve_rounds);
+    fprintf(out, "    \"vars_removed\": %d,\n", ralph->presolve_vars_removed);
+    fprintf(out, "    \"cons_removed\": %d,\n", ralph->presolve_cons_removed);
+    fprintf(out, "    \"bounds_tightened\": %d,\n", ralph->presolve_bounds_tightened);
+    fprintf(out, "    \"matrix_rank\": %d,\n", ralph->presolve_matrix_rank);
+    fprintf(out, "    \"redundant_rows_found\": %d,\n",
+            ralph->presolve_redundant_rows_found);
+    fprintf(out, "    \"time_ms\": %.6f\n", ralph->presolve_time_ms);
+    fprintf(out, "  },\n");
+
     /* Ralph timing breakdown (solver-internal instrumentation) */
     fprintf(out, "  \"timing\": {\n");
     fprintf(out, "    \"primal_setup_ms\": %.6f,\n", ralph->primal_setup_ms);
@@ -4986,6 +5027,7 @@ static int run_single_benchmark(const char *problem_path, const char *name,
                                           opts->external_glpk_oop,
                                           -1,
                                           opts->no_presolve,
+                                          opts->presolve_mask_override,
                                           opts->crash,
                                           opts->trace_phase1,
                                           opts->solver_verbose,
@@ -5018,6 +5060,7 @@ static int run_single_benchmark(const char *problem_path, const char *name,
                                  opts->external_glpk_oop,
                                  0,
                                  opts->no_presolve,
+                                 opts->presolve_mask_override,
                                  opts->crash,
                                  opts->trace_phase1,
                                  opts->solver_verbose,
@@ -5049,6 +5092,7 @@ static int run_single_benchmark(const char *problem_path, const char *name,
                                  1,
                                  -1,
                                  opts->no_presolve,
+                                 opts->presolve_mask_override,
                                  opts->crash,
                                  opts->trace_phase1,
                                  opts->solver_verbose,
@@ -5159,6 +5203,7 @@ static int test_solve_one(const char *path, const char *name,
                                                external_glpk_oop,
                                                -1,
                                                0,
+                                               -1,
                                                crash,
                                                trace_phase1,
                                                0,
@@ -5392,6 +5437,7 @@ static void print_help(const char *prog) {
     printf("  --no-adaptive-fallback        Do not retry invalid/failed native solves with shift-off or external backend\n");
     printf("  --no-external-fallback        Allow native retries but forbid external backend rescue\n");
     printf("  --no-presolve                 Disable native presolve before simplex\n");
+    printf("  --presolve-mask <MASK>        Override native presolve technique mask (decimal or 0x-prefixed)\n");
     printf("  --crash                       Enable native primal crash basis\n");
     printf("  --lu-supernode                Enable supernodal LU factorization\n");
     printf("\n");
@@ -5446,6 +5492,7 @@ static int parse_args(int argc, char **argv, Options *opts) {
     opts->glpk_bfcp_backend = -1;
     opts->lp_reinvert_controller_mode = LP_REINVERT_MODE_SHADOW;
     opts->random_seed = 0;
+    opts->presolve_mask_override = -1;
 
     for (int i = 1; i < argc; i++) {
         const char *arg = argv[i];
@@ -5562,6 +5609,16 @@ static int parse_args(int argc, char **argv, Options *opts) {
             opts->no_external_fallback = 1;
         } else if (strcmp(arg, "--no-presolve") == 0) {
             opts->no_presolve = 1;
+        } else if (strcmp(arg, "--presolve-mask") == 0 && i + 1 < argc) {
+            char *end = NULL;
+            unsigned long mask = strtoul(argv[++i], &end, 0);
+            if (!end || *end != '\0' || mask > 0xFFFFul) {
+                fprintf(stderr,
+                        "Invalid --presolve-mask: %s (expected 0..0xFFFF)\n",
+                        argv[i]);
+                return -1;
+            }
+            opts->presolve_mask_override = (int)mask;
         } else if (strcmp(arg, "--crash") == 0) {
             opts->crash = 1;
         } else if (strcmp(arg, "--lu-supernode") == 0) {
