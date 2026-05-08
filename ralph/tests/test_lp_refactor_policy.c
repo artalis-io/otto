@@ -620,6 +620,36 @@ int main(void) {
     TEST(should_run == 1, "soft lu cost gate defers under expensive refactors");
 
     should_run = lp_refactor_policy_soft_lu_cost_gate_should_defer(2,
+                                                                    799,
+                                                                    0,
+                                                                    0,
+                                                                    60,
+                                                                    120,
+                                                                    10,
+                                                                    100,
+                                                                    1e5,
+                                                                    100.0,
+                                                                    12.0,
+                                                                    1.0);
+    TEST(should_run == 1,
+         "soft lu cost gate defers large phase2 nondegenerate health refactors");
+
+    should_run = lp_refactor_policy_soft_lu_cost_gate_should_defer(1,
+                                                                    1503,
+                                                                    0,
+                                                                    0,
+                                                                    60,
+                                                                    120,
+                                                                    10,
+                                                                    100,
+                                                                    1e5,
+                                                                    100.0,
+                                                                    12.0,
+                                                                    1.0);
+    TEST(should_run == 0,
+         "soft lu cost gate keeps phase1 nondegenerate threshold");
+
+    should_run = lp_refactor_policy_soft_lu_cost_gate_should_defer(2,
                                                                     1503,
                                                                     0,
                                                                     80,
