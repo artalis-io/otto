@@ -138,6 +138,10 @@ int main(void) {
          "dense spike warmup override does not apply below medium basis");
     TEST(lp_refactor_policy_dense_spike_min_updates_override(2, 700) == 0,
          "dense spike warmup override leaves large basis policy unchanged");
+    TEST(lp_refactor_policy_dense_spike_min_updates_override(2, 3000) == 32,
+         "dense spike warmup override extends large Phase 2 warmup");
+    TEST(lp_refactor_policy_dense_spike_min_updates_override(1, 3000) == 0,
+         "dense spike warmup override leaves large Phase 1 policy unchanged");
 
     TEST(fabs(lp_refactor_policy_periodic_pressure_effective(0, 0.9, 0.2) - 0.9) < 1e-12,
          "periodic pressure effective: cooldown-off keeps run pressure");

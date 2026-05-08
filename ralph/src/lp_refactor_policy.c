@@ -183,6 +183,8 @@
 #define DENSE_SPIKE_WARMUP_PHASE2_MEDIUM_MIN_M 300
 #define DENSE_SPIKE_WARMUP_PHASE2_MEDIUM_MAX_M 500
 #define DENSE_SPIKE_WARMUP_PHASE2_MEDIUM_MIN_UPDATES 16
+#define DENSE_SPIKE_WARMUP_PHASE2_LARGE_MIN_M 2500
+#define DENSE_SPIKE_WARMUP_PHASE2_LARGE_MIN_UPDATES 32
 
 void lp_refactor_policy_config_defaults(LPRefactorPolicyConfig *cfg) {
     if (!cfg) return;
@@ -1750,6 +1752,9 @@ int lp_refactor_policy_dense_spike_min_updates_override(int phase,
         m >= DENSE_SPIKE_WARMUP_PHASE2_MEDIUM_MIN_M &&
         m < DENSE_SPIKE_WARMUP_PHASE2_MEDIUM_MAX_M) {
         return DENSE_SPIKE_WARMUP_PHASE2_MEDIUM_MIN_UPDATES;
+    }
+    if (phase == 2 && m >= DENSE_SPIKE_WARMUP_PHASE2_LARGE_MIN_M) {
+        return DENSE_SPIKE_WARMUP_PHASE2_LARGE_MIN_UPDATES;
     }
     return 0;
 }
