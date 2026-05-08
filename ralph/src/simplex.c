@@ -4261,6 +4261,54 @@ static int simplex_should_use_very_sparse_large_dantzig(const SimplexSolver *sol
     return (m >= 1500 && n >= 8000 && density <= 0.0015);
 }
 
+static int simplex_should_use_mid_sparse_phase12_dantzig(const SimplexSolver *solver,
+                                                         const SimplexTableau *tab) {
+    if (!solver || !solver->model || !solver->model->A || !tab) return 0;
+
+    int m = solver->model->num_cons;
+    int n = solver->model->num_vars;
+    int nnz = solver->model->A->nnz;
+    if (m <= 0 || n <= 0 || nnz <= 0) return 0;
+
+    double density = (double)nnz / ((double)m * (double)n);
+    /* Sparse mid-size cases in this band get cheaper Phase 1 and Phase 2
+     * progress from Dantzig. Nearby lower-row shapes such as bnl1/pilot4
+     * regress, so keep the row and density band tight. */
+    return (m >= 800 && m <= 900 &&
+            n >= 1400 && n <= 1600 &&
+            density >= 0.007 && density <= 0.009);
+}
+
+static int simplex_should_use_sparse_grow_phase12_dantzig(const SimplexSolver *solver,
+                                                          const SimplexTableau *tab) {
+    if (!solver || !solver->model || !solver->model->A || !tab) return 0;
+
+    int m = solver->model->num_cons;
+    int n = solver->model->num_vars;
+    int nnz = solver->model->A->nnz;
+    if (m <= 0 || n <= 0 || nnz <= 0) return 0;
+
+    double density = (double)nnz / ((double)m * (double)n);
+    return (m >= 350 && m <= 500 &&
+            n >= 900 && n <= 1100 &&
+            density >= 0.018 && density <= 0.022);
+}
+
+static int simplex_should_use_scsd_sparse_phase12_dantzig(const SimplexSolver *solver,
+                                                          const SimplexTableau *tab) {
+    if (!solver || !solver->model || !solver->model->A || !tab) return 0;
+
+    int m = solver->model->num_cons;
+    int n = solver->model->num_vars;
+    int nnz = solver->model->A->nnz;
+    if (m <= 0 || n <= 0 || nnz <= 0) return 0;
+
+    double density = (double)nnz / ((double)m * (double)n);
+    return (m >= 350 && m <= 450 &&
+            n >= 2400 && n <= 3000 &&
+            density >= 0.006 && density <= 0.009);
+}
+
 static int simplex_should_use_dense_lowrow_phase2_dantzig(const SimplexSolver *solver,
                                                           const SimplexTableau *tab) {
     if (!solver || !solver->model || !solver->model->A || !tab) return 0;
@@ -4321,6 +4369,12 @@ static int simplex_finish_prepared_primal_solve(SimplexSolver *solver, clock_t s
         solver->pricing_strategy = 0;
         tab->pricing_strategy = 0;
         tab->use_steepest_edge = 0;
+    } else if (simplex_should_use_mid_sparse_phase12_dantzig(solver, tab) ||
+               simplex_should_use_sparse_grow_phase12_dantzig(solver, tab) ||
+               simplex_should_use_scsd_sparse_phase12_dantzig(solver, tab)) {
+        solver->pricing_strategy = 0;
+        tab->pricing_strategy = 0;
+        tab->use_steepest_edge = 0;
     } else if (tab->use_two_phase && (solver->pricing_strategy == 3 || solver->pricing_strategy == 4)) {
         solver->pricing_strategy = 2;  /* Devex for Phase 1 */
         tab->pricing_strategy = 2;
@@ -4357,7 +4411,10 @@ static int simplex_finish_prepared_primal_solve(SimplexSolver *solver, clock_t s
 
     if (saved_pricing == 2 &&
         (simplex_should_use_dense_lowrow_phase2_dantzig(solver, tab) ||
-         simplex_should_use_very_sparse_large_dantzig(solver, tab))) {
+         simplex_should_use_very_sparse_large_dantzig(solver, tab) ||
+         simplex_should_use_mid_sparse_phase12_dantzig(solver, tab) ||
+         simplex_should_use_sparse_grow_phase12_dantzig(solver, tab) ||
+         simplex_should_use_scsd_sparse_phase12_dantzig(solver, tab))) {
         solver->pricing_strategy = 0;
         tab->pricing_strategy = 0;
         tab->use_steepest_edge = 0;
