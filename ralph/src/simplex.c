@@ -3486,11 +3486,13 @@ static int simplex_phase2(SimplexSolver *solver) {
 
         /* Zone 2: pricing */
         zr = p2_zone_pricing(solver, tab, &st, iter);
+        if (zr == P2_ZONE_CONTINUE)       continue;
         if (zr == P2_ZONE_RETURN_OPTIMAL) return 0;
         if (zr == P2_ZONE_RETURN_FAIL)    return -1;
 
         /* Zone 3: ratio test */
         zr = p2_zone_ratio(solver, tab, &st, iter);
+        if (zr == P2_ZONE_CONTINUE)       continue;
         if (zr == P2_ZONE_RETURN_OPTIMAL) return 0;
         if (zr == P2_ZONE_RETURN_FAIL)    return -1;
 
