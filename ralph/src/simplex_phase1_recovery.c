@@ -113,6 +113,9 @@ void p1_recovery_init(P1RecoveryState *rs,
         (solver->phase1_pricing >= 0) ? solver->phase1_pricing
                                       : solver->pricing_strategy;
     rs->cycling.auto_dantzig_enabled = 0;
+    rs->cycling.auto_partial_enabled =
+        (solver->phase1_pricing < 0 && rs->cycling.pricing_strategy == 3) ? 1 : 0;
+    rs->cycling.auto_partial_abandoned = 0;
 
     /* ── Numerical ───────────────────────────────────────────────── */
     rs->numerical.dir_stabilize_cooldown = 0;

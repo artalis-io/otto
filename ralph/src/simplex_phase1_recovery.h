@@ -66,6 +66,8 @@ typedef struct {
     int max_perturb_attempts;     /* const after init */
     int pricing_strategy;
     int auto_dantzig_enabled;
+    int auto_partial_enabled;
+    int auto_partial_abandoned;
 } P1CyclingState;
 
 /* ── Numerical: direction guard, stabilization, shadow/extreme followup ── */

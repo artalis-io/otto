@@ -474,6 +474,29 @@ P1ZoneResult p1_zone_pre_iter(SimplexSolver *solver,
 {
     (void)ctx;
 
+    if (rs->cycling.auto_partial_enabled &&
+        !rs->cycling.auto_partial_abandoned &&
+        rs->cycling.pricing_strategy == 3 &&
+        (rs->progress.no_pivot_streak >= 4 ||
+         rs->progress.no_pivot_no_progress_streak >= 2 ||
+         rs->basis.fail_repeat_count > 0 ||
+         rs->basis.ratio_breakdown_count > 0 ||
+         rs->numerical.dir_skip_event_streak >= 4)) {
+        rs->cycling.pricing_strategy = 2;
+        rs->cycling.auto_partial_abandoned = 1;
+        tab->pricing_strategy = 2;
+        tab->use_steepest_edge = 1;
+        phase1_recompute_full_with_reason(
+            solver,
+            tab,
+            &rs->numerical.rc_only_streak,
+            LP_PHASE1_RECOMPUTE_REASON_DIR_SKIP);
+        if (solver->verbose >= 2) {
+            LP_LOG_STDERR("[simplex_phase1] Abandoning auto partial pricing after Phase 1 recovery pressure at iter %d\n",
+                    iter);
+        }
+    }
+
     /* Auto-Dantzig pricing switch for large degenerate Phase 1 */
     if (!rs->cycling.auto_dantzig_enabled &&
         solver->phase1_pricing < 0 &&
