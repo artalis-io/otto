@@ -2842,6 +2842,12 @@ static int lu_factorize_markowitz(
                         int s = cv_ptr[jj], n2 = cv_len[jj];
                         int scanned_entries = n2;
                         for (int e = 0; e < n2; e++) {
+                            if (e + 8 < n2) {
+                                int next_row = cv_idx[s + e + 8];
+                                RALPH_PREFETCH(&cv_idx[s + e + 8], 0, 1);
+                                RALPH_PREFETCH(&cv_val[s + e + 8], 0, 1);
+                                RALPH_PREFETCH(&row_deg[next_row], 0, 1);
+                            }
                             int row = cv_idx[s + e];
                             if (!row_alive[row] || row_reserved[row]) continue;
                             double av = fabs(cv_val[s + e]);
@@ -2877,6 +2883,12 @@ static int lu_factorize_markowitz(
                         int s = cv_ptr[jj], n2 = cv_len[jj];
                         int scanned_entries = n2;
                         for (int e = 0; e < n2; e++) {
+                            if (e + 8 < n2) {
+                                int next_row = cv_idx[s + e + 8];
+                                RALPH_PREFETCH(&cv_idx[s + e + 8], 0, 1);
+                                RALPH_PREFETCH(&cv_val[s + e + 8], 0, 1);
+                                RALPH_PREFETCH(&row_deg[next_row], 0, 1);
+                            }
                             int row = cv_idx[s + e];
                             if (!row_alive[row]) continue;
                             double av = fabs(cv_val[s + e]);
