@@ -2331,6 +2331,14 @@ int main(void) {
             .expected_allow = 0
         },
         {
+            .name = "phase1 dir-skip rc-only enabled on medium sustained no-pivot streak",
+            .m = 524,
+            .n = 854,
+            .degenerate_count = 5,
+            .no_pivot_streak = 12,
+            .expected_allow = 1
+        },
+        {
             .name = "phase1 dir-skip rc-only enabled for wide LP despite small basis",
             .m = 500,
             .n = 2500,
@@ -2342,7 +2350,7 @@ int main(void) {
     const DirSkipNoRecomputeCase dir_skip_no_recompute_cases[] = {
         {
             .name = "phase1 dir-skip no-recompute disabled when rc-only not allowed",
-            .m = 500,
+            .m = 499,
             .n = 500,
             .degenerate_count = 100,
             .no_pivot_streak = 20,
