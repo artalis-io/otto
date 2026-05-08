@@ -2831,6 +2831,12 @@ static int lu_factorize_markowitz(
                             cand++;
                             continue;
                         }
+                        if (best_cost < (long long)m * m + 1 &&
+                            bucket_lower_bound == best_cost &&
+                            col_max[jj] <= best_piv_val) {
+                            cand++;
+                            continue;
+                        }
                         double max_col = col_max[jj];
                         double thr = threshold_ratio * max_col;
                         int s = cv_ptr[jj], n2 = cv_len[jj];
