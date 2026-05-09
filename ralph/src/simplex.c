@@ -2094,12 +2094,7 @@ int simplex_pivot(SimplexTableau *tab,
     }
 
     double *x_basic_backup = tab->primal_basic_x_backup;
-    if (leaving_pos != -2) {
-        if (!x_basic_backup) return -1;
-        for (int k = 0; k < tab->m; k++) {
-            x_basic_backup[k] = x[basis[k]];
-        }
-    }
+    if (leaving_pos != -2 && !x_basic_backup) return -1;
 
     /* Update entering variable */
     if (tab->var_status[entering] == RALPH_NONBASIC_LOWER) {
@@ -2114,6 +2109,9 @@ int simplex_pivot(SimplexTableau *tab,
         double dk = work2[k];
         int basic_var = basis[k];
         double dx = -step * dk;
+        if (leaving_pos != -2) {
+            x_basic_backup[k] = x[basic_var];
+        }
         x[basic_var] += dx;
         obj_delta += tab->c_ext[basic_var] * dx;
         gamma_e += dk * dk;
