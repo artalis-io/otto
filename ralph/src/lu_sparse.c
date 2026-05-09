@@ -2813,6 +2813,32 @@ static int lu_factorize_markowitz(
     }
 
     (void)0;  /* active rows/cols tracked implicitly by degree lists */
+    /* For large structural fronts, test the cached column maximum first.
+     * It is threshold-eligible by construction and can avoid full column scans
+     * when it also reaches the current bucket's Markowitz lower bound. */
+    int use_colmax_probe = (k >= 1000);
+
+    #define MKZ_TRY_COLMAX_PROBE(row_ok_expr) do { \
+        int max_pos = use_colmax_probe ? col_max_pos[jj] : -1; \
+        if (max_pos >= 0 && max_pos < n2) { \
+            int row = cv_idx[s + max_pos]; \
+            if ((row_ok_expr)) { \
+                double av = fabs(cv_val[s + max_pos]); \
+                if (av >= thr) { \
+                    long long cost = (long long)(row_deg[row] - 1) * (col_deg[jj] - 1); \
+                    if (cost < best_cost || (cost == best_cost && av > best_piv_val)) { \
+                        best_cost = cost; \
+                        piv_col = jj; piv_row = row; best_piv_val = av; \
+                        if (cost == bucket_lower_bound) { \
+                            scanned_entries = 1; \
+                            mkz_primary_scan_entries += (uint64_t)scanned_entries; \
+                            goto pivot_found; \
+                        } \
+                    } \
+                } \
+            } \
+        } \
+    } while (0)
 
     for (int step = 0; step < k; step++) {
         int singular_retry_used = 0;
@@ -2856,6 +2882,7 @@ static int lu_factorize_markowitz(
                         double thr = threshold_ratio * max_col;
                         int s = cv_ptr[jj], n2 = cv_len[jj];
                         int scanned_entries = n2;
+                        MKZ_TRY_COLMAX_PROBE(row_alive[row] && !row_reserved[row]);
                         for (int e = 0; e < n2; e++) {
                             if (e + 8 < n2) {
                                 int next_row = cv_idx[s + e + 8];
@@ -2897,6 +2924,7 @@ static int lu_factorize_markowitz(
                         double thr = threshold_ratio * max_col;
                         int s = cv_ptr[jj], n2 = cv_len[jj];
                         int scanned_entries = n2;
+                        MKZ_TRY_COLMAX_PROBE(row_alive[row]);
                         for (int e = 0; e < n2; e++) {
                             if (e + 8 < n2) {
                                 int next_row = cv_idx[s + e + 8];
@@ -3371,6 +3399,7 @@ static int lu_factorize_markowitz(
     #undef ROW_DEG_CHANGE
     #undef CV_REMOVE
     #undef RV_REMOVE
+    #undef MKZ_TRY_COLMAX_PROBE
     #undef MKZ_FLUSH_TELEMETRY
     #undef MKZ_FLUSH_COLMAX_WORK
     #undef MKZ_FLUSH_SCAN_WORK
