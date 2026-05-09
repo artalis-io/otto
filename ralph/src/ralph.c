@@ -466,6 +466,12 @@ static int ralph_should_control_mid_sparse_reinvert(const LPModel *model) {
     if (n <= 0 || m <= 0 || nnz <= 0) return 0;
 
     double density = (double)nnz / ((double)n * (double)m);
+    if (n >= 3000 && n <= 4500 &&
+        m >= 1800 && m <= 2800 &&
+        density >= 0.001 && density <= 0.0025) {
+        return 1;
+    }
+
     if (n >= 800 && n <= 1500 &&
         nnz >= 8000 &&
         m >= 700 && m <= 1100 &&
