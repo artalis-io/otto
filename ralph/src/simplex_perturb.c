@@ -47,12 +47,28 @@ int artificial_var_row(const SimplexTableau *tab, int var_idx) {
     return -1;
 }
 
+static double artificial_abs_sum_for_redundancy(const SimplexTableau *tab) {
+    double sum = 0.0;
+    if (!tab || !tab->artificial_vars || !tab->x) return 0.0;
+    for (int k = 0; k < tab->num_artificial; k++) {
+        int j = tab->artificial_vars[k];
+        if (j >= 0 && j < tab->n) {
+            sum += fabs(tab->x[j]);
+        }
+    }
+    return sum;
+}
+
 /* Mark basic rows backed by artificial variables as redundant hints for LU.
  * A basic artificial proves row redundancy only after Phase 1 has driven that
  * artificial to zero. A positive artificial is evidence of remaining Phase 1
  * infeasibility, not permission to zero the row. */
 int mark_basic_artificial_rows_redundant(SimplexTableau *tab, int only_infeasible) {
     if (!tab || !tab->redundant_rows) {
+        return 0;
+    }
+    if (only_infeasible &&
+        artificial_abs_sum_for_redundancy(tab) > RALPH_FEAS_TOL) {
         return 0;
     }
 

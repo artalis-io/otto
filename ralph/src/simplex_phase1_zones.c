@@ -19,6 +19,8 @@
 
 #include <math.h>
 #include <limits.h>
+#include <stdlib.h>
+#include <string.h>
 
 /* ── Shared helpers ─────────────────────────────────────────────────── */
 
@@ -1708,6 +1710,17 @@ P1ZoneResult p1_zone_periodic_refactor(SimplexSolver *solver,
                 LP_LOG_STDERR("[simplex_phase1] Refactorization failed at iter %d, trying dual rescue\n", iter);
             }
 
+            unsigned char *saved_redundant_rows = NULL;
+            int saved_num_redundant = tab->num_redundant;
+            if (tab->redundant_rows && tab->m > 0) {
+                saved_redundant_rows =
+                    (unsigned char*)malloc((size_t)tab->m * sizeof(unsigned char));
+                if (saved_redundant_rows) {
+                    memcpy(saved_redundant_rows,
+                           tab->redundant_rows,
+                           (size_t)tab->m * sizeof(unsigned char));
+                }
+            }
             int marked = mark_basic_artificial_rows_redundant(tab, 1);
             if (marked > 0) {
                 if (solver->verbose >= 2) {
@@ -1715,6 +1728,7 @@ P1ZoneResult p1_zone_periodic_refactor(SimplexSolver *solver,
                             marked);
                 }
                 if (tableau_refactorize_with_reason(tab, RALPH_REFACTOR_REASON_INFEASIBILITY_CLEANUP) == 0) {
+                    free(saved_redundant_rows);
                     tab->phase1_compute_solution_context =
                         LP_PHASE1_COMPUTE_CTX_REFACTOR_FAILURE_RECOVERY;
                     tab->phase1_compute_rc_context =
@@ -1723,6 +1737,13 @@ P1ZoneResult p1_zone_periodic_refactor(SimplexSolver *solver,
                     tableau_compute_reduced_costs(tab);
                     return P1_ZONE_CONTINUE;
                 }
+            }
+            if (saved_redundant_rows) {
+                memcpy(tab->redundant_rows,
+                       saved_redundant_rows,
+                       (size_t)tab->m * sizeof(unsigned char));
+                tab->num_redundant = saved_num_redundant;
+                free(saved_redundant_rows);
             }
 
             int rescue_status = p1_progress_attempt_direct_rescue(
