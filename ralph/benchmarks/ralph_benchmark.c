@@ -971,6 +971,7 @@ typedef struct {
     int glpk_smcp_flip;  /* -1=default, 0=off (--noflip), 1=on (--flip) */
     int glpk_smcp_shift; /* -1=default, 0=off, 1=on */
     int glpk_bfcp_backend; /* -1=default, 0=luf_ft, 1=cbg, 2=cgr */
+    int glpk_bfcp_update_limit; /* -1=default, positive overrides max updates */
     int lu_supernode; /* 0=off, 1=enable supernodal LU */
     int lp_basis_governor_mode; /* 0=off, 1=shadow, 2=control_phase2 */
     int lp_reinvert_controller_mode; /* 0=off, 1=shadow, 2=control_phase1, 3=control_all */
@@ -1401,6 +1402,7 @@ static SolveResult solve_with_ralph(const char *problem_path, double time_limit_
                                      int method, int pricing, int phase1_pricing,
                                      int glpk_smcp_ratio, int glpk_smcp_flip,
                                      int glpk_bfcp_backend,
+                                     int glpk_bfcp_update_limit,
                                      int lu_supernode, int lp_basis_governor_mode,
                                      int lp_reinvert_controller_mode,
                                      int random_seed,
@@ -1526,6 +1528,10 @@ static SolveResult solve_with_ralph(const char *problem_path, double time_limit_
         if (glpk_bfcp_backend >= 0) {
             ralph_test_set_int_param(model, "glpk_bfcp_backend", glpk_bfcp_backend);
         }
+    }
+    if (glpk_bfcp_update_limit > 0) {
+        ralph_test_set_int_param(model, "glpk_bfcp_update_limit",
+                                 glpk_bfcp_update_limit);
     }
     if (lu_supernode) {
         ralph_test_set_int_param(model, "lu_supernode", 1);
@@ -5072,6 +5078,7 @@ static int run_single_benchmark(const char *problem_path, const char *name,
                                           opts->glpk_smcp_ratio,
                                           opts->glpk_smcp_flip,
                                           opts->glpk_bfcp_backend,
+                                          opts->glpk_bfcp_update_limit,
                                           opts->lu_supernode,
                                           opts->lp_basis_governor_mode,
                                           opts->lp_reinvert_controller_mode,
@@ -5106,6 +5113,7 @@ static int run_single_benchmark(const char *problem_path, const char *name,
                                  opts->glpk_smcp_ratio,
                                  opts->glpk_smcp_flip,
                                  opts->glpk_bfcp_backend,
+                                 opts->glpk_bfcp_update_limit,
                                  opts->lu_supernode,
                                  opts->lp_basis_governor_mode,
                                  opts->lp_reinvert_controller_mode,
@@ -5139,6 +5147,7 @@ static int run_single_benchmark(const char *problem_path, const char *name,
                                  opts->glpk_smcp_ratio,
                                  opts->glpk_smcp_flip,
                                  opts->glpk_bfcp_backend,
+                                 opts->glpk_bfcp_update_limit,
                                  opts->lu_supernode,
                                  opts->lp_basis_governor_mode,
                                  opts->lp_reinvert_controller_mode,
@@ -5220,6 +5229,7 @@ static int test_solve_one(const char *path, const char *name,
                            int glpk_smcp_ratio, int glpk_smcp_flip,
                            int glpk_smcp_shift,
                            int glpk_bfcp_backend,
+                           int glpk_bfcp_update_limit,
                            int lu_supernode, int lp_basis_governor_mode,
                            int lp_reinvert_controller_mode,
                            int random_seed, int external_glpk_oop,
@@ -5253,6 +5263,7 @@ static int test_solve_one(const char *path, const char *name,
                                                phase1_pricing,
                                                glpk_smcp_ratio, glpk_smcp_flip,
                                                glpk_bfcp_backend,
+                                               glpk_bfcp_update_limit,
                                                lu_supernode,
                                                lp_basis_governor_mode,
                                                lp_reinvert_controller_mode,
@@ -5381,6 +5392,7 @@ static int run_test_mode(const Options *opts) {
                                      opts->glpk_smcp_flip,
                                      opts->glpk_smcp_shift,
                                      opts->glpk_bfcp_backend,
+                                     opts->glpk_bfcp_update_limit,
                                      opts->lu_supernode,
                                      opts->lp_basis_governor_mode,
                                      opts->lp_reinvert_controller_mode,
@@ -5489,6 +5501,7 @@ static void print_help(const char *prog) {
     printf("  --noflip                      Disable dual bound flipping (GLPK-compat flip=0)\n");
     printf("  --smcp-shift <N>              GLPK-compat bound shift: 0=off, 1=on\n");
     printf("  --bfcp-backend <N>            GLPK BFCP backend: 0=luf_ft, 1=cbg, 2=cgr\n");
+    printf("  --bfcp-update-limit <N>       GLPK BFCP update limit override (>0)\n");
     printf("  --lp-basis-governor-mode <N>  Basis governor: 0=off, 1=shadow, 2=control_phase2\n");
     printf("  --lp-reinvert-controller-mode <N> Reinvert controller: 0=off, 1=shadow, 2=control_phase1, 3=control_all\n");
     printf("  --random-seed <N>             Deterministic LP anti-cycling seed (default: 0)\n");
@@ -5553,6 +5566,7 @@ static int parse_args(int argc, char **argv, Options *opts) {
     opts->glpk_smcp_flip = -1;
     opts->glpk_smcp_shift = -1;
     opts->glpk_bfcp_backend = -1;
+    opts->glpk_bfcp_update_limit = -1;
     opts->lp_reinvert_controller_mode = LP_REINVERT_MODE_SHADOW;
     opts->random_seed = 0;
     opts->presolve_mask_override = -1;
@@ -5649,6 +5663,14 @@ static int parse_args(int argc, char **argv, Options *opts) {
                 fprintf(stderr,
                         "Invalid --bfcp-backend: %d (expected 0..2)\n",
                         opts->glpk_bfcp_backend);
+                return -1;
+            }
+        } else if (strcmp(arg, "--bfcp-update-limit") == 0 && i + 1 < argc) {
+            opts->glpk_bfcp_update_limit = atoi(argv[++i]);
+            if (opts->glpk_bfcp_update_limit <= 0) {
+                fprintf(stderr,
+                        "Invalid --bfcp-update-limit: %d (expected >0)\n",
+                        opts->glpk_bfcp_update_limit);
                 return -1;
             }
         } else if (strcmp(arg, "--lp-basis-governor-mode") == 0 && i + 1 < argc) {
