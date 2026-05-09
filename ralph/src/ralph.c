@@ -467,7 +467,8 @@ static int ralph_should_control_mid_sparse_reinvert(const LPModel *model) {
 
     double density = (double)nnz / ((double)n * (double)m);
     if (n >= 800 && n <= 1500 &&
-        m >= 500 && m <= 1100 &&
+        nnz >= 8000 &&
+        m >= 700 && m <= 1100 &&
         n * 20 <= m * 31 &&
         density >= 0.005 && density <= 0.010) {
         return 1;
@@ -477,6 +478,7 @@ static int ralph_should_control_mid_sparse_reinvert(const LPModel *model) {
      * periodic reinversions.  Let the reinvert controller dampen cadence here,
      * while keeping larger rows out of this automatic control path. */
     if (n >= 1000 && n <= 1300 &&
+        nnz >= 8000 &&
         m >= 600 && m <= 700 &&
         n * 10 >= m * 17 &&
         density >= 0.005 && density <= 0.009) {
