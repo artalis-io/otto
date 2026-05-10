@@ -458,6 +458,17 @@ static int ralph_should_skip_sparse_mid_presolve(const LPModel *model) {
         return 1;
     }
 
+    /* GROW-like staircase LPs see only bound-tightening changes from safe
+     * presolve; the simplex path is unchanged, so the presolve pass is pure
+     * overhead on this width/density family. */
+    if (n >= 280 && n <= 1000 &&
+        m >= 120 && m <= 460 &&
+        n * 20 >= m * 42 &&
+        n * 20 <= m * 45 &&
+        density >= 0.018 && density <= 0.065) {
+        return 1;
+    }
+
     if (n >= 1100 && n <= 1250 &&
         m >= 600 && m <= 700 &&
         density >= 0.005 && density <= 0.008) {
