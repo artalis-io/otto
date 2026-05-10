@@ -2677,7 +2677,7 @@ int dual_simplex_solve_v2(SimplexSolver *solver) {
     int dse_refactors_since_refresh = 0;
     /* Refresh often enough to keep DSE weights from degenerating, but avoid
      * making large NETLIB runs pay exact-weight cost at every refactor. */
-    const int DSE_REFACTOR_REFRESH_PERIOD = 8;
+    const int DSE_REFACTOR_REFRESH_PERIOD = 16;
 
     /* Stalling/degeneracy tracking */
     int degenerate_count = 0;
