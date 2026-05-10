@@ -689,7 +689,7 @@ static void dual_ratio_adaptive_config_defaults(DualRatioAdaptiveConfig *cfg) {
     if (!cfg) return;
     cfg->strict_pivot_floor = 10.0 * RALPH_PIVOT_TOL;
     cfg->base_pivot_floor = RALPH_PIVOT_TOL;
-    cfg->strict_theta_floor = 1e-12;
+    cfg->strict_theta_floor = 0.0;
     cfg->permissive_theta_floor = -RALPH_OPT_TOL;
     cfg->hard_refactor_floor = 1e-4;
     cfg->flip_round_cap = 3;
@@ -702,7 +702,7 @@ static void dual_ratio_adaptive_config_core(int m,
                                             DualRatioAdaptiveConfig *cfg) {
     double strict_mult = 10.0;
     double base_mult = 1.0;
-    double theta_floor = 1e-12;
+    double theta_floor = 0.0;
     double hard_mult = 1024.0;
     double base_tol;
     double stress;

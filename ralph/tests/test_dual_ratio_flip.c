@@ -190,6 +190,31 @@ static void test_harris_mode_keeps_regular_entering(void) {
     free_flip_fixture(solver, model);
 }
 
+static void test_harris_mode_accepts_zero_ratio_candidate(void) {
+    SimplexSolver *solver = NULL;
+    SimplexTableau *tab = NULL;
+    LPModel *model = NULL;
+    int entering = -99;
+    double theta = -1.0;
+    int rc;
+
+    if (build_flip_fixture(&solver, &tab, &model) != 0) {
+        ASSERT_TRUE(0, "fixture build");
+        return;
+    }
+
+    solver->dual_ratio_test_mode = LP_DUAL_RATIO_TEST_HARRIS;
+    solver->use_dual_bound_flip = 1;
+    tab->rc[0] = 0.0;
+
+    rc = dual_ratio_test(tab, 0, &entering, &theta);
+    ASSERT_TRUE(rc == 0, "dual_ratio_test accepts zero-ratio Harris candidate");
+    ASSERT_TRUE(entering == 0, "zero-ratio candidate is selected before positive ratios");
+    ASSERT_TRUE(fabs(theta) < 1e-12, "zero-ratio candidate returns theta=0");
+
+    free_flip_fixture(solver, model);
+}
+
 static void test_flip_mode_respects_runtime_disable(void) {
     SimplexSolver *solver = NULL;
     SimplexTableau *tab = NULL;
@@ -472,6 +497,7 @@ int main(void) {
     printf("=== Dual Ratio Flip Tests ===\n");
     test_flip_mode_applies_flip_only_step();
     test_harris_mode_keeps_regular_entering();
+    test_harris_mode_accepts_zero_ratio_candidate();
     test_flip_mode_respects_runtime_disable();
     test_adaptive_ratio_thresholds_scale_with_lu_health();
     test_sparse_pressure_refactor_gate();
