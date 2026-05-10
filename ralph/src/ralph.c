@@ -81,7 +81,7 @@ struct RalphModel {
     int lp_threads;         /* LP thread policy (0=auto; deterministic mode defaults to 1) */
     int lp_basis_governor_mode; /* 0=off, 1=shadow, 2=control_phase2 */
     int lp_reinvert_controller_mode; /* 0=off, 1=shadow, 2=control_phase1, 3=control_all */
-    int lp_policy_profile;  /* 0=default, 1=glpk_compat(strict), 2=glpk_strict, 3=glpk_legacy */
+    int lp_policy_profile;  /* 0=default, 1=glpk_compat, 2=glpk_strict, 3=glpk_legacy */
     int glpk_smcp_method;   /* 0=auto, 1=primal, 2=dualp, 3=dual */
     int glpk_smcp_pricing;  /* 0=standard, 1=steep */
     int glpk_smcp_ratio;    /* 0=standard, 1=harris */
@@ -1026,8 +1026,7 @@ static int ralph_probe_lp_status(const RalphModel *model,
     lp_basis_governor_set_mode(&probe->policy.basis_governor,
                                probe->policy.basis_governor_mode);
     probe->glpk_strict_mode =
-        (glpk_policy_cfg.lp_policy_profile == LP_POLICY_PROFILE_GLPK_COMPAT ||
-         glpk_policy_cfg.lp_policy_profile == LP_POLICY_PROFILE_GLPK_STRICT) ? 1 : 0;
+        (glpk_policy_cfg.lp_policy_profile == LP_POLICY_PROFILE_GLPK_STRICT) ? 1 : 0;
     probe->smcp_tol_bnd = probe_tol_bnd;
     probe->smcp_tol_dj = probe_tol_dj;
     probe->smcp_tol_piv = probe_tol_piv;
@@ -1632,8 +1631,7 @@ static int ralph_optimize_with_mode(RalphModel *model, RalphSolveMode mode) {
          glpk_policy_cfg.lp_policy_profile == LP_POLICY_PROFILE_GLPK_STRICT ||
          glpk_policy_cfg.lp_policy_profile == LP_POLICY_PROFILE_GLPK_LEGACY) ? 1 : 0;
     lp_glpk_strict_profile =
-        (glpk_policy_cfg.lp_policy_profile == LP_POLICY_PROFILE_GLPK_COMPAT ||
-         glpk_policy_cfg.lp_policy_profile == LP_POLICY_PROFILE_GLPK_STRICT) ? 1 : 0;
+        (glpk_policy_cfg.lp_policy_profile == LP_POLICY_PROFILE_GLPK_STRICT) ? 1 : 0;
 
     ralph_reset_lp_algorithm_report(model);
     ralph_reset_lp_external_failure_report(model);
