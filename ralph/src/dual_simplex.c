@@ -1145,9 +1145,11 @@ static int dual_ratio_test_core(SimplexTableau *tab,
     }
 
     /* Compute leaving row of basis inverse: e_leaving' * B^{-1} */
-    vec_set_zero(tab->work1, tab->m);
-    tab->work1[leaving] = 1.0;
-    lu_solve_transpose(tab->lu, tab->work1, tab->work2);  /* alpha = B^{-T} * e_leaving */
+    {
+        int rhs_idx = leaving;
+        double rhs_val = 1.0;
+        lu_solve_transpose_sparse(tab->lu, 1, &rhs_idx, &rhs_val, tab->work2);
+    }
 
     /* Find entering variable by dual ratio test */
     *entering = -1;
@@ -1329,9 +1331,11 @@ static int dual_ratio_test_flip_iterative(SimplexTableau *tab,
         return -1;
     }
 
-    vec_set_zero(tab->work1, tab->m);
-    tab->work1[leaving] = 1.0;
-    lu_solve_transpose(tab->lu, tab->work1, tab->work2);
+    {
+        int rhs_idx = leaving;
+        double rhs_val = 1.0;
+        lu_solve_transpose_sparse(tab->lu, 1, &rhs_idx, &rhs_val, tab->work2);
+    }
 
     if (use_row_kernel) {
         alpha_at = tab->csr_alpha;
@@ -1972,9 +1976,11 @@ static int dual_phase1_rescue_ratio_test(SimplexTableau *tab,
         return -1;
     }
 
-    vec_set_zero(tab->work1, tab->m);
-    tab->work1[leaving] = 1.0;
-    lu_solve_transpose(tab->lu, tab->work1, tab->work2);
+    {
+        int rhs_idx = leaving;
+        double rhs_val = 1.0;
+        lu_solve_transpose_sparse(tab->lu, 1, &rhs_idx, &rhs_val, tab->work2);
+    }
 
     *entering = -1;
     *theta = RALPH_INFINITY;
