@@ -955,6 +955,12 @@ int dual_phase1_rescue_progress_update_for_test(int current_rows,
 }
 
 static int dual_ratio_passes_theta_floor(double ratio, double theta_floor);
+static int dual_ratio_candidate_value(const SimplexTableau *tab,
+                                      int dir,
+                                      int var,
+                                      double alpha_j,
+                                      double pivot_floor,
+                                      double *ratio_out);
 
 /* Test hook: adaptive ratio thresholds (orthogonal to simplex-policy tests). */
 void dual_ratio_adaptive_config_for_test(int m,
@@ -981,6 +987,15 @@ void dual_ratio_adaptive_config_for_test(int m,
 
 int dual_ratio_passes_theta_floor_for_test(double ratio, double theta_floor) {
     return dual_ratio_passes_theta_floor(ratio, theta_floor);
+}
+
+int dual_ratio_candidate_value_for_test(const SimplexTableau *tab,
+                                        int dir,
+                                        int var,
+                                        double alpha_j,
+                                        double pivot_floor,
+                                        double *ratio_out) {
+    return dual_ratio_candidate_value(tab, dir, var, alpha_j, pivot_floor, ratio_out);
 }
 
 static int dual_candidate_can_flip(const SimplexTableau *tab, int var) {
@@ -1034,6 +1049,7 @@ static int dual_ratio_candidate_value(const SimplexTableau *tab,
     double rc_j;
     double ratio = RALPH_INFINITY;
     VarStatus st;
+    int ratio_valid = 0;
 
     if (!tab || !ratio_out || var < 0 || var >= tab->n) return 0;
     st = tab->var_status[var];
@@ -1044,17 +1060,22 @@ static int dual_ratio_candidate_value(const SimplexTableau *tab,
     if (dir > 0) {
         if (alpha_j < -pivot_floor && st == RALPH_NONBASIC_LOWER) {
             ratio = -rc_j / alpha_j;
+            ratio_valid = 1;
         } else if (alpha_j > pivot_floor && st == RALPH_NONBASIC_UPPER) {
             ratio = -rc_j / alpha_j;
+            ratio_valid = 1;
         }
     } else {
         if (alpha_j > pivot_floor && st == RALPH_NONBASIC_LOWER) {
             ratio = rc_j / alpha_j;
+            ratio_valid = 1;
         } else if (alpha_j < -pivot_floor && st == RALPH_NONBASIC_UPPER) {
             ratio = rc_j / alpha_j;
+            ratio_valid = 1;
         }
     }
 
+    if (!ratio_valid) return 0;
     if (!isfinite(ratio)) return 0;
     if (ratio < 0.0 && ratio >= -RALPH_OPT_TOL) {
         ratio = 0.0;
@@ -1066,7 +1087,7 @@ static int dual_ratio_candidate_value(const SimplexTableau *tab,
 static int dual_ratio_passes_theta_floor(double ratio, double theta_floor) {
     if (!isfinite(ratio)) return 0;
     if (ratio < 0.0) return ratio >= theta_floor;
-    if (ratio == 0.0) return 1;
+    if (ratio <= RALPH_OPT_TOL) return 1;
     return ratio >= theta_floor;
 }
 
