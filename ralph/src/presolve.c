@@ -317,43 +317,44 @@ int presolve_remove_empty_cols(PresolveContext *ctx) {
 int presolve_singleton_rows(PresolveContext *ctx) {
     LPModel *model = ctx->working;
     int count = 0;
+    int m = model->num_cons;
     int n = model->num_vars;
+    int *row_nnz = (int*)calloc((size_t)m, sizeof(int));
+    int *singleton_col = (int*)malloc((size_t)m * sizeof(int));
+    double *singleton_val = (double*)calloc((size_t)m, sizeof(double));
+    if (!row_nnz || !singleton_col || !singleton_val) {
+        free(row_nnz);
+        free(singleton_col);
+        free(singleton_val);
+        return 0;
+    }
+    for (int i = 0; i < m; i++) singleton_col[i] = -1;
 
-    /* Allocate dense row buffer once */
-    double *row = (double*)calloc(n, sizeof(double));
-    if (!row) return 0;
-
-    for (int i = 0; i < model->num_cons; i++) {
-        if (ctx->row_deleted[i]) continue;
-
-        /* Extract row once */
-        sparse_get_row(model->A, i, row);
-
-        /* Find the single non-zero */
-        int singleton_col = -1;
-        double singleton_val = 0.0;
-        int nnz = 0;
-
-        for (int j = 0; j < n; j++) {
-            if (ctx->col_deleted[j]) continue;
-
-            if (fabs(row[j]) > RALPH_ZERO_TOL) {
-                nnz++;
-                singleton_col = j;
-                singleton_val = row[j];
-                if (nnz > 1) break;
+    for (int j = 0; j < n; j++) {
+        if (ctx->col_deleted[j]) continue;
+        for (int p = model->A->colptr[j]; p < model->A->colptr[j + 1]; p++) {
+            int i = model->A->rowidx[p];
+            double a = model->A->values[p];
+            if (ctx->row_deleted[i] || fabs(a) <= RALPH_ZERO_TOL) continue;
+            if (row_nnz[i] == 0) {
+                singleton_col[i] = j;
+                singleton_val[i] = a;
             }
+            if (row_nnz[i] < 2) row_nnz[i]++;
         }
+    }
 
-        if (nnz == 1 && singleton_col >= 0) {
+    for (int i = 0; i < m; i++) {
+        if (ctx->row_deleted[i]) continue;
+        if (row_nnz[i] == 1 && singleton_col[i] >= 0) {
             /* Row i is: a_ij * x_j (sense) b_i
              * For inequality constraints: derive implied bound, tighten, delete.
              * For equality constraints: only delete if already redundant
              * (equalities are better handled by Gaussian elimination to
              * avoid creating ill-conditioned reduced models). */
             double rhs = model->b[i];
-            double implied_val = rhs / singleton_val;
-            int j = singleton_col;
+            double implied_val = rhs / singleton_val[i];
+            int j = singleton_col[i];
             double lb = model->lb[j];
             double ub = model->ub[j];
             int can_delete = 0;
@@ -364,12 +365,12 @@ int presolve_singleton_rows(PresolveContext *ctx) {
                     fabs(ub - implied_val) <= RALPH_FEAS_TOL) {
                     can_delete = 1;
                 }
-            } else if ((model->sense[i] == 'L' && singleton_val > 0) ||
-                       (model->sense[i] == 'G' && singleton_val < 0)) {
+            } else if ((model->sense[i] == 'L' && singleton_val[i] > 0) ||
+                       (model->sense[i] == 'G' && singleton_val[i] < 0)) {
                 /* Implies x_j <= implied_val */
                 if (ub <= implied_val + RALPH_FEAS_TOL) {
                     can_delete = 1;  /* Already redundant */
-                } else if (fabs(singleton_val) >= RALPH_PIVOT_TOL &&
+                } else if (fabs(singleton_val[i]) >= RALPH_PIVOT_TOL &&
                            implied_val >= lb - RALPH_FEAS_TOL) {
                     /* Tighten upper bound and delete */
                     model->ub[j] = implied_val;
@@ -379,7 +380,7 @@ int presolve_singleton_rows(PresolveContext *ctx) {
                 /* Implies x_j >= implied_val */
                 if (lb >= implied_val - RALPH_FEAS_TOL) {
                     can_delete = 1;  /* Already redundant */
-                } else if (fabs(singleton_val) >= RALPH_PIVOT_TOL &&
+                } else if (fabs(singleton_val[i]) >= RALPH_PIVOT_TOL &&
                            implied_val <= ub + RALPH_FEAS_TOL) {
                     /* Tighten lower bound and delete */
                     model->lb[j] = implied_val;
@@ -394,7 +395,9 @@ int presolve_singleton_rows(PresolveContext *ctx) {
         }
     }
 
-    free(row);
+    free(row_nnz);
+    free(singleton_col);
+    free(singleton_val);
     return count;
 }
 
