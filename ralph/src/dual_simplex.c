@@ -1811,9 +1811,14 @@ static int dual_simplex_pivot(SimplexTableau *tab,
         step = (x_leave - tab->ub_ext[leaving_var]) / pivot;
     }
 
-    /* Update primal solution */
+    double obj_delta = 0.0;
+
+    /* Update primal solution and objective. */
     for (int k = 0; k < tab->m; k++) {
-        tab->x[tab->basis[k]] -= step * tab->work3[k];
+        int basic_var = tab->basis[k];
+        double dx = -step * tab->work3[k];
+        tab->x[basic_var] += dx;
+        obj_delta += tab->c_ext[basic_var] * dx;
     }
 
     /* Update entering variable.
@@ -1821,11 +1826,13 @@ static int dual_simplex_pivot(SimplexTableau *tab,
      * When entering is at upper bound and alpha > 0 (increases leaving), step < 0
      * So: x_entering = bound + step (works for both cases)
      */
+    double x_enter_old = tab->x[entering];
     if (tab->var_status[entering] == RALPH_NONBASIC_LOWER) {
         tab->x[entering] = tab->lb_ext[entering] + step;
     } else {
         tab->x[entering] = tab->ub_ext[entering] + step;
     }
+    obj_delta += tab->c_ext[entering] * (tab->x[entering] - x_enter_old);
 
     /* Update basis */
     tab->basis[leaving] = entering;
@@ -1843,12 +1850,17 @@ static int dual_simplex_pivot(SimplexTableau *tab,
     if (x_leave < tab->lb_ext[leaving_var]) {
         /* Was below lower bound - go to lower bound */
         tab->var_status[leaving_var] = RALPH_NONBASIC_LOWER;
+        double x_leave_after_update = tab->x[leaving_var];
         tab->x[leaving_var] = tab->lb_ext[leaving_var];
+        obj_delta += tab->c_ext[leaving_var] * (tab->x[leaving_var] - x_leave_after_update);
     } else {
         /* Was above upper bound - go to upper bound */
         tab->var_status[leaving_var] = RALPH_NONBASIC_UPPER;
+        double x_leave_after_update = tab->x[leaving_var];
         tab->x[leaving_var] = tab->ub_ext[leaving_var];
+        obj_delta += tab->c_ext[leaving_var] * (tab->x[leaving_var] - x_leave_after_update);
     }
+    tab->obj_value += obj_delta;
     (void)rc_entering_orig;  /* Suppress unused warning */
 
     /* DSE weight update (P6): must happen before LU update (uses old B^{-1}).
@@ -1933,12 +1945,6 @@ static int dual_simplex_pivot(SimplexTableau *tab,
                 }
             }
         }
-    }
-
-    /* Recompute objective value */
-    tab->obj_value = 0.0;
-    for (int j = 0; j < tab->n; j++) {
-        tab->obj_value += tab->c_ext[j] * tab->x[j];
     }
 
     return 0;
