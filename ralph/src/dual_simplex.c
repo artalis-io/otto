@@ -132,6 +132,11 @@ typedef struct {
     int flip_only_streak;
 } DualRefactorQualityState;
 
+#define DUAL_QUALITY_RATIO_FAIL_REFACTOR_STREAK 2
+#define DUAL_QUALITY_PIVOT_FAIL_REFACTOR_STREAK 2
+#define DUAL_QUALITY_THETA_NONPOS_REFACTOR_STREAK 8
+#define DUAL_QUALITY_FLIP_ONLY_REFACTOR_STREAK 8
+
 static void dual_quality_init(DualRefactorQualityState *state) {
     if (!state) return;
     memset(state, 0, sizeof(*state));
@@ -205,10 +210,10 @@ static int dual_quality_periodic_refactor_signal(
     if (interval < 8) interval = 8;
 
     /* Pathology streaks override nominal cadence. */
-    if (state->ratio_fail_streak >= 2 ||
-        state->pivot_fail_streak >= 2 ||
-        state->theta_nonpos_streak >= 3 ||
-        state->flip_only_streak >= 8) {
+    if (state->ratio_fail_streak >= DUAL_QUALITY_RATIO_FAIL_REFACTOR_STREAK ||
+        state->pivot_fail_streak >= DUAL_QUALITY_PIVOT_FAIL_REFACTOR_STREAK ||
+        state->theta_nonpos_streak >= DUAL_QUALITY_THETA_NONPOS_REFACTOR_STREAK ||
+        state->flip_only_streak >= DUAL_QUALITY_FLIP_ONLY_REFACTOR_STREAK) {
         return 1;
     }
 
