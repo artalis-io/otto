@@ -52,6 +52,7 @@ static void dse_init_approx(SimplexTableau *tab);
 
 /* Forward declaration for dual feasibility function (non-static for simplex.c access) */
 int make_dual_feasible(SimplexTableau *tab, int obj_sense, int allow_bound_flip);
+static int dual_smcp_excl_skip_var(const SimplexTableau *tab, int var);
 
 static double dual_max_reduced_cost_violation(const SimplexTableau *tab) {
     double max_viol = 0.0;
@@ -60,6 +61,7 @@ static double dual_max_reduced_cost_violation(const SimplexTableau *tab) {
     for (int j = 0; j < tab->n; j++) {
         double viol = 0.0;
         if (tab->var_status[j] == RALPH_BASIC) continue;
+        if (dual_smcp_excl_skip_var(tab, j)) continue;
         if (tab->var_status[j] == RALPH_NONBASIC_LOWER &&
             tab->rc[j] < -RALPH_OPT_TOL) {
             viol = -tab->rc[j];
@@ -996,6 +998,10 @@ int dual_ratio_candidate_value_for_test(const SimplexTableau *tab,
                                         double pivot_floor,
                                         double *ratio_out) {
     return dual_ratio_candidate_value(tab, dir, var, alpha_j, pivot_floor, ratio_out);
+}
+
+double dual_max_reduced_cost_violation_for_test(const SimplexTableau *tab) {
+    return dual_max_reduced_cost_violation(tab);
 }
 
 static int dual_candidate_can_flip(const SimplexTableau *tab, int var) {
@@ -2769,18 +2775,7 @@ int dual_simplex_solve_v2(SimplexSolver *solver) {
              * to catch suboptimal termination (stale rc from perturbed pivots). */
             tableau_compute_reduced_costs(tab);
             {
-                double max_dual_viol = 0.0;
-                for (int j = 0; j < tab->n; j++) {
-                    if (tab->var_status[j] == RALPH_BASIC) continue;
-                    double viol = 0.0;
-                    if (tab->var_status[j] == RALPH_NONBASIC_LOWER && tab->rc[j] < -RALPH_OPT_TOL)
-                        viol = -tab->rc[j];
-                    else if (tab->var_status[j] == RALPH_NONBASIC_UPPER && tab->rc[j] > RALPH_OPT_TOL)
-                        viol = tab->rc[j];
-                    else if (tab->var_status[j] == RALPH_NONBASIC_FREE && fabs(tab->rc[j]) > RALPH_OPT_TOL)
-                        viol = fabs(tab->rc[j]);
-                    if (viol > max_dual_viol) max_dual_viol = viol;
-                }
+                double max_dual_viol = dual_max_reduced_cost_violation(tab);
                 if (max_dual_viol > 1e-4) {
                     if (solver->verbose) {
                         LP_LOG_STDOUT("[dual_v2] Suboptimal: max dual violation %.2e after unshift\n",
