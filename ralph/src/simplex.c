@@ -4500,7 +4500,7 @@ static int simplex_should_use_wide_sparse_phase1_heap(const SimplexSolver *solve
             density >= 0.0024 && density <= 0.0040);
 }
 
-static int simplex_should_use_dense_lowrow_phase2_dantzig(const SimplexSolver *solver,
+static int simplex_should_use_dense_lowrow_phase2_partial(const SimplexSolver *solver,
                                                           const SimplexTableau *tab) {
     if (!solver || !solver->model || !solver->model->A || !tab) return 0;
 
@@ -4510,9 +4510,9 @@ static int simplex_should_use_dense_lowrow_phase2_dantzig(const SimplexSolver *s
     if (m <= 0 || n <= 0 || nnz <= 0) return 0;
 
     double density = (double)nnz / ((double)m * (double)n);
-    /* Very low-row dense NETLIB LPs spend more in Devex weight maintenance than
-     * they recover from better pricing. Keep this selector narrow; blanket
-     * Dantzig pricing regresses wider sparse models such as fit1p. */
+    /* Very low-row dense NETLIB LPs spend more in full-column Devex/Dantzig
+     * pricing and dense pivot maintenance than they recover from exact pricing.
+     * Partial pricing keeps the Phase 2 path much cheaper on this shape. */
     return (m <= 30 && n >= 1000 && density >= 0.30);
 }
 
@@ -4626,9 +4626,12 @@ static int simplex_finish_prepared_primal_solve(SimplexSolver *solver, clock_t s
     tab->use_steepest_edge = saved_tab_se;
     if (solver->verbose) LP_LOG_STDOUT("[simplex_solve] Phase 1 complete\n");
 
-    if (saved_pricing == 2 &&
-        (simplex_should_use_dense_lowrow_phase2_dantzig(solver, tab) ||
-         simplex_should_use_very_sparse_large_dantzig(solver, tab) ||
+    if (saved_pricing == 2 && simplex_should_use_dense_lowrow_phase2_partial(solver, tab)) {
+        solver->pricing_strategy = 3;
+        tab->pricing_strategy = 3;
+        tab->use_steepest_edge = 0;
+    } else if (saved_pricing == 2 &&
+        (simplex_should_use_very_sparse_large_dantzig(solver, tab) ||
          simplex_should_use_mid_sparse_phase12_dantzig(solver, tab) ||
          simplex_should_use_sparse_grow_phase12_dantzig(solver, tab) ||
          simplex_should_use_scsd_sparse_phase12_dantzig(solver, tab))) {
