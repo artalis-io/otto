@@ -513,6 +513,18 @@ typedef struct {
     int perf_refactor_last_m;
     int perf_refactor_last_k;
     int perf_refactor_last_nnz_B;
+    int perf_refactor_factorize_failures;
+    int perf_refactor_repair_successes;
+    int perf_refactor_repair_failures;
+    int perf_refactor_last_factorize_failure_reason;
+    int perf_refactor_last_sparse_numeric_failure_reason;
+    int perf_refactor_last_repair_status;
+    int perf_phase1_refactor_factorize_failures;
+    int perf_phase1_refactor_repair_successes;
+    int perf_phase1_refactor_repair_failures;
+    int perf_phase2_refactor_factorize_failures;
+    int perf_phase2_refactor_repair_successes;
+    int perf_phase2_refactor_repair_failures;
 
     double perf_phase1_pricing_ms;
     double perf_phase1_ratio_ms;

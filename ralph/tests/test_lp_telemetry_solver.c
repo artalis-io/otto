@@ -98,6 +98,14 @@ static void test_solver_reset_and_refactor_accounting(void) {
     solver.telemetry.perf_phase1_force_extreme_tiny_theta_relax_next_ratio_breakdown = 2;
     solver.telemetry.perf_phase1_force_extreme_tiny_theta_relax_next_pivot_fail = 1;
     solver.telemetry.perf_phase1_force_extreme_tiny_theta_relax_next_pivot_success = 3;
+    solver.telemetry.perf_refactor_factorize_failures = 4;
+    solver.telemetry.perf_refactor_repair_successes = 2;
+    solver.telemetry.perf_refactor_repair_failures = 2;
+    solver.telemetry.perf_refactor_last_factorize_failure_reason =
+        LU_FAIL_FACTOR_SINGULAR;
+    solver.telemetry.perf_refactor_last_sparse_numeric_failure_reason =
+        LU_SPARSE_NUMERIC_FAIL_PATHOLOGICAL;
+    solver.telemetry.perf_refactor_last_repair_status = -1;
     solver.telemetry.perf_phase1_recompute_after_ratio_breakdown = 4;
     solver.telemetry.perf_phase1_recompute_after_dir_skip = 3;
     solver.telemetry.perf_phase1_recompute_after_dir_refactor = 2;
@@ -415,6 +423,20 @@ static void test_solver_reset_and_refactor_accounting(void) {
                   "reset: phase1 force extreme tiny-theta relax next pivot fail");
     ASSERT_INT_EQ(solver.telemetry.perf_phase1_force_extreme_tiny_theta_relax_next_pivot_success, 0,
                   "reset: phase1 force extreme tiny-theta relax next pivot success");
+    ASSERT_INT_EQ(solver.telemetry.perf_refactor_factorize_failures, 0,
+                  "reset: refactor factorize failures");
+    ASSERT_INT_EQ(solver.telemetry.perf_refactor_repair_successes, 0,
+                  "reset: refactor repair successes");
+    ASSERT_INT_EQ(solver.telemetry.perf_refactor_repair_failures, 0,
+                  "reset: refactor repair failures");
+    ASSERT_INT_EQ(solver.telemetry.perf_refactor_last_factorize_failure_reason,
+                  LU_FAIL_NONE,
+                  "reset: refactor last factorize failure reason");
+    ASSERT_INT_EQ(solver.telemetry.perf_refactor_last_sparse_numeric_failure_reason,
+                  LU_SPARSE_NUMERIC_FAIL_NONE,
+                  "reset: refactor last sparse numeric failure reason");
+    ASSERT_INT_EQ(solver.telemetry.perf_refactor_last_repair_status, 0,
+                  "reset: refactor last repair status");
     ASSERT_INT_EQ(solver.telemetry.perf_phase1_recompute_after_ratio_breakdown, 0,
                   "reset: phase1 recompute ratio breakdown");
     ASSERT_INT_EQ(solver.telemetry.perf_phase1_recompute_after_dir_skip, 0,
@@ -904,6 +926,35 @@ static void test_solver_reset_and_refactor_accounting(void) {
     ASSERT_DBL_EQ(solver.telemetry.perf_phase1_refactor_ms, 2.0, "record: phase1 refactor ms");
     ASSERT_INT_EQ(solver.telemetry.perf_phase1_refactor_safety_forced, 0,
                   "record: phase1 safety remains 0 for setup");
+
+    lp_telemetry_record_refactor_repair_outcome(
+        &solver, 1, LU_FAIL_FACTOR_SINGULAR,
+        LU_SPARSE_NUMERIC_FAIL_PATHOLOGICAL, -1);
+    lp_telemetry_record_refactor_repair_outcome(
+        &solver, 2, LU_FAIL_SINGULAR_UPDATE,
+        LU_SPARSE_NUMERIC_FAIL_IDENTITY_SEPARATION, 0);
+    ASSERT_INT_EQ(solver.telemetry.perf_refactor_factorize_failures, 2,
+                  "record: refactor factorize failures");
+    ASSERT_INT_EQ(solver.telemetry.perf_refactor_repair_successes, 1,
+                  "record: refactor repair successes");
+    ASSERT_INT_EQ(solver.telemetry.perf_refactor_repair_failures, 1,
+                  "record: refactor repair failures");
+    ASSERT_INT_EQ(solver.telemetry.perf_refactor_last_factorize_failure_reason,
+                  LU_FAIL_SINGULAR_UPDATE,
+                  "record: refactor last factorize failure reason");
+    ASSERT_INT_EQ(solver.telemetry.perf_refactor_last_sparse_numeric_failure_reason,
+                  LU_SPARSE_NUMERIC_FAIL_IDENTITY_SEPARATION,
+                  "record: refactor last sparse numeric failure reason");
+    ASSERT_INT_EQ(solver.telemetry.perf_refactor_last_repair_status, 0,
+                  "record: refactor last repair status");
+    ASSERT_INT_EQ(solver.telemetry.perf_phase1_refactor_factorize_failures, 1,
+                  "record: phase1 refactor factorize failures");
+    ASSERT_INT_EQ(solver.telemetry.perf_phase1_refactor_repair_failures, 1,
+                  "record: phase1 refactor repair failures");
+    ASSERT_INT_EQ(solver.telemetry.perf_phase2_refactor_factorize_failures, 1,
+                  "record: phase2 refactor factorize failures");
+    ASSERT_INT_EQ(solver.telemetry.perf_phase2_refactor_repair_successes, 1,
+                  "record: phase2 refactor repair successes");
 
     lp_telemetry_record_phase1_dir_stabilize_force(&solver, 1, 0);
     lp_telemetry_record_phase1_dir_stabilize_force(&solver, 0, 1);
@@ -1519,6 +1570,20 @@ static void test_solver_snapshot(void) {
     solver.telemetry.perf_btran_sol_nnz_total = 1303;
     solver.telemetry.perf_refactor_reason_periodic = 11;
     solver.telemetry.perf_basis_tail_shift_bytes = 4096ULL;
+    solver.telemetry.perf_refactor_factorize_failures = 5;
+    solver.telemetry.perf_refactor_repair_successes = 3;
+    solver.telemetry.perf_refactor_repair_failures = 2;
+    solver.telemetry.perf_refactor_last_factorize_failure_reason =
+        LU_FAIL_FACTOR_SINGULAR;
+    solver.telemetry.perf_refactor_last_sparse_numeric_failure_reason =
+        LU_SPARSE_NUMERIC_FAIL_PATHOLOGICAL;
+    solver.telemetry.perf_refactor_last_repair_status = -1;
+    solver.telemetry.perf_phase1_refactor_factorize_failures = 4;
+    solver.telemetry.perf_phase1_refactor_repair_successes = 2;
+    solver.telemetry.perf_phase1_refactor_repair_failures = 2;
+    solver.telemetry.perf_phase2_refactor_factorize_failures = 1;
+    solver.telemetry.perf_phase2_refactor_repair_successes = 1;
+    solver.telemetry.perf_phase2_refactor_repair_failures = 0;
     solver.telemetry.perf_phase1_pricing_calls = 17;
     solver.telemetry.perf_phase1_dir_stabilize_force_extreme_dir = 6;
     solver.telemetry.perf_phase1_dir_stabilize_force_lu_health = 9;
@@ -1812,6 +1877,32 @@ static void test_solver_snapshot(void) {
                   "solver_snapshot: refactor_reason_periodic");
     ASSERT_ULL_EQ(snap.perf_basis_tail_shift_bytes, 4096ULL,
                   "solver_snapshot: basis_tail_shift_bytes");
+    ASSERT_INT_EQ(snap.perf_refactor_factorize_failures, 5,
+                  "solver_snapshot: refactor factorize failures");
+    ASSERT_INT_EQ(snap.perf_refactor_repair_successes, 3,
+                  "solver_snapshot: refactor repair successes");
+    ASSERT_INT_EQ(snap.perf_refactor_repair_failures, 2,
+                  "solver_snapshot: refactor repair failures");
+    ASSERT_INT_EQ(snap.perf_refactor_last_factorize_failure_reason,
+                  LU_FAIL_FACTOR_SINGULAR,
+                  "solver_snapshot: refactor last factorize failure reason");
+    ASSERT_INT_EQ(snap.perf_refactor_last_sparse_numeric_failure_reason,
+                  LU_SPARSE_NUMERIC_FAIL_PATHOLOGICAL,
+                  "solver_snapshot: refactor last sparse numeric failure reason");
+    ASSERT_INT_EQ(snap.perf_refactor_last_repair_status, -1,
+                  "solver_snapshot: refactor last repair status");
+    ASSERT_INT_EQ(snap.perf_phase1_refactor_factorize_failures, 4,
+                  "solver_snapshot: phase1 refactor factorize failures");
+    ASSERT_INT_EQ(snap.perf_phase1_refactor_repair_successes, 2,
+                  "solver_snapshot: phase1 refactor repair successes");
+    ASSERT_INT_EQ(snap.perf_phase1_refactor_repair_failures, 2,
+                  "solver_snapshot: phase1 refactor repair failures");
+    ASSERT_INT_EQ(snap.perf_phase2_refactor_factorize_failures, 1,
+                  "solver_snapshot: phase2 refactor factorize failures");
+    ASSERT_INT_EQ(snap.perf_phase2_refactor_repair_successes, 1,
+                  "solver_snapshot: phase2 refactor repair successes");
+    ASSERT_INT_EQ(snap.perf_phase2_refactor_repair_failures, 0,
+                  "solver_snapshot: phase2 refactor repair failures");
     ASSERT_INT_EQ(snap.perf_phase1_pricing_calls, 17,
                   "solver_snapshot: phase1_pricing_calls");
     ASSERT_INT_EQ(snap.perf_phase1_dir_stabilize_force_extreme_dir, 6,

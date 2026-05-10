@@ -81,6 +81,19 @@ void lp_telemetry_reset_solver(SimplexSolver *solver) {
     solver->telemetry.perf_refactor_last_m = 0;
     solver->telemetry.perf_refactor_last_k = 0;
     solver->telemetry.perf_refactor_last_nnz_B = 0;
+    solver->telemetry.perf_refactor_factorize_failures = 0;
+    solver->telemetry.perf_refactor_repair_successes = 0;
+    solver->telemetry.perf_refactor_repair_failures = 0;
+    solver->telemetry.perf_refactor_last_factorize_failure_reason = LU_FAIL_NONE;
+    solver->telemetry.perf_refactor_last_sparse_numeric_failure_reason =
+        LU_SPARSE_NUMERIC_FAIL_NONE;
+    solver->telemetry.perf_refactor_last_repair_status = 0;
+    solver->telemetry.perf_phase1_refactor_factorize_failures = 0;
+    solver->telemetry.perf_phase1_refactor_repair_successes = 0;
+    solver->telemetry.perf_phase1_refactor_repair_failures = 0;
+    solver->telemetry.perf_phase2_refactor_factorize_failures = 0;
+    solver->telemetry.perf_phase2_refactor_repair_successes = 0;
+    solver->telemetry.perf_phase2_refactor_repair_failures = 0;
 
     solver->telemetry.perf_phase1_pricing_ms = 0.0;
     solver->telemetry.perf_phase1_ratio_ms = 0.0;
@@ -658,6 +671,42 @@ void lp_telemetry_record_refactor_with_lu_timed(SimplexSolver *owner,
                                          lu);
 }
 
+void lp_telemetry_record_refactor_repair_outcome(
+    SimplexSolver *owner,
+    int phase,
+    int original_lu_failure_reason,
+    int original_sparse_numeric_failure_reason,
+    int repair_status) {
+    if (!solver_telemetry_enabled(owner)) return;
+    owner->telemetry.perf_refactor_factorize_failures++;
+    owner->telemetry.perf_refactor_last_factorize_failure_reason =
+        original_lu_failure_reason;
+    owner->telemetry.perf_refactor_last_sparse_numeric_failure_reason =
+        original_sparse_numeric_failure_reason;
+    owner->telemetry.perf_refactor_last_repair_status = repair_status;
+    if (repair_status == 0) {
+        owner->telemetry.perf_refactor_repair_successes++;
+    } else {
+        owner->telemetry.perf_refactor_repair_failures++;
+    }
+
+    if (phase == 1) {
+        owner->telemetry.perf_phase1_refactor_factorize_failures++;
+        if (repair_status == 0) {
+            owner->telemetry.perf_phase1_refactor_repair_successes++;
+        } else {
+            owner->telemetry.perf_phase1_refactor_repair_failures++;
+        }
+    } else if (phase == 2) {
+        owner->telemetry.perf_phase2_refactor_factorize_failures++;
+        if (repair_status == 0) {
+            owner->telemetry.perf_phase2_refactor_repair_successes++;
+        } else {
+            owner->telemetry.perf_phase2_refactor_repair_failures++;
+        }
+    }
+}
+
 #define COPY_SOLVER_FIELD(field) out->field = solver->telemetry.field
 void lp_telemetry_snapshot_solver(const SimplexSolver *solver,
                                   LPSolverTelemetrySnapshot *out) {
@@ -718,6 +767,18 @@ void lp_telemetry_snapshot_solver(const SimplexSolver *solver,
     COPY_SOLVER_FIELD(perf_refactor_last_m);
     COPY_SOLVER_FIELD(perf_refactor_last_k);
     COPY_SOLVER_FIELD(perf_refactor_last_nnz_B);
+    COPY_SOLVER_FIELD(perf_refactor_factorize_failures);
+    COPY_SOLVER_FIELD(perf_refactor_repair_successes);
+    COPY_SOLVER_FIELD(perf_refactor_repair_failures);
+    COPY_SOLVER_FIELD(perf_refactor_last_factorize_failure_reason);
+    COPY_SOLVER_FIELD(perf_refactor_last_sparse_numeric_failure_reason);
+    COPY_SOLVER_FIELD(perf_refactor_last_repair_status);
+    COPY_SOLVER_FIELD(perf_phase1_refactor_factorize_failures);
+    COPY_SOLVER_FIELD(perf_phase1_refactor_repair_successes);
+    COPY_SOLVER_FIELD(perf_phase1_refactor_repair_failures);
+    COPY_SOLVER_FIELD(perf_phase2_refactor_factorize_failures);
+    COPY_SOLVER_FIELD(perf_phase2_refactor_repair_successes);
+    COPY_SOLVER_FIELD(perf_phase2_refactor_repair_failures);
 
     COPY_SOLVER_FIELD(perf_phase1_pricing_ms);
     COPY_SOLVER_FIELD(perf_phase1_ratio_ms);

@@ -858,6 +858,18 @@ typedef struct {
     int perf_refactor_last_m;
     int perf_refactor_last_k;
     int perf_refactor_last_nnz_B;
+    int perf_refactor_factorize_failures;
+    int perf_refactor_repair_successes;
+    int perf_refactor_repair_failures;
+    int perf_refactor_last_factorize_failure_reason;
+    int perf_refactor_last_sparse_numeric_failure_reason;
+    int perf_refactor_last_repair_status;
+    int perf_phase1_refactor_factorize_failures;
+    int perf_phase1_refactor_repair_successes;
+    int perf_phase1_refactor_repair_failures;
+    int perf_phase2_refactor_factorize_failures;
+    int perf_phase2_refactor_repair_successes;
+    int perf_phase2_refactor_repair_failures;
 
     /* Per-phase hot-path breakdown (Phase 1 vs Phase 2) */
     double perf_phase1_pricing_ms;
@@ -1561,6 +1573,18 @@ typedef struct {
     int perf_refactor_last_m;
     int perf_refactor_last_k;
     int perf_refactor_last_nnz_B;
+    int perf_refactor_factorize_failures;
+    int perf_refactor_repair_successes;
+    int perf_refactor_repair_failures;
+    int perf_refactor_last_factorize_failure_reason;
+    int perf_refactor_last_sparse_numeric_failure_reason;
+    int perf_refactor_last_repair_status;
+    int perf_phase1_refactor_factorize_failures;
+    int perf_phase1_refactor_repair_successes;
+    int perf_phase1_refactor_repair_failures;
+    int perf_phase2_refactor_factorize_failures;
+    int perf_phase2_refactor_repair_successes;
+    int perf_phase2_refactor_repair_failures;
 
     double perf_phase1_pricing_ms;
     double perf_phase1_ratio_ms;
@@ -2473,6 +2497,12 @@ void lp_telemetry_record_refactor_with_lu_timed(SimplexSolver *owner,
                                                 double start_ms,
                                                 int m,
                                                 const LUFactorization *lu);
+void lp_telemetry_record_refactor_repair_outcome(
+    SimplexSolver *owner,
+    int phase,
+    int original_lu_failure_reason,
+    int original_sparse_numeric_failure_reason,
+    int repair_status);
 void lp_telemetry_snapshot_solver(const SimplexSolver *solver,
                                   LPSolverTelemetrySnapshot *out);
 void lp_telemetry_snapshot_lu(const LUFactorization *lu,
