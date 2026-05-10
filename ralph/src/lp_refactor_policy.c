@@ -205,7 +205,7 @@ void lp_refactor_policy_config_defaults(LPRefactorPolicyConfig *cfg) {
     cfg->phase1_auto_dantzig_min_m        = 700;   /* PHASE1_AUTO_DANTZIG_MIN_M (simplex.c) */
     cfg->lu_cost_ewma_alpha               = 0.20;  /* SOFT_LU_COST_EWMA_ALPHA (simplex.c) */
     cfg->lu_max_consec_defer_phase1       = 12;    /* SOFT_LU_MAX_CONSEC_DEFER_PHASE1 (simplex.c) */
-    cfg->lu_max_consec_defer_phase2       = 8;     /* SOFT_LU_MAX_CONSEC_DEFER_PHASE2 (simplex.c) */
+    cfg->lu_max_consec_defer_phase2       = 16;    /* SOFT_LU_MAX_CONSEC_DEFER_PHASE2 (simplex.c) */
     cfg->lu_cost_gate_ratio               = LU_SOFT_COST_GATE_RATIO_TRIGGER;        /* 8.0 */
     cfg->lu_spike_warn_pct                = LU_HEALTH_SOFT_SPIKE_WARN_PCT;           /* 85 */
     cfg->no_pivot_progress_window         = 6;     /* PHASE1_NO_PIVOT_PROGRESS_WINDOW (simplex.c) */
