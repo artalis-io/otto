@@ -73,7 +73,7 @@ struct RalphModel {
     double objective_limit; /* Early-exit obj limit (user space) */
     int phase1_pricing;     /* Override pricing for Phase 1: 0=Dantzig, -1=disabled */
     int dual_bound_flip;    /* -1=default(on), 0=off, 1=on */
-    int dual_steepest_edge; /* -1=default(on), 0=off, 1=on */
+    int dual_steepest_edge; /* -1=default(off), 0=off, 1=on */
     int var_select;         /* -1=default, 0=most_infeas, 1=pseudo_cost, 2=strong, 3=reliability */
     int lu_supernode;       /* 0=off (default), 1=enable supernodal LU factorization (T2.1) */
     int deterministic;      /* 1=enforce deterministic LP runtime policy */
@@ -1210,7 +1210,7 @@ RalphModel* ralph_core_create(void) {
     model->node_select = 3; /* Default: hybrid */
     model->trace_phase1 = 0;
     model->dual_bound_flip = -1;    /* -1 = use default (on) */
-    model->dual_steepest_edge = -1; /* -1 = use default (on) */
+    model->dual_steepest_edge = -1; /* -1 = use default (off) */
     model->var_select = -1;         /* -1 = use MIP solver default */
     model->deterministic = 0;
     model->random_seed = 0;
