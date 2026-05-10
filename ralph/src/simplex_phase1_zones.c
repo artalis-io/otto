@@ -48,6 +48,27 @@ static double p1_max_bound_infeasibility(const SimplexTableau *tab) {
     return max_infeas;
 }
 
+static int p1_should_keep_devex_for_sparse_transport(const SimplexSolver *solver,
+                                                     const SimplexTableau *tab) {
+    if (!solver || !solver->model || !solver->model->A || !tab) return 0;
+
+    int m = solver->model->num_cons;
+    int n = solver->model->num_vars;
+    int nnz = solver->model->A->nnz;
+    if (m <= 0 || n <= 0 || nnz <= 0) return 0;
+
+    double density = (double)nnz / ((double)m * (double)n);
+    double width_ratio = (double)n / (double)m;
+    /* Sparse transportation-shaped Phase 1 tableaus in this band reach
+     * feasibility with substantially fewer pivots when Devex is kept active.
+     * The generic large-degenerate Dantzig switch is still valuable outside
+     * this narrow mid-width class. */
+    return (m >= 1000 && m <= 1200 &&
+            n >= 1700 && n <= 2000 &&
+            width_ratio >= 1.55 && width_ratio <= 1.85 &&
+            density >= 0.0025 && density <= 0.0040);
+}
+
 static int p1_tableau_valid_for_infeasibility_certificate(
     const SimplexTableau *tab,
     double art_sum,
@@ -502,6 +523,7 @@ P1ZoneResult p1_zone_pre_iter(SimplexSolver *solver,
     /* Auto-Dantzig pricing switch for large degenerate Phase 1 */
     if (!rs->cycling.auto_dantzig_enabled &&
         solver->phase1_pricing < 0 &&
+        !p1_should_keep_devex_for_sparse_transport(solver, tab) &&
         tab->use_two_phase &&
         tab->m >= PHASE1_AUTO_DANTZIG_MIN_M &&
         tab->m <= PHASE1_AUTO_DANTZIG_MAX_M &&
