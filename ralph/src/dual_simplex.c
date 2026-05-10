@@ -1646,7 +1646,11 @@ int dual_sparse_pressure_force_refactor_for_test(int m,
                                                     btran_nnz);
 }
 
-static int dual_simplex_pivot(SimplexTableau *tab, int entering, int leaving, double theta) {
+static int dual_simplex_pivot(SimplexTableau *tab,
+                              int entering,
+                              int leaving,
+                              double theta,
+                              int pivot_row_valid) {
     (void)theta;  /* Step size already computed in caller */
     if (!tab || entering < 0 || entering >= tab->n || leaving < 0 || leaving >= tab->m) {
         return -1;
@@ -1739,16 +1743,21 @@ static int dual_simplex_pivot(SimplexTableau *tab, int entering, int leaving, do
      * The pivot row gives us (B^{-1} * a_j)[leaving] for any j via a sparse dot product.
      */
     {
-        int rhs_idx = leaving;
-        double rhs_val = 1.0;
-        double t_btran_ms = lp_telemetry_timer_start();
-        lu_solve_transpose_sparse(tab->lu, 1, &rhs_idx, &rhs_val, tab->work2);
+        double t_btran_ms = 0.0;
+        if (!pivot_row_valid) {
+            int rhs_idx = leaving;
+            double rhs_val = 1.0;
+            t_btran_ms = lp_telemetry_timer_start();
+            lu_solve_transpose_sparse(tab->lu, 1, &rhs_idx, &rhs_val, tab->work2);
+        }
         btran_nnz = 0;
         for (int k = 0; k < tab->m; k++) {
             if (fabs(tab->work2[k]) > RALPH_ZERO_TOL) btran_nnz++;
         }
-        if (tab->owner) {
+        if (tab->owner && !pivot_row_valid) {
             lp_telemetry_add_btran_timed(tab->owner, t_btran_ms);
+        }
+        if (tab->owner) {
             lp_telemetry_record_btran_nnz(tab->owner, 1, btran_nnz);
         }
     }
@@ -2233,7 +2242,7 @@ int dual_simplex_phase1_rescue(SimplexSolver *solver, int max_iters) {
 
         dual_quality_record_ratio_success(&quality, entering, theta);
 
-        if (dual_simplex_pivot(tab, entering, leaving, theta) != 0) {
+        if (dual_simplex_pivot(tab, entering, leaving, theta, 1) != 0) {
             dual_quality_record_pivot_failure(&quality);
             if (tableau_refactorize(tab) != 0) {
                 refactor_failures++;
@@ -2729,7 +2738,7 @@ int dual_simplex_solve_v2(SimplexSolver *solver) {
                     dual_quality_record_ratio_success(&quality, cl_entering, cl_theta);
                     {
                         double t_pivot_ms = lp_telemetry_timer_start();
-                        int rc_pivot = dual_simplex_pivot(tab, cl_entering, cl_leaving, cl_theta);
+                        int rc_pivot = dual_simplex_pivot(tab, cl_entering, cl_leaving, cl_theta, 1);
                         lp_telemetry_record_pivot_timed(solver, 0, t_pivot_ms);
                         if (rc_pivot != 0) {
                             dual_quality_record_pivot_failure(&quality);
@@ -2852,7 +2861,7 @@ int dual_simplex_solve_v2(SimplexSolver *solver) {
         /* Perform dual pivot */
         {
             double t_pivot_ms = lp_telemetry_timer_start();
-            int rc_pivot = dual_simplex_pivot(tab, entering, leaving, theta);
+            int rc_pivot = dual_simplex_pivot(tab, entering, leaving, theta, 1);
             lp_telemetry_record_pivot_timed(solver, 0, t_pivot_ms);
             if (rc_pivot != 0) {
                 dual_quality_record_pivot_failure(&quality);
@@ -3125,7 +3134,7 @@ int dual_phase1(SimplexSolver *solver) {
         }
         dual_quality_record_ratio_success(&quality, entering, theta);
 
-        if (dual_simplex_pivot(tab, entering, leaving, theta) != 0) {
+        if (dual_simplex_pivot(tab, entering, leaving, theta, 1) != 0) {
             dual_quality_record_pivot_failure(&quality);
             if (tableau_refactorize(tab) != 0) break;
             dual_quality_on_refactor(&quality, iter);
