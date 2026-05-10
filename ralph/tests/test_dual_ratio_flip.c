@@ -13,6 +13,12 @@ void dual_ratio_adaptive_config_for_test(int m,
                                          double *hard_refactor_floor_out,
                                          int *flip_round_cap_out);
 int dual_ratio_passes_theta_floor_for_test(double ratio, double theta_floor);
+int dual_ratio_candidate_value_for_test(const SimplexTableau *tab,
+                                        int dir,
+                                        int var,
+                                        double alpha_j,
+                                        double pivot_floor,
+                                        double *ratio_out);
 int dual_sparse_pressure_force_refactor_for_test(int m,
                                                  int num_updates,
                                                  int max_updates,
@@ -309,10 +315,40 @@ static void test_adaptive_ratio_thresholds_scale_with_lu_health(void) {
 static void test_theta_floor_keeps_degenerate_limiter(void) {
     ASSERT_TRUE(dual_ratio_passes_theta_floor_for_test(0.0, 1e-10) == 1,
                 "theta floor keeps exact zero dual limiter");
-    ASSERT_TRUE(dual_ratio_passes_theta_floor_for_test(0.5e-10, 1e-10) == 0,
-                "theta floor still rejects positive progress below strict floor");
+    ASSERT_TRUE(dual_ratio_passes_theta_floor_for_test(0.5e-10, 1e-10) == 1,
+                "theta floor keeps tolerance-sized dual limiter");
+    ASSERT_TRUE(dual_ratio_passes_theta_floor_for_test(2.0 * RALPH_OPT_TOL, 1e-3) == 0,
+                "theta floor still rejects material positive progress below strict floor");
     ASSERT_TRUE(dual_ratio_passes_theta_floor_for_test(2e-10, 1e-10) == 1,
                 "theta floor accepts positive progress above strict floor");
+}
+
+static void test_candidate_value_rejects_ineligible_sign_status(void) {
+    SimplexSolver *solver = NULL;
+    SimplexTableau *tab = NULL;
+    LPModel *model = NULL;
+    double ratio = -1.0;
+
+    if (build_flip_fixture(&solver, &tab, &model) != 0) {
+        ASSERT_TRUE(0, "fixture build");
+        return;
+    }
+
+    tab->var_status[0] = RALPH_NONBASIC_UPPER;
+    tab->rc[0] = -3.0;
+    ASSERT_TRUE(dual_ratio_candidate_value_for_test(tab, -1, 0, 2.0,
+                                                    RALPH_PIVOT_TOL, &ratio) == 0,
+                "dual candidate value rejects dir/status/sign mismatch");
+    ASSERT_TRUE(ratio == -1.0, "rejected dual candidate leaves ratio output unchanged");
+
+    tab->var_status[0] = RALPH_NONBASIC_LOWER;
+    tab->rc[0] = 3.0;
+    ASSERT_TRUE(dual_ratio_candidate_value_for_test(tab, -1, 0, 2.0,
+                                                    RALPH_PIVOT_TOL, &ratio) == 1,
+                "dual candidate value accepts eligible sign/status");
+    ASSERT_TRUE(fabs(ratio - 1.5) < 1e-12, "eligible dual candidate returns finite ratio");
+
+    free_flip_fixture(solver, model);
 }
 
 static void test_sparse_pressure_refactor_gate(void) {
@@ -537,6 +573,7 @@ int main(void) {
     test_flip_mode_respects_runtime_disable();
     test_adaptive_ratio_thresholds_scale_with_lu_health();
     test_theta_floor_keeps_degenerate_limiter();
+    test_candidate_value_rejects_ineligible_sign_status();
     test_sparse_pressure_refactor_gate();
     test_dual_smcp_shift_toggle();
     test_dual_aorn_scan_direction();
