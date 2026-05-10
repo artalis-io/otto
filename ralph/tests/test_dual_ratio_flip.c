@@ -19,6 +19,7 @@ int dual_ratio_candidate_value_for_test(const SimplexTableau *tab,
                                         double alpha_j,
                                         double pivot_floor,
                                         double *ratio_out);
+double dual_max_reduced_cost_violation_for_test(const SimplexTableau *tab);
 int dual_sparse_pressure_force_refactor_for_test(int m,
                                                  int num_updates,
                                                  int max_updates,
@@ -351,6 +352,33 @@ static void test_candidate_value_rejects_ineligible_sign_status(void) {
     free_flip_fixture(solver, model);
 }
 
+static void test_dual_violation_ignores_fixed_excluded_nonbasic(void) {
+    SimplexSolver *solver = NULL;
+    SimplexTableau *tab = NULL;
+    LPModel *model = NULL;
+
+    if (build_flip_fixture(&solver, &tab, &model) != 0) {
+        ASSERT_TRUE(0, "fixture build");
+        return;
+    }
+
+    solver->smcp_excl = 1;
+    solver->smcp_shift = 1;
+    solver->smcp_tol_bnd = 1e-12;
+    tab->var_status[0] = RALPH_NONBASIC_UPPER;
+    tab->lb_ext[0] = 0.0;
+    tab->ub_ext[0] = 0.0;
+    tab->rc[0] = 1.0;
+    ASSERT_TRUE(fabs(dual_max_reduced_cost_violation_for_test(tab)) < 1e-12,
+                "dual violation check ignores excluded fixed nonbasic column");
+
+    tab->ub_ext[0] = 1.0;
+    ASSERT_TRUE(dual_max_reduced_cost_violation_for_test(tab) > 0.5,
+                "dual violation check still catches movable upper-bound sign violation");
+
+    free_flip_fixture(solver, model);
+}
+
 static void test_sparse_pressure_refactor_gate(void) {
     int trigger_small = dual_sparse_pressure_force_refactor_for_test(
         120, 80, 100, 0, 0, 80, 90);
@@ -574,6 +602,7 @@ int main(void) {
     test_adaptive_ratio_thresholds_scale_with_lu_health();
     test_theta_floor_keeps_degenerate_limiter();
     test_candidate_value_rejects_ineligible_sign_status();
+    test_dual_violation_ignores_fixed_excluded_nonbasic();
     test_sparse_pressure_refactor_gate();
     test_dual_smcp_shift_toggle();
     test_dual_aorn_scan_direction();
