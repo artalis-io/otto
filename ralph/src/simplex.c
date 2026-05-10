@@ -1465,7 +1465,7 @@ int repair_singular_basis(SimplexTableau *tab) {
                         break;
                     }
                 }
-                if (is_artificial) continue;
+                if (is_artificial && tab->phase != 1) continue;
 
                 /* Skip if already basic or fixed */
                 if (tab->var_status[slack_idx] == RALPH_BASIC) continue;
@@ -1520,7 +1520,7 @@ crash_basis_repair:
                 }
             }
 
-            if (!is_artificial) {
+            if (!is_artificial || tab->phase == 1) {
                 /* Swap to slack */
                 if (old_j != slack_idx) {
                     tab->var_status[old_j] = RALPH_NONBASIC_LOWER;
