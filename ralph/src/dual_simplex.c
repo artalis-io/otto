@@ -2184,6 +2184,8 @@ int dual_simplex_phase1_rescue(SimplexSolver *solver, int max_iters) {
 
     unsigned char *tried_rows = (unsigned char*)calloc((size_t)tab->m, sizeof(unsigned char));
     if (!tried_rows) {
+        lp_telemetry_record_phase1_dual_rescue_exit(
+            solver, LP_PHASE1_DUAL_RESCUE_EXIT_ALLOC_FAILURE);
         return 1;
     }
 
@@ -2206,6 +2208,8 @@ int dual_simplex_phase1_rescue(SimplexSolver *solver, int max_iters) {
 
     for (int iter = 0; iter < max_iters; iter++) {
         if (dual_time_limit_exceeded(solver, iter)) {
+            lp_telemetry_record_phase1_dual_rescue_exit(
+                solver, LP_PHASE1_DUAL_RESCUE_EXIT_TIME_LIMIT);
             free(tried_rows);
             return 1;
         }
@@ -2227,6 +2231,8 @@ int dual_simplex_phase1_rescue(SimplexSolver *solver, int max_iters) {
                 if (solver->verbose >= 2) {
                     LP_LOG_STDERR("[dual_phase1_rescue] Aborting after repeated non-finite recovery failures\n");
                 }
+                lp_telemetry_record_phase1_dual_rescue_exit(
+                    solver, LP_PHASE1_DUAL_RESCUE_EXIT_BAD_NUMERICS);
                 free(tried_rows);
                 return 1;
             }
@@ -2278,6 +2284,8 @@ int dual_simplex_phase1_rescue(SimplexSolver *solver, int max_iters) {
                         max_infeas,
                         sum_infeas);
             }
+            lp_telemetry_record_phase1_dual_rescue_exit(
+                solver, LP_PHASE1_DUAL_RESCUE_EXIT_NO_PROGRESS);
             free(tried_rows);
             return 1;
         }
@@ -2337,6 +2345,8 @@ int dual_simplex_phase1_rescue(SimplexSolver *solver, int max_iters) {
             if (solver->verbose >= 2) {
                 LP_LOG_STDERR("[dual_phase1_rescue] No valid entering column for infeasible rows at iter %d\n", iter);
             }
+            lp_telemetry_record_phase1_dual_rescue_exit(
+                solver, LP_PHASE1_DUAL_RESCUE_EXIT_NO_ENTERING);
             free(tried_rows);
             return 1;
         }
@@ -2352,6 +2362,8 @@ int dual_simplex_phase1_rescue(SimplexSolver *solver, int max_iters) {
                             iter, refactor_failures);
                 }
                 if (refactor_failures >= MAX_REFACTOR_FAILURES) {
+                    lp_telemetry_record_phase1_dual_rescue_exit(
+                        solver, LP_PHASE1_DUAL_RESCUE_EXIT_PIVOT_REFACTOR_FAILURE);
                     free(tried_rows);
                     return 1;
                 }
@@ -2381,6 +2393,8 @@ int dual_simplex_phase1_rescue(SimplexSolver *solver, int max_iters) {
                             iter, refactor_failures);
                 }
                 if (refactor_failures >= MAX_REFACTOR_FAILURES) {
+                    lp_telemetry_record_phase1_dual_rescue_exit(
+                        solver, LP_PHASE1_DUAL_RESCUE_EXIT_PERIODIC_REFACTOR_FAILURE);
                     free(tried_rows);
                     return 1;
                 }
@@ -2396,6 +2410,8 @@ int dual_simplex_phase1_rescue(SimplexSolver *solver, int max_iters) {
     }
 
     free(tried_rows);
+    lp_telemetry_record_phase1_dual_rescue_exit(
+        solver, LP_PHASE1_DUAL_RESCUE_EXIT_MAX_ITERS);
     return 1;
 }
 

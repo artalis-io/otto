@@ -129,6 +129,14 @@ static void test_solver_reset_and_refactor_accounting(void) {
     solver.telemetry.perf_phase1_direct_dual_rescue_failures = 4;
     solver.telemetry.perf_phase1_direct_dual_rescue_guard_cooldown_blocks = 3;
     solver.telemetry.perf_phase1_direct_dual_rescue_guard_fail_cap_blocks = 1;
+    solver.telemetry.perf_phase1_dual_rescue_exit_time_limit = 1;
+    solver.telemetry.perf_phase1_dual_rescue_exit_bad_numerics = 2;
+    solver.telemetry.perf_phase1_dual_rescue_exit_no_progress = 3;
+    solver.telemetry.perf_phase1_dual_rescue_exit_no_entering = 4;
+    solver.telemetry.perf_phase1_dual_rescue_exit_pivot_refactor_failure = 5;
+    solver.telemetry.perf_phase1_dual_rescue_exit_periodic_refactor_failure = 6;
+    solver.telemetry.perf_phase1_dual_rescue_exit_max_iters = 7;
+    solver.telemetry.perf_phase1_dual_rescue_exit_alloc_failure = 8;
     solver.telemetry.perf_phase1_soft_lu_policy_cooldown_defers = 5;
     solver.telemetry.perf_phase1_dir_skip_same_entering_repeats = 7;
     solver.telemetry.perf_phase1_dir_skip_same_entering_max_streak = 3;
@@ -469,6 +477,22 @@ static void test_solver_reset_and_refactor_accounting(void) {
                   "reset: phase1 direct dual rescue guard cooldown");
     ASSERT_INT_EQ(solver.telemetry.perf_phase1_direct_dual_rescue_guard_fail_cap_blocks, 0,
                   "reset: phase1 direct dual rescue guard fail cap");
+    ASSERT_INT_EQ(solver.telemetry.perf_phase1_dual_rescue_exit_time_limit, 0,
+                  "reset: phase1 dual rescue exit time limit");
+    ASSERT_INT_EQ(solver.telemetry.perf_phase1_dual_rescue_exit_bad_numerics, 0,
+                  "reset: phase1 dual rescue exit bad numerics");
+    ASSERT_INT_EQ(solver.telemetry.perf_phase1_dual_rescue_exit_no_progress, 0,
+                  "reset: phase1 dual rescue exit no progress");
+    ASSERT_INT_EQ(solver.telemetry.perf_phase1_dual_rescue_exit_no_entering, 0,
+                  "reset: phase1 dual rescue exit no entering");
+    ASSERT_INT_EQ(solver.telemetry.perf_phase1_dual_rescue_exit_pivot_refactor_failure, 0,
+                  "reset: phase1 dual rescue exit pivot refactor failure");
+    ASSERT_INT_EQ(solver.telemetry.perf_phase1_dual_rescue_exit_periodic_refactor_failure, 0,
+                  "reset: phase1 dual rescue exit periodic refactor failure");
+    ASSERT_INT_EQ(solver.telemetry.perf_phase1_dual_rescue_exit_max_iters, 0,
+                  "reset: phase1 dual rescue exit max iters");
+    ASSERT_INT_EQ(solver.telemetry.perf_phase1_dual_rescue_exit_alloc_failure, 0,
+                  "reset: phase1 dual rescue exit alloc failure");
     ASSERT_INT_EQ(solver.telemetry.perf_phase1_soft_lu_policy_cooldown_defers, 0,
                   "reset: phase1 soft-lu periodic cooldown defers");
     ASSERT_INT_EQ(solver.telemetry.perf_phase1_dir_skip_same_entering_repeats, 0,
@@ -1554,6 +1578,14 @@ static void test_solver_snapshot(void) {
     solver.telemetry.perf_phase1_direct_dual_rescue_failures = 5;
     solver.telemetry.perf_phase1_direct_dual_rescue_guard_cooldown_blocks = 4;
     solver.telemetry.perf_phase1_direct_dual_rescue_guard_fail_cap_blocks = 1;
+    solver.telemetry.perf_phase1_dual_rescue_exit_time_limit = 2;
+    solver.telemetry.perf_phase1_dual_rescue_exit_bad_numerics = 3;
+    solver.telemetry.perf_phase1_dual_rescue_exit_no_progress = 4;
+    solver.telemetry.perf_phase1_dual_rescue_exit_no_entering = 5;
+    solver.telemetry.perf_phase1_dual_rescue_exit_pivot_refactor_failure = 6;
+    solver.telemetry.perf_phase1_dual_rescue_exit_periodic_refactor_failure = 7;
+    solver.telemetry.perf_phase1_dual_rescue_exit_max_iters = 8;
+    solver.telemetry.perf_phase1_dual_rescue_exit_alloc_failure = 9;
     solver.telemetry.perf_phase1_soft_lu_policy_cooldown_defers = 4;
     solver.telemetry.perf_phase1_dir_skip_same_entering_repeats = 15;
     solver.telemetry.perf_phase1_dir_skip_same_entering_max_streak = 5;
@@ -1898,6 +1930,22 @@ static void test_solver_snapshot(void) {
                   "solver_snapshot: phase1 direct dual rescue guard cooldown");
     ASSERT_INT_EQ(snap.perf_phase1_direct_dual_rescue_guard_fail_cap_blocks, 1,
                   "solver_snapshot: phase1 direct dual rescue guard fail cap");
+    ASSERT_INT_EQ(snap.perf_phase1_dual_rescue_exit_time_limit, 2,
+                  "solver_snapshot: phase1 dual rescue exit time limit");
+    ASSERT_INT_EQ(snap.perf_phase1_dual_rescue_exit_bad_numerics, 3,
+                  "solver_snapshot: phase1 dual rescue exit bad numerics");
+    ASSERT_INT_EQ(snap.perf_phase1_dual_rescue_exit_no_progress, 4,
+                  "solver_snapshot: phase1 dual rescue exit no progress");
+    ASSERT_INT_EQ(snap.perf_phase1_dual_rescue_exit_no_entering, 5,
+                  "solver_snapshot: phase1 dual rescue exit no entering");
+    ASSERT_INT_EQ(snap.perf_phase1_dual_rescue_exit_pivot_refactor_failure, 6,
+                  "solver_snapshot: phase1 dual rescue exit pivot refactor failure");
+    ASSERT_INT_EQ(snap.perf_phase1_dual_rescue_exit_periodic_refactor_failure, 7,
+                  "solver_snapshot: phase1 dual rescue exit periodic refactor failure");
+    ASSERT_INT_EQ(snap.perf_phase1_dual_rescue_exit_max_iters, 8,
+                  "solver_snapshot: phase1 dual rescue exit max iters");
+    ASSERT_INT_EQ(snap.perf_phase1_dual_rescue_exit_alloc_failure, 9,
+                  "solver_snapshot: phase1 dual rescue exit alloc failure");
     ASSERT_INT_EQ(snap.perf_phase1_soft_lu_policy_cooldown_defers, 4,
                   "solver_snapshot: phase1 soft-lu periodic cooldown defers");
     ASSERT_INT_EQ(snap.perf_phase1_dir_skip_same_entering_repeats, 15,

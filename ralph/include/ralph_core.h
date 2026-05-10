@@ -636,6 +636,14 @@ typedef struct {
     int perf_phase1_direct_dual_rescue_failures;
     int perf_phase1_direct_dual_rescue_guard_cooldown_blocks;
     int perf_phase1_direct_dual_rescue_guard_fail_cap_blocks;
+    int perf_phase1_dual_rescue_exit_time_limit;
+    int perf_phase1_dual_rescue_exit_bad_numerics;
+    int perf_phase1_dual_rescue_exit_no_progress;
+    int perf_phase1_dual_rescue_exit_no_entering;
+    int perf_phase1_dual_rescue_exit_pivot_refactor_failure;
+    int perf_phase1_dual_rescue_exit_periodic_refactor_failure;
+    int perf_phase1_dual_rescue_exit_max_iters;
+    int perf_phase1_dual_rescue_exit_alloc_failure;
     int perf_phase1_soft_lu_policy_cooldown_defers;
     int perf_phase1_dir_skip_same_entering_repeats;
     int perf_phase1_dir_skip_same_entering_max_streak;
