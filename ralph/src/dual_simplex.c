@@ -954,6 +954,8 @@ int dual_phase1_rescue_progress_update_for_test(int current_rows,
     return (stall_limit > 0 && stall_count >= stall_limit) ? 1 : 0;
 }
 
+static int dual_ratio_passes_theta_floor(double ratio, double theta_floor);
+
 /* Test hook: adaptive ratio thresholds (orthogonal to simplex-policy tests). */
 void dual_ratio_adaptive_config_for_test(int m,
                                          double lu_pivot_tol,
@@ -975,6 +977,10 @@ void dual_ratio_adaptive_config_for_test(int m,
     if (strict_theta_floor_out) *strict_theta_floor_out = cfg.strict_theta_floor;
     if (hard_refactor_floor_out) *hard_refactor_floor_out = cfg.hard_refactor_floor;
     if (flip_round_cap_out) *flip_round_cap_out = cfg.flip_round_cap;
+}
+
+int dual_ratio_passes_theta_floor_for_test(double ratio, double theta_floor) {
+    return dual_ratio_passes_theta_floor(ratio, theta_floor);
 }
 
 static int dual_candidate_can_flip(const SimplexTableau *tab, int var) {
@@ -1055,6 +1061,13 @@ static int dual_ratio_candidate_value(const SimplexTableau *tab,
     }
     *ratio_out = ratio;
     return 1;
+}
+
+static int dual_ratio_passes_theta_floor(double ratio, double theta_floor) {
+    if (!isfinite(ratio)) return 0;
+    if (ratio < 0.0) return ratio >= theta_floor;
+    if (ratio == 0.0) return 1;
+    return ratio >= theta_floor;
 }
 
 static void dual_ratio_mode_flags(int mode, int *use_harris, int *prefer_flip_candidates) {
@@ -1187,7 +1200,7 @@ static int dual_ratio_test_core(SimplexTableau *tab,
         if (ratio < 0.0 && ratio >= -RALPH_OPT_TOL) {
             ratio = 0.0;
         }
-        if (ratio < theta_floor) continue;
+        if (!dual_ratio_passes_theta_floor(ratio, theta_floor)) continue;
         int can_flip = prefer_flip_candidates ? dual_candidate_can_flip(tab, j) : 0;
         if (*entering < 0 || ratio < *theta) {
             *theta = ratio;
@@ -1322,7 +1335,7 @@ static int dual_ratio_test_flip_iterative(SimplexTableau *tab,
             alpha_j = use_at_kernel ? alpha_at[j]
                                     : sparse_dot_column(tab->A_ext, j, tab->work2);
             if (!dual_ratio_candidate_value(tab, dir, j, alpha_j, pivot_floor, &ratio)) continue;
-            if (ratio < theta_floor) continue;
+            if (!dual_ratio_passes_theta_floor(ratio, theta_floor)) continue;
             candidate_count++;
             if (ratio < theta_min) theta_min = ratio;
         }
@@ -1343,7 +1356,7 @@ static int dual_ratio_test_flip_iterative(SimplexTableau *tab,
             alpha_j = use_at_kernel ? alpha_at[j]
                                     : sparse_dot_column(tab->A_ext, j, tab->work2);
             if (!dual_ratio_candidate_value(tab, dir, j, alpha_j, pivot_floor, &ratio)) continue;
-            if (ratio < theta_floor) continue;
+            if (!dual_ratio_passes_theta_floor(ratio, theta_floor)) continue;
 
             if (ratio <= theta_harris) {
                 abs_alpha = fabs(alpha_j);
