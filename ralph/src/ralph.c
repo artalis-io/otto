@@ -457,6 +457,23 @@ static int ralph_should_skip_sparse_mid_presolve(const LPModel *model) {
     return 0;
 }
 
+static int ralph_should_skip_dense_compact_bound_tightening(const LPModel *model) {
+    if (!model || !model->A) return 0;
+
+    int n = model->num_vars;
+    int m = model->num_cons;
+    int nnz = model->A->nnz;
+    if (n <= 0 || m <= 0 || nnz <= 0) return 0;
+
+    double density = (double)nnz / ((double)n * (double)m);
+    /* Compact dense LPs in this band can get a much harder Phase 1 after safe
+     * bound tightening interacts with singleton-row reductions. Keep structural
+     * reductions and bound shifting, but avoid the extra tightening pass. */
+    return (n >= 350 && n <= 500 &&
+            m >= 130 && m <= 220 &&
+            density >= 0.055 && density <= 0.080);
+}
+
 static int ralph_should_control_mid_sparse_reinvert(const LPModel *model) {
     if (!model || !model->A) return 0;
 
@@ -1920,6 +1937,11 @@ static int ralph_optimize_with_mode(RalphModel *model, RalphSolveMode mode) {
     if (use_presolve > 0 && !solve_as_mip &&
         ralph_should_skip_sparse_mid_presolve(model->lp_model)) {
         use_presolve = 0;
+    }
+    if (use_presolve > 0 && !solve_as_mip &&
+        use_mask == PRESOLVE_SAFE &&
+        ralph_should_skip_dense_compact_bound_tightening(model->lp_model)) {
+        use_mask &= ~PRESOLVE_BOUND_TIGHTENING;
     }
 
     if (use_presolve > 0) {
