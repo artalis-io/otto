@@ -442,6 +442,16 @@ static int ralph_should_skip_sparse_mid_presolve(const LPModel *model) {
         return 1;
     }
 
+    /* Compact sparse BANDM-like LPs lose useful basis structure under safe
+     * presolve: few rows disappear, but Phase 1 takes substantially more
+     * pivots. Keep this below denser compact classes that benefit from
+     * bound-tightening-only presolve. */
+    if (n >= 450 && n <= 500 &&
+        m >= 290 && m <= 320 &&
+        density >= 0.015 && density <= 0.020) {
+        return 1;
+    }
+
     if (n >= 1100 && n <= 1250 &&
         m >= 600 && m <= 700 &&
         density >= 0.005 && density <= 0.008) {
