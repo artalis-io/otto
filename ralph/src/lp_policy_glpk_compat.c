@@ -122,7 +122,7 @@ static int lp_glpk_bfcp_suhl_valid(int value) {
            value <= LP_GLPK_BFCP_SUHL_ON;
 }
 
-static double lp_glpk_working_fixed_width_tol(int smcp_shift, double tol_bnd) {
+double lp_policy_glpk_working_fixed_width_tol(int smcp_shift, double tol_bnd) {
     const double strict_tol = 1e-12;
     const double shifted_tol_default = 1e-7;
     const double shifted_tol_cap = 1e-7;
@@ -144,7 +144,7 @@ int lp_policy_glpk_working_exclude_nonbasic(int smcp_excl,
                                             double lb,
                                             double ub,
                                             double tol_bnd) {
-    double fixed_tol = lp_glpk_working_fixed_width_tol(smcp_shift, tol_bnd);
+    double fixed_tol = lp_policy_glpk_working_fixed_width_tol(smcp_shift, tol_bnd);
     if (var_status == (int)RALPH_FIXED) return 1;
     if (smcp_excl == LP_GLPK_SMCP_EXCL_OFF) return 0;
     if (var_status != (int)RALPH_NONBASIC_LOWER &&
