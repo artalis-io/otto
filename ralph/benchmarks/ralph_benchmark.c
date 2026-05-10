@@ -5491,7 +5491,7 @@ static void print_help(const char *prog) {
            DEFAULT_HARD_CAP_SEC);
     printf("\n");
     printf("Solver:\n");
-    printf("  --method <N>                  LP method: 0=primal, 1=dual, 2=auto, 3=dualp (default: 0)\n");
+    printf("  --method <N>                  LP method: 0=primal, 1=dual, 2=auto, 3=dualp (default: 2)\n");
     printf("  --phase1-pricing <N>          Override Phase 1 pricing only: 0=Dantzig, 1=SE, 2=Devex, 3=Partial, 4=Heap\n");
     printf("  --steep                       Use steep pricing (alias for --pricing 1)\n");
     printf("  --nosteep                     Use standard pricing (alias for --pricing 0)\n");
@@ -5560,6 +5560,7 @@ static int parse_args(int argc, char **argv, Options *opts) {
     opts->obj_abs_tol = DEFAULT_OBJ_ABS_TOL;
     opts->feas_tol = DEFAULT_FEAS_TOL;
     opts->lp_only = 1;  /* Default: LP only */
+    opts->method = 2;   /* Default: auto (dual first, primal fallback) */
     opts->pricing = -1;  /* Default: solver default */
     opts->phase1_pricing = -1;  /* Default: solver default */
     opts->glpk_smcp_ratio = -1;

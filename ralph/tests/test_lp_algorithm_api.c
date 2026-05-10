@@ -654,10 +654,10 @@ static void test_algorithm_report_guards_and_invalidation(void) {
     ASSERT_INT_EQ(ralph_lp_get_last_algorithm_report(model, &report), 0,
                   "report: available after LP solve");
     ASSERT_INT_EQ((int)report.requested_algorithm,
-                  (int)RALPH_LP_ALGORITHM_PRIMAL_SIMPLEX,
+                  (int)RALPH_LP_ALGORITHM_AUTO,
                   "report: default requested algorithm");
     ASSERT_INT_EQ((int)report.effective_algorithm,
-                  (int)RALPH_LP_ALGORITHM_PRIMAL_SIMPLEX,
+                  (int)RALPH_LP_ALGORITHM_AUTO,
                   "report: default effective algorithm");
     ASSERT_INT_EQ(report.fallback_applied, 0,
                   "report: no fallback for default algorithm");
