@@ -4516,6 +4516,27 @@ static int simplex_should_use_dense_lowrow_phase2_partial(const SimplexSolver *s
     return (m <= 30 && n >= 1000 && density >= 0.30);
 }
 
+static int simplex_should_use_medium_sparse_phase2_partial(const SimplexSolver *solver,
+                                                           const SimplexTableau *tab) {
+    if (!solver || !solver->model || !solver->model->A || !tab) return 0;
+
+    int m = solver->model->num_cons;
+    int n = solver->model->num_vars;
+    int nnz = solver->model->A->nnz;
+    if (m <= 0 || n <= 0 || nnz <= 0) return 0;
+
+    double density = (double)nnz / ((double)m * (double)n);
+    double width_ratio = (double)n / (double)m;
+    /* Medium sparse Phase 2 tableaus in this band pay enough full Devex
+     * maintenance cost that partial pricing can reduce refactors and pivots.
+     * Keep the shape away from lower-width NETLIB cases where full Devex is
+     * needed for stable progress. */
+    return (m >= 600 && m <= 700 &&
+            n >= 1500 && n <= 1900 &&
+            width_ratio >= 2.3 && width_ratio <= 3.1 &&
+            density >= 0.007 && density <= 0.012);
+}
+
 static int simplex_should_skip_auto_dual_startup(const SimplexSolver *solver) {
     if (!solver || !solver->model) return 0;
 
@@ -4626,7 +4647,9 @@ static int simplex_finish_prepared_primal_solve(SimplexSolver *solver, clock_t s
     tab->use_steepest_edge = saved_tab_se;
     if (solver->verbose) LP_LOG_STDOUT("[simplex_solve] Phase 1 complete\n");
 
-    if (saved_pricing == 2 && simplex_should_use_dense_lowrow_phase2_partial(solver, tab)) {
+    if (saved_pricing == 2 &&
+        (simplex_should_use_dense_lowrow_phase2_partial(solver, tab) ||
+         simplex_should_use_medium_sparse_phase2_partial(solver, tab))) {
         solver->pricing_strategy = 3;
         tab->pricing_strategy = 3;
         tab->use_steepest_edge = 0;
