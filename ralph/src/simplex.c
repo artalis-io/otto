@@ -1405,10 +1405,27 @@ int repair_singular_basis(SimplexTableau *tab) {
     int repairs = 0;
     const int MAX_REPAIRS = 100;
     const int sparse_only_repair = (m >= 700);
+    int *saved_basis = (int*)malloc((size_t)m * sizeof(int));
+    int *saved_basis_pos = (int*)malloc((size_t)n * sizeof(int));
+    VarStatus *saved_status = (VarStatus*)malloc((size_t)n * sizeof(VarStatus));
+    double *saved_x = (double*)malloc((size_t)n * sizeof(double));
+
+    if (!saved_basis || !saved_basis_pos || !saved_status || !saved_x) {
+        free(saved_basis);
+        free(saved_basis_pos);
+        free(saved_status);
+        free(saved_x);
+        return -1;
+    }
+
+    memcpy(saved_basis, tab->basis, (size_t)m * sizeof(int));
+    memcpy(saved_basis_pos, tab->basis_pos, (size_t)n * sizeof(int));
+    memcpy(saved_status, tab->var_status, (size_t)n * sizeof(VarStatus));
+    memcpy(saved_x, tab->x, (size_t)n * sizeof(double));
 
     /* Build a copy of the basis for analysis */
     SparseMatrix *B = build_basis_matrix(tab);
-    if (!B) return -1;
+    if (!B) goto repair_fail;
 
     if (sparse_only_repair) {
         goto crash_basis_repair;
@@ -1421,6 +1438,10 @@ int repair_singular_basis(SimplexTableau *tab) {
             ? lu_factorize_sparse_no_dense(tab->lu, B)
             : lu_factorize(tab->lu, B);
         if (status == 0) {
+            free(saved_basis);
+            free(saved_basis_pos);
+            free(saved_status);
+            free(saved_x);
             return 0;  /* Success */
         }
 
@@ -1460,13 +1481,17 @@ int repair_singular_basis(SimplexTableau *tab) {
 
                 /* Rebuild B and test */
                 B = build_basis_matrix(tab);
-                if (!B) return -1;
+                if (!B) goto repair_fail;
 
                 /* Test if this improved things */
                 int test_status = sparse_only_repair
                     ? lu_factorize_sparse_no_dense(tab->lu, B)
                     : lu_factorize(tab->lu, B);
                 if (test_status == 0) {
+                    free(saved_basis);
+                    free(saved_basis_pos);
+                    free(saved_status);
+                    free(saved_x);
                     return 0;  /* Success */
                 }
 
@@ -1511,13 +1536,31 @@ crash_basis_repair:
 
     /* Rebuild and try */
     B = build_basis_matrix(tab);
-    if (!B) return -1;
+    if (!B) goto repair_fail;
 
     int status = sparse_only_repair
         ? lu_factorize_sparse_no_dense(tab->lu, B)
         : lu_factorize(tab->lu, B);
+    if (status == 0) {
+        free(saved_basis);
+        free(saved_basis_pos);
+        free(saved_status);
+        free(saved_x);
+        return 0;
+    }
 
-    return status;
+repair_fail:
+    memcpy(tab->basis, saved_basis, (size_t)m * sizeof(int));
+    memcpy(tab->basis_pos, saved_basis_pos, (size_t)n * sizeof(int));
+    memcpy(tab->var_status, saved_status, (size_t)n * sizeof(VarStatus));
+    memcpy(tab->x, saved_x, (size_t)n * sizeof(double));
+    tab->basis_cache_valid = 0;
+    tab->basis_cache_total_nnz = 0;
+    free(saved_basis);
+    free(saved_basis_pos);
+    free(saved_status);
+    free(saved_x);
+    return -1;
 }
 
 static void column_to_dense(const SimplexTableau *tab, int col, double *out) {
