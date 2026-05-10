@@ -12,6 +12,7 @@ void dual_ratio_adaptive_config_for_test(int m,
                                          double *strict_theta_floor_out,
                                          double *hard_refactor_floor_out,
                                          int *flip_round_cap_out);
+int dual_ratio_passes_theta_floor_for_test(double ratio, double theta_floor);
 int dual_sparse_pressure_force_refactor_for_test(int m,
                                                  int num_updates,
                                                  int max_updates,
@@ -305,6 +306,15 @@ static void test_adaptive_ratio_thresholds_scale_with_lu_health(void) {
     ASSERT_TRUE(rounds_bad >= rounds_good, "adaptive thresholds keep or increase flip rounds under stress");
 }
 
+static void test_theta_floor_keeps_degenerate_limiter(void) {
+    ASSERT_TRUE(dual_ratio_passes_theta_floor_for_test(0.0, 1e-10) == 1,
+                "theta floor keeps exact zero dual limiter");
+    ASSERT_TRUE(dual_ratio_passes_theta_floor_for_test(0.5e-10, 1e-10) == 0,
+                "theta floor still rejects positive progress below strict floor");
+    ASSERT_TRUE(dual_ratio_passes_theta_floor_for_test(2e-10, 1e-10) == 1,
+                "theta floor accepts positive progress above strict floor");
+}
+
 static void test_sparse_pressure_refactor_gate(void) {
     int trigger_small = dual_sparse_pressure_force_refactor_for_test(
         120, 80, 100, 0, 0, 80, 90);
@@ -526,6 +536,7 @@ int main(void) {
     test_harris_mode_clamps_tiny_negative_ratio_candidate();
     test_flip_mode_respects_runtime_disable();
     test_adaptive_ratio_thresholds_scale_with_lu_health();
+    test_theta_floor_keeps_degenerate_limiter();
     test_sparse_pressure_refactor_gate();
     test_dual_smcp_shift_toggle();
     test_dual_aorn_scan_direction();
