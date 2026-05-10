@@ -1776,7 +1776,17 @@ int tableau_refactorize(SimplexTableau *tab) {
 
     if (status != 0) {
         /* Factorization failed - try to repair the basis */
+        int original_lu_failure_reason =
+            tab->lu ? (int)lu_get_last_failure_reason(tab->lu) : (int)LU_FAIL_NONE;
+        int original_sparse_numeric_failure_reason =
+            tab->lu ? tab->lu->telemetry.sparse_numeric_last_failure_reason
+                    : (int)LU_SPARSE_NUMERIC_FAIL_NONE;
         status = repair_singular_basis(tab);
+        lp_telemetry_record_refactor_repair_outcome(owner,
+                                                    tab ? tab->phase : 0,
+                                                    original_lu_failure_reason,
+                                                    original_sparse_numeric_failure_reason,
+                                                    status);
     }
 
     if (owner) {

@@ -265,6 +265,18 @@ typedef struct {
     int refactor_last_m;
     int refactor_last_k;
     int refactor_last_nnz_b;
+    int refactor_factorize_failures;
+    int refactor_repair_successes;
+    int refactor_repair_failures;
+    int refactor_last_factorize_failure_reason;
+    int refactor_last_sparse_numeric_failure_reason;
+    int refactor_last_repair_status;
+    int phase1_refactor_factorize_failures;
+    int phase1_refactor_repair_successes;
+    int phase1_refactor_repair_failures;
+    int phase2_refactor_factorize_failures;
+    int phase2_refactor_repair_successes;
+    int phase2_refactor_repair_failures;
 
     double phase1_pricing_ms;
     double phase1_ratio_ms;
@@ -1666,6 +1678,26 @@ static SolveResult solve_with_ralph(const char *problem_path, double time_limit_
             result.refactor_last_m = solver_tel.perf_refactor_last_m;
             result.refactor_last_k = solver_tel.perf_refactor_last_k;
             result.refactor_last_nnz_b = solver_tel.perf_refactor_last_nnz_B;
+            result.refactor_factorize_failures = solver_tel.perf_refactor_factorize_failures;
+            result.refactor_repair_successes = solver_tel.perf_refactor_repair_successes;
+            result.refactor_repair_failures = solver_tel.perf_refactor_repair_failures;
+            result.refactor_last_factorize_failure_reason =
+                solver_tel.perf_refactor_last_factorize_failure_reason;
+            result.refactor_last_sparse_numeric_failure_reason =
+                solver_tel.perf_refactor_last_sparse_numeric_failure_reason;
+            result.refactor_last_repair_status = solver_tel.perf_refactor_last_repair_status;
+            result.phase1_refactor_factorize_failures =
+                solver_tel.perf_phase1_refactor_factorize_failures;
+            result.phase1_refactor_repair_successes =
+                solver_tel.perf_phase1_refactor_repair_successes;
+            result.phase1_refactor_repair_failures =
+                solver_tel.perf_phase1_refactor_repair_failures;
+            result.phase2_refactor_factorize_failures =
+                solver_tel.perf_phase2_refactor_factorize_failures;
+            result.phase2_refactor_repair_successes =
+                solver_tel.perf_phase2_refactor_repair_successes;
+            result.phase2_refactor_repair_failures =
+                solver_tel.perf_phase2_refactor_repair_failures;
 
             result.phase1_pricing_ms = solver_tel.perf_phase1_pricing_ms;
             result.phase1_ratio_ms = solver_tel.perf_phase1_ratio_ms;
@@ -4290,6 +4322,26 @@ static void print_json_result(const char *problem_name, const char *source,
     fprintf(out, "    \"last_m\": %d,\n", ralph->refactor_last_m);
     fprintf(out, "    \"last_k\": %d,\n", ralph->refactor_last_k);
     fprintf(out, "    \"last_nnz_B\": %d,\n", ralph->refactor_last_nnz_b);
+    fprintf(out, "    \"factorize_failures\": %d,\n", ralph->refactor_factorize_failures);
+    fprintf(out, "    \"repair_successes\": %d,\n", ralph->refactor_repair_successes);
+    fprintf(out, "    \"repair_failures\": %d,\n", ralph->refactor_repair_failures);
+    fprintf(out, "    \"last_factorize_failure_reason_code\": %d,\n",
+            ralph->refactor_last_factorize_failure_reason);
+    fprintf(out, "    \"last_sparse_numeric_failure_reason_code\": %d,\n",
+            ralph->refactor_last_sparse_numeric_failure_reason);
+    fprintf(out, "    \"last_repair_status\": %d,\n", ralph->refactor_last_repair_status);
+    fprintf(out, "    \"phase1_factorize_failures\": %d,\n",
+            ralph->phase1_refactor_factorize_failures);
+    fprintf(out, "    \"phase1_repair_successes\": %d,\n",
+            ralph->phase1_refactor_repair_successes);
+    fprintf(out, "    \"phase1_repair_failures\": %d,\n",
+            ralph->phase1_refactor_repair_failures);
+    fprintf(out, "    \"phase2_factorize_failures\": %d,\n",
+            ralph->phase2_refactor_factorize_failures);
+    fprintf(out, "    \"phase2_repair_successes\": %d,\n",
+            ralph->phase2_refactor_repair_successes);
+    fprintf(out, "    \"phase2_repair_failures\": %d,\n",
+            ralph->phase2_refactor_repair_failures);
     fprintf(out, "    \"reason_setup\": %d,\n", ralph->refactor_reason_setup);
     fprintf(out, "    \"reason_transition\": %d,\n", ralph->refactor_reason_transition);
     fprintf(out, "    \"reason_periodic\": %d,\n", ralph->refactor_reason_periodic);
