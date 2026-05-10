@@ -48,7 +48,7 @@ static void phase1_rescue_compute_reduced_costs(SimplexTableau *tab) {
 /* Bound perturbation for degeneracy prevention (defined below) */
 static void apply_bound_perturbation(SimplexTableau *tab);
 static void remove_bound_perturbation(SimplexTableau *tab);
-static void dse_init_approx(SimplexTableau *tab);
+static void dse_init_exact(SimplexTableau *tab);
 
 /* Forward declaration for dual feasibility function (non-static for simplex.c access) */
 int make_dual_feasible(SimplexTableau *tab, int obj_sense, int allow_bound_flip);
@@ -720,7 +720,7 @@ static int dual_try_one_shot_recovery(SimplexSolver *solver,
     }
 
     tab->dse_initialized = 0;
-    if (use_dse) dse_init_approx(tab);
+    if (use_dse) dse_init_exact(tab);
     phase1_rescue_compute_solution(tab);
     phase1_rescue_compute_reduced_costs(tab);
     return 1;
@@ -1639,23 +1639,36 @@ dual_ratio_done:
 
 static void dse_init_exact(SimplexTableau *tab) {
     for (int k = 0; k < tab->m; k++) {
-        vec_set_zero(tab->work1, tab->m);
-        tab->work1[k] = 1.0;
-        lu_solve_transpose(tab->lu, tab->work1, tab->tau_work);
+        int rhs_idx = k;
+        double rhs_val = 1.0;
+        lu_solve_transpose_sparse(tab->lu, 1, &rhs_idx, &rhs_val, tab->tau_work);
         double norm_sq = vec_dot(tab->m, tab->tau_work, tab->tau_work);
         tab->dse_weights[k] = (norm_sq < 1e-12) ? 1.0 : norm_sq;
     }
     tab->dse_initialized = 1;
 }
 
-/* Approximate DSE init: set all weights to 1.0 (B5 fix).
- * Used after mid-loop refactorization where exact init is O(m^2).
- * The incremental weight update formula self-corrects within a few pivots. */
-static void dse_init_approx(SimplexTableau *tab) {
-    for (int k = 0; k < tab->m; k++) {
-        tab->dse_weights[k] = 1.0;
+/* Same-basis refactors preserve the DSE invariant mathematically, but the
+ * incremental updates can drift on long degenerate dual runs. Periodic exact
+ * refresh keeps the pivot rule useful without paying O(m) BTRANs on every
+ * refactor. */
+static void dse_refresh_after_refactor(SimplexTableau *tab,
+                                       int use_dse,
+                                       int *refactors_since_refresh,
+                                       int refresh_period) {
+    if (!use_dse || !tab) return;
+    if (!tab->dse_initialized) {
+        dse_init_exact(tab);
+        if (refactors_since_refresh) *refactors_since_refresh = 0;
+        return;
     }
-    tab->dse_initialized = 1;
+    if (!refactors_since_refresh) return;
+    (*refactors_since_refresh)++;
+    if (*refactors_since_refresh >= refresh_period) {
+        tab->dse_initialized = 0;
+        dse_init_exact(tab);
+        *refactors_since_refresh = 0;
+    }
 }
 
 /* ============================================================================
@@ -2661,6 +2674,10 @@ int dual_simplex_solve_v2(SimplexSolver *solver) {
     if (use_dse && !tab->dse_initialized) {
         dse_init_exact(tab);
     }
+    int dse_refactors_since_refresh = 0;
+    /* Refresh often enough to keep DSE weights from degenerating, but avoid
+     * making large NETLIB runs pay exact-weight cost at every refactor. */
+    const int DSE_REFACTOR_REFRESH_PERIOD = 8;
 
     /* Stalling/degeneracy tracking */
     int degenerate_count = 0;
@@ -2770,8 +2787,9 @@ int dual_simplex_solve_v2(SimplexSolver *solver) {
                         dual_quality_on_refactor(&quality, iter);
                     }
                 }
-                tab->dse_initialized = 0;
-                if (use_dse) dse_init_approx(tab);
+                dse_refresh_after_refactor(tab, use_dse,
+                                           &dse_refactors_since_refresh,
+                                           DSE_REFACTOR_REFRESH_PERIOD);
                 tableau_compute_solution(tab);
                 tableau_compute_reduced_costs(tab);
 
@@ -2866,7 +2884,8 @@ int dual_simplex_solve_v2(SimplexSolver *solver) {
                             if (rc_ref != 0) break;
                             dual_quality_on_refactor(&quality, iter + cleanup_iters);
                             tab->dse_initialized = 0;
-                            if (use_dse) dse_init_approx(tab);
+                            if (use_dse) dse_init_exact(tab);
+                            dse_refactors_since_refresh = 0;
                             tableau_compute_solution(tab);
                             tableau_compute_reduced_costs(tab);
                         }
@@ -2890,8 +2909,9 @@ int dual_simplex_solve_v2(SimplexSolver *solver) {
                         lp_telemetry_add_refactor_runtime_timed(solver, t_refactor_ms);
                         if (rc_ref != 0) break;
                         dual_quality_on_refactor(&quality, iter + cleanup_iters);
-                        tab->dse_initialized = 0;
-                        if (use_dse) dse_init_approx(tab);
+                        dse_refresh_after_refactor(tab, use_dse,
+                                                   &dse_refactors_since_refresh,
+                                                   DSE_REFACTOR_REFRESH_PERIOD);
                         tableau_compute_solution(tab);
                         tableau_compute_reduced_costs(tab);
                     }
@@ -2994,7 +3014,8 @@ int dual_simplex_solve_v2(SimplexSolver *solver) {
                 }
                 dual_quality_on_refactor(&quality, iter);
                 tab->dse_initialized = 0;
-                if (use_dse) dse_init_approx(tab);
+                if (use_dse) dse_init_exact(tab);
+                dse_refactors_since_refresh = 0;
                 tableau_compute_solution(tab);
                 tableau_compute_reduced_costs(tab);
                 continue;
@@ -3062,8 +3083,9 @@ int dual_simplex_solve_v2(SimplexSolver *solver) {
                 return -1;
             }
             dual_quality_on_refactor(&quality, iter);
-            tab->dse_initialized = 0;
-            if (use_dse) dse_init_approx(tab);
+            dse_refresh_after_refactor(tab, use_dse,
+                                       &dse_refactors_since_refresh,
+                                       DSE_REFACTOR_REFRESH_PERIOD);
             tableau_compute_solution(tab);
             tableau_compute_reduced_costs(tab);
         } else if (iter > 0 && iter % dual_rc_recompute_interval == 0) {
@@ -3259,7 +3281,7 @@ int dual_phase1(SimplexSolver *solver) {
             if (tableau_refactorize(tab) != 0) break;
             dual_quality_on_refactor(&quality, iter);
             tab->dse_initialized = 0;
-            if (use_dse) dse_init_approx(tab);
+            if (use_dse) dse_init_exact(tab);
             tableau_compute_solution(tab);
             tableau_compute_reduced_costs(tab);
             continue;
@@ -3277,7 +3299,7 @@ int dual_phase1(SimplexSolver *solver) {
             if (tableau_refactorize(tab) != 0) break;
             dual_quality_on_refactor(&quality, iter);
             tab->dse_initialized = 0;
-            if (use_dse) dse_init_approx(tab);
+            if (use_dse) dse_init_exact(tab);
             tableau_compute_solution(tab);
             tableau_compute_reduced_costs(tab);
         }
