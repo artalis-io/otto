@@ -1048,11 +1048,186 @@ static int presolve_binary_row_propagation(PresolveContext *ctx, int row_idx,
     return count;
 }
 
+static int presolve_bound_tightening_sparse_lp(PresolveContext *ctx) {
+    LPModel *model = ctx->working;
+    SparseMatrix *A = model->A;
+    int m = model->num_cons;
+    int n = model->num_vars;
+    int nnz = A ? A->nnz : 0;
+    int count = 0;
+    int *rowptr = NULL;
+    int *rowfill = NULL;
+    int *colidx = NULL;
+    double *values = NULL;
+
+    if (!A) return 0;
+
+    rowptr = (int*)calloc((size_t)m + 1, sizeof(int));
+    rowfill = (int*)calloc((size_t)m, sizeof(int));
+    colidx = (int*)malloc((size_t)nnz * sizeof(int));
+    values = (double*)malloc((size_t)nnz * sizeof(double));
+    if (!rowptr || !rowfill || !colidx || !values) {
+        free(rowptr);
+        free(rowfill);
+        free(colidx);
+        free(values);
+        return -2;
+    }
+
+    for (int p = 0; p < nnz; p++) {
+        int r = A->rowidx[p];
+        if (r >= 0 && r < m) rowptr[r + 1]++;
+    }
+    for (int i = 0; i < m; i++) {
+        rowptr[i + 1] += rowptr[i];
+        rowfill[i] = rowptr[i];
+    }
+    for (int j = 0; j < n; j++) {
+        for (int p = A->colptr[j]; p < A->colptr[j + 1]; p++) {
+            int r = A->rowidx[p];
+            if (r < 0 || r >= m) continue;
+            int q = rowfill[r]++;
+            colidx[q] = j;
+            values[q] = A->values[p];
+        }
+    }
+
+    for (int i = 0; i < m; i++) {
+        if (ctx->row_deleted[i]) continue;
+
+        double rhs = model->b[i];
+        RowBounds rb;
+        rb.lb = 0.0;
+        rb.ub = 0.0;
+        rb.abs_sum = 0.0;
+        rb.lb_finite = 1;
+        rb.ub_finite = 1;
+
+        for (int p = rowptr[i]; p < rowptr[i + 1]; p++) {
+            int j = colidx[p];
+            double aij = values[p];
+            if (ctx->col_deleted[j] || fabs(aij) < RALPH_ZERO_TOL) continue;
+            if (aij > 0.0) {
+                if (model->lb[j] <= -RALPH_INFINITY / 2.0) {
+                    rb.lb_finite = 0;
+                } else {
+                    double contrib = aij * model->lb[j];
+                    rb.lb += contrib;
+                    rb.abs_sum += fabs(contrib);
+                }
+                if (model->ub[j] >= RALPH_INFINITY / 2.0) {
+                    rb.ub_finite = 0;
+                } else {
+                    rb.ub += aij * model->ub[j];
+                }
+            } else {
+                if (model->ub[j] >= RALPH_INFINITY / 2.0) {
+                    rb.lb_finite = 0;
+                } else {
+                    double contrib = aij * model->ub[j];
+                    rb.lb += contrib;
+                    rb.abs_sum += fabs(contrib);
+                }
+                if (model->lb[j] <= -RALPH_INFINITY / 2.0) {
+                    rb.ub_finite = 0;
+                } else {
+                    rb.ub += aij * model->lb[j];
+                }
+            }
+        }
+        if (!rb.lb_finite) rb.lb = -RALPH_INFINITY;
+        if (!rb.ub_finite) rb.ub = RALPH_INFINITY;
+
+        double row_lb = rb.lb, row_ub = rb.ub, abs_sum = rb.abs_sum;
+        int row_lb_finite = rb.lb_finite, row_ub_finite = rb.ub_finite;
+
+        for (int p = rowptr[i]; p < rowptr[i + 1]; p++) {
+            int j = colidx[p];
+            double aij = values[p];
+            if (ctx->col_deleted[j] || fabs(aij) < RALPH_ZERO_TOL) continue;
+
+            double j_contrib_lb = 0.0, j_contrib_ub = 0.0;
+            int j_lb_finite = 1, j_ub_finite = 1;
+
+            if (aij > 0.0) {
+                if (model->lb[j] <= -RALPH_INFINITY / 2.0) j_lb_finite = 0;
+                else j_contrib_lb = aij * model->lb[j];
+                if (model->ub[j] >= RALPH_INFINITY / 2.0) j_ub_finite = 0;
+                else j_contrib_ub = aij * model->ub[j];
+            } else {
+                if (model->ub[j] >= RALPH_INFINITY / 2.0) j_lb_finite = 0;
+                else j_contrib_lb = aij * model->ub[j];
+                if (model->lb[j] <= -RALPH_INFINITY / 2.0) j_ub_finite = 0;
+                else j_contrib_ub = aij * model->lb[j];
+            }
+
+            if (abs_sum > RALPH_ZERO_TOL && fabs(j_contrib_lb) > 0.1 * abs_sum) {
+                continue;
+            }
+
+            double other_lb = row_lb_finite && j_lb_finite ? row_lb - j_contrib_lb : -RALPH_INFINITY;
+            double other_ub = row_ub_finite && j_ub_finite ? row_ub - j_contrib_ub : RALPH_INFINITY;
+            double safety_margin = 1e-8 * fmax(abs_sum, fmax(fabs(rhs), 1.0));
+            double new_lb = model->lb[j];
+            double new_ub = model->ub[j];
+
+            if (model->sense[i] == 'L' || model->sense[i] == 'E') {
+                if (other_lb > -RALPH_INFINITY / 2.0) {
+                    double bound = (rhs - other_lb) / aij;
+                    if (aij > 0.0) new_ub = fmin(new_ub, bound + safety_margin / fabs(aij));
+                    else new_lb = fmax(new_lb, bound - safety_margin / fabs(aij));
+                }
+            }
+            if (model->sense[i] == 'G' || model->sense[i] == 'E') {
+                if (other_ub < RALPH_INFINITY / 2.0) {
+                    double bound = (rhs - other_ub) / aij;
+                    if (aij > 0.0) new_lb = fmax(new_lb, bound - safety_margin / fabs(aij));
+                    else new_ub = fmin(new_ub, bound + safety_margin / fabs(aij));
+                }
+            }
+
+            double curr_lb = model->lb[j];
+            double curr_ub = model->ub[j];
+            double range = curr_ub - curr_lb;
+            double abs_tol = 1e-4;
+            double lb_threshold = fmax(abs_tol, 0.01 * fmax(fabs(curr_lb), range));
+            double ub_threshold = fmax(abs_tol, 0.01 * fmax(fabs(curr_ub), range));
+
+            if (new_lb > curr_lb + lb_threshold && new_lb < curr_ub - abs_tol) {
+                model->lb[j] = new_lb;
+                count++;
+            }
+            if (new_ub < curr_ub - ub_threshold && new_ub > curr_lb + abs_tol) {
+                model->ub[j] = new_ub;
+                count++;
+            }
+            if (model->lb[j] > model->ub[j] + RALPH_FEAS_TOL) {
+                free(rowptr);
+                free(rowfill);
+                free(colidx);
+                free(values);
+                return -1;
+            }
+        }
+    }
+
+    free(rowptr);
+    free(rowfill);
+    free(colidx);
+    free(values);
+    return count;
+}
+
 /* Tighten variable bounds using constraint information */
 int presolve_bound_tightening(PresolveContext *ctx) {
     LPModel *model = ctx->working;
     int count = 0;
     int n = model->num_vars;
+
+    if (model->num_binary == 0) {
+        int sparse_count = presolve_bound_tightening_sparse_lp(ctx);
+        if (sparse_count != -2) return sparse_count;
+    }
 
     /* Allocate dense row buffer once */
     double *row = (double*)calloc(n, sizeof(double));
