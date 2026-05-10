@@ -4598,10 +4598,10 @@ static int simplex_should_use_wide_sparse_phase1_heap(const SimplexSolver *solve
     double density = (double)nnz / ((double)m * (double)n);
     double width_ratio = (double)n / (double)m;
     /* Very sparse, wide transportation-style Phase 1 tableaus get cheaper
-     * progress from heap pricing. Denser mid-row NETLIB shapes in the same row
-     * range regress badly, so keep the density and width guards tight. */
+     * progress from heap pricing. Extremely wide long-form ship tableaus pay
+     * more in extra pivots than heap pricing saves, so leave those on Devex. */
     return (m >= 750 && m <= 1200 &&
-            width_ratio >= 2.0 && width_ratio <= 5.7 &&
+            width_ratio >= 2.0 && width_ratio <= 4.2 &&
             density >= 0.0024 && density <= 0.0040);
 }
 

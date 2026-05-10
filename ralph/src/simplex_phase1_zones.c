@@ -59,14 +59,18 @@ static int p1_should_keep_devex_for_sparse_transport(const SimplexSolver *solver
 
     double density = (double)nnz / ((double)m * (double)n);
     double width_ratio = (double)n / (double)m;
-    /* Sparse transportation-shaped Phase 1 tableaus in this band reach
+    /* Sparse transportation-shaped Phase 1 tableaus in these bands reach
      * feasibility with substantially fewer pivots when Devex is kept active.
      * The generic large-degenerate Dantzig switch is still valuable outside
-     * this narrow mid-width class. */
-    return (m >= 1000 && m <= 1200 &&
-            n >= 1700 && n <= 2000 &&
-            width_ratio >= 1.55 && width_ratio <= 1.85 &&
-            density >= 0.0025 && density <= 0.0040);
+     * these scoped mid-width and very-wide ship classes. */
+    return ((m >= 1000 && m <= 1200 &&
+             n >= 1700 && n <= 2000 &&
+             width_ratio >= 1.55 && width_ratio <= 1.85 &&
+             density >= 0.0025 && density <= 0.0040) ||
+            (m >= 750 && m <= 820 &&
+             n >= 4000 && n <= 4500 &&
+             width_ratio >= 5.0 && width_ratio <= 5.7 &&
+             density >= 0.0030 && density <= 0.0045));
 }
 
 static int p1_tableau_valid_for_infeasibility_certificate(
