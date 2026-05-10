@@ -1659,7 +1659,8 @@ static int dual_simplex_pivot(SimplexTableau *tab,
                               int entering,
                               int leaving,
                               double theta,
-                              int pivot_row_valid) {
+                              int pivot_row_valid,
+                              int pivot_alpha_valid) {
     (void)theta;  /* Step size already computed in caller */
     if (!tab || entering < 0 || entering >= tab->n || leaving < 0 || leaving >= tab->m) {
         return -1;
@@ -1782,7 +1783,8 @@ static int dual_simplex_pivot(SimplexTableau *tab,
             tab->rc[j] = 0.0;
         } else if (j != entering) {
             /* Compute pivot_row * a_j via sparse dot product */
-            double dot = sparse_dot_column(tab->A_ext, j, tab->work2);
+            double dot = pivot_alpha_valid ? tab->csr_alpha[j]
+                                           : sparse_dot_column(tab->A_ext, j, tab->work2);
             tab->rc[j] -= rc_factor * dot;
             /* T2.2: Collect candidates with attractive |rc| */
             if (fabs(tab->rc[j]) > DUAL_CAND_RC_THRESH &&
@@ -2253,7 +2255,7 @@ int dual_simplex_phase1_rescue(SimplexSolver *solver, int max_iters) {
 
         dual_quality_record_ratio_success(&quality, entering, theta);
 
-        if (dual_simplex_pivot(tab, entering, leaving, theta, 1) != 0) {
+        if (dual_simplex_pivot(tab, entering, leaving, theta, 1, 0) != 0) {
             dual_quality_record_pivot_failure(&quality);
             if (tableau_refactorize(tab) != 0) {
                 refactor_failures++;
@@ -2749,7 +2751,8 @@ int dual_simplex_solve_v2(SimplexSolver *solver) {
                     dual_quality_record_ratio_success(&quality, cl_entering, cl_theta);
                     {
                         double t_pivot_ms = lp_telemetry_timer_start();
-                        int rc_pivot = dual_simplex_pivot(tab, cl_entering, cl_leaving, cl_theta, 1);
+                        int rc_pivot = dual_simplex_pivot(tab, cl_entering, cl_leaving, cl_theta,
+                                                          1, dual_ratio_use_row_kernel(tab));
                         lp_telemetry_record_pivot_timed(solver, 0, t_pivot_ms);
                         if (rc_pivot != 0) {
                             dual_quality_record_pivot_failure(&quality);
@@ -2872,7 +2875,8 @@ int dual_simplex_solve_v2(SimplexSolver *solver) {
         /* Perform dual pivot */
         {
             double t_pivot_ms = lp_telemetry_timer_start();
-            int rc_pivot = dual_simplex_pivot(tab, entering, leaving, theta, 1);
+            int rc_pivot = dual_simplex_pivot(tab, entering, leaving, theta,
+                                              1, dual_ratio_use_row_kernel(tab));
             lp_telemetry_record_pivot_timed(solver, 0, t_pivot_ms);
             if (rc_pivot != 0) {
                 dual_quality_record_pivot_failure(&quality);
@@ -3145,7 +3149,8 @@ int dual_phase1(SimplexSolver *solver) {
         }
         dual_quality_record_ratio_success(&quality, entering, theta);
 
-        if (dual_simplex_pivot(tab, entering, leaving, theta, 1) != 0) {
+        if (dual_simplex_pivot(tab, entering, leaving, theta,
+                               1, dual_ratio_use_row_kernel(tab)) != 0) {
             dual_quality_record_pivot_failure(&quality);
             if (tableau_refactorize(tab) != 0) break;
             dual_quality_on_refactor(&quality, iter);
