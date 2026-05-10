@@ -2105,7 +2105,7 @@ int main(void) {
             .iter_cost_ewma_ms = 1.0,
             .consecutive_defers = 0,
             .expected_defer = 1,
-            .expected_cap = 8,
+            .expected_cap = 16,
             .expected_cap_blocked = 0,
             .expected_next_consecutive = 1
         },
@@ -2123,9 +2123,9 @@ int main(void) {
             .growth_factor = 100.0,
             .refactor_cost_ewma_ms = 12.0,
             .iter_cost_ewma_ms = 1.0,
-            .consecutive_defers = 8,
+            .consecutive_defers = 16,
             .expected_defer = 0,
-            .expected_cap = 8,
+            .expected_cap = 16,
             .expected_cap_blocked = 1,
             .expected_next_consecutive = 0
         },
@@ -2145,7 +2145,7 @@ int main(void) {
             .iter_cost_ewma_ms = 1.0,
             .consecutive_defers = 2,
             .expected_defer = 0,
-            .expected_cap = 8,
+            .expected_cap = 16,
             .expected_cap_blocked = 0,
             .expected_next_consecutive = 0
         }
