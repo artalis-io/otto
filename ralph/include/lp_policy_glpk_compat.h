@@ -156,6 +156,8 @@ int lp_policy_glpk_working_exclude_nonbasic(int smcp_excl,
                                             double lb,
                                             double ub,
                                             double tol_bnd);
+double lp_policy_glpk_working_fixed_width_tol(int smcp_shift,
+                                              double tol_bnd);
 int lp_policy_glpk_working_use_at_kernel(int smcp_aorn, int has_row_scatter);
 int lp_policy_glpk_perturb_next_state(int state, int event, int *next_state_out);
 int lp_policy_glpk_basis_crash_mode(int smcp_basis, int *crash_mode_out);

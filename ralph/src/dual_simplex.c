@@ -54,14 +54,65 @@ static void dse_init_approx(SimplexTableau *tab);
 int make_dual_feasible(SimplexTableau *tab, int obj_sense, int allow_bound_flip);
 static int dual_smcp_excl_skip_var(const SimplexTableau *tab, int var);
 
+typedef struct {
+    const SimplexTableau *tab;
+    int smcp_excl;
+    double fixed_width_tol;
+} DualWorkingExclusionCtx;
+
+static DualWorkingExclusionCtx dual_working_exclusion_ctx(const SimplexTableau *tab) {
+    int smcp_excl = 1;
+    int smcp_shift = 1;
+    double tol_bnd = 1e-12;
+    if (tab && tab->owner) {
+        smcp_excl = tab->owner->smcp_excl;
+        smcp_shift = tab->owner->smcp_shift;
+        tol_bnd = tab->owner->smcp_tol_bnd;
+    }
+    return (DualWorkingExclusionCtx) {
+        tab,
+        smcp_excl,
+        lp_policy_glpk_working_fixed_width_tol(smcp_shift, tol_bnd)
+    };
+}
+
+static inline int dual_working_exclusion_skip_var(const DualWorkingExclusionCtx *ctx,
+                                                  int var) {
+    const SimplexTableau *tab = ctx ? ctx->tab : NULL;
+    VarStatus st;
+    if (!tab || var < 0 || var >= tab->n) return 0;
+    st = tab->var_status[var];
+    if (tab->model && tab->free_split_col && tab->free_split_orig) {
+        int mate = -1;
+        if (var < tab->model->num_vars) {
+            mate = tab->free_split_col[var];
+        } else if (var < tab->num_structural_ext) {
+            mate = tab->free_split_orig[var];
+        }
+        if (mate >= 0 && mate < tab->n && tab->var_status[mate] == RALPH_BASIC) {
+            return 1;
+        }
+    }
+    if (st == RALPH_FIXED) return 1;
+    if (ctx->smcp_excl == LP_GLPK_SMCP_EXCL_OFF) return 0;
+    if (st != RALPH_NONBASIC_LOWER && st != RALPH_NONBASIC_UPPER) return 0;
+    if (tab->lb_ext[var] <= -RALPH_INFINITY / 2.0 ||
+        tab->ub_ext[var] >= RALPH_INFINITY / 2.0) {
+        return 0;
+    }
+    return fabs(tab->ub_ext[var] - tab->lb_ext[var]) <= ctx->fixed_width_tol;
+}
+
 static double dual_max_reduced_cost_violation(const SimplexTableau *tab) {
     double max_viol = 0.0;
+    DualWorkingExclusionCtx excl_ctx;
 
     if (!tab) return RALPH_INFINITY;
+    excl_ctx = dual_working_exclusion_ctx(tab);
     for (int j = 0; j < tab->n; j++) {
         double viol = 0.0;
         if (tab->var_status[j] == RALPH_BASIC) continue;
-        if (dual_smcp_excl_skip_var(tab, j)) continue;
+        if (dual_working_exclusion_skip_var(&excl_ctx, j)) continue;
         if (tab->var_status[j] == RALPH_NONBASIC_LOWER &&
             tab->rc[j] < -RALPH_OPT_TOL) {
             viol = -tab->rc[j];
@@ -1164,6 +1215,7 @@ static int dual_ratio_test_core(SimplexTableau *tab,
     const double tie_tol = 1e-12;
     int scan_dir = dual_ratio_scan_direction(tab);
     int use_row_kernel = dual_ratio_use_row_kernel(tab);
+    DualWorkingExclusionCtx excl_ctx = dual_working_exclusion_ctx(tab);
     double *alpha_at = NULL;
 
     if (use_row_kernel) {
@@ -1181,7 +1233,10 @@ static int dual_ratio_test_core(SimplexTableau *tab,
 
     for (int t = 0; t < tab->n; t++) {
         int j = (scan_dir > 0) ? t : (tab->n - 1 - t);
-        if (tab->var_status[j] == RALPH_BASIC || dual_smcp_excl_skip_var(tab, j)) continue;
+        if (tab->var_status[j] == RALPH_BASIC ||
+            dual_working_exclusion_skip_var(&excl_ctx, j)) {
+            continue;
+        }
 
         /* Compute alpha_j = (B^{-1} * a_j)[leaving] = alpha' * a_j using sparse dot */
         double alpha_j = use_row_kernel ? alpha_at[j]
@@ -1315,6 +1370,7 @@ static int dual_ratio_test_flip_iterative(SimplexTableau *tab,
     int round;
     int scan_dir = dual_ratio_scan_direction(tab);
     int use_row_kernel = dual_ratio_use_row_kernel(tab);
+    DualWorkingExclusionCtx excl_ctx = dual_working_exclusion_ctx(tab);
     double *alpha_at = NULL;
 
     if (!tab || !entering || !theta || leaving < 0 || leaving >= tab->m) return -1;
@@ -1375,7 +1431,10 @@ static int dual_ratio_test_flip_iterative(SimplexTableau *tab,
             int j = (scan_dir > 0) ? t : (tab->n - 1 - t);
             double alpha_j;
             double ratio;
-            if (tab->var_status[j] == RALPH_BASIC || dual_smcp_excl_skip_var(tab, j)) continue;
+            if (tab->var_status[j] == RALPH_BASIC ||
+                dual_working_exclusion_skip_var(&excl_ctx, j)) {
+                continue;
+            }
             alpha_j = use_row_kernel ? alpha_at[j]
                                      : sparse_dot_column(tab->A_ext, j, tab->work2);
             if (!dual_ratio_candidate_value(tab, dir, j, alpha_j, pivot_floor, &ratio)) continue;
@@ -1396,7 +1455,10 @@ static int dual_ratio_test_flip_iterative(SimplexTableau *tab,
             double alpha_j;
             double ratio;
             double abs_alpha;
-            if (tab->var_status[j] == RALPH_BASIC || dual_smcp_excl_skip_var(tab, j)) continue;
+            if (tab->var_status[j] == RALPH_BASIC ||
+                dual_working_exclusion_skip_var(&excl_ctx, j)) {
+                continue;
+            }
             alpha_j = use_row_kernel ? alpha_at[j]
                                      : sparse_dot_column(tab->A_ext, j, tab->work2);
             if (!dual_ratio_candidate_value(tab, dir, j, alpha_j, pivot_floor, &ratio)) continue;

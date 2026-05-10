@@ -650,6 +650,12 @@ static void test_working_lp_helpers(void) {
     int aorn_nt = lp_policy_glpk_working_use_at_kernel(LP_GLPK_SMCP_AORN_USE_NT, 1);
     int aorn_at_no_rows = lp_policy_glpk_working_use_at_kernel(LP_GLPK_SMCP_AORN_USE_AT, 0);
     int aorn_at_rows = lp_policy_glpk_working_use_at_kernel(LP_GLPK_SMCP_AORN_USE_AT, 1);
+    double tol_shift_off = lp_policy_glpk_working_fixed_width_tol(
+        LP_GLPK_SMCP_SHIFT_OFF, 1e-7);
+    double tol_shift_on = lp_policy_glpk_working_fixed_width_tol(
+        LP_GLPK_SMCP_SHIFT_ON, 1e-7);
+    double tol_shift_on_cap = lp_policy_glpk_working_fixed_width_tol(
+        LP_GLPK_SMCP_SHIFT_ON, 1e-3);
 
     ASSERT_INT_EQ(skip_shift_off, 0,
                   "working lp helper: shift off keeps narrow boxed var active");
@@ -661,6 +667,12 @@ static void test_working_lp_helpers(void) {
                   "working lp helper: infinite-bound var remains in working LP");
     ASSERT_INT_EQ(skip_tol_cap, 0,
                   "working lp helper: shifted exclusion tolerance is capped");
+    ASSERT_DBL_NEAR(tol_shift_off, 1e-12, 1e-18,
+                    "working lp helper: shift-off fixed width tolerance is strict");
+    ASSERT_DBL_NEAR(tol_shift_on, 1e-7, 1e-15,
+                    "working lp helper: shift-on uses bound tolerance");
+    ASSERT_DBL_NEAR(tol_shift_on_cap, 1e-7, 1e-15,
+                    "working lp helper: shift-on fixed width tolerance is capped");
     ASSERT_INT_EQ(aorn_nt, 0,
                   "working lp helper: N^T selects column kernel");
     ASSERT_INT_EQ(aorn_at_no_rows, 0,
