@@ -388,6 +388,14 @@ typedef struct {
     int phase1_direct_dual_rescue_failures;
     int phase1_direct_dual_rescue_guard_cooldown_blocks;
     int phase1_direct_dual_rescue_guard_fail_cap_blocks;
+    int phase1_dual_rescue_exit_time_limit;
+    int phase1_dual_rescue_exit_bad_numerics;
+    int phase1_dual_rescue_exit_no_progress;
+    int phase1_dual_rescue_exit_no_entering;
+    int phase1_dual_rescue_exit_pivot_refactor_failure;
+    int phase1_dual_rescue_exit_periodic_refactor_failure;
+    int phase1_dual_rescue_exit_max_iters;
+    int phase1_dual_rescue_exit_alloc_failure;
     int phase1_soft_lu_policy_cooldown_defers;
     int phase1_dir_skip_same_entering_repeats;
     int phase1_dir_skip_same_entering_max_streak;
@@ -1888,6 +1896,22 @@ static SolveResult solve_with_ralph(const char *problem_path, double time_limit_
                 solver_tel.perf_phase1_direct_dual_rescue_guard_cooldown_blocks;
             result.phase1_direct_dual_rescue_guard_fail_cap_blocks =
                 solver_tel.perf_phase1_direct_dual_rescue_guard_fail_cap_blocks;
+            result.phase1_dual_rescue_exit_time_limit =
+                solver_tel.perf_phase1_dual_rescue_exit_time_limit;
+            result.phase1_dual_rescue_exit_bad_numerics =
+                solver_tel.perf_phase1_dual_rescue_exit_bad_numerics;
+            result.phase1_dual_rescue_exit_no_progress =
+                solver_tel.perf_phase1_dual_rescue_exit_no_progress;
+            result.phase1_dual_rescue_exit_no_entering =
+                solver_tel.perf_phase1_dual_rescue_exit_no_entering;
+            result.phase1_dual_rescue_exit_pivot_refactor_failure =
+                solver_tel.perf_phase1_dual_rescue_exit_pivot_refactor_failure;
+            result.phase1_dual_rescue_exit_periodic_refactor_failure =
+                solver_tel.perf_phase1_dual_rescue_exit_periodic_refactor_failure;
+            result.phase1_dual_rescue_exit_max_iters =
+                solver_tel.perf_phase1_dual_rescue_exit_max_iters;
+            result.phase1_dual_rescue_exit_alloc_failure =
+                solver_tel.perf_phase1_dual_rescue_exit_alloc_failure;
             result.phase1_soft_lu_policy_cooldown_defers =
                 solver_tel.perf_phase1_soft_lu_policy_cooldown_defers;
             result.phase1_dir_skip_same_entering_repeats =
@@ -3872,6 +3896,22 @@ static void print_json_result(const char *problem_name, const char *source,
             ralph->phase1_direct_dual_rescue_guard_cooldown_blocks);
     fprintf(out, "      \"direct_dual_rescue_guard_fail_cap_blocks\": %d,\n",
             ralph->phase1_direct_dual_rescue_guard_fail_cap_blocks);
+    fprintf(out, "      \"dual_rescue_exit_time_limit\": %d,\n",
+            ralph->phase1_dual_rescue_exit_time_limit);
+    fprintf(out, "      \"dual_rescue_exit_bad_numerics\": %d,\n",
+            ralph->phase1_dual_rescue_exit_bad_numerics);
+    fprintf(out, "      \"dual_rescue_exit_no_progress\": %d,\n",
+            ralph->phase1_dual_rescue_exit_no_progress);
+    fprintf(out, "      \"dual_rescue_exit_no_entering\": %d,\n",
+            ralph->phase1_dual_rescue_exit_no_entering);
+    fprintf(out, "      \"dual_rescue_exit_pivot_refactor_failure\": %d,\n",
+            ralph->phase1_dual_rescue_exit_pivot_refactor_failure);
+    fprintf(out, "      \"dual_rescue_exit_periodic_refactor_failure\": %d,\n",
+            ralph->phase1_dual_rescue_exit_periodic_refactor_failure);
+    fprintf(out, "      \"dual_rescue_exit_max_iters\": %d,\n",
+            ralph->phase1_dual_rescue_exit_max_iters);
+    fprintf(out, "      \"dual_rescue_exit_alloc_failure\": %d,\n",
+            ralph->phase1_dual_rescue_exit_alloc_failure);
     fprintf(out, "      \"soft_lu_policy_cooldown_defers\": %d,\n",
             ralph->phase1_soft_lu_policy_cooldown_defers);
     fprintf(out, "      \"dir_skip_same_entering_repeats\": %d,\n",
@@ -4372,6 +4412,22 @@ static void print_json_result(const char *problem_name, const char *source,
             ralph->phase1_no_pivot_ladder_rescue_guard_cooldown_blocks);
     fprintf(out, "    \"phase1_no_pivot_ladder_rescue_guard_fail_cap_forces\": %d,\n",
             ralph->phase1_no_pivot_ladder_rescue_guard_fail_cap_forces);
+    fprintf(out, "    \"phase1_dual_rescue_exit_time_limit\": %d,\n",
+            ralph->phase1_dual_rescue_exit_time_limit);
+    fprintf(out, "    \"phase1_dual_rescue_exit_bad_numerics\": %d,\n",
+            ralph->phase1_dual_rescue_exit_bad_numerics);
+    fprintf(out, "    \"phase1_dual_rescue_exit_no_progress\": %d,\n",
+            ralph->phase1_dual_rescue_exit_no_progress);
+    fprintf(out, "    \"phase1_dual_rescue_exit_no_entering\": %d,\n",
+            ralph->phase1_dual_rescue_exit_no_entering);
+    fprintf(out, "    \"phase1_dual_rescue_exit_pivot_refactor_failure\": %d,\n",
+            ralph->phase1_dual_rescue_exit_pivot_refactor_failure);
+    fprintf(out, "    \"phase1_dual_rescue_exit_periodic_refactor_failure\": %d,\n",
+            ralph->phase1_dual_rescue_exit_periodic_refactor_failure);
+    fprintf(out, "    \"phase1_dual_rescue_exit_max_iters\": %d,\n",
+            ralph->phase1_dual_rescue_exit_max_iters);
+    fprintf(out, "    \"phase1_dual_rescue_exit_alloc_failure\": %d,\n",
+            ralph->phase1_dual_rescue_exit_alloc_failure);
     fprintf(out, "    \"phase1_soft_lu_policy_cooldown_defers\": %d,\n",
             ralph->phase1_soft_lu_policy_cooldown_defers);
     fprintf(out, "    \"reason_infeasibility_cleanup\": %d,\n", ralph->refactor_reason_infeas_cleanup);

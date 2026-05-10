@@ -1615,6 +1615,38 @@ void lp_telemetry_record_phase1_direct_dual_rescue_guard(
     }
 }
 
+void lp_telemetry_record_phase1_dual_rescue_exit(
+    SimplexSolver *solver,
+    LPPhase1DualRescueExitReason reason) {
+    if (!solver_telemetry_enabled(solver)) return;
+    switch (reason) {
+        case LP_PHASE1_DUAL_RESCUE_EXIT_TIME_LIMIT:
+            solver->telemetry.perf_phase1_dual_rescue_exit_time_limit++;
+            break;
+        case LP_PHASE1_DUAL_RESCUE_EXIT_BAD_NUMERICS:
+            solver->telemetry.perf_phase1_dual_rescue_exit_bad_numerics++;
+            break;
+        case LP_PHASE1_DUAL_RESCUE_EXIT_NO_PROGRESS:
+            solver->telemetry.perf_phase1_dual_rescue_exit_no_progress++;
+            break;
+        case LP_PHASE1_DUAL_RESCUE_EXIT_NO_ENTERING:
+            solver->telemetry.perf_phase1_dual_rescue_exit_no_entering++;
+            break;
+        case LP_PHASE1_DUAL_RESCUE_EXIT_PIVOT_REFACTOR_FAILURE:
+            solver->telemetry.perf_phase1_dual_rescue_exit_pivot_refactor_failure++;
+            break;
+        case LP_PHASE1_DUAL_RESCUE_EXIT_PERIODIC_REFACTOR_FAILURE:
+            solver->telemetry.perf_phase1_dual_rescue_exit_periodic_refactor_failure++;
+            break;
+        case LP_PHASE1_DUAL_RESCUE_EXIT_MAX_ITERS:
+            solver->telemetry.perf_phase1_dual_rescue_exit_max_iters++;
+            break;
+        case LP_PHASE1_DUAL_RESCUE_EXIT_ALLOC_FAILURE:
+            solver->telemetry.perf_phase1_dual_rescue_exit_alloc_failure++;
+            break;
+    }
+}
+
 void lp_telemetry_record_phase1_soft_lu_policy_cooldown_defer(
     SimplexSolver *solver) {
     if (!solver_telemetry_enabled(solver)) return;

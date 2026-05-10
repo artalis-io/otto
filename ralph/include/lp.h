@@ -982,6 +982,14 @@ typedef struct {
     int perf_phase1_direct_dual_rescue_failures;
     int perf_phase1_direct_dual_rescue_guard_cooldown_blocks;
     int perf_phase1_direct_dual_rescue_guard_fail_cap_blocks;
+    int perf_phase1_dual_rescue_exit_time_limit;
+    int perf_phase1_dual_rescue_exit_bad_numerics;
+    int perf_phase1_dual_rescue_exit_no_progress;
+    int perf_phase1_dual_rescue_exit_no_entering;
+    int perf_phase1_dual_rescue_exit_pivot_refactor_failure;
+    int perf_phase1_dual_rescue_exit_periodic_refactor_failure;
+    int perf_phase1_dual_rescue_exit_max_iters;
+    int perf_phase1_dual_rescue_exit_alloc_failure;
     int perf_phase1_soft_lu_policy_cooldown_defers;
     int perf_phase1_dir_skip_same_entering_repeats;
     int perf_phase1_dir_skip_same_entering_max_streak;
@@ -1676,6 +1684,14 @@ typedef struct {
     int perf_phase1_direct_dual_rescue_failures;
     int perf_phase1_direct_dual_rescue_guard_cooldown_blocks;
     int perf_phase1_direct_dual_rescue_guard_fail_cap_blocks;
+    int perf_phase1_dual_rescue_exit_time_limit;
+    int perf_phase1_dual_rescue_exit_bad_numerics;
+    int perf_phase1_dual_rescue_exit_no_progress;
+    int perf_phase1_dual_rescue_exit_no_entering;
+    int perf_phase1_dual_rescue_exit_pivot_refactor_failure;
+    int perf_phase1_dual_rescue_exit_periodic_refactor_failure;
+    int perf_phase1_dual_rescue_exit_max_iters;
+    int perf_phase1_dual_rescue_exit_alloc_failure;
     int perf_phase1_soft_lu_policy_cooldown_defers;
     int perf_phase1_dir_skip_same_entering_repeats;
     int perf_phase1_dir_skip_same_entering_max_streak;
@@ -2785,6 +2801,19 @@ void lp_telemetry_record_phase1_direct_dual_rescue(SimplexSolver *solver,
 void lp_telemetry_record_phase1_direct_dual_rescue_guard(
     SimplexSolver *solver,
     int fail_cap_block);
+typedef enum LPPhase1DualRescueExitReason {
+    LP_PHASE1_DUAL_RESCUE_EXIT_TIME_LIMIT = 0,
+    LP_PHASE1_DUAL_RESCUE_EXIT_BAD_NUMERICS = 1,
+    LP_PHASE1_DUAL_RESCUE_EXIT_NO_PROGRESS = 2,
+    LP_PHASE1_DUAL_RESCUE_EXIT_NO_ENTERING = 3,
+    LP_PHASE1_DUAL_RESCUE_EXIT_PIVOT_REFACTOR_FAILURE = 4,
+    LP_PHASE1_DUAL_RESCUE_EXIT_PERIODIC_REFACTOR_FAILURE = 5,
+    LP_PHASE1_DUAL_RESCUE_EXIT_MAX_ITERS = 6,
+    LP_PHASE1_DUAL_RESCUE_EXIT_ALLOC_FAILURE = 7
+} LPPhase1DualRescueExitReason;
+void lp_telemetry_record_phase1_dual_rescue_exit(
+    SimplexSolver *solver,
+    LPPhase1DualRescueExitReason reason);
 void lp_telemetry_record_phase1_soft_lu_policy_cooldown_defer(
     SimplexSolver *solver);
 void lp_telemetry_record_dual_ratio_no_entering(SimplexSolver *solver);
