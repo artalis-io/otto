@@ -1194,8 +1194,8 @@ RalphModel* ralph_core_create(void) {
     model->mip_gap = RALPH_DEFAULT_MIP_GAP;
     model->max_nodes = RALPH_DEFAULT_NODE_LIMIT;
     model->max_cut_rounds = -1;  /* Inherit MIP solver default unless explicitly set */
-    model->method = 0;  /* Default: primal simplex */
-    model->lp_algorithm = (int)RALPH_LP_ALGORITHM_PRIMAL_SIMPLEX;
+    model->method = 2;  /* Default: auto (dual first, primal fallback) */
+    model->lp_algorithm = (int)RALPH_LP_ALGORITHM_AUTO;
     model->barrier_crossover = (int)RALPH_LP_CROSSOVER_AUTO;
     model->lp_external_provider = (int)RALPH_LP_EXTERNAL_PROVIDER_NONE;
     model->lp_external_strict = 0;
@@ -5790,7 +5790,7 @@ static const RalphParamSpec* ralph_param_specs(void) {
             .name = "lp_algorithm",
             .scope = RALPH_PARAM_SCOPE_LP,
             .value_type = RALPH_PARAM_VALUE_INT,
-            .default_value = (double)RALPH_LP_ALGORITHM_PRIMAL_SIMPLEX,
+            .default_value = (double)RALPH_LP_ALGORITHM_AUTO,
             .has_min = 1,
             .min_value = (double)RALPH_LP_ALGORITHM_PRIMAL_SIMPLEX,
             .has_max = 1,

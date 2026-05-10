@@ -4453,10 +4453,10 @@ static int simplex_should_skip_auto_dual_startup(const SimplexSolver *solver) {
     /* In auto mode the scratch dual solve is speculative: if it does not return
      * a verified optimum, the solver pays the full dual startup cost and then
      * runs the primal path anyway.  On NETLIB-scale models up through roughly
-     * 1300 rows that failed-dual toll dominates, while the larger sparse cases
+     * 1500 rows that failed-dual toll dominates, while the larger sparse cases
      * still have enough Phase 2 work for a dual attempt to be useful.  Explicit
      * dual mode keeps the dual path; this only governs method=2 dispatch. */
-    return (m <= 1300);
+    return (m <= 1500);
 }
 
 static int simplex_finish_prepared_primal_solve(SimplexSolver *solver, clock_t start) {
