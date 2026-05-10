@@ -4541,7 +4541,23 @@ static int simplex_should_skip_auto_dual_startup(const SimplexSolver *solver) {
     if (!solver || !solver->model) return 0;
 
     int m = solver->model->num_cons;
+    int n = solver->model->num_vars;
+    double density;
+    int allow_sparse_midrow_dual;
     if (m <= 0) return 0;
+
+    density = (n > 0)
+        ? ((double)solver->model->num_elements / ((double)m * (double)n))
+        : 1.0;
+    /* Very sparse mid-row transport-like models avoid enough primal Phase 1
+     * work that the speculative dual solve is worth its startup cost. */
+    allow_sparse_midrow_dual =
+        (m >= 1000 && m <= 1300 &&
+         n >= 2500 &&
+         density > 0.0 && density <= 0.003);
+    if (allow_sparse_midrow_dual) {
+        return 0;
+    }
 
     /* In auto mode the scratch dual solve is speculative: if it does not return
      * a verified optimum, the solver pays the full dual startup cost and then
