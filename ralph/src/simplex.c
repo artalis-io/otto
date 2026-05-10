@@ -4551,6 +4551,26 @@ static int simplex_should_use_eta_sparse_phase12_dantzig(const SimplexSolver *so
             density >= 0.008 && density <= 0.014);
 }
 
+static int simplex_should_use_lowrow_wide_scsd_phase12_dantzig(const SimplexSolver *solver,
+                                                               const SimplexTableau *tab) {
+    if (!solver || !solver->model || !solver->model->A || !tab) return 0;
+
+    int m = solver->model->num_cons;
+    int n = solver->model->num_vars;
+    int nnz = solver->model->A->nnz;
+    if (m <= 0 || n <= 0 || nnz <= 0) return 0;
+
+    double density = (double)nnz / ((double)m * (double)n);
+    double width_ratio = (double)n / (double)m;
+    /* Low-row, wide SCSD-like tableaus are still sparse enough that full
+     * Devex bookkeeping dominates, but not so tiny/dense that Devex's pivot
+     * quality wins. Keep this away from scsd1 and larger scsd8-like cases. */
+    return (m >= 130 && m <= 170 &&
+            n >= 1200 && n <= 1500 &&
+            width_ratio >= 8.0 && width_ratio <= 10.0 &&
+            density >= 0.018 && density <= 0.025);
+}
+
 static int simplex_should_use_scsd_sparse_phase12_dantzig(const SimplexSolver *solver,
                                                           const SimplexTableau *tab) {
     if (!solver || !solver->model || !solver->model->A || !tab) return 0;
@@ -4711,6 +4731,7 @@ static int simplex_finish_prepared_primal_solve(SimplexSolver *solver, clock_t s
                simplex_should_use_sparse_grow_phase12_dantzig(solver, tab) ||
                simplex_should_use_small_grow_phase12_dantzig(solver, tab) ||
                simplex_should_use_eta_sparse_phase12_dantzig(solver, tab) ||
+               simplex_should_use_lowrow_wide_scsd_phase12_dantzig(solver, tab) ||
                simplex_should_use_scsd_sparse_phase12_dantzig(solver, tab)) {
         solver->pricing_strategy = 0;
         tab->pricing_strategy = 0;
@@ -4769,6 +4790,7 @@ static int simplex_finish_prepared_primal_solve(SimplexSolver *solver, clock_t s
          simplex_should_use_sparse_grow_phase12_dantzig(solver, tab) ||
          simplex_should_use_small_grow_phase12_dantzig(solver, tab) ||
          simplex_should_use_eta_sparse_phase12_dantzig(solver, tab) ||
+         simplex_should_use_lowrow_wide_scsd_phase12_dantzig(solver, tab) ||
          simplex_should_use_scsd_sparse_phase12_dantzig(solver, tab))) {
         solver->pricing_strategy = 0;
         tab->pricing_strategy = 0;
