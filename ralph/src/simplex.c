@@ -2615,7 +2615,7 @@ SimplexSolver* simplex_create(LPModel *model) {
     solver->objective_limit = RALPH_INFINITY;
     solver->phase1_pricing = -1;  /* Default: disabled (use solver pricing) */
     solver->use_dual_bound_flip = 1;
-    solver->use_dual_steepest_edge = 0;
+    solver->use_dual_steepest_edge = 1;
     solver->glpk_strict_mode = 0;
     solver->smcp_tol_bnd = 1e-7;
     solver->smcp_tol_dj = 1e-7;

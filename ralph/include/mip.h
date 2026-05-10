@@ -240,7 +240,7 @@ typedef struct {
     int verbose;
     int telemetry;          /* 1 = collect LP/LU telemetry in node relaxations */
     int dual_bound_flip;    /* -1=default(on), 0=off, 1=on */
-    int dual_steepest_edge; /* -1=default(off), 0=off, 1=on */
+    int dual_steepest_edge; /* -1=LP solver default, 0=off, 1=on */
     int lu_supernode;       /* 0=off, 1=enable supernodal LU (T2.1) */
 
     /* Statistics */

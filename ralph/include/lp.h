@@ -1488,7 +1488,7 @@ typedef struct SimplexSolver {
 
     /* Dual simplex enhancements */
     int use_dual_bound_flip;    /* 0=off, 1=on (default 1) */
-    int use_dual_steepest_edge; /* 0=off, 1=on (default 0) */
+    int use_dual_steepest_edge; /* 0=off, 1=on (default 1) */
     int glpk_strict_mode;       /* 0=off (default), 1=strict GLPK control semantics */
     double smcp_tol_bnd;        /* GLPK-like primal feasibility tolerance */
     double smcp_tol_dj;         /* GLPK-like dual feasibility tolerance */
