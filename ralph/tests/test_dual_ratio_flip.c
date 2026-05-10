@@ -30,6 +30,10 @@ int dual_sparse_pressure_force_refactor_for_test(int m,
 int dual_smcp_shift_allows_perturb_for_test(int smcp_shift);
 int dual_ratio_scan_direction_for_test(int smcp_aorn);
 int dual_ratio_use_at_kernel_for_test(int smcp_aorn, int has_row_scatter);
+int dual_ratio_use_row_kernel_for_test(int smcp_aorn,
+                                       int has_row_scatter,
+                                       int csr_use_scatter,
+                                       int m);
 void dual_cadence_intervals_for_test(int requested_base,
                                      int requested_rc,
                                      int *base_out,
@@ -416,6 +420,14 @@ static void test_dual_aorn_kernel_selection(void) {
                 "dual aorn A^T falls back when row-kernel unavailable");
     ASSERT_TRUE(dual_ratio_use_at_kernel_for_test(1, 1) == 1,
                 "dual aorn A^T enables row-kernel when available");
+    ASSERT_TRUE(dual_ratio_use_row_kernel_for_test(2, 1, 1, 1499) == 0,
+                "default dual ratio keeps column kernel below large-tableau threshold");
+    ASSERT_TRUE(dual_ratio_use_row_kernel_for_test(2, 1, 1, 1500) == 1,
+                "default dual ratio uses row kernel for large sparse tableaux");
+    ASSERT_TRUE(dual_ratio_use_row_kernel_for_test(2, 1, 0, 2500) == 0,
+                "default dual ratio keeps column kernel when CSR scatter is disabled");
+    ASSERT_TRUE(dual_ratio_use_row_kernel_for_test(1, 1, 0, 10) == 1,
+                "dual aorn A^T explicitly requests row kernel when row scatter exists");
 }
 
 static void test_dual_cadence_clamp(void) {
