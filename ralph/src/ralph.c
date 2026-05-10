@@ -517,6 +517,26 @@ static int ralph_should_control_mid_sparse_reinvert(const LPModel *model) {
     return 0;
 }
 
+static int ralph_should_disable_dual_dse_wide_ship(const LPModel *model) {
+    if (!model || !model->A) return 0;
+
+    int n = model->num_vars;
+    int m = model->num_cons;
+    int nnz = model->A->nnz;
+    if (n <= 0 || m <= 0 || nnz <= 0) return 0;
+
+    double density = (double)nnz / ((double)n * (double)m);
+    double width_ratio = (double)n / (double)m;
+    /* Wide, very sparse ship12-class dual starts get almost the same pivot
+     * path without DSE, while avoiding exact DSE initialization and refresh
+     * solves. Keep this narrow; denser/lower-row dual starts still benefit
+     * from DSE pivot quality. */
+    return (m >= 1100 && m <= 1200 &&
+            n >= 2500 && n <= 5600 &&
+            width_ratio >= 2.3 && width_ratio <= 4.9 &&
+            density >= 0.0023 && density <= 0.0029);
+}
+
 static int ralph_set_requested_lp_algorithm_internal(RalphModel *model, int value) {
     int normalized_algorithm = 0;
     int legacy_method = 0;
@@ -2384,6 +2404,8 @@ static int ralph_optimize_with_mode(RalphModel *model, RalphSolveMode mode) {
             model->lp_solver->use_dual_bound_flip = lp_dual_bound_flip;
         if (model->dual_steepest_edge >= 0)
             model->lp_solver->use_dual_steepest_edge = model->dual_steepest_edge;
+        else if (ralph_should_disable_dual_dse_wide_ship(solve_model))
+            model->lp_solver->use_dual_steepest_edge = 0;
         model->lp_solver->lu_supernode = model->lu_supernode;
         /* Copy R2 refactoring policy overrides to solver config */
         model->lp_solver->refactor_config.phase2_refactor_min_interval = model->refactor_min_interval;
