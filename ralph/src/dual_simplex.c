@@ -1739,10 +1739,10 @@ static int dual_simplex_pivot(SimplexTableau *tab, int entering, int leaving, do
      * The pivot row gives us (B^{-1} * a_j)[leaving] for any j via a sparse dot product.
      */
     {
+        int rhs_idx = leaving;
+        double rhs_val = 1.0;
         double t_btran_ms = lp_telemetry_timer_start();
-        vec_set_zero(tab->work1, tab->m);
-        tab->work1[leaving] = 1.0;
-        lu_solve_transpose(tab->lu, tab->work1, tab->work2);  /* work2 = pivot_row */
+        lu_solve_transpose_sparse(tab->lu, 1, &rhs_idx, &rhs_val, tab->work2);
         btran_nnz = 0;
         for (int k = 0; k < tab->m; k++) {
             if (fabs(tab->work2[k]) > RALPH_ZERO_TOL) btran_nnz++;
