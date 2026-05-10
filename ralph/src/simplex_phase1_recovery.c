@@ -788,6 +788,7 @@ int p1_progress_attempt_direct_rescue(SimplexSolver *solver,
         phase1_trace_emit_summary(solver, RALPH_STATUS_TIME_LIMIT);
         return -1;
     }
+    lp_telemetry_record_phase1_direct_dual_rescue(solver, 0);
     if (have_snapshot) {
         if (p1_tableau_snapshot_restore(tab, &snapshot) != 0) {
             p1_tableau_snapshot_free(&snapshot);
@@ -798,6 +799,5 @@ int p1_progress_attempt_direct_rescue(SimplexSolver *solver,
     if (ps && ps->no_pivot_ladder_rescue_fail_streak < INT_MAX) {
         (ps->no_pivot_ladder_rescue_fail_streak)++;
     }
-    lp_telemetry_record_phase1_direct_dual_rescue(solver, 0);
     return 0;
 }
