@@ -4481,6 +4481,25 @@ static int simplex_should_use_scsd_sparse_phase12_dantzig(const SimplexSolver *s
             density >= 0.006 && density <= 0.009);
 }
 
+static int simplex_should_use_wide_sparse_phase1_heap(const SimplexSolver *solver,
+                                                      const SimplexTableau *tab) {
+    if (!solver || !solver->model || !solver->model->A || !tab) return 0;
+
+    int m = solver->model->num_cons;
+    int n = solver->model->num_vars;
+    int nnz = solver->model->A->nnz;
+    if (m <= 0 || n <= 0 || nnz <= 0) return 0;
+
+    double density = (double)nnz / ((double)m * (double)n);
+    double width_ratio = (double)n / (double)m;
+    /* Very sparse, wide transportation-style Phase 1 tableaus get cheaper
+     * progress from heap pricing. Denser mid-row NETLIB shapes in the same row
+     * range regress badly, so keep the density and width guards tight. */
+    return (m >= 750 && m <= 1200 &&
+            width_ratio >= 2.0 && width_ratio <= 5.7 &&
+            density >= 0.0024 && density <= 0.0040);
+}
+
 static int simplex_should_use_dense_lowrow_phase2_dantzig(const SimplexSolver *solver,
                                                           const SimplexTableau *tab) {
     if (!solver || !solver->model || !solver->model->A || !tab) return 0;
@@ -4565,6 +4584,11 @@ static int simplex_finish_prepared_primal_solve(SimplexSolver *solver, clock_t s
                simplex_should_use_scsd_sparse_phase12_dantzig(solver, tab)) {
         solver->pricing_strategy = 0;
         tab->pricing_strategy = 0;
+        tab->use_steepest_edge = 0;
+    } else if (simplex_should_use_wide_sparse_phase1_heap(solver, tab)) {
+        solver->phase1_pricing = 4;
+        solver->pricing_strategy = 4;
+        tab->pricing_strategy = 4;
         tab->use_steepest_edge = 0;
     } else if (tab->use_two_phase && (solver->pricing_strategy == 3 || solver->pricing_strategy == 4)) {
         solver->pricing_strategy = 2;  /* Devex for Phase 1 */
