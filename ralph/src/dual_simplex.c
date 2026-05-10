@@ -1050,6 +1050,9 @@ static int dual_ratio_candidate_value(const SimplexTableau *tab,
     }
 
     if (!isfinite(ratio)) return 0;
+    if (ratio < 0.0 && ratio >= -RALPH_OPT_TOL) {
+        ratio = 0.0;
+    }
     *ratio_out = ratio;
     return 1;
 }
@@ -1181,8 +1184,10 @@ static int dual_ratio_test_core(SimplexTableau *tab,
         }
 
         if (!ratio_valid || !isfinite(ratio)) continue;
+        if (ratio < 0.0 && ratio >= -RALPH_OPT_TOL) {
+            ratio = 0.0;
+        }
         if (ratio < theta_floor) continue;
-
         int can_flip = prefer_flip_candidates ? dual_candidate_can_flip(tab, j) : 0;
         if (*entering < 0 || ratio < *theta) {
             *theta = ratio;
