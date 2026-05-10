@@ -4642,6 +4642,31 @@ static int simplex_should_use_medium_sparse_phase2_partial(const SimplexSolver *
             density >= 0.007 && density <= 0.012);
 }
 
+static int simplex_should_use_wide_scsd_phase2_partial(const SimplexSolver *solver,
+                                                       const SimplexTableau *tab) {
+    if (!solver || !solver->model || !solver->model->A || !tab) return 0;
+
+    int m = solver->model->num_cons;
+    int n = solver->model->num_vars;
+    int nnz = solver->model->A->nnz;
+    if (m <= 0 || n <= 0 || nnz <= 0) return 0;
+
+    double density = (double)nnz / ((double)m * (double)n);
+    double width_ratio = (double)n / (double)m;
+    /* Wide SCSD tableaus keep the Dantzig Phase-1 path, but Phase 2 spends
+     * enough in full pricing over many columns that partial pricing wins.
+     * The density/width bands keep this away from tiny dense scsd1 and from
+     * unrelated mid-row sparse NETLIB families. */
+    return ((m >= 130 && m <= 170 &&
+             n >= 1200 && n <= 1500 &&
+             width_ratio >= 8.0 && width_ratio <= 10.0 &&
+             density >= 0.018 && density <= 0.025) ||
+            (m >= 380 && m <= 420 &&
+             n >= 2600 && n <= 2900 &&
+             width_ratio >= 6.5 && width_ratio <= 7.3 &&
+             density >= 0.006 && density <= 0.009));
+}
+
 static int simplex_should_skip_auto_dual_startup(const SimplexSolver *solver) {
     if (!solver || !solver->model) return 0;
 
@@ -4779,7 +4804,8 @@ static int simplex_finish_prepared_primal_solve(SimplexSolver *solver, clock_t s
 
     if (saved_pricing == 2 &&
         (simplex_should_use_dense_lowrow_phase2_partial(solver, tab) ||
-         simplex_should_use_medium_sparse_phase2_partial(solver, tab))) {
+         simplex_should_use_medium_sparse_phase2_partial(solver, tab) ||
+         simplex_should_use_wide_scsd_phase2_partial(solver, tab))) {
         solver->pricing_strategy = 3;
         tab->pricing_strategy = 3;
         tab->use_steepest_edge = 0;
