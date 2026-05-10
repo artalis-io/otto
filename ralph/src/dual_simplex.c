@@ -1677,9 +1677,14 @@ static int dual_simplex_pivot(SimplexTableau *tab,
     int btran_nnz = -1;
     int sparse_pressure_refactor = 0;
     int *solve_idx_buf = (tab->flip_list && tab->n >= tab->m) ? tab->flip_list : NULL;
+    const int is_mip_lp = (tab->model && tab->model->num_integers > 0);
+    int full_rollback_snapshot = 0;
+    int force_refactor = 0;
+    VarStatus entering_status_before = tab->var_status[entering];
+    VarStatus leaving_status_before = tab->var_status[leaving_var];
     if (!(pivot_reject_floor > 0.0)) pivot_reject_floor = RALPH_PIVOT_TOL;
     if (!(hard_refactor_floor > 0.0)) hard_refactor_floor = 1e-4;
-    if (tab->model && tab->model->num_integers > 0) {
+    if (is_mip_lp) {
         /* Keep MIP dual warm-start numerics on legacy pivot gates. */
         pivot_reject_floor = RALPH_PIVOT_TOL;
         hard_refactor_floor = 1e-4;
@@ -1693,12 +1698,6 @@ static int dual_simplex_pivot(SimplexTableau *tab,
     int *basis_pos_backup = tab->dual_basis_pos_backup;
     VarStatus *status_backup = tab->dual_status_backup;
 
-    memcpy(x_backup, tab->x, (size_t)tab->n * sizeof(double));
-    memcpy(rc_backup, tab->rc, (size_t)tab->n * sizeof(double));
-    memcpy(basis_backup, tab->basis, (size_t)tab->m * sizeof(int));
-    memcpy(basis_pos_backup, tab->basis_pos, (size_t)tab->n * sizeof(int));
-    memcpy(status_backup, tab->var_status, (size_t)tab->n * sizeof(VarStatus));
-
     /* Compute entering column in basis representation using sparse solve */
     int col_nnz;
     const int *col_idx;
@@ -1706,7 +1705,7 @@ static int dual_simplex_pivot(SimplexTableau *tab,
     sparse_get_column_sparse(tab->A_ext, entering, &col_nnz, &col_idx, &col_val);
     {
         double t_ftran_ms = lp_telemetry_timer_start();
-        if (tab->model && tab->model->num_integers > 0) {
+        if (is_mip_lp) {
             /* Keep MIP node LP path on the proven sparse FTRAN kernel.
              * Hyper-sparse is enabled for LP-heavy runs first. */
             lu_solve_sparse(tab->lu, col_nnz, col_idx, col_val, tab->work3);
@@ -1770,6 +1769,26 @@ static int dual_simplex_pivot(SimplexTableau *tab,
         if (tab->owner) {
             lp_telemetry_record_btran_nnz(tab->owner, 1, btran_nnz);
         }
+    }
+
+    if (!is_mip_lp) {
+        sparse_pressure_refactor = dual_sparse_pressure_force_refactor_core(
+            tab->m,
+            tab->lu ? lu_get_num_updates(tab->lu) : 0,
+            tab->lu ? lu_get_max_updates(tab->lu) : 0,
+            (tab->lu && lu_get_use_ft_updates(tab->lu)) ? lu_get_spike_pool_used(tab->lu) : -1,
+            (tab->lu && lu_get_use_ft_updates(tab->lu)) ? lu_get_spike_pool_capacity(tab->lu) : -1,
+            ftran_nnz,
+            btran_nnz);
+    }
+    force_refactor = (fabs(pivot) < hard_refactor_floor) || sparse_pressure_refactor;
+    full_rollback_snapshot = is_mip_lp || force_refactor;
+    if (full_rollback_snapshot) {
+        memcpy(x_backup, tab->x, (size_t)tab->n * sizeof(double));
+        memcpy(rc_backup, tab->rc, (size_t)tab->n * sizeof(double));
+        memcpy(basis_backup, tab->basis, (size_t)tab->m * sizeof(int));
+        memcpy(basis_pos_backup, tab->basis_pos, (size_t)tab->n * sizeof(int));
+        memcpy(status_backup, tab->var_status, (size_t)tab->n * sizeof(VarStatus));
     }
 
     /* Update all reduced costs using sparse dot products:
@@ -1891,20 +1910,7 @@ static int dual_simplex_pivot(SimplexTableau *tab,
         tab->dse_weights[leaving] = (w_enter < 1e-8) ? 1e-8 : w_enter;
     }
 
-    if (!(tab->model && tab->model->num_integers > 0)) {
-        sparse_pressure_refactor = dual_sparse_pressure_force_refactor_core(
-            tab->m,
-            tab->lu ? lu_get_num_updates(tab->lu) : 0,
-            tab->lu ? lu_get_max_updates(tab->lu) : 0,
-            (tab->lu && lu_get_use_ft_updates(tab->lu)) ? lu_get_spike_pool_used(tab->lu) : -1,
-            (tab->lu && lu_get_use_ft_updates(tab->lu)) ? lu_get_spike_pool_capacity(tab->lu) : -1,
-            ftran_nnz,
-            btran_nnz);
-    }
-
     /* Update LU factorization */
-    const int force_refactor =
-        (fabs(pivot) < hard_refactor_floor) || sparse_pressure_refactor;
     if (force_refactor) {
         if (tab->owner) {
             lp_telemetry_record_dual_lu_hard_trigger(tab->owner);
@@ -1935,6 +1941,9 @@ static int dual_simplex_pivot(SimplexTableau *tab,
                     lp_telemetry_record_dual_lu_hard_trigger(tab->owner);
                     lp_telemetry_set_refactor_next_reason(tab->owner, RALPH_REFACTOR_REASON_UPDATE_RECOVERY);
                 }
+                if (!full_rollback_snapshot) {
+                    goto pivot_fail_rollback;
+                }
                 double t_refactor_ms = lp_telemetry_timer_start();
                 int rc_ref = tableau_refactorize(tab);
                 if (tab->owner) {
@@ -1950,11 +1959,22 @@ static int dual_simplex_pivot(SimplexTableau *tab,
     return 0;
 
 pivot_fail_rollback:
-    memcpy(tab->x, x_backup, (size_t)tab->n * sizeof(double));
-    memcpy(tab->rc, rc_backup, (size_t)tab->n * sizeof(double));
-    memcpy(tab->basis, basis_backup, (size_t)tab->m * sizeof(int));
-    memcpy(tab->basis_pos, basis_pos_backup, (size_t)tab->n * sizeof(int));
-    memcpy(tab->var_status, status_backup, (size_t)tab->n * sizeof(VarStatus));
+    if (full_rollback_snapshot) {
+        memcpy(tab->x, x_backup, (size_t)tab->n * sizeof(double));
+        memcpy(tab->rc, rc_backup, (size_t)tab->n * sizeof(double));
+        memcpy(tab->basis, basis_backup, (size_t)tab->m * sizeof(int));
+        memcpy(tab->basis_pos, basis_pos_backup, (size_t)tab->n * sizeof(int));
+        memcpy(tab->var_status, status_backup, (size_t)tab->n * sizeof(VarStatus));
+    } else {
+        tab->basis[leaving] = leaving_var;
+        tab->basis_pos[leaving_var] = leaving;
+        tab->basis_pos[entering] = -1;
+        tab->var_status[entering] = entering_status_before;
+        tab->var_status[leaving_var] = leaving_status_before;
+        tab->duals_valid = 0;
+        tab->rc_all_valid = 0;
+        tab->dual_cand_valid = 0;
+    }
     tab->obj_value = saved_obj;
     return -1;
 }
