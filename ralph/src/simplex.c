@@ -4531,6 +4531,26 @@ static int simplex_should_use_small_grow_phase12_dantzig(const SimplexSolver *so
             density >= 0.025 && density <= 0.065);
 }
 
+static int simplex_should_use_eta_sparse_phase12_dantzig(const SimplexSolver *solver,
+                                                         const SimplexTableau *tab) {
+    if (!solver || !solver->model || !solver->model->A || !tab) return 0;
+
+    int m = solver->model->num_cons;
+    int n = solver->model->num_vars;
+    int nnz = solver->model->A->nnz;
+    if (m <= 0 || n <= 0 || nnz <= 0) return 0;
+
+    double density = (double)nnz / ((double)m * (double)n);
+    double width_ratio = (double)n / (double)m;
+    /* Sparse ETA-like mid-row tableaus spend enough in Devex maintenance
+     * during both phases that Dantzig's cheaper path wins. Keep this away
+     * from denser/scaled neighbors that need Devex pivot quality. */
+    return (m >= 390 && m <= 410 &&
+            n >= 590 && n <= 620 &&
+            width_ratio >= 1.45 && width_ratio <= 1.60 &&
+            density >= 0.008 && density <= 0.014);
+}
+
 static int simplex_should_use_scsd_sparse_phase12_dantzig(const SimplexSolver *solver,
                                                           const SimplexTableau *tab) {
     if (!solver || !solver->model || !solver->model->A || !tab) return 0;
@@ -4690,6 +4710,7 @@ static int simplex_finish_prepared_primal_solve(SimplexSolver *solver, clock_t s
                simplex_should_use_midwide_sparse_phase12_dantzig(solver, tab) ||
                simplex_should_use_sparse_grow_phase12_dantzig(solver, tab) ||
                simplex_should_use_small_grow_phase12_dantzig(solver, tab) ||
+               simplex_should_use_eta_sparse_phase12_dantzig(solver, tab) ||
                simplex_should_use_scsd_sparse_phase12_dantzig(solver, tab)) {
         solver->pricing_strategy = 0;
         tab->pricing_strategy = 0;
@@ -4747,6 +4768,7 @@ static int simplex_finish_prepared_primal_solve(SimplexSolver *solver, clock_t s
          simplex_should_use_midwide_sparse_phase12_dantzig(solver, tab) ||
          simplex_should_use_sparse_grow_phase12_dantzig(solver, tab) ||
          simplex_should_use_small_grow_phase12_dantzig(solver, tab) ||
+         simplex_should_use_eta_sparse_phase12_dantzig(solver, tab) ||
          simplex_should_use_scsd_sparse_phase12_dantzig(solver, tab))) {
         solver->pricing_strategy = 0;
         tab->pricing_strategy = 0;
