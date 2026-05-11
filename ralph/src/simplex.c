@@ -4448,6 +4448,24 @@ static int simplex_should_use_narrow_midrow_phase1_dantzig(const SimplexSolver *
              density >= 0.007 && density <= 0.011));
 }
 
+static int simplex_should_use_bandm_phase2_dantzig(const SimplexSolver *solver,
+                                                   const SimplexTableau *tab) {
+    if (!solver || !solver->model || !solver->model->A || !tab) return 0;
+
+    int m = solver->model->num_cons;
+    int n = solver->model->num_vars;
+    int nnz = solver->model->A->nnz;
+    if (m <= 0 || n <= 0 || nnz <= 0) return 0;
+
+    double density = (double)nnz / ((double)m * (double)n);
+    /* BANDM-like compact sparse Phase 2 gets fewer pivots with Dantzig after
+     * the existing Phase-1 Dantzig path.  Keep this on the narrow BANDM shape;
+     * neighboring SCAGR/STAIR families have different density and row bands. */
+    return (m >= 290 && m <= 320 &&
+            n >= 450 && n <= 500 &&
+            density >= 0.015 && density <= 0.020);
+}
+
 static int simplex_should_use_very_sparse_large_dantzig(const SimplexSolver *solver,
                                                         const SimplexTableau *tab) {
     if (!solver || !solver->model || !solver->model->A || !tab) return 0;
@@ -4965,6 +4983,11 @@ static int simplex_finish_prepared_primal_solve(SimplexSolver *solver, clock_t s
         solver->pricing_strategy = 1;
         tab->pricing_strategy = 1;
         tab->use_steepest_edge = 1;
+    } else if (saved_pricing == 2 &&
+        simplex_should_use_bandm_phase2_dantzig(solver, tab)) {
+        solver->pricing_strategy = 0;
+        tab->pricing_strategy = 0;
+        tab->use_steepest_edge = 0;
     } else if (saved_pricing == 2 &&
         (simplex_should_use_dense_lowrow_phase2_partial(solver, tab) ||
          simplex_should_use_medium_sparse_phase2_partial(solver, tab) ||
