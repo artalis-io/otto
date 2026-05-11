@@ -4852,6 +4852,7 @@ static int simplex_should_skip_auto_dual_startup(const SimplexSolver *solver) {
     double density;
     double width_ratio;
     int allow_sparse_midrow_dual;
+    int allow_lowrow_ship_dual;
     int allow_compact_sparse_dual;
     if (m <= 0) return 0;
 
@@ -4866,6 +4867,19 @@ static int simplex_should_skip_auto_dual_startup(const SimplexSolver *solver) {
          n >= 2500 &&
          density > 0.0 && density <= 0.003);
     if (allow_sparse_midrow_dual) {
+        return 0;
+    }
+
+    /* SHIP08-style low-row shipping models avoid a costly artificial Phase 1
+     * when started directly on the dual path.  Keep this below the existing
+     * SHIP12 mid-row band and above denser SHIP04 siblings, where speculative
+     * dual startup is slower than the primal route. */
+    allow_lowrow_ship_dual =
+        (m >= 740 && m <= 820 &&
+         n >= 2200 && n <= 4600 &&
+         width_ratio >= 2.8 && width_ratio <= 5.8 &&
+         density >= 0.0035 && density <= 0.0042);
+    if (allow_lowrow_ship_dual) {
         return 0;
     }
 
