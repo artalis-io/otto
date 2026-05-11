@@ -4789,6 +4789,7 @@ static int simplex_should_skip_auto_dual_startup(const SimplexSolver *solver) {
     int m = solver->model->num_cons;
     int n = solver->model->num_vars;
     double density;
+    double width_ratio;
     int allow_sparse_midrow_dual;
     int allow_compact_sparse_dual;
     if (m <= 0) return 0;
@@ -4796,6 +4797,7 @@ static int simplex_should_skip_auto_dual_startup(const SimplexSolver *solver) {
     density = (n > 0)
         ? ((double)solver->model->num_elements / ((double)m * (double)n))
         : 1.0;
+    width_ratio = (m > 0) ? ((double)n / (double)m) : 0.0;
     /* Very sparse mid-row transport-like models avoid enough primal Phase 1
      * work that the speculative dual solve is worth its startup cost. */
     allow_sparse_midrow_dual =
@@ -4816,6 +4818,17 @@ static int simplex_should_skip_auto_dual_startup(const SimplexSolver *solver) {
          density >= 0.012 && density <= 0.015);
     if (allow_compact_sparse_dual) {
         return 0;
+    }
+
+    /* Very wide, ultra-sparse large LPs can pay a multi-second failed-dual
+     * startup before falling back to the same primal solve.  This band keeps
+     * near-square stochastic models and ship-family mid-row instances on their
+     * useful dual starts. */
+    if (m >= 2000 && m <= 2500 &&
+        n >= 9000 && n <= 10500 &&
+        width_ratio >= 3.8 && width_ratio <= 4.8 &&
+        density > 0.0 && density <= 0.0012) {
+        return 1;
     }
 
     /* In auto mode the scratch dual solve is speculative: if it does not return
