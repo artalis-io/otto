@@ -748,7 +748,7 @@ static int ralph_should_use_relaxed_dual_rc_cadence_compact_sparse(const LPModel
             density >= 0.012 && density <= 0.015);
 }
 
-static int ralph_should_use_shift_off_dual_wide_dense_low_row(const LPModel *model) {
+static int ralph_should_use_shift_off_dual_start(const LPModel *model) {
     if (!model || !model->A) return 0;
 
     int n = model->num_vars;
@@ -761,10 +761,20 @@ static int ralph_should_use_shift_off_dual_wide_dense_low_row(const LPModel *mod
     /* Very wide, dense, low-row LPs can make shifted dual working bounds
      * return a bound-imprecise basis, while the unshifted dual path is both
      * valid and much cheaper than falling through to primal Phase 1. */
-    return (m >= 230 && m <= 260 &&
-            n >= 2400 && n <= 2800 &&
-            width_ratio >= 9.5 && width_ratio <= 12.0 &&
-            density >= 0.09 && density <= 0.13);
+    if (m >= 230 && m <= 260 &&
+        n >= 2400 && n <= 2800 &&
+        width_ratio >= 9.5 && width_ratio <= 12.0 &&
+        density >= 0.09 && density <= 0.13) {
+        return 1;
+    }
+
+    /* A wider sparse mid-row band shows the same shifted-bound failure mode:
+     * primal gets trapped in degenerate cleanup, shifted dual is imprecise, and
+     * unshifted dual produces a verified basis quickly. */
+    return (m >= 390 && m <= 430 &&
+            n >= 5800 && n <= 6500 &&
+            width_ratio >= 14.0 && width_ratio <= 16.0 &&
+            density >= 0.012 && density <= 0.017);
 }
 
 static int ralph_set_requested_lp_algorithm_internal(RalphModel *model, int value) {
@@ -2567,7 +2577,7 @@ static int ralph_optimize_with_mode(RalphModel *model, RalphSolveMode mode) {
     } else {
         /* LP solve */
         if (!glpk_policy_active &&
-            ralph_should_use_shift_off_dual_wide_dense_low_row(solve_model)) {
+            ralph_should_use_shift_off_dual_start(solve_model)) {
             if (lp_simplex_method == 2) lp_simplex_method = 1;
             if (lp_simplex_method == 1) lp_smcp_shift = 0;
         }
