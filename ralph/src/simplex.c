@@ -4908,7 +4908,11 @@ static int simplex_finish_prepared_primal_solve(SimplexSolver *solver, clock_t s
     int saved_phase1_pricing = solver->phase1_pricing;
     int saved_tab_pricing = tab->pricing_strategy;
     int saved_tab_se = tab->use_steepest_edge;
-    if (solver->phase1_pricing >= 0) {
+    if (simplex_should_use_very_sparse_large_dantzig(solver, tab)) {
+        solver->pricing_strategy = 0;
+        tab->pricing_strategy = 0;
+        tab->use_steepest_edge = 0;
+    } else if (solver->phase1_pricing >= 0) {
         solver->pricing_strategy = solver->phase1_pricing;
         tab->pricing_strategy = solver->phase1_pricing;
         tab->use_steepest_edge = (solver->phase1_pricing == 1 || solver->phase1_pricing == 2
@@ -4942,10 +4946,6 @@ static int simplex_finish_prepared_primal_solve(SimplexSolver *solver, clock_t s
         tab->use_steepest_edge = 0;
     } else if (simplex_should_use_narrow_midrow_phase1_dantzig(solver, tab)) {
         solver->phase1_pricing = 0;
-        solver->pricing_strategy = 0;
-        tab->pricing_strategy = 0;
-        tab->use_steepest_edge = 0;
-    } else if (simplex_should_use_very_sparse_large_dantzig(solver, tab)) {
         solver->pricing_strategy = 0;
         tab->pricing_strategy = 0;
         tab->use_steepest_edge = 0;
