@@ -578,6 +578,17 @@ static int ralph_should_control_mid_sparse_reinvert(const LPModel *model) {
         return 1;
     }
 
+    /* Larger DEGEN-family dual starts stay numerically calm but spend heavily
+     * on routine dual reinversions after presolve bound tightening.  Control
+     * that cadence only in this near-square sparse band; wider sparse dual
+     * timeout families and denser compact DEGEN2-like primals use different
+     * paths. */
+    if (n >= 1700 && n <= 1900 &&
+        m >= 1400 && m <= 1600 &&
+        density >= 0.008 && density <= 0.010) {
+        return 1;
+    }
+
     /* Larger GROW-like staircase LPs have almost no Phase 1 work, but spend
      * much of Phase 2 paying for routine reinversions. The reinvert controller
      * safely defers that cadence on the sparse large member; smaller denser
