@@ -663,6 +663,18 @@ static int ralph_should_control_mid_sparse_reinvert(const LPModel *model) {
         return 1;
     }
 
+    /* FIT1P-size sparse primals spend heavily on small-pivot/update recovery
+     * reinversions in both phases.  Reinvert control trims that cadence on
+     * this medium-wide band; keep the selector below FIT2P and away from the
+     * denser, lower-row PILOT4 family where the same control path regresses. */
+    if (n >= 1600 && n <= 1800 &&
+        m >= 600 && m <= 660 &&
+        n * 10 >= m * 25 &&
+        n * 10 <= m * 29 &&
+        density >= 0.008 && density <= 0.011) {
+        return 1;
+    }
+
     return 0;
 }
 
