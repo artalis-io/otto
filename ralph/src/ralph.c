@@ -551,6 +551,17 @@ static int ralph_should_control_mid_sparse_reinvert(const LPModel *model) {
         return 1;
     }
 
+    /* SCFXM-family presolved primals are sparse and near-rectangular; routine
+     * reinversions dominate both phases.  Keep BNL-like wider cases out via
+     * the row/column ratio guard, since they regress under the same control. */
+    if (n >= 850 && n <= 1500 &&
+        nnz >= 5000 &&
+        m >= 600 && m <= 1100 &&
+        n * 20 <= m * 31 &&
+        density >= 0.005 && density <= 0.010) {
+        return 1;
+    }
+
     /* Smaller column-heavy mid-sparse bases can spend most of Phase 1 on
      * periodic reinversions.  Let the reinvert controller dampen cadence here,
      * while keeping larger rows out of this automatic control path. */
