@@ -663,6 +663,16 @@ static int ralph_should_control_mid_sparse_reinvert(const LPModel *model) {
         return 1;
     }
 
+    /* Low-row, wide SHELL-style sparse primals pay many small routine
+     * reinversions relative to their pivot count.  Control that cadence in
+     * this narrow width/density band; taller transport/SCTAP cases and denser
+     * BNL/SCFXM families stay on their existing policies. */
+    if (n >= 1700 && n <= 1850 &&
+        m >= 500 && m <= 575 &&
+        density >= 0.0032 && density <= 0.0042) {
+        return 1;
+    }
+
     /* Larger SCTAP-style sparse primals pay several routine Phase-1/Phase-2
      * reinversions after the preserved full matrix reaches Phase 2.  This
      * narrow row/width/density band excludes smaller SCTAP siblings, which are
