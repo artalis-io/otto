@@ -771,10 +771,27 @@ static int ralph_should_use_shift_off_dual_start(const LPModel *model) {
     /* A wider sparse mid-row band shows the same shifted-bound failure mode:
      * primal gets trapped in degenerate cleanup, shifted dual is imprecise, and
      * unshifted dual produces a verified basis quickly. */
-    return (m >= 390 && m <= 430 &&
-            n >= 5800 && n <= 6500 &&
-            width_ratio >= 14.0 && width_ratio <= 16.0 &&
-            density >= 0.012 && density <= 0.017);
+    if (m >= 390 && m <= 430 &&
+        n >= 5800 && n <= 6500 &&
+        width_ratio >= 14.0 && width_ratio <= 16.0 &&
+        density >= 0.012 && density <= 0.017) {
+        return 1;
+    }
+
+    /* SHIP08/SHIP12 sparse dual starts are already valid with shifted bounds,
+     * but the unshifted dual path avoids extra pivots and refactors.  Keep the
+     * row bands split: middle-row CZPROB-like cases fail on this path. */
+    if (m >= 740 && m <= 820 &&
+        n >= 2300 && n <= 4400 &&
+        width_ratio >= 3.0 && width_ratio <= 5.7 &&
+        density >= 0.0035 && density <= 0.0042) {
+        return 1;
+    }
+
+    return (m >= 1100 && m <= 1200 &&
+            n >= 2500 && n <= 5600 &&
+            width_ratio >= 2.3 && width_ratio <= 4.9 &&
+            density >= 0.0023 && density <= 0.0029);
 }
 
 static int ralph_set_requested_lp_algorithm_internal(RalphModel *model, int value) {
