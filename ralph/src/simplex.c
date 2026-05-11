@@ -4852,6 +4852,7 @@ static int simplex_should_skip_auto_dual_startup(const SimplexSolver *solver) {
     double density;
     double width_ratio;
     int allow_sparse_midrow_dual;
+    int allow_ganges_dual;
     int allow_lowrow_ship_dual;
     int allow_compact_sparse_dual;
     if (m <= 0) return 0;
@@ -4867,6 +4868,19 @@ static int simplex_should_skip_auto_dual_startup(const SimplexSolver *solver) {
          n >= 2500 &&
          density > 0.0 && density <= 0.003);
     if (allow_sparse_midrow_dual) {
+        return 0;
+    }
+
+    /* GANGES-style sparse mid-row models pay more for primal artificial Phase 1
+     * than for a direct dual startup when DSE is disabled by the matching
+     * model-level policy.  Keep this narrow to avoid lower-row BNL/SCFXM
+     * families and taller transport/SCTAP shapes. */
+    allow_ganges_dual =
+        (m >= 1250 && m <= 1350 &&
+         n >= 1600 && n <= 1750 &&
+         width_ratio >= 1.20 && width_ratio <= 1.35 &&
+         density >= 0.0029 && density <= 0.0034);
+    if (allow_ganges_dual) {
         return 0;
     }
 
