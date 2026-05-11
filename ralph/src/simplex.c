@@ -4605,6 +4605,28 @@ static int simplex_should_use_wide_sparse_phase1_heap(const SimplexSolver *solve
             density >= 0.0024 && density <= 0.0040);
 }
 
+static int simplex_should_use_wide_sparse_phase1_steepest_phase2_partial(
+    const SimplexSolver *solver,
+    const SimplexTableau *tab) {
+    if (!solver || !solver->model || !solver->model->A || !tab) return 0;
+    if (!tab->use_two_phase || tab->num_artificial <= 0) return 0;
+
+    int m = solver->model->num_cons;
+    int n = solver->model->num_vars;
+    int nnz = solver->model->A->nnz;
+    if (m <= 0 || n <= 0 || nnz <= 0) return 0;
+
+    double density = (double)nnz / ((double)m * (double)n);
+    double width_ratio = (double)n / (double)m;
+    /* Wide sparse CZPROB-like tableaus benefit from stronger Phase-1 pivot
+     * quality but still pay too much for full Phase-2 scans. Keep this away
+     * from wider SHIP cases and lower-width GANGES/SCTAP shapes. */
+    return (m >= 850 && m <= 1050 &&
+            n >= 3300 && n <= 3700 &&
+            width_ratio >= 3.4 && width_ratio <= 4.2 &&
+            density >= 0.0028 && density <= 0.0038);
+}
+
 static int simplex_should_use_dense_lowrow_phase2_partial(const SimplexSolver *solver,
                                                           const SimplexTableau *tab) {
     if (!solver || !solver->model || !solver->model->A || !tab) return 0;
@@ -4819,6 +4841,11 @@ static int simplex_finish_prepared_primal_solve(SimplexSolver *solver, clock_t s
         solver->pricing_strategy = 0;
         tab->pricing_strategy = 0;
         tab->use_steepest_edge = 0;
+    } else if (simplex_should_use_wide_sparse_phase1_steepest_phase2_partial(solver, tab)) {
+        solver->phase1_pricing = 1;
+        solver->pricing_strategy = 1;
+        tab->pricing_strategy = 1;
+        tab->use_steepest_edge = 1;
     } else if (simplex_should_use_wide_sparse_phase1_heap(solver, tab)) {
         solver->phase1_pricing = 4;
         solver->pricing_strategy = 4;
@@ -4869,6 +4896,7 @@ static int simplex_finish_prepared_primal_solve(SimplexSolver *solver, clock_t s
         (simplex_should_use_dense_lowrow_phase2_partial(solver, tab) ||
          simplex_should_use_medium_sparse_phase2_partial(solver, tab) ||
          simplex_should_use_compact_sparse_phase2_partial(solver, tab) ||
+         simplex_should_use_wide_sparse_phase1_steepest_phase2_partial(solver, tab) ||
          simplex_should_use_wide_scsd_phase2_partial(solver, tab))) {
         solver->pricing_strategy = 3;
         tab->pricing_strategy = 3;
