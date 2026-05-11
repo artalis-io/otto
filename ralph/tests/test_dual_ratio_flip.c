@@ -420,9 +420,9 @@ static void test_dual_aorn_kernel_selection(void) {
                 "dual aorn A^T falls back when row-kernel unavailable");
     ASSERT_TRUE(dual_ratio_use_at_kernel_for_test(1, 1) == 1,
                 "dual aorn A^T enables row-kernel when available");
-    ASSERT_TRUE(dual_ratio_use_row_kernel_for_test(2, 1, 1, 999) == 0,
+    ASSERT_TRUE(dual_ratio_use_row_kernel_for_test(2, 1, 1, 499) == 0,
                 "default dual ratio keeps column kernel below large-tableau threshold");
-    ASSERT_TRUE(dual_ratio_use_row_kernel_for_test(2, 1, 1, 1000) == 1,
+    ASSERT_TRUE(dual_ratio_use_row_kernel_for_test(2, 1, 1, 500) == 1,
                 "default dual ratio uses row kernel for large sparse tableaux");
     ASSERT_TRUE(dual_ratio_use_row_kernel_for_test(2, 1, 0, 2500) == 0,
                 "default dual ratio keeps column kernel when CSR scatter is disabled");

@@ -44,7 +44,7 @@ static void phase1_rescue_compute_reduced_costs(SimplexTableau *tab) {
 #define DUAL_REINVERT_HARD_BURST_WINDOW_ITERS 64
 #define DUAL_REINVERT_HARD_BURST_DEMOTE_COUNT 6
 #define DUAL_PHASE1_RESCUE_PROGRESS_LIMIT 16
-#define DUAL_RATIO_ROW_KERNEL_MIN_M 1000
+#define DUAL_RATIO_ROW_KERNEL_MIN_M 500
 
 /* Bound perturbation for degeneracy prevention (defined below) */
 static void apply_bound_perturbation(SimplexTableau *tab);
