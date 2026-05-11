@@ -5032,7 +5032,8 @@ static int simplex_finish_prepared_primal_solve(SimplexSolver *solver, clock_t s
          simplex_should_use_small_grow_phase12_dantzig(solver, tab) ||
          simplex_should_use_eta_sparse_phase12_dantzig(solver, tab) ||
          simplex_should_use_lowrow_wide_scsd_phase12_dantzig(solver, tab) ||
-         simplex_should_use_scsd_sparse_phase12_dantzig(solver, tab))) {
+         simplex_should_use_scsd_sparse_phase12_dantzig(solver, tab) ||
+         simplex_should_use_lowrow_wide_sparse_phase1_heap(solver, tab))) {
         solver->pricing_strategy = 0;
         tab->pricing_strategy = 0;
         tab->use_steepest_edge = 0;
