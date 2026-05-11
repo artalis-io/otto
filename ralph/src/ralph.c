@@ -593,6 +593,16 @@ static int ralph_should_control_mid_sparse_reinvert(const LPModel *model) {
         return 1;
     }
 
+    /* SHIP12-class dual starts are wide and very sparse; DSE is already
+     * disabled for this band, and reinversion control cuts routine dual
+     * refactors without changing the pivot path.  Keep this separate from
+     * denser SHIP04 and lower-row SHIP08 cases. */
+    if (n >= 2500 && n <= 5600 &&
+        m >= 1100 && m <= 1200 &&
+        density >= 0.0023 && density <= 0.0029) {
+        return 1;
+    }
+
     if (n >= 800 && n <= 900 &&
         m >= 500 && m <= 550 &&
         density >= 0.012 && density <= 0.015) {
