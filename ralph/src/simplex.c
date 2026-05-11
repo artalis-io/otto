@@ -4391,6 +4391,9 @@ static int simplex_should_use_narrow_midrow_phase1_dantzig(const SimplexSolver *
     return ((m >= 290 && m <= 305 &&
              n >= 465 && n <= 480 &&
              density >= 0.015 && density <= 0.020) ||
+            (m >= 250 && m <= 290 &&
+             n >= 330 && n <= 380 &&
+             density >= 0.016 && density <= 0.021) ||
             (m >= 340 && m <= 370 &&
              n >= 370 && n <= 400 &&
              density >= 0.020 && density <= 0.030) ||
