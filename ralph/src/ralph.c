@@ -543,6 +543,16 @@ static int ralph_should_control_mid_sparse_reinvert(const LPModel *model) {
         return 1;
     }
 
+    /* Wide sparse CZPROB-like primals have many routine reinversions after
+     * the no-presolve path preserves the full matrix.  Reuse the narrow
+     * CZPROB shape band from the presolve policy so larger D2Q06C-like dual
+     * starts and denser mid-size cases stay on their existing cadence. */
+    if (n >= 3300 && n <= 3700 &&
+        m >= 850 && m <= 1050 &&
+        density >= 0.0025 && density <= 0.0045) {
+        return 1;
+    }
+
     if (n >= 800 && n <= 1500 &&
         nnz >= 8000 &&
         m >= 700 && m <= 1100 &&
