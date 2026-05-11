@@ -788,6 +788,16 @@ static int ralph_should_use_shift_off_dual_start(const LPModel *model) {
         return 1;
     }
 
+    /* Large near-square stochastic dual starts keep the shifted-bound path
+     * valid, but unshifted dual trims a substantial pivot/refactor tail. Keep
+     * this above the tiny STOCFOR member and away from wider sparse timeouts. */
+    if (m >= 2050 && m <= 2250 &&
+        n >= 1950 && n <= 2150 &&
+        width_ratio >= 0.90 && width_ratio <= 1.00 &&
+        density >= 0.0017 && density <= 0.0021) {
+        return 1;
+    }
+
     /* SHIP08/SHIP12 sparse dual starts are already valid with shifted bounds,
      * but the unshifted dual path avoids extra pivots and refactors.  Keep the
      * row bands split: middle-row CZPROB-like cases fail on this path. */
