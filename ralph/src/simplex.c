@@ -4642,6 +4642,30 @@ static int simplex_should_use_medium_sparse_phase2_partial(const SimplexSolver *
             density >= 0.007 && density <= 0.012);
 }
 
+static int simplex_should_use_compact_sparse_phase2_partial(const SimplexSolver *solver,
+                                                            const SimplexTableau *tab) {
+    if (!solver || !solver->model || !solver->model->A || !tab) return 0;
+
+    int m = solver->model->num_cons;
+    int n = solver->model->num_vars;
+    int nnz = solver->model->A->nnz;
+    if (m <= 0 || n <= 0 || nnz <= 0) return 0;
+
+    double density = (double)nnz / ((double)m * (double)n);
+    double width_ratio = (double)n / (double)m;
+    double nnz_per_row = (double)nnz / (double)m;
+    /* Compact sparse tableaus in this narrow-width band finish Phase 1 reliably
+     * under Devex, then pay more for exact Phase-2 pricing than they recover
+     * from full-column pivot quality.  The guards use the presolved shape and
+     * exclude wider BNL-like cases where partial pricing can stall after Phase
+     * 1. */
+    return (m >= 250 && m <= 950 &&
+            n >= 400 && n <= 1450 &&
+            width_ratio >= 1.48 && width_ratio <= 1.62 &&
+            nnz_per_row >= 7.0 && nnz_per_row <= 10.0 &&
+            density >= 0.004 && density <= 0.020);
+}
+
 static int simplex_should_use_wide_scsd_phase2_partial(const SimplexSolver *solver,
                                                        const SimplexTableau *tab) {
     if (!solver || !solver->model || !solver->model->A || !tab) return 0;
@@ -4818,6 +4842,7 @@ static int simplex_finish_prepared_primal_solve(SimplexSolver *solver, clock_t s
     if (saved_pricing == 2 &&
         (simplex_should_use_dense_lowrow_phase2_partial(solver, tab) ||
          simplex_should_use_medium_sparse_phase2_partial(solver, tab) ||
+         simplex_should_use_compact_sparse_phase2_partial(solver, tab) ||
          simplex_should_use_wide_scsd_phase2_partial(solver, tab))) {
         solver->pricing_strategy = 3;
         tab->pricing_strategy = 3;
