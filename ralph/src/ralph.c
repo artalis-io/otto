@@ -551,6 +551,17 @@ static int ralph_should_control_mid_sparse_reinvert(const LPModel *model) {
         return 1;
     }
 
+    /* Large near-square stochastic LPs can spend much of dual startup on
+     * periodic reinversions after presolve tightens bounds but leaves the
+     * matrix dimensions intact.  Let the reinvert controller defer routine
+     * dual refactors in this sparse band while keeping wider FIT-like dual
+     * timeout cases on the legacy cadence. */
+    if (n >= 1800 && n <= 2300 &&
+        m >= 1900 && m <= 2400 &&
+        density >= 0.0015 && density <= 0.0023) {
+        return 1;
+    }
+
     return 0;
 }
 
