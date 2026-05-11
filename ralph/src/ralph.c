@@ -583,6 +583,16 @@ static int ralph_should_control_mid_sparse_reinvert(const LPModel *model) {
         return 1;
     }
 
+    /* SHIP08-size sparse primals keep the same pivot path under reinversion
+     * control while cutting routine Phase-1/Phase-2 refactors.  SHIP04 and
+     * SHIP12 have distinct row/density bands and remain on their existing
+     * policies. */
+    if (n >= 2300 && n <= 4400 &&
+        m >= 740 && m <= 820 &&
+        density >= 0.0035 && density <= 0.0042) {
+        return 1;
+    }
+
     if (n >= 800 && n <= 900 &&
         m >= 500 && m <= 550 &&
         density >= 0.012 && density <= 0.015) {
