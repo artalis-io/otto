@@ -939,6 +939,25 @@ static void dual_build_csr_alpha(SimplexTableau *tab, const double *row) {
     }
 }
 
+static int dual_int_compare_ascending(const void *a, const void *b) {
+    int ia = *(const int *)a;
+    int ib = *(const int *)b;
+    return (ia > ib) - (ia < ib);
+}
+
+static int dual_should_sparse_scan_alpha(const SimplexTableau *tab) {
+    if (!tab || tab->csr_alpha_count <= 0 || tab->n <= 0) return 0;
+    return (8 * tab->csr_alpha_count < tab->n);
+}
+
+static void dual_sort_csr_alpha_if_sparse_scan(SimplexTableau *tab) {
+    if (!dual_should_sparse_scan_alpha(tab)) return;
+    qsort(tab->csr_alpha_idx,
+          (size_t)tab->csr_alpha_count,
+          sizeof(tab->csr_alpha_idx[0]),
+          dual_int_compare_ascending);
+}
+
 static int dual_smcp_excl_skip_var(const SimplexTableau *tab, int var) {
     int smcp_excl = 1;
     int smcp_shift = 1;
@@ -1261,10 +1280,16 @@ static int dual_ratio_test_core(SimplexTableau *tab,
     if (use_row_kernel) {
         alpha_at = tab->csr_alpha;
         dual_build_csr_alpha(tab, tab->work2);
+        dual_sort_csr_alpha_if_sparse_scan(tab);
     }
 
-    for (int t = 0; t < tab->n; t++) {
-        int j = (scan_dir > 0) ? t : (tab->n - 1 - t);
+    int use_sparse_alpha_scan = dual_should_sparse_scan_alpha(tab);
+    int scan_count = use_sparse_alpha_scan ? tab->csr_alpha_count : tab->n;
+    for (int t = 0; t < scan_count; t++) {
+        int j = use_sparse_alpha_scan
+              ? ((scan_dir > 0) ? tab->csr_alpha_idx[t]
+                                : tab->csr_alpha_idx[scan_count - 1 - t])
+              : ((scan_dir > 0) ? t : (tab->n - 1 - t));
         if (tab->var_status[j] == RALPH_BASIC ||
             dual_working_exclusion_skip_var(&excl_ctx, j)) {
             continue;
@@ -1433,6 +1458,7 @@ static int dual_ratio_test_flip_iterative(SimplexTableau *tab,
     if (use_row_kernel) {
         alpha_at = tab->csr_alpha;
         dual_build_csr_alpha(tab, tab->work2);
+        dual_sort_csr_alpha_if_sparse_scan(tab);
     }
 
     flip_cap = tab->m / 2;
@@ -1451,8 +1477,13 @@ static int dual_ratio_test_flip_iterative(SimplexTableau *tab,
         int round_flip_count = 0;
 
         /* Pass 1: strict candidate window baseline. */
-        for (int t = 0; t < tab->n; t++) {
-            int j = (scan_dir > 0) ? t : (tab->n - 1 - t);
+        int use_sparse_alpha_scan = dual_should_sparse_scan_alpha(tab);
+        int scan_count = use_sparse_alpha_scan ? tab->csr_alpha_count : tab->n;
+        for (int t = 0; t < scan_count; t++) {
+            int j = use_sparse_alpha_scan
+                  ? ((scan_dir > 0) ? tab->csr_alpha_idx[t]
+                                    : tab->csr_alpha_idx[scan_count - 1 - t])
+                  : ((scan_dir > 0) ? t : (tab->n - 1 - t));
             double alpha_j;
             double ratio;
             if (tab->var_status[j] == RALPH_BASIC ||
@@ -1474,8 +1505,11 @@ static int dual_ratio_test_flip_iterative(SimplexTableau *tab,
         theta_harris = theta_min + HARRIS_TOL * (1.0 + fabs(theta_min));
 
         /* Pass 2: choose entering in Harris window; stage interior flips. */
-        for (int t = 0; t < tab->n; t++) {
-            int j = (scan_dir > 0) ? t : (tab->n - 1 - t);
+        for (int t = 0; t < scan_count; t++) {
+            int j = use_sparse_alpha_scan
+                  ? ((scan_dir > 0) ? tab->csr_alpha_idx[t]
+                                    : tab->csr_alpha_idx[scan_count - 1 - t])
+                  : ((scan_dir > 0) ? t : (tab->n - 1 - t));
             double alpha_j;
             double ratio;
             double abs_alpha;
