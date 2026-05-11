@@ -774,11 +774,16 @@ static SimplexTableau* tableau_create_ex(LPModel *model, int force_two_phase, in
         tab->csr_colidx = (int*)malloc(csr_nnz * sizeof(int));
         tab->csr_values = (double*)malloc(csr_nnz * sizeof(double));
         tab->csr_alpha = (double*)calloc(csr_n, sizeof(double));
-        if (!tab->csr_rowptr || !tab->csr_colidx || !tab->csr_values || !tab->csr_alpha) {
+        tab->csr_alpha_idx = (int*)malloc(csr_n * sizeof(int));
+        tab->csr_alpha_mark = (int*)calloc(csr_n, sizeof(int));
+        if (!tab->csr_rowptr || !tab->csr_colidx || !tab->csr_values ||
+            !tab->csr_alpha || !tab->csr_alpha_idx || !tab->csr_alpha_mark) {
             free(norm_sense); free(norm_sign); free(basic_var_for_row);
             tableau_free(tab);
             return NULL;
         }
+        tab->csr_alpha_count = 0;
+        tab->csr_alpha_token = 1;
         /* Count nnz per row */
         for (int j = 0; j < csr_n; j++) {
             for (int p = tab->A_ext->colptr[j]; p < tab->A_ext->colptr[j+1]; p++) {
@@ -1045,6 +1050,8 @@ void tableau_free(SimplexTableau *tab) {
     SAFE_FREE(tab->csr_colidx);
     SAFE_FREE(tab->csr_values);
     SAFE_FREE(tab->csr_alpha);
+    SAFE_FREE(tab->csr_alpha_idx);
+    SAFE_FREE(tab->csr_alpha_mark);
 
     /* Free arena (frees all workspace arrays in one call) */
     sh_arena_free(tab->arena);
@@ -3759,6 +3766,8 @@ static int tableau_build_csr_from_current_matrix(SimplexTableau *tab) {
     SAFE_FREE(tab->csr_colidx);
     SAFE_FREE(tab->csr_values);
     SAFE_FREE(tab->csr_alpha);
+    SAFE_FREE(tab->csr_alpha_idx);
+    SAFE_FREE(tab->csr_alpha_mark);
 
     int csr_m = tab->m;
     int csr_n = tab->n;
@@ -3767,9 +3776,14 @@ static int tableau_build_csr_from_current_matrix(SimplexTableau *tab) {
     tab->csr_colidx = (int*)malloc((size_t)csr_nnz * sizeof(int));
     tab->csr_values = (double*)malloc((size_t)csr_nnz * sizeof(double));
     tab->csr_alpha = (double*)calloc((size_t)csr_n, sizeof(double));
-    if (!tab->csr_rowptr || !tab->csr_colidx || !tab->csr_values || !tab->csr_alpha) {
+    tab->csr_alpha_idx = (int*)malloc((size_t)csr_n * sizeof(int));
+    tab->csr_alpha_mark = (int*)calloc((size_t)csr_n, sizeof(int));
+    if (!tab->csr_rowptr || !tab->csr_colidx || !tab->csr_values ||
+        !tab->csr_alpha || !tab->csr_alpha_idx || !tab->csr_alpha_mark) {
         return -1;
     }
+    tab->csr_alpha_count = 0;
+    tab->csr_alpha_token = 1;
 
     for (int j = 0; j < csr_n; j++) {
         for (int p = tab->A_ext->colptr[j]; p < tab->A_ext->colptr[j + 1]; p++) {
