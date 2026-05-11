@@ -44,6 +44,7 @@ static void phase1_rescue_compute_reduced_costs(SimplexTableau *tab) {
 #define DUAL_REINVERT_HARD_BURST_WINDOW_ITERS 64
 #define DUAL_REINVERT_HARD_BURST_DEMOTE_COUNT 6
 #define DUAL_PHASE1_RESCUE_PROGRESS_LIMIT 16
+#define DUAL_RATIO_ROW_KERNEL_MIN_M 1000
 
 /* Bound perturbation for degeneracy prevention (defined below) */
 static void apply_bound_perturbation(SimplexTableau *tab);
@@ -879,7 +880,7 @@ int dual_ratio_use_row_kernel_for_test(int smcp_aorn,
                                        int m) {
     if (!has_row_scatter) return 0;
     if (dual_ratio_use_at_kernel_for_test(smcp_aorn, has_row_scatter)) return 1;
-    return csr_use_scatter && m >= 1500;
+    return csr_use_scatter && m >= DUAL_RATIO_ROW_KERNEL_MIN_M;
 }
 
 static inline int dual_ratio_scan_direction(const SimplexTableau *tab) {
