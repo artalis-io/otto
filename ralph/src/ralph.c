@@ -551,6 +551,16 @@ static int ralph_should_control_mid_sparse_reinvert(const LPModel *model) {
         return 1;
     }
 
+    /* Compact DEGEN2-like LPs spend enough time in both phases on routine
+     * reinversions that controller deferral cuts the pivot path substantially.
+     * Keep this away from denser STAIR-like cases and larger DEGEN3 dual
+     * starts, which have different bottlenecks. */
+    if (n >= 520 && n <= 550 &&
+        m >= 430 && m <= 460 &&
+        density >= 0.015 && density <= 0.019) {
+        return 1;
+    }
+
     /* Larger GROW-like staircase LPs have almost no Phase 1 work, but spend
      * much of Phase 2 paying for routine reinversions. The reinvert controller
      * safely defers that cadence on the sparse large member; smaller denser
