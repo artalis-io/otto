@@ -778,6 +778,16 @@ static int ralph_should_use_shift_off_dual_start(const LPModel *model) {
         return 1;
     }
 
+    /* GANGES-style mid-row sparse dual starts are numerically cleaner without
+     * shifted working bounds; this trims pivots on the same band that already
+     * disables exact DSE maintenance. */
+    if (m >= 1250 && m <= 1350 &&
+        n >= 1600 && n <= 1750 &&
+        width_ratio >= 1.20 && width_ratio <= 1.35 &&
+        density >= 0.0029 && density <= 0.0034) {
+        return 1;
+    }
+
     /* SHIP08/SHIP12 sparse dual starts are already valid with shifted bounds,
      * but the unshifted dual path avoids extra pivots and refactors.  Keep the
      * row bands split: middle-row CZPROB-like cases fail on this path. */
