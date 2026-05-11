@@ -20,6 +20,8 @@
 #define SOFT_LU_MAX_CONSEC_DEFER_PHASE2 16
 #define PERIODIC_COST_MAX_CONSEC_DEFER_PHASE1 2
 #define PERIODIC_COST_MAX_CONSEC_DEFER_PHASE2 3
+#define PERIODIC_COST_MIDROW_MAX_CONSEC_DEFER_PHASE1 4
+#define PERIODIC_COST_MIDROW_MAX_CONSEC_DEFER_PHASE2 6
 
 /* ══════════════════════════════════════════════════════════════════════
  * Category 1: EWMA / phase hotpath
@@ -228,9 +230,21 @@ void periodic_cost_record_defer(SimplexSolver *owner, int phase) {
     else if (phase == 2) owner->policy.periodic_cost_gate_phase2.defers++;
 }
 
-static int periodic_cost_defer_cap_for_phase(int phase) {
-    if (phase == 1) return PERIODIC_COST_MAX_CONSEC_DEFER_PHASE1;
-    if (phase == 2) return PERIODIC_COST_MAX_CONSEC_DEFER_PHASE2;
+static int periodic_cost_defer_cap_for_phase(int phase, int m) {
+    /* 25FV47-like presolved mid-row tableaus have expensive routine
+     * reinversions but stay stable through longer cost-gated defer bursts.
+     * Wider/taller cases such as GANGES keep the conservative global caps. */
+    int midrow_sparse_band = (m >= 750 && m <= 850);
+    if (phase == 1) {
+        return midrow_sparse_band
+            ? PERIODIC_COST_MIDROW_MAX_CONSEC_DEFER_PHASE1
+            : PERIODIC_COST_MAX_CONSEC_DEFER_PHASE1;
+    }
+    if (phase == 2) {
+        return midrow_sparse_band
+            ? PERIODIC_COST_MIDROW_MAX_CONSEC_DEFER_PHASE2
+            : PERIODIC_COST_MAX_CONSEC_DEFER_PHASE2;
+    }
     return 0;
 }
 
@@ -751,7 +765,7 @@ int simplex_periodic_cost_defer_plan_for_test(int phase,
                                               int *cap_blocked_out,
                                               int *next_consecutive_defers_out) {
     LPPeriodicCostDampenReason decision;
-    int cap = periodic_cost_defer_cap_for_phase(phase);
+    int cap = periodic_cost_defer_cap_for_phase(phase, m);
     int should_defer = 0;
     int cap_blocked = 0;
     int next_consecutive = 0;
