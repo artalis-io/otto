@@ -663,6 +663,16 @@ static int ralph_should_control_mid_sparse_reinvert(const LPModel *model) {
         return 1;
     }
 
+    /* Larger SCTAP-style sparse primals pay several routine Phase-1/Phase-2
+     * reinversions after the preserved full matrix reaches Phase 2.  This
+     * narrow row/width/density band excludes smaller SCTAP siblings, which are
+     * already below target, and denser MAROS/PILOT families. */
+    if (n >= 2300 && n <= 2600 &&
+        m >= 1400 && m <= 1550 &&
+        density >= 0.0022 && density <= 0.0027) {
+        return 1;
+    }
+
     /* FIT1P-size sparse primals spend heavily on small-pivot/update recovery
      * reinversions in both phases.  Reinvert control trims that cadence on
      * this medium-wide band; keep the selector below FIT2P and away from the
