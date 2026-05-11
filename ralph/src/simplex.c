@@ -4838,6 +4838,12 @@ static int simplex_should_use_sparse_fit_phase2_steepest(const SimplexSolver *so
             density >= 0.008 && density <= 0.011);
 }
 
+static int simplex_should_use_sparse_fit_phase1_partial(const SimplexSolver *solver,
+                                                        const SimplexTableau *tab) {
+    if (!tab || !tab->use_two_phase || tab->num_artificial <= 0) return 0;
+    return simplex_should_use_sparse_fit_phase2_steepest(solver, tab);
+}
+
 static int simplex_should_skip_auto_dual_startup(const SimplexSolver *solver) {
     if (!solver || !solver->model) return 0;
 
@@ -4948,6 +4954,11 @@ static int simplex_finish_prepared_primal_solve(SimplexSolver *solver, clock_t s
         solver->phase1_pricing = 0;
         solver->pricing_strategy = 0;
         tab->pricing_strategy = 0;
+        tab->use_steepest_edge = 0;
+    } else if (simplex_should_use_sparse_fit_phase1_partial(solver, tab)) {
+        solver->phase1_pricing = 3;
+        solver->pricing_strategy = 3;
+        tab->pricing_strategy = 3;
         tab->use_steepest_edge = 0;
     } else if (simplex_should_use_large_sparse_phase1_dantzig(solver, tab)) {
         solver->phase1_pricing = 0;
