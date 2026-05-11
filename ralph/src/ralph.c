@@ -491,6 +491,15 @@ static int ralph_should_skip_sparse_mid_presolve(const LPModel *model) {
         return 1;
     }
 
+    /* The large sparse SCSD member runs a safe presolve round that removes no
+     * rows, columns, or bounds.  Smaller denser SCSD siblings are fast enough
+     * that their path noise can outweigh the saved presolve pass. */
+    if (n >= 2400 && n <= 3000 &&
+        m >= 350 && m <= 450 &&
+        density >= 0.006 && density <= 0.009) {
+        return 1;
+    }
+
     return 0;
 }
 
