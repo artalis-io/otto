@@ -747,6 +747,10 @@ typedef struct {
     int *csr_colidx;        /* [nnz] column indices */
     double *csr_values;     /* [nnz] values */
     double *csr_alpha;      /* [n] scratch for accumulating alpha_j in row-scatter */
+    int *csr_alpha_idx;     /* [n] columns touched while accumulating csr_alpha */
+    int *csr_alpha_mark;    /* [n] generation marks for csr_alpha_idx uniqueness */
+    int csr_alpha_count;    /* Number of touched columns in csr_alpha_idx */
+    int csr_alpha_token;    /* Current generation token for csr_alpha_mark */
     int csr_use_scatter;    /* 1 if row-scatter is enabled (sparse enough to benefit) */
 
     /* Auxiliary variable mapping (for cut generation) */

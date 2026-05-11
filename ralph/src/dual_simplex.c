@@ -889,7 +889,8 @@ static inline int dual_ratio_scan_direction(const SimplexTableau *tab) {
 
 static inline int dual_ratio_use_row_kernel(const SimplexTableau *tab) {
     if (!tab || !tab->csr_rowptr || !tab->csr_colidx ||
-        !tab->csr_values || !tab->csr_alpha) {
+        !tab->csr_values || !tab->csr_alpha ||
+        !tab->csr_alpha_idx || !tab->csr_alpha_mark) {
         return 0;
     }
     return dual_ratio_use_row_kernel_for_test(
@@ -897,6 +898,45 @@ static inline int dual_ratio_use_row_kernel(const SimplexTableau *tab) {
         1,
         tab->csr_use_scatter,
         tab->m);
+}
+
+static void dual_clear_csr_alpha(SimplexTableau *tab) {
+    if (!tab || !tab->csr_alpha || !tab->csr_alpha_idx) return;
+    for (int k = 0; k < tab->csr_alpha_count; k++) {
+        int j = tab->csr_alpha_idx[k];
+        if (j >= 0 && j < tab->n) {
+            tab->csr_alpha[j] = 0.0;
+        }
+    }
+    tab->csr_alpha_count = 0;
+}
+
+static void dual_build_csr_alpha(SimplexTableau *tab, const double *row) {
+    if (!tab || !row || !tab->csr_rowptr || !tab->csr_colidx ||
+        !tab->csr_values || !tab->csr_alpha ||
+        !tab->csr_alpha_idx || !tab->csr_alpha_mark) {
+        return;
+    }
+
+    dual_clear_csr_alpha(tab);
+    if (++tab->csr_alpha_token <= 0) {
+        memset(tab->csr_alpha_mark, 0, (size_t)tab->n * sizeof(int));
+        tab->csr_alpha_token = 1;
+    }
+
+    for (int i = 0; i < tab->m; i++) {
+        double wi = row[i];
+        if (wi == 0.0) continue;
+        for (int p = tab->csr_rowptr[i]; p < tab->csr_rowptr[i + 1]; p++) {
+            int col = tab->csr_colidx[p];
+            if (tab->csr_alpha_mark[col] != tab->csr_alpha_token) {
+                tab->csr_alpha_mark[col] = tab->csr_alpha_token;
+                tab->csr_alpha_idx[tab->csr_alpha_count++] = col;
+                tab->csr_alpha[col] = 0.0;
+            }
+            tab->csr_alpha[col] += wi * tab->csr_values[p];
+        }
+    }
 }
 
 static int dual_smcp_excl_skip_var(const SimplexTableau *tab, int var) {
@@ -1220,15 +1260,7 @@ static int dual_ratio_test_core(SimplexTableau *tab,
 
     if (use_row_kernel) {
         alpha_at = tab->csr_alpha;
-        memset(alpha_at, 0, (size_t)tab->n * sizeof(double));
-        for (int i = 0; i < tab->m; i++) {
-            double wi = tab->work2[i];
-            if (wi == 0.0) continue;
-            for (int p = tab->csr_rowptr[i]; p < tab->csr_rowptr[i + 1]; p++) {
-                int col = tab->csr_colidx[p];
-                alpha_at[col] += wi * tab->csr_values[p];
-            }
-        }
+        dual_build_csr_alpha(tab, tab->work2);
     }
 
     for (int t = 0; t < tab->n; t++) {
@@ -1400,15 +1432,7 @@ static int dual_ratio_test_flip_iterative(SimplexTableau *tab,
 
     if (use_row_kernel) {
         alpha_at = tab->csr_alpha;
-        memset(alpha_at, 0, (size_t)tab->n * sizeof(double));
-        for (int i = 0; i < tab->m; i++) {
-            double wi = tab->work2[i];
-            if (wi == 0.0) continue;
-            for (int p = tab->csr_rowptr[i]; p < tab->csr_rowptr[i + 1]; p++) {
-                int col = tab->csr_colidx[p];
-                alpha_at[col] += wi * tab->csr_values[p];
-            }
-        }
+        dual_build_csr_alpha(tab, tab->work2);
     }
 
     flip_cap = tab->m / 2;
@@ -1872,18 +1896,31 @@ static int dual_simplex_pivot(SimplexTableau *tab,
      */
     double rc_factor = tab->rc[entering] / pivot;
     tab->dual_cand_count = 0;
-    for (int j = 0; j < tab->n; j++) {
-        if (tab->var_status[j] == RALPH_BASIC) {
-            tab->rc[j] = 0.0;
-        } else if (j != entering) {
-            /* Compute pivot_row * a_j via sparse dot product */
-            double dot = pivot_alpha_valid ? tab->csr_alpha[j]
-                                           : sparse_dot_column(tab->A_ext, j, tab->work2);
-            tab->rc[j] -= rc_factor * dot;
-            /* T2.2: Collect candidates with attractive |rc| */
+    if (pivot_alpha_valid && tab->csr_alpha_idx) {
+        for (int t = 0; t < tab->csr_alpha_count; t++) {
+            int j = tab->csr_alpha_idx[t];
+            if (j == entering || tab->var_status[j] == RALPH_BASIC) {
+                continue;
+            }
+            tab->rc[j] -= rc_factor * tab->csr_alpha[j];
             if (fabs(tab->rc[j]) > DUAL_CAND_RC_THRESH &&
                 tab->dual_cand_count < tab->dual_cand_capacity) {
                 tab->dual_candidates[tab->dual_cand_count++] = j;
+            }
+        }
+    } else {
+        for (int j = 0; j < tab->n; j++) {
+            if (tab->var_status[j] == RALPH_BASIC) {
+                tab->rc[j] = 0.0;
+            } else if (j != entering) {
+                /* Compute pivot_row * a_j via sparse dot product */
+                double dot = sparse_dot_column(tab->A_ext, j, tab->work2);
+                tab->rc[j] -= rc_factor * dot;
+                /* T2.2: Collect candidates with attractive |rc| */
+                if (fabs(tab->rc[j]) > DUAL_CAND_RC_THRESH &&
+                    tab->dual_cand_count < tab->dual_cand_capacity) {
+                    tab->dual_candidates[tab->dual_cand_count++] = j;
+                }
             }
         }
     }
