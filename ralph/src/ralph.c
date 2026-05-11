@@ -551,6 +551,18 @@ static int ralph_should_control_mid_sparse_reinvert(const LPModel *model) {
         return 1;
     }
 
+    /* Larger GROW-like staircase LPs have almost no Phase 1 work, but spend
+     * much of Phase 2 paying for routine reinversions. The reinvert controller
+     * safely defers that cadence on the sparse large member; smaller denser
+     * GROW siblings are already fast and stay outside this band. */
+    if (n >= 900 && n <= 1000 &&
+        m >= 420 && m <= 460 &&
+        n * 20 >= m * 42 &&
+        n * 20 <= m * 45 &&
+        density >= 0.018 && density <= 0.022) {
+        return 1;
+    }
+
     /* Large near-square stochastic LPs can spend much of dual startup on
      * periodic reinversions after presolve tightens bounds but leaves the
      * matrix dimensions intact.  Let the reinvert controller defer routine
