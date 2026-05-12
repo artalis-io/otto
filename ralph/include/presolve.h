@@ -122,6 +122,12 @@ typedef struct {
     int *col_deleted;
     double *row_lb;             /* Implied row lower bounds */
     double *row_ub;             /* Implied row upper bounds */
+    int *bt_rowptr;             /* Cached row-form for sparse bound tightening */
+    int *bt_rowfill;            /* Scratch fill positions while building row-form */
+    int *bt_colidx;             /* Cached row-form column indices */
+    double *bt_values;          /* Cached row-form values */
+    int bt_cache_nnz;           /* Capacity/nnz for cached sparse bound-tightening rows */
+    int bt_cache_valid;         /* 1 when row-form cache matches current A values */
 
     /* Redundant row detection statistics */
     int redundant_rows_found;   /* Count of linearly dependent rows */
