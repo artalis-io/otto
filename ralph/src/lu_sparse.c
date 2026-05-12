@@ -3237,6 +3237,7 @@ static int lu_factorize_markowitz(
 
               /* Pass 1: Walk row's entries, update existing entries using flag[] O(1) */
               int rs = rv_ptr[row], rn = rv_len[row];
+              int handled_pivot_live = 0;
               mkz_update_existing_entries += (uint64_t)rn;
               for (int re = 0; re < rn; re++) {
                   int jj = rv_idx[rs + re];
@@ -3244,6 +3245,7 @@ static int lu_factorize_markowitz(
                   if (flag[jj]) {
                       /* Existing entry — update in place */
                       flag[jj] = 0;  /* mark handled */
+                      handled_pivot_live++;
                       double new_val = rv_val[rs + re] - mult * work[jj];
                       rv_val[rs + re] = new_val;
                       int cs = cv_ptr[jj], cn = cv_len[jj];
@@ -3308,7 +3310,7 @@ static int lu_factorize_markowitz(
               }
 
               /* Pass 2: Fill-in — flag[jj] still set means no existing entry */
-              {
+              if (handled_pivot_live < pivot_live_n) {
                 mkz_update_fill_candidates += (uint64_t)pivot_live_n;
                 for (int pe = 0; pe < pivot_live_n; pe++) {
                     int jj = pivot_live_col[pe];
