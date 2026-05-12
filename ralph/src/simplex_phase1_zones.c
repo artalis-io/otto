@@ -1736,15 +1736,15 @@ P1ZoneResult p1_zone_periodic_refactor(SimplexSolver *solver,
                 LP_LOG_STDERR("[simplex_phase1] Refactorization failed at iter %d, trying dual rescue\n", iter);
             }
 
-            unsigned char *saved_redundant_rows = NULL;
+            int *saved_redundant_rows = NULL;
             int saved_num_redundant = tab->num_redundant;
             if (tab->redundant_rows && tab->m > 0) {
                 saved_redundant_rows =
-                    (unsigned char*)malloc((size_t)tab->m * sizeof(unsigned char));
+                    (int*)malloc((size_t)tab->m * sizeof(int));
                 if (saved_redundant_rows) {
                     memcpy(saved_redundant_rows,
                            tab->redundant_rows,
-                           (size_t)tab->m * sizeof(unsigned char));
+                           (size_t)tab->m * sizeof(int));
                 }
             }
             int marked = mark_basic_artificial_rows_redundant(tab, 1);
@@ -1767,7 +1767,7 @@ P1ZoneResult p1_zone_periodic_refactor(SimplexSolver *solver,
             if (saved_redundant_rows) {
                 memcpy(tab->redundant_rows,
                        saved_redundant_rows,
-                       (size_t)tab->m * sizeof(unsigned char));
+                       (size_t)tab->m * sizeof(int));
                 tab->num_redundant = saved_num_redundant;
                 free(saved_redundant_rows);
             }
