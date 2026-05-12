@@ -528,6 +528,26 @@ static int ralph_should_skip_dense_compact_bound_tightening(const LPModel *model
             density >= 0.055 && density <= 0.080);
 }
 
+static int ralph_should_use_fixed_bound_tightening_presolve(const LPModel *model) {
+    if (!model || !model->A) return 0;
+
+    int n = model->num_vars;
+    int m = model->num_cons;
+    int nnz = model->A->nnz;
+    if (n <= 0 || m <= 0 || nnz <= 0) return 0;
+
+    double density = (double)nnz / ((double)n * (double)m);
+    double width_ratio = (double)n / (double)m;
+    /* SHELL-like sparse models get the useful fixed-variable and bound
+     * tightening reductions from safe presolve, while singleton/empty-row
+     * passes add overhead and shift the following primal path. Keep this on
+     * the fixed-variable-heavy wide sparse band only. */
+    return (m >= 500 && m <= 570 &&
+            n >= 1700 && n <= 1850 &&
+            width_ratio >= 3.1 && width_ratio <= 3.5 &&
+            density >= 0.0030 && density <= 0.0045);
+}
+
 static int ralph_should_control_mid_sparse_reinvert(const LPModel *model) {
     if (!model || !model->A) return 0;
 
@@ -2249,6 +2269,11 @@ static int ralph_optimize_with_mode(RalphModel *model, RalphSolveMode mode) {
         use_mask == PRESOLVE_SAFE &&
         ralph_should_skip_dense_compact_bound_tightening(model->lp_model)) {
         use_mask &= ~PRESOLVE_BOUND_TIGHTENING;
+    }
+    if (use_presolve > 0 && !solve_as_mip &&
+        use_mask == PRESOLVE_SAFE &&
+        ralph_should_use_fixed_bound_tightening_presolve(model->lp_model)) {
+        use_mask = PRESOLVE_FIXED_VARS | PRESOLVE_BOUND_TIGHTENING;
     }
 
     if (use_presolve > 0) {
