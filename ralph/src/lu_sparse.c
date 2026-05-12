@@ -3763,20 +3763,28 @@ static int lu_numeric_factorize(LUFactorization *lu, const SparseMatrix *B,
     int *col_order = lu->ws_col_order;
     (void)num_identity;  /* Used implicitly: k = m - num_identity */
 
-    /* Use dense_work for A_struct (m×k fits in m×m, row-major layout) */
+    /* Use dense_work for A_struct (m×k fits in m×m, row-major layout).
+     * Build it lazily: sparse Markowitz consumes B directly and is the common
+     * successful backend on large NETLIB bases, so zeroing/scattering this dense
+     * buffer before Markowitz is wasted work on that path. */
     double *A_struct = lu->dense_work;
-    t_stage_start_ms = lp_telemetry_timer_start();
-    memset(A_struct, 0, (size_t)m * k * sizeof(double));
-
-    /* Row-major layout A_struct[row * k + col] for cache-friendly GE */
-    for (int jj = 0; jj < k; jj++) {
-        int j = col_order[jj];  /* Original column index */
-        for (int p = B->colptr[j]; p < B->colptr[j + 1]; p++) {
-            int row = B->rowidx[p];
-            A_struct[row * k + jj] = B->values[p];
-        }
-    }
-    t_a_struct_build_ms += lp_telemetry_timer_elapsed_ms(t_stage_start_ms);
+    int a_struct_valid = 0;
+#define ENSURE_A_STRUCT_BUILT() do { \
+    if (!a_struct_valid) { \
+        t_stage_start_ms = lp_telemetry_timer_start(); \
+        memset(A_struct, 0, (size_t)m * k * sizeof(double)); \
+        for (int astruct_jj = 0; astruct_jj < k; astruct_jj++) { \
+            int astruct_j = col_order[astruct_jj]; \
+            for (int astruct_p = B->colptr[astruct_j]; \
+                 astruct_p < B->colptr[astruct_j + 1]; astruct_p++) { \
+                int astruct_row = B->rowidx[astruct_p]; \
+                A_struct[(size_t)astruct_row * k + astruct_jj] = B->values[astruct_p]; \
+            } \
+        } \
+        t_a_struct_build_ms += lp_telemetry_timer_elapsed_ms(t_stage_start_ms); \
+        a_struct_valid = 1; \
+    } \
+} while (0)
 
     /* Dense LU with partial pivoting on the m×k structural part */
     int *row_perm = lu->ws_row_perm;
@@ -4280,17 +4288,6 @@ static int lu_numeric_factorize(LUFactorization *lu, const SparseMatrix *B,
                 row_pos[row_perm[i]] = i;
             }
         }
-        /* Re-populate A_struct from B */
-        t_stage_start_ms = lp_telemetry_timer_start();
-        memset(A_struct, 0, (size_t)m * k * sizeof(double));
-        for (int jj = 0; jj < k; jj++) {
-            int j = col_order[jj];
-            for (int p = B->colptr[j]; p < B->colptr[j + 1]; p++) {
-                int row = B->rowidx[p];
-                A_struct[row * k + jj] = B->values[p];
-            }
-        }
-        t_a_struct_build_ms += lp_telemetry_timer_elapsed_ms(t_stage_start_ms);
     }
 
     /* T2.1: Try supernodal factorization if enabled and k is large enough */
@@ -4306,6 +4303,7 @@ supernode_factorization:
         } else {
             force_supernode_attempt = 0;
             lu->sn_calls++;
+            ENSURE_A_STRUCT_BUILT();
             /* Build or reuse symbolic analysis */
             SNSymbolic *sn_sym = lu->sn_symbolic;
             if (!sn_sym || sn_sym->k != k || sn_sym->m != m) {
@@ -4470,12 +4468,14 @@ supernode_factorization:
                     }
                 }
                 t_a_struct_build_ms += lp_telemetry_timer_elapsed_ms(t_stage_start_ms);
+                a_struct_valid = 1;
             }
         }
     }
 
 dense_ge_factorization:
     backend_used = LU_NUMERIC_BACKEND_DENSE_GE;
+    ENSURE_A_STRUCT_BUILT();
     /* LU factorization of structural columns with partial pivoting */
     t_stage_start_ms = lp_telemetry_timer_start();
     for (int step = 0; step < k; step++) {
@@ -4666,6 +4666,7 @@ identity_placement:
                     }
                 }
                 t_a_struct_build_ms += lp_telemetry_timer_elapsed_ms(t_stage_start_ms);
+                a_struct_valid = 1;
                 goto supernode_factorization;
             }
 
@@ -4703,6 +4704,7 @@ identity_placement:
                     }
                 }
                 t_a_struct_build_ms += lp_telemetry_timer_elapsed_ms(t_stage_start_ms);
+                a_struct_valid = 1;
                 goto dense_ge_factorization;
             }
             terminal_failure_reason_hint = LU_SPARSE_NUMERIC_FAIL_IDENTITY_SEPARATION;
@@ -4875,6 +4877,7 @@ identity_placement:
     }
 
     NUMERIC_RETURN(0);
+#undef ENSURE_A_STRUCT_BUILT
 #undef NUMERIC_RETURN
 #undef NUMERIC_COMMIT
 }
