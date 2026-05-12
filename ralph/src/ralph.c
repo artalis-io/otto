@@ -485,6 +485,16 @@ static int ralph_should_skip_sparse_mid_presolve(const LPModel *model) {
         return 1;
     }
 
+    /* Mid-size sparse LPs in this band pay for several safe-presolve rounds
+     * and bound tightening, but the smaller presolved matrix takes a longer
+     * Phase 2 path. Keep the bypass below the broader large-sparse bands that
+     * still benefit from presolve-driven reductions. */
+    if (n >= 1450 && n <= 1650 &&
+        m >= 780 && m <= 860 &&
+        density >= 0.0075 && density <= 0.0088) {
+        return 1;
+    }
+
     if (n >= 1600 && n <= 8500 &&
         m >= 750 && m <= 1600 &&
         density >= 0.002 && density <= 0.0045) {
