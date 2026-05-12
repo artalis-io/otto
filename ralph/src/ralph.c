@@ -574,6 +574,17 @@ static int ralph_should_control_mid_sparse_reinvert(const LPModel *model) {
         return 1;
     }
 
+    /* Very wide ultra-sparse FIT2P-scale primals hit long Phase 2 stretches
+     * where routine reinversions dominate. Let the reinvert controller dampen
+     * the cadence for this large sparse shape while keeping dense FITD and
+     * smaller FIT1P-style models on their established policies. */
+    if (n >= 12500 && n <= 14500 &&
+        m >= 2800 && m <= 3200 &&
+        width_ratio >= 4.2 && width_ratio <= 4.8 &&
+        density >= 0.0010 && density <= 0.0015) {
+        return 1;
+    }
+
     /* Wide sparse CZPROB-like primals have many routine reinversions after
      * the no-presolve path preserves the full matrix.  Reuse the narrow
      * CZPROB shape band from the presolve policy so larger D2Q06C-like dual

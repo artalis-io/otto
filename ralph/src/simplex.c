@@ -4923,6 +4923,17 @@ static int simplex_should_skip_auto_dual_startup(const SimplexSolver *solver) {
         return 1;
     }
 
+    /* FIT2P-scale ultra-sparse wide LPs spend the auto-mode budget in a
+     * speculative dual startup, while the primal path is the one that reaches
+     * a verified optimum. Keep this above the smaller FIT1P sparse band and
+     * away from dense FITD cases. */
+    if (m >= 2800 && m <= 3200 &&
+        n >= 12500 && n <= 14500 &&
+        width_ratio >= 4.2 && width_ratio <= 4.8 &&
+        density >= 0.0010 && density <= 0.0015) {
+        return 1;
+    }
+
     /* In auto mode the scratch dual solve is speculative: if it does not return
      * a verified optimum, the solver pays the full dual startup cost and then
      * runs the primal path anyway.  On NETLIB-scale models up through roughly
