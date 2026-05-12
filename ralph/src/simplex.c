@@ -2169,7 +2169,7 @@ int simplex_pivot(SimplexTableau *tab,
         (tab->work2_sparse_valid &&
          tab->work2_sparse_entering == entering &&
          tab->work2_sparse_nnz > 0 &&
-         tab->work2_sparse_nnz * 2 < tab->m);
+         tab->work2_sparse_nnz * 3 < tab->m * 2);
     if (use_sparse_direction) {
         for (int t = 0; t < tab->work2_sparse_nnz; t++) {
             int k = tab->work2_sparse_idx[t];
