@@ -2188,7 +2188,12 @@ int simplex_pivot(SimplexTableau *tab,
     }
     obj_delta += tab->c_ext[entering] * (x[entering] - x_enter_old);
 
-    if (leaving_pos != -2) {
+    if (leaving_pos != -2 && use_sparse_direction) {
+        for (int t = 0; t < tab->work2_sparse_nnz; t++) {
+            int k = tab->work2_sparse_idx[t];
+            x_basic_backup[t] = x[basis[k]];
+        }
+    } else if (leaving_pos != -2) {
         for (int k = 0; k < tab->m; k++) {
             x_basic_backup[k] = x[basis[k]];
         }
@@ -2633,8 +2638,15 @@ pivot_fail_rollback:
     tab->basis_pos[entering] = -1;
     tab->var_status[leaving] = RALPH_BASIC;
     tab->var_status[entering] = entering_old_status;
-    for (int k = 0; k < tab->m; k++) {
-        tab->x[tab->basis[k]] = x_basic_backup[k];
+    if (use_sparse_direction) {
+        for (int t = 0; t < tab->work2_sparse_nnz; t++) {
+            int k = tab->work2_sparse_idx[t];
+            tab->x[tab->basis[k]] = x_basic_backup[t];
+        }
+    } else {
+        for (int k = 0; k < tab->m; k++) {
+            tab->x[tab->basis[k]] = x_basic_backup[k];
+        }
     }
     tab->x[entering] = x_enter_old;
     tab->x[leaving] = x_leave_old;
