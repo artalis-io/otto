@@ -682,6 +682,10 @@ typedef struct {
     /* Working vectors */
     double *work1;
     double *work2;
+    int *work2_sparse_idx; /* Nonzero positions for latest FTRAN direction */
+    int work2_sparse_nnz;
+    int work2_sparse_valid;
+    int work2_sparse_entering;
     double *work3;
     double *work4;
     double *rhs;            /* Normalized RHS (always >= 0) */

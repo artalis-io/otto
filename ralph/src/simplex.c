@@ -268,9 +268,9 @@ static int tableau_alloc_arrays(SimplexTableau *tab, int num_aux_vars, int num_a
         (size_t)m * sizeof(double) + (size_t)num_aux_vars * sizeof(double) +
         /* double array: c_original for two-phase (n) */
         (size_t)n * sizeof(double) +
-        /* int arrays: basis, basis_pos (m and n), basis cache cols/nnz (m each) */
+        /* int arrays: basis, basis_pos (m and n), basis cache cols/nnz (m each), sparse work2 idx */
         (size_t)m * sizeof(int) + (size_t)n * sizeof(int) +
-        2 * (size_t)m * sizeof(int) +
+        3 * (size_t)m * sizeof(int) +
         /* int arrays: nonbasis, var_status (n-m and n) */
         (size_t)(n - m) * sizeof(int) + (size_t)n * sizeof(VarStatus) +
         /* int arrays: cb_sparse_idx, aux_row, partial_candidates, dual_candidates */
@@ -321,6 +321,10 @@ static int tableau_alloc_arrays(SimplexTableau *tab, int num_aux_vars, int num_a
 
     tab->work1 = (double*)sh_arena_calloc(tab->arena, m, sizeof(double));
     tab->work2 = (double*)sh_arena_calloc(tab->arena, m, sizeof(double));
+    tab->work2_sparse_idx = (int*)sh_arena_alloc(tab->arena, m * sizeof(int));
+    tab->work2_sparse_nnz = 0;
+    tab->work2_sparse_valid = 0;
+    tab->work2_sparse_entering = -1;
     tab->work3 = (double*)sh_arena_calloc(tab->arena, n, sizeof(double));
     tab->work4 = (double*)sh_arena_calloc(tab->arena, m, sizeof(double));
     tab->rhs = (double*)sh_arena_calloc(tab->arena, m, sizeof(double));
@@ -393,7 +397,8 @@ static int tableau_alloc_arrays(SimplexTableau *tab, int num_aux_vars, int num_a
         !tab->basis || !tab->nonbasis || !tab->var_status || !tab->basis_pos ||
         !tab->basis_col_cache || !tab->basis_col_nnz_cache ||
         !tab->x || !tab->y || !tab->rc ||
-        !tab->work1 || !tab->work2 || !tab->work3 || !tab->work4 || !tab->rhs || !tab->row_sign ||
+        !tab->work1 || !tab->work2 || !tab->work2_sparse_idx ||
+        !tab->work3 || !tab->work4 || !tab->rhs || !tab->row_sign ||
         !tab->pivot_row || !tab->tau_work || !tab->se_weights ||
         !tab->cb_sparse_idx || !tab->cb_sparse_val ||
         !tab->aux_row || !tab->aux_coef || !tab->partial_candidates || !tab->dual_candidates ||
@@ -1076,6 +1081,10 @@ void tableau_free(SimplexTableau *tab) {
     tab->rc = NULL;
     tab->work1 = NULL;
     tab->work2 = NULL;
+    tab->work2_sparse_idx = NULL;
+    tab->work2_sparse_nnz = 0;
+    tab->work2_sparse_valid = 0;
+    tab->work2_sparse_entering = -1;
     tab->work3 = NULL;
     tab->work4 = NULL;
     tab->rhs = NULL;
@@ -2138,6 +2147,7 @@ int simplex_pivot(SimplexTableau *tab,
     double step = theta * dir;
     double gamma_e = 0.0;
     double obj_delta = 0.0;
+    int use_sparse_direction = 0;
     if (tab->trace_phase1_enabled) {
         tab->trace_last_entering = entering;
         tab->trace_last_leaving_pos = leaving_pos;
@@ -2155,6 +2165,20 @@ int simplex_pivot(SimplexTableau *tab,
 
     double *x_basic_backup = tab->primal_basic_x_backup;
     if (leaving_pos != -2 && !x_basic_backup) return -1;
+    use_sparse_direction =
+        (tab->work2_sparse_valid &&
+         tab->work2_sparse_entering == entering &&
+         tab->work2_sparse_nnz > 0 &&
+         tab->work2_sparse_nnz * 2 < tab->m);
+    if (use_sparse_direction) {
+        for (int t = 0; t < tab->work2_sparse_nnz; t++) {
+            int k = tab->work2_sparse_idx[t];
+            if (k < 0 || k >= tab->m) {
+                use_sparse_direction = 0;
+                break;
+            }
+        }
+    }
 
     /* Update entering variable */
     if (tab->var_status[entering] == RALPH_NONBASIC_LOWER) {
@@ -2164,17 +2188,39 @@ int simplex_pivot(SimplexTableau *tab,
     }
     obj_delta += tab->c_ext[entering] * (x[entering] - x_enter_old);
 
-    /* Update basic variables and accumulate ||d_entering||^2 in one pass. */
-    for (int k = 0; k < tab->m; k++) {
-        double dk = work2[k];
-        int basic_var = basis[k];
-        double dx = -step * dk;
-        if (leaving_pos != -2) {
-            x_basic_backup[k] = x[basic_var];
+    if (leaving_pos != -2) {
+        for (int k = 0; k < tab->m; k++) {
+            x_basic_backup[k] = x[basis[k]];
         }
-        x[basic_var] += dx;
-        obj_delta += tab->c_ext[basic_var] * dx;
-        gamma_e += dk * dk;
+    }
+
+    /* Update basic variables and accumulate ||d_entering||^2.  Hyper-sparse
+     * FTRAN already gives the nonzero direction positions; preserve that
+     * sparsity here instead of touching every basic variable on sparse pivots. */
+    if (use_sparse_direction) {
+        for (int t = 0; t < tab->work2_sparse_nnz; t++) {
+            int k = tab->work2_sparse_idx[t];
+            double dk;
+            int basic_var;
+            double dx;
+            dk = work2[k];
+            if (fabs(dk) <= RALPH_ZERO_TOL) continue;
+            basic_var = basis[k];
+            dx = -step * dk;
+            x[basic_var] += dx;
+            obj_delta += tab->c_ext[basic_var] * dx;
+            gamma_e += dk * dk;
+        }
+    }
+    if (!use_sparse_direction) {
+        for (int k = 0; k < tab->m; k++) {
+            double dk = work2[k];
+            int basic_var = basis[k];
+            double dx = -step * dk;
+            x[basic_var] += dx;
+            obj_delta += tab->c_ext[basic_var] * dx;
+            gamma_e += dk * dk;
+        }
     }
 
     if (leaving_pos == -2) {
@@ -2191,6 +2237,9 @@ int simplex_pivot(SimplexTableau *tab,
         tab->obj_value += obj_delta;
         /* Status changed → heap score changed; re-sift to correct position */
         if (tab->pricing_strategy == 4) heap_update(tab, entering);
+        tab->work2_sparse_valid = 0;
+        tab->work2_sparse_nnz = 0;
+        tab->work2_sparse_entering = -1;
         return 0;
     }
 
@@ -2419,6 +2468,9 @@ basis_update_done:
         tab->duals_valid = 0;
         tab->rc_all_valid = 0;
         tab->rc[entering] = 0.0;  /* Basic variables have rc = 0 */
+        tab->work2_sparse_valid = 0;
+        tab->work2_sparse_nnz = 0;
+        tab->work2_sparse_entering = -1;
         return 0;
     }
 
@@ -2568,6 +2620,9 @@ basis_update_done:
         if (use_heap) heap_insert(tab, leaving);  /* leaving → non-basic */
     }
 
+    tab->work2_sparse_valid = 0;
+    tab->work2_sparse_nnz = 0;
+    tab->work2_sparse_entering = -1;
     return 0;
 
 pivot_fail_rollback:
@@ -2585,6 +2640,9 @@ pivot_fail_rollback:
     tab->x[leaving] = x_leave_old;
     tab->duals_valid = 0;
     tab->rc_all_valid = 0;
+    tab->work2_sparse_valid = 0;
+    tab->work2_sparse_nnz = 0;
+    tab->work2_sparse_entering = -1;
     return -1;
 }
 

@@ -35,7 +35,13 @@ int ratio_test_bland(SimplexTableau *tab, int entering, int *leaving, double *th
     /* Use hyper-sparse FTRAN for better performance on sparse columns */
     {
         double t_ftran_ms = lp_telemetry_timer_start();
-        lu_ftran_hyper_sparse(tab->lu, col_nnz, col_idx, col_val, tab->work2, NULL, NULL);
+        tab->work2_sparse_valid = 0;
+        tab->work2_sparse_nnz = 0;
+        tab->work2_sparse_entering = -1;
+        lu_ftran_hyper_sparse(tab->lu, col_nnz, col_idx, col_val, tab->work2,
+                              tab->work2_sparse_idx, &tab->work2_sparse_nnz);
+        tab->work2_sparse_valid = 1;
+        tab->work2_sparse_entering = entering;
         if (tab->owner) {
             lp_telemetry_add_ftran_timed(tab->owner, t_ftran_ms);
         }
@@ -141,7 +147,13 @@ int ratio_test_standard(SimplexTableau *tab, int entering, int *leaving, double 
 
     {
         double t_ftran_ms = lp_telemetry_timer_start();
-        lu_ftran_hyper_sparse(tab->lu, col_nnz, col_idx, col_val, tab->work2, NULL, NULL);
+        tab->work2_sparse_valid = 0;
+        tab->work2_sparse_nnz = 0;
+        tab->work2_sparse_entering = -1;
+        lu_ftran_hyper_sparse(tab->lu, col_nnz, col_idx, col_val, tab->work2,
+                              tab->work2_sparse_idx, &tab->work2_sparse_nnz);
+        tab->work2_sparse_valid = 1;
+        tab->work2_sparse_entering = entering;
         if (tab->owner) {
             lp_telemetry_add_ftran_timed(tab->owner, t_ftran_ms);
         }
@@ -247,7 +259,13 @@ int ratio_test_harris(SimplexTableau *tab, int entering, int *leaving, double *t
     /* Use hyper-sparse FTRAN for better performance on sparse columns */
     {
         double t_ftran_ms = lp_telemetry_timer_start();
-        lu_ftran_hyper_sparse(tab->lu, col_nnz, col_idx, col_val, tab->work2, NULL, NULL);
+        tab->work2_sparse_valid = 0;
+        tab->work2_sparse_nnz = 0;
+        tab->work2_sparse_entering = -1;
+        lu_ftran_hyper_sparse(tab->lu, col_nnz, col_idx, col_val, tab->work2,
+                              tab->work2_sparse_idx, &tab->work2_sparse_nnz);
+        tab->work2_sparse_valid = 1;
+        tab->work2_sparse_entering = entering;
         if (tab->owner) {
             lp_telemetry_add_ftran_timed(tab->owner, t_ftran_ms);
         }
