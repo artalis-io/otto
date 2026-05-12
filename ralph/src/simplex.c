@@ -4911,6 +4911,28 @@ static int simplex_should_use_sparse_fit_phase2_steepest(const SimplexSolver *so
             density >= 0.008 && density <= 0.011);
 }
 
+static int simplex_should_use_fit2p_phase2_heap(const SimplexSolver *solver,
+                                                const SimplexTableau *tab) {
+    if (!solver || !solver->model || !solver->model->A || !tab) return 0;
+
+    int m = solver->model->num_cons;
+    int n = solver->model->num_vars;
+    int nnz = solver->model->A->nnz;
+    if (m <= 0 || n <= 0 || nnz <= 0) return 0;
+
+    double density = (double)nnz / ((double)m * (double)n);
+    double width_ratio = (double)n / (double)m;
+    /* FIT2P-scale Phase 2 spends hundreds of milliseconds repeatedly scanning
+     * a very wide reduced-cost vector. Heap pricing preserves the path shape
+     * on this ultra-sparse band while avoiding the full-column scan cost.
+     * Keep this above FIT1P and away from denser BNL/SCTAP/25FV families where
+     * heap pricing adds pivots and regresses wall time. */
+    return (m >= 2800 && m <= 3200 &&
+            n >= 12500 && n <= 14500 &&
+            width_ratio >= 4.2 && width_ratio <= 4.8 &&
+            density >= 0.0010 && density <= 0.0015);
+}
+
 static int simplex_should_use_sparse_fit_phase1_partial(const SimplexSolver *solver,
                                                         const SimplexTableau *tab) {
     if (!tab || !tab->use_two_phase || tab->num_artificial <= 0) return 0;
@@ -5147,6 +5169,11 @@ static int simplex_finish_prepared_primal_solve(SimplexSolver *solver, clock_t s
         solver->pricing_strategy = 1;
         tab->pricing_strategy = 1;
         tab->use_steepest_edge = 1;
+    } else if (saved_pricing == 2 &&
+        simplex_should_use_fit2p_phase2_heap(solver, tab)) {
+        solver->pricing_strategy = 4;
+        tab->pricing_strategy = 4;
+        tab->use_steepest_edge = 0;
     } else if (saved_pricing == 2 &&
         simplex_should_use_bandm_phase2_dantzig(solver, tab)) {
         solver->pricing_strategy = 0;
