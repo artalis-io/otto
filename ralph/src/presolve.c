@@ -86,7 +86,16 @@ static void presolve_context_free(PresolveContext *ctx) {
     free(ctx->col_deleted);
     free(ctx->row_lb);
     free(ctx->row_ub);
+    free(ctx->bt_rowptr);
+    free(ctx->bt_rowfill);
+    free(ctx->bt_colidx);
+    free(ctx->bt_values);
     free(ctx);
+}
+
+static void presolve_invalidate_bound_tightening_cache(PresolveContext *ctx) {
+    if (!ctx) return;
+    ctx->bt_cache_valid = 0;
 }
 
 /* ============================================================================
@@ -1059,41 +1068,63 @@ static int presolve_bound_tightening_sparse_lp(PresolveContext *ctx) {
     int nnz = A ? A->nnz : 0;
     int count = 0;
     int *rowptr = NULL;
-    int *rowfill = NULL;
     int *colidx = NULL;
     double *values = NULL;
 
     if (!A) return 0;
 
-    rowptr = (int*)calloc((size_t)m + 1, sizeof(int));
-    rowfill = (int*)calloc((size_t)m, sizeof(int));
-    colidx = (int*)malloc((size_t)nnz * sizeof(int));
-    values = (double*)malloc((size_t)nnz * sizeof(double));
-    if (!rowptr || !rowfill || !colidx || !values) {
-        free(rowptr);
-        free(rowfill);
-        free(colidx);
-        free(values);
-        return -2;
+    if (!ctx->bt_cache_valid || ctx->bt_cache_nnz != nnz ||
+        !ctx->bt_rowptr || !ctx->bt_rowfill ||
+        !ctx->bt_colidx || !ctx->bt_values) {
+        if (!ctx->bt_rowptr) {
+            ctx->bt_rowptr = (int*)calloc((size_t)m + 1, sizeof(int));
+        } else {
+            memset(ctx->bt_rowptr, 0, ((size_t)m + 1) * sizeof(int));
+        }
+        if (!ctx->bt_rowfill) {
+            ctx->bt_rowfill = (int*)calloc((size_t)m, sizeof(int));
+        } else {
+            memset(ctx->bt_rowfill, 0, (size_t)m * sizeof(int));
+        }
+        if (ctx->bt_cache_nnz != nnz || !ctx->bt_colidx) {
+            int *new_colidx = (int*)realloc(ctx->bt_colidx, (size_t)nnz * sizeof(int));
+            if (!new_colidx) return -2;
+            ctx->bt_colidx = new_colidx;
+        }
+        if (ctx->bt_cache_nnz != nnz || !ctx->bt_values) {
+            double *new_values = (double*)realloc(ctx->bt_values, (size_t)nnz * sizeof(double));
+            if (!new_values) return -2;
+            ctx->bt_values = new_values;
+        }
+        if (!ctx->bt_rowptr || !ctx->bt_rowfill ||
+            !ctx->bt_colidx || !ctx->bt_values) {
+            return -2;
+        }
+        ctx->bt_cache_nnz = nnz;
+
+        for (int p = 0; p < nnz; p++) {
+            int r = A->rowidx[p];
+            if (r >= 0 && r < m) ctx->bt_rowptr[r + 1]++;
+        }
+        for (int i = 0; i < m; i++) {
+            ctx->bt_rowptr[i + 1] += ctx->bt_rowptr[i];
+            ctx->bt_rowfill[i] = ctx->bt_rowptr[i];
+        }
+        for (int j = 0; j < n; j++) {
+            for (int p = A->colptr[j]; p < A->colptr[j + 1]; p++) {
+                int r = A->rowidx[p];
+                if (r < 0 || r >= m) continue;
+                int q = ctx->bt_rowfill[r]++;
+                ctx->bt_colidx[q] = j;
+                ctx->bt_values[q] = A->values[p];
+            }
+        }
+        ctx->bt_cache_valid = 1;
     }
 
-    for (int p = 0; p < nnz; p++) {
-        int r = A->rowidx[p];
-        if (r >= 0 && r < m) rowptr[r + 1]++;
-    }
-    for (int i = 0; i < m; i++) {
-        rowptr[i + 1] += rowptr[i];
-        rowfill[i] = rowptr[i];
-    }
-    for (int j = 0; j < n; j++) {
-        for (int p = A->colptr[j]; p < A->colptr[j + 1]; p++) {
-            int r = A->rowidx[p];
-            if (r < 0 || r >= m) continue;
-            int q = rowfill[r]++;
-            colidx[q] = j;
-            values[q] = A->values[p];
-        }
-    }
+    rowptr = ctx->bt_rowptr;
+    colidx = ctx->bt_colidx;
+    values = ctx->bt_values;
 
     for (int i = 0; i < m; i++) {
         if (ctx->row_deleted[i]) continue;
@@ -1205,19 +1236,11 @@ static int presolve_bound_tightening_sparse_lp(PresolveContext *ctx) {
                 count++;
             }
             if (model->lb[j] > model->ub[j] + RALPH_FEAS_TOL) {
-                free(rowptr);
-                free(rowfill);
-                free(colidx);
-                free(values);
                 return -1;
             }
         }
     }
 
-    free(rowptr);
-    free(rowfill);
-    free(colidx);
-    free(values);
     return count;
 }
 
@@ -2951,6 +2974,7 @@ PresolveResult* presolve_with_mask(LPModel *model, unsigned int technique_mask) 
         if (mask & PRESOLVE_DOUBLETON_EQ) {
             int n = presolve_doubleton_equality(ctx, result);
             if (n < 0) { status = -1; break; }
+            if (n > 0) presolve_invalidate_bound_tightening_cache(ctx);
             changed += n;
             structural_changed += n;
             result->vars_removed += n;
@@ -2984,6 +3008,7 @@ PresolveResult* presolve_with_mask(LPModel *model, unsigned int technique_mask) 
         if (mask & PRESOLVE_PROPORTIONAL_COLS) {
             int n = presolve_proportional_cols(ctx);
             if (n < 0) { status = -1; break; }
+            if (n > 0) presolve_invalidate_bound_tightening_cache(ctx);
             changed += n;
             structural_changed += n;
             result->vars_removed += n;
@@ -2992,6 +3017,7 @@ PresolveResult* presolve_with_mask(LPModel *model, unsigned int technique_mask) 
         if (ctx->probing && model->num_binary > 0 && (mask & PRESOLVE_PROBING)) {
             int n = presolve_probing(ctx);
             if (n < 0) { status = -1; break; }
+            if (n > 0) presolve_invalidate_bound_tightening_cache(ctx);
             changed += n;
             structural_changed += n;
             result->vars_removed += n;
