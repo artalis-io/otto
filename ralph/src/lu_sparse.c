@@ -2851,7 +2851,7 @@ static int lu_factorize_markowitz(
     /* For large structural fronts, test the cached column maximum first.
      * It is threshold-eligible by construction and can avoid full column scans
      * when it also reaches the current bucket's Markowitz lower bound. */
-    int use_colmax_probe = (k >= 1000);
+    int use_colmax_probe = (k >= 500);
 
     #define MKZ_TRY_COLMAX_PROBE(row_ok_expr) do { \
         int max_pos = use_colmax_probe ? col_max_pos[jj] : -1; \
