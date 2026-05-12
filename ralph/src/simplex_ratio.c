@@ -294,6 +294,19 @@ int ratio_test_harris(SimplexTableau *tab, int entering, int *leaving, double *t
     const double *lb = tab->lb_ext;
     const double *ub = tab->ub_ext;
     const double *work2 = tab->work2;
+    const int *scan_idx = NULL;
+    int scan_count = tab->m;
+
+    if (tab->phase != 1 &&
+        tab->m >= 500 &&
+        tab->work2_sparse_valid &&
+        tab->work2_sparse_entering == entering &&
+        tab->work2_sparse_idx &&
+        tab->work2_sparse_nnz > 0 &&
+        tab->work2_sparse_nnz * 3 < tab->m * 2) {
+        scan_idx = tab->work2_sparse_idx;
+        scan_count = tab->work2_sparse_nnz;
+    }
 
     /* See ratio_test_bland: Phase 1 uses the absolute floor for bound
      * protection; Phase 2 keeps the relative numerical filter. */
@@ -301,7 +314,9 @@ int ratio_test_harris(SimplexTableau *tab, int entering, int *leaving, double *t
     double pivot_tol = RALPH_PIVOT_TOL;
     if (tab->phase != 1) {
         double max_abs_dk = 0.0;
-        for (int k = 0; k < tab->m; k++) {
+        for (int t = 0; t < scan_count; t++) {
+            int k = scan_idx ? scan_idx[t] : t;
+            if (k < 0 || k >= tab->m) continue;
             double dk = (dir > 0.0) ? work2[k] : -work2[k];
             double abs_dk = fabs(dk);
             if (abs_dk > RALPH_ZERO_TOL) ftran_nnz++;
@@ -337,7 +352,9 @@ int ratio_test_harris(SimplexTableau *tab, int entering, int *leaving, double *t
     }
 
     /* Single pass: compute theta_max and select best leaving simultaneously */
-    for (int k = 0; k < tab->m; k++) {
+    for (int t = 0; t < scan_count; t++) {
+        int k = scan_idx ? scan_idx[t] : t;
+        if (k < 0 || k >= tab->m) continue;
         double dk = (dir > 0.0) ? work2[k] : -work2[k];
         double abs_dk = fabs(dk);
         if (tab->phase == 1 && abs_dk > RALPH_ZERO_TOL) ftran_nnz++;
@@ -402,7 +419,9 @@ int ratio_test_harris(SimplexTableau *tab, int entering, int *leaving, double *t
         *leaving = -1;
         *theta = RALPH_INFINITY;
 
-        for (int k = 0; k < tab->m; k++) {
+        for (int t = 0; t < scan_count; t++) {
+            int k = scan_idx ? scan_idx[t] : t;
+            if (k < 0 || k >= tab->m) continue;
             double dk = (dir > 0.0) ? work2[k] : -work2[k];
             if (fabs(dk) < pivot_tol) continue;
 
