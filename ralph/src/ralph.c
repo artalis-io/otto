@@ -557,6 +557,7 @@ static int ralph_should_control_mid_sparse_reinvert(const LPModel *model) {
     if (n <= 0 || m <= 0 || nnz <= 0) return 0;
 
     double density = (double)nnz / ((double)n * (double)m);
+    double width_ratio = (double)n / (double)m;
     if (n >= 3000 && n <= 4500 &&
         m >= 1800 && m <= 2800 &&
         density >= 0.001 && density <= 0.0025) {
@@ -620,6 +621,17 @@ static int ralph_should_control_mid_sparse_reinvert(const LPModel *model) {
     if (n >= 2500 && n <= 5600 &&
         m >= 1100 && m <= 1200 &&
         density >= 0.0023 && density <= 0.0029) {
+        return 1;
+    }
+
+    /* GANGES-style mid-row sparse dual starts already avoid exact DSE and
+     * shifted bounds; routine reinversions become the remaining dual bottleneck.
+     * Control that cadence only in this narrow row/width/density band so
+     * taller SCTAP and denser SCFXM/MAROS families keep their existing paths. */
+    if (m >= 1250 && m <= 1350 &&
+        n >= 1600 && n <= 1750 &&
+        width_ratio >= 1.20 && width_ratio <= 1.35 &&
+        density >= 0.0029 && density <= 0.0034) {
         return 1;
     }
 
