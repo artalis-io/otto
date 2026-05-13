@@ -207,6 +207,37 @@ static int test_score_rejects_artificial_increase(void) {
     return 1;
 }
 
+static int test_score_rejects_degenerate_candidate(void) {
+    P1FeasCandidate candidate = {
+        .current_art_sum = 5.0,
+        .predicted_art_sum = 5.0,
+        .pivot_abs = 10.0,
+        .theta = 0.0
+    };
+
+    ASSERT_INT_EQ(p1_engine_score_candidate(candidate).valid, 0,
+                  "zero-step candidate invalid");
+    return 1;
+}
+
+static int test_score_prefers_nonzero_movement_before_pivot_size(void) {
+    P1FeasCandidate a = {
+        .current_art_sum = 10.0,
+        .predicted_art_sum = 5.0,
+        .pivot_abs = 1.0,
+        .theta = 2.0,
+        .artificial_basic_after = 4
+    };
+    P1FeasCandidate b = a;
+    b.pivot_abs = 10.0;
+    b.theta = 1.0;
+
+    ASSERT_TRUE(p1_engine_score_better(p1_engine_score_candidate(a),
+                                       p1_engine_score_candidate(b)),
+                "larger movement wins tied artificial score before pivot size");
+    return 1;
+}
+
 static int test_progress_window_initializes_on_first_update(void) {
     P1ProgressWindow window;
 
@@ -328,6 +359,10 @@ static struct { const char *name; TestFunc func; } all_tests[] = {
     {"score_prefers_removing_positive_artificial_on_tie",
      test_score_prefers_removing_positive_artificial_on_tie},
     {"score_rejects_artificial_increase", test_score_rejects_artificial_increase},
+    {"score_rejects_degenerate_candidate",
+     test_score_rejects_degenerate_candidate},
+    {"score_prefers_nonzero_movement_before_pivot_size",
+     test_score_prefers_nonzero_movement_before_pivot_size},
     {"progress_window_initializes_on_first_update",
      test_progress_window_initializes_on_first_update},
     {"progress_window_resets_on_sufficient_drop",

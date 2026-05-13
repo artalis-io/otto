@@ -948,7 +948,7 @@ P1FeasScore p1_engine_score_candidate(P1FeasCandidate candidate) {
         !isfinite(candidate.pivot_abs) ||
         !isfinite(candidate.theta) ||
         candidate.pivot_abs <= 0.0 ||
-        candidate.theta < 0.0 ||
+        candidate.theta <= RALPH_FEAS_TOL ||
         candidate.predicted_art_sum > candidate.current_art_sum +
             fmax(1000.0 * RALPH_FEAS_TOL,
                  1e-9 * fmax(1.0, candidate.current_art_sum))) {
@@ -987,8 +987,11 @@ int p1_engine_score_better(P1FeasScore a, P1FeasScore b) {
         return a.artificial_basic_after < b.artificial_basic_after;
     }
 
+    if (a.theta > b.theta + RALPH_FEAS_TOL) return 1;
+    if (b.theta > a.theta + RALPH_FEAS_TOL) return 0;
+
     if (a.pivot_abs > b.pivot_abs * 1.1) return 1;
     if (b.pivot_abs > a.pivot_abs * 1.1) return 0;
 
-    return a.theta > b.theta + RALPH_FEAS_TOL;
+    return 0;
 }
