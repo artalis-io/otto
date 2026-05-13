@@ -537,6 +537,57 @@ int p1_engine_direction_preserves_artificial_progress(const SimplexTableau *tab,
     return predicted <= current + tol;
 }
 
+int p1_candidate_basis_refactorable(SimplexTableau *tab,
+                                    int entering,
+                                    int leaving,
+                                    double theta,
+                                    double max_artificial_increase) {
+    double before_art_sum;
+    double after_art_sum;
+    P1CleanupSnapshot snap;
+
+    if (!tab || entering < 0 || entering >= tab->n || !isfinite(theta) ||
+        theta < 0.0 || max_artificial_increase < 0.0) {
+        return 0;
+    }
+    if (leaving < 0) {
+        return p1_engine_direction_preserves_artificial_progress(tab,
+                                                                 entering,
+                                                                 leaving,
+                                                                 theta);
+    }
+    if (leaving >= tab->m || !tab->A_ext || !tab->lu || !tab->work1 ||
+        !tab->work2 || !tab->basis || !tab->basis_pos || !tab->var_status ||
+        !tab->x) {
+        return 0;
+    }
+
+    before_art_sum = p1_engine_artificial_sum(tab);
+    if (!isfinite(before_art_sum)) return 0;
+    if (p1_cleanup_snapshot_take(tab, &snap) != 0) return 0;
+
+    sparse_get_column(tab->A_ext, entering, tab->work1);
+    lu_solve(tab->lu, tab->work1, tab->work2);
+    tab->work2_sparse_valid = 0;
+    tab->work2_sparse_nnz = 0;
+    tab->work2_sparse_entering = -1;
+
+    if (simplex_pivot(tab, entering, leaving, theta, 0) != 0 ||
+        tableau_refactorize(tab) != 0) {
+        (void)p1_cleanup_snapshot_restore(tab, &snap);
+        p1_cleanup_snapshot_free(&snap);
+        return 0;
+    }
+
+    tableau_compute_solution(tab);
+    after_art_sum = p1_engine_artificial_sum(tab);
+    (void)p1_cleanup_snapshot_restore(tab, &snap);
+    p1_cleanup_snapshot_free(&snap);
+
+    if (!isfinite(after_art_sum)) return 0;
+    return after_art_sum <= before_art_sum + max_artificial_increase;
+}
+
 int p1_select_leaving_feasibility(SimplexTableau *tab,
                                   int entering,
                                   int *leaving,

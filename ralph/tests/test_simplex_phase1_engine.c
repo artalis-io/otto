@@ -270,6 +270,53 @@ static int test_progress_window_perturb_uses_cooldown(void) {
     return 1;
 }
 
+static int test_candidate_basis_rejects_missing_lu(void) {
+    SimplexTableau tab;
+    int basis[2] = {2, 1};
+    int basis_pos[4];
+    VarStatus status[4];
+    int artificials[2];
+    double x[4], lb[4], ub[4], work2[2];
+
+    seed_tableau(&tab, basis, basis_pos, status, artificials, x, lb, ub, work2);
+    status[2] = RALPH_BASIC;
+    status[1] = RALPH_BASIC;
+    basis_pos[2] = 0;
+    basis_pos[1] = 1;
+    x[2] = 5.0;
+    work2[0] = 1.0;
+
+    ASSERT_INT_EQ(p1_candidate_basis_refactorable(&tab, 0, 0, 1.0, 1e-8),
+                  0, "basis candidate without LU is rejected");
+    return 1;
+}
+
+static int test_candidate_basis_bound_flip_uses_artificial_prediction(void) {
+    SimplexTableau tab;
+    int basis[2] = {2, 1};
+    int basis_pos[4];
+    VarStatus status[4];
+    int artificials[2];
+    double x[4], lb[4], ub[4], work2[2];
+
+    seed_tableau(&tab, basis, basis_pos, status, artificials, x, lb, ub, work2);
+    status[2] = RALPH_BASIC;
+    status[1] = RALPH_BASIC;
+    basis_pos[2] = 0;
+    basis_pos[1] = 1;
+    x[2] = 5.0;
+    x[3] = 2.0;
+    work2[0] = -1.0;
+    work2[1] = 0.0;
+
+    ASSERT_INT_EQ(p1_candidate_basis_refactorable(&tab, 0, -2, 1.0, 1e-8),
+                  0, "artificial-increasing bound flip is rejected");
+    work2[0] = 0.0;
+    ASSERT_INT_EQ(p1_candidate_basis_refactorable(&tab, 0, -2, 1.0, 1e-8),
+                  1, "artificial-preserving bound flip is accepted");
+    return 1;
+}
+
 typedef int (*TestFunc)(void);
 
 static struct { const char *name; TestFunc func; } all_tests[] = {
@@ -289,6 +336,10 @@ static struct { const char *name; TestFunc func; } all_tests[] = {
      test_progress_window_triggers_cleanup_before_perturb},
     {"progress_window_perturb_uses_cooldown",
      test_progress_window_perturb_uses_cooldown},
+    {"candidate_basis_rejects_missing_lu",
+     test_candidate_basis_rejects_missing_lu},
+    {"candidate_basis_bound_flip_uses_artificial_prediction",
+     test_candidate_basis_bound_flip_uses_artificial_prediction},
 };
 
 int main(void) {
