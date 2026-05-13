@@ -3,6 +3,8 @@
  */
 
 #include <math.h>
+#include <stdlib.h>
+#include <string.h>
 #include "simplex_phase1_engine.h"
 #include "simplex_internal.h"
 
@@ -149,6 +151,77 @@ static int p1_entering_movable(const SimplexTableau *tab, int j) {
         return tab->x[j] > tab->lb_ext[j] + RALPH_FEAS_TOL;
     }
     return st == RALPH_NONBASIC_FREE;
+}
+
+typedef struct {
+    int m;
+    int n;
+    int *basis;
+    VarStatus *var_status;
+    double *x;
+} P1CleanupSnapshot;
+
+static int p1_cleanup_snapshot_take(SimplexTableau *tab,
+                                    P1CleanupSnapshot *snap) {
+    if (!tab || !snap || tab->m <= 0 || tab->n <= 0 ||
+        !tab->basis || !tab->var_status || !tab->x) {
+        return -1;
+    }
+    memset(snap, 0, sizeof(*snap));
+    snap->m = tab->m;
+    snap->n = tab->n;
+    snap->basis = (int*)malloc((size_t)tab->m * sizeof(int));
+    snap->var_status = (VarStatus*)malloc((size_t)tab->n * sizeof(VarStatus));
+    snap->x = (double*)malloc((size_t)tab->n * sizeof(double));
+    if (!snap->basis || !snap->var_status || !snap->x) {
+        free(snap->basis);
+        free(snap->var_status);
+        free(snap->x);
+        memset(snap, 0, sizeof(*snap));
+        return -1;
+    }
+    memcpy(snap->basis, tab->basis, (size_t)tab->m * sizeof(int));
+    memcpy(snap->var_status, tab->var_status, (size_t)tab->n * sizeof(VarStatus));
+    memcpy(snap->x, tab->x, (size_t)tab->n * sizeof(double));
+    return 0;
+}
+
+static void p1_cleanup_snapshot_free(P1CleanupSnapshot *snap) {
+    if (!snap) return;
+    free(snap->basis);
+    free(snap->var_status);
+    free(snap->x);
+    memset(snap, 0, sizeof(*snap));
+}
+
+static int p1_cleanup_snapshot_restore(SimplexTableau *tab,
+                                       const P1CleanupSnapshot *snap) {
+    if (!tab || !snap || !snap->basis || !snap->var_status || !snap->x ||
+        snap->m != tab->m || snap->n != tab->n ||
+        !tab->basis || !tab->basis_pos || !tab->var_status || !tab->x) {
+        return -1;
+    }
+
+    memcpy(tab->basis, snap->basis, (size_t)tab->m * sizeof(int));
+    memcpy(tab->var_status, snap->var_status, (size_t)tab->n * sizeof(VarStatus));
+    memcpy(tab->x, snap->x, (size_t)tab->n * sizeof(double));
+    for (int j = 0; j < tab->n; j++) {
+        tab->basis_pos[j] = -1;
+    }
+    for (int k = 0; k < tab->m; k++) {
+        int j = tab->basis[k];
+        if (j < 0 || j >= tab->n) return -1;
+        tab->basis_pos[j] = k;
+        tab->var_status[j] = RALPH_BASIC;
+    }
+    tab->duals_valid = 0;
+    tab->rc_all_valid = 0;
+    tab->basis_cache_valid = 0;
+    tab->basis_cache_total_nnz = 0;
+    if (tableau_refactorize(tab) != 0) return -1;
+    tableau_compute_solution(tab);
+    tableau_compute_reduced_costs(tab);
+    return 0;
 }
 
 void p1_progress_window_init(P1ProgressWindow *window) {
@@ -713,6 +786,10 @@ int p1_cleanup_zero_artificials(SimplexTableau *tab, int max_pivots) {
 
         if (best_j < 0 || best_abs_coef <= RALPH_PIVOT_TOL) continue;
 
+        double before_art_sum = p1_engine_artificial_sum(tab);
+        P1CleanupSnapshot snap;
+        if (p1_cleanup_snapshot_take(tab, &snap) != 0) continue;
+
         sparse_get_column(tab->A_ext, best_j, tab->work1);
         lu_solve(tab->lu, tab->work1, tab->work2);
         tab->work2_sparse_valid = 0;
@@ -720,8 +797,27 @@ int p1_cleanup_zero_artificials(SimplexTableau *tab, int max_pivots) {
         tab->work2_sparse_entering = -1;
 
         if (simplex_pivot(tab, best_j, pos, 0.0, 0) == 0) {
+            double after_art_sum;
+            if (tableau_refactorize(tab) != 0) {
+                (void)p1_cleanup_snapshot_restore(tab, &snap);
+                p1_cleanup_snapshot_free(&snap);
+                continue;
+            }
+            tableau_compute_solution(tab);
+            after_art_sum = p1_engine_artificial_sum(tab);
+            if (!isfinite(after_art_sum) ||
+                after_art_sum > before_art_sum +
+                    fmax(1e-8, 1e-9 * fmax(1.0, before_art_sum))) {
+                (void)p1_cleanup_snapshot_restore(tab, &snap);
+                p1_cleanup_snapshot_free(&snap);
+                continue;
+            }
+            tableau_compute_reduced_costs(tab);
             pivots++;
+        } else {
+            (void)p1_cleanup_snapshot_restore(tab, &snap);
         }
+        p1_cleanup_snapshot_free(&snap);
     }
 
     return pivots;
