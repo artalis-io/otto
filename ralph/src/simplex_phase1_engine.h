@@ -70,6 +70,12 @@ int p1_engine_direction_preserves_artificial_progress(const SimplexTableau *tab,
                                                       int leaving,
                                                       double theta);
 
+int p1_candidate_basis_refactorable(SimplexTableau *tab,
+                                    int entering,
+                                    int leaving,
+                                    double theta,
+                                    double max_artificial_increase);
+
 int p1_select_leaving_feasibility(SimplexTableau *tab,
                                   int entering,
                                   int *leaving,
