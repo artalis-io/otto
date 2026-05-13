@@ -1410,10 +1410,20 @@ P1ZoneResult p1_zone_stall_detect(SimplexSolver *solver,
     }
 
     if (rs->progress.feasibility_window.cleanup_due) {
+        int cleanup_pivots = p1_cleanup_zero_artificials(tab, 1);
+        if (cleanup_pivots > 0) {
+            rs->cycling.stall_count = 0;
+            if (rs->cycling.pricing_strategy == 4) heap_build(tab);
+            if (solver->verbose >= 2) {
+                LP_LOG_STDERR("[simplex_phase1] Progress-window cleanup pivoted out %d zero artificial basic at iter %d\n",
+                        cleanup_pivots, iter);
+            }
+            return P1_ZONE_CONTINUE;
+        }
         rs->cycling.use_bland = 1;
         rs->cycling.stall_count = 0;
         if (solver->verbose >= 3) {
-            LP_LOG_STDERR("[simplex_phase1] Progress-window stale at iter %d (art_sum=%.17g); deferring cleanup to safer trigger\n",
+            LP_LOG_STDERR("[simplex_phase1] Progress-window stale at iter %d (art_sum=%.17g); no safe cleanup pivot found\n",
                     iter, art_sum);
         }
     }
