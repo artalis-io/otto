@@ -48,6 +48,21 @@ int p1_engine_direction_preserves_artificial_progress(const SimplexTableau *tab,
                                                       int leaving,
                                                       double theta);
 
+int p1_select_leaving_feasibility(SimplexTableau *tab,
+                                  int entering,
+                                  int *leaving,
+                                  double *theta,
+                                  P1FeasScore *score_out);
+
+int p1_select_entering_feasibility(SimplexTableau *tab,
+                                   const int *excluded_vars,
+                                   int excluded_count,
+                                   int max_evals,
+                                   int *entering,
+                                   int *leaving,
+                                   double *theta,
+                                   P1FeasScore *score_out);
+
 P1FeasScore p1_engine_score_candidate(P1FeasCandidate candidate);
 
 int p1_engine_score_better(P1FeasScore a, P1FeasScore b);
