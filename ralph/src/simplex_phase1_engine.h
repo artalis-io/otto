@@ -63,6 +63,8 @@ int p1_select_entering_feasibility(SimplexTableau *tab,
                                    double *theta,
                                    P1FeasScore *score_out);
 
+int p1_cleanup_zero_artificials(SimplexTableau *tab, int max_pivots);
+
 P1FeasScore p1_engine_score_candidate(P1FeasCandidate candidate);
 
 int p1_engine_score_better(P1FeasScore a, P1FeasScore b);
