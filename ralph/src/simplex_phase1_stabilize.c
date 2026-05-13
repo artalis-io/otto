@@ -9,6 +9,7 @@
 
 #include "simplex_phase1_stabilize.h"
 #include "simplex_internal.h"
+#include "simplex_phase1_engine.h"
 #include "simplex_pricing.h"
 #include "lp_refactor_policy.h"
 #include "lp_log.h"
@@ -257,6 +258,15 @@ void phase1_recompute_full_with_reason(SimplexSolver *solver,
     tab->phase1_compute_rc_context = LP_PHASE1_COMPUTE_CTX_RECOMPUTE_FULL;
     tableau_compute_solution(tab);
     tableau_compute_reduced_costs(tab);
+    if (tab->phase == 1 &&
+        reason != LP_PHASE1_RECOMPUTE_REASON_PERTURB &&
+        tab->artificial_basic_count > 0) {
+        double art_sum = p1_engine_artificial_sum(tab);
+        if (isfinite(art_sum) &&
+            (art_sum <= 1e-4 || tab->artificial_basic_count <= 32)) {
+            (void)p1_cleanup_zero_artificials(tab, 1);
+        }
+    }
     if (rc_only_streak) *rc_only_streak = 0;
     lp_telemetry_record_phase1_recompute(solver, reason);
 }

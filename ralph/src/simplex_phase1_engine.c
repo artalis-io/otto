@@ -902,6 +902,14 @@ int p1_cleanup_zero_artificials(SimplexTableau *tab, int max_pivots) {
         tab->work2_sparse_valid = 0;
         tab->work2_sparse_nnz = 0;
         tab->work2_sparse_entering = -1;
+        if (fabs(tab->work2[pos]) < fmax(1e-4, RALPH_PIVOT_TOL)) {
+            p1_cleanup_snapshot_free(&snap);
+            continue;
+        }
+        if (!p1_candidate_basis_refactorable(tab, best_j, pos, 0.0, 0.0)) {
+            p1_cleanup_snapshot_free(&snap);
+            continue;
+        }
 
         if (simplex_pivot(tab, best_j, pos, 0.0, 0) == 0) {
             double after_art_sum;
