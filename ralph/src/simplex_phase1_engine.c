@@ -132,6 +132,156 @@ static int p1_entering_eligible(const SimplexTableau *tab, int j) {
     return 0;
 }
 
+static int p1_entering_movable(const SimplexTableau *tab, int j) {
+    VarStatus st;
+
+    if (!tab || j < 0 || j >= tab->n || !tab->var_status ||
+        !tab->x || !tab->lb_ext || !tab->ub_ext) {
+        return 0;
+    }
+    st = tab->var_status[j];
+    if (st == RALPH_BASIC || st == RALPH_FIXED) return 0;
+    if (st == RALPH_NONBASIC_LOWER) {
+        return tab->ub_ext[j] > tab->x[j] + RALPH_FEAS_TOL;
+    }
+    if (st == RALPH_NONBASIC_UPPER) {
+        return tab->x[j] > tab->lb_ext[j] + RALPH_FEAS_TOL;
+    }
+    return st == RALPH_NONBASIC_FREE;
+}
+
+static int p1_consider_entering_candidate(SimplexTableau *tab,
+                                          int j,
+                                          int *best_entering,
+                                          int *best_leaving,
+                                          double *best_theta,
+                                          P1FeasScore *best_score) {
+    int cand_leaving = -1;
+    double cand_theta = RALPH_INFINITY;
+    P1FeasScore cand_score;
+
+    if (p1_select_leaving_feasibility(tab, j, &cand_leaving,
+                                      &cand_theta, &cand_score) != 0) {
+        return 0;
+    }
+    if (p1_engine_score_better(cand_score, *best_score)) {
+        *best_score = cand_score;
+        *best_entering = j;
+        *best_leaving = cand_leaving;
+        *best_theta = cand_theta;
+        return 1;
+    }
+    return 0;
+}
+
+static int p1_select_entering_for_positive_artificial_rows(
+    SimplexTableau *tab,
+    const int *excluded_vars,
+    int excluded_count,
+    int max_evals,
+    int *evals,
+    int *best_entering,
+    int *best_leaving,
+    double *best_theta,
+    P1FeasScore *best_score) {
+    if (!tab || !evals || !best_entering || !best_leaving ||
+        !best_theta || !best_score || !tab->work1 || !tab->work4) {
+        return 0;
+    }
+
+    int picked_art[6] = {-1, -1, -1, -1, -1, -1};
+
+    for (int row_pick = 0; row_pick < 6; row_pick++) {
+        int best_art_j = -1;
+        double best_art_x = 0.0;
+        int pos;
+
+        if (max_evals > 0 && *evals >= max_evals) break;
+
+        for (int a = 0; a < tab->num_artificial; a++) {
+            int art_j = tab->artificial_vars[a];
+            double art_x;
+            int already_picked = 0;
+
+            if (art_j < 0 || art_j >= tab->n) continue;
+            for (int p = 0; p < row_pick; p++) {
+                if (picked_art[p] == art_j) {
+                    already_picked = 1;
+                    break;
+                }
+            }
+            if (already_picked) continue;
+            if (tab->var_status[art_j] != RALPH_BASIC) continue;
+            art_x = fabs(tab->x[art_j]);
+            if (art_x <= best_art_x || art_x <= RALPH_FEAS_TOL) continue;
+            if (best_score->removes_positive_artificial &&
+                best_score->decrease >= art_x - RALPH_FEAS_TOL) {
+                continue;
+            }
+            best_art_x = art_x;
+            best_art_j = art_j;
+        }
+
+        if (best_art_j < 0) break;
+        picked_art[row_pick] = best_art_j;
+
+        pos = tab->basis_pos[best_art_j];
+        if (pos < 0 || pos >= tab->m) continue;
+
+        vec_set_zero(tab->work1, tab->m);
+        tab->work1[pos] = 1.0;
+        lu_solve_transpose(tab->lu, tab->work1, tab->work4);
+
+        for (int pass = 0; pass < 2; pass++) {
+            int j_begin = (pass == 0) ? 0 : tab->num_structural_ext;
+            int j_end = (pass == 0) ? tab->num_structural_ext : tab->n;
+            int row_best_j = -1;
+            double row_best_dk = 0.0;
+
+            if (max_evals > 0 && *evals >= max_evals) break;
+            if (j_begin < 0) j_begin = 0;
+            if (j_end > tab->n) j_end = tab->n;
+
+            for (int j = j_begin; j < j_end; j++) {
+                double coef;
+                double dir;
+                double dk;
+
+                if (p1_entering_excluded(j, excluded_vars, excluded_count)) continue;
+                if (p1_var_is_artificial(tab, j)) continue;
+                if (!p1_entering_movable(tab, j)) continue;
+
+                coef = sparse_dot_column(tab->A_ext, j, tab->work4);
+                dir = (tab->var_status[j] == RALPH_NONBASIC_UPPER) ? -1.0 : 1.0;
+                dk = coef * dir;
+
+                /* A positive basic artificial at its lower bound leaves when
+                 * the entering direction decreases it, i.e. dk > 0 in the
+                 * primal ratio-test convention. */
+                if (dk <= RALPH_PIVOT_TOL) continue;
+
+                if (dk > row_best_dk) {
+                    row_best_dk = dk;
+                    row_best_j = j;
+                }
+            }
+
+            if (row_best_j >= 0) {
+                (*evals)++;
+                p1_consider_entering_candidate(tab, row_best_j, best_entering,
+                                               best_leaving, best_theta,
+                                               best_score);
+                if (best_score->removes_positive_artificial &&
+                    best_score->decrease > RALPH_FEAS_TOL) {
+                    return 1;
+                }
+            }
+        }
+    }
+
+    return best_score->valid;
+}
+
 double p1_engine_artificial_sum(const SimplexTableau *tab) {
     double sum = 0.0;
 
@@ -379,29 +529,34 @@ int p1_select_entering_feasibility(SimplexTableau *tab,
     best_score.artificial_basic_after = p1_artificial_basic_count(tab);
     best_score.valid = 0;
 
-    for (int j = 0; j < tab->n; j++) {
-        int cand_leaving = -1;
-        double cand_theta = RALPH_INFINITY;
-        P1FeasScore cand_score;
+    if (p1_select_entering_for_positive_artificial_rows(tab,
+                                                        excluded_vars,
+                                                        excluded_count,
+                                                        max_evals,
+                                                        &evals,
+                                                        &best_entering,
+                                                        &best_leaving,
+                                                        &best_theta,
+                                                        &best_score)) {
+        goto restore_selected;
+    }
+    if (evals > 0) {
+        goto restore_selected;
+    }
 
+    for (int j = 0; j < tab->n; j++) {
         if (p1_entering_excluded(j, excluded_vars, excluded_count)) continue;
         if (!p1_entering_eligible(tab, j)) continue;
 
         if (max_evals > 0 && evals >= max_evals) break;
         evals++;
 
-        if (p1_select_leaving_feasibility(tab, j, &cand_leaving,
-                                          &cand_theta, &cand_score) != 0) {
-            continue;
-        }
-        if (p1_engine_score_better(cand_score, best_score)) {
-            best_score = cand_score;
-            best_entering = j;
-            best_leaving = cand_leaving;
-            best_theta = cand_theta;
-        }
+        p1_consider_entering_candidate(tab, j, &best_entering,
+                                       &best_leaving, &best_theta,
+                                       &best_score);
     }
 
+restore_selected:
     if (!best_score.valid || best_entering < 0) {
         return -1;
     }
