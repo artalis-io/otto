@@ -97,6 +97,8 @@ double tableau_get_rc(SimplexTableau *tab, int j);
 
 /* ── Functions shared between simplex.c and zone handlers ─────────── */
 
+int tableau_refactorize_strict_probe(SimplexTableau *tab);
+
 /* Refactorize with telemetry reason code */
 static inline int tableau_refactorize_with_reason(SimplexTableau *tab, int reason) {
     lp_telemetry_set_refactor_next_reason(tab ? tab->owner : NULL, reason);
