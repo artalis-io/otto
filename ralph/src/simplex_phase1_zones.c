@@ -778,13 +778,17 @@ P1ZoneResult p1_zone_pricing(SimplexSolver *solver,
         double feas_tol = fmax(1000.0 * RALPH_FEAS_TOL,
                                1e-9 * fmax(1.0, art_sum_pre));
         int try_feas_pricing = 0;
+        int artificial_heavy =
+            tab->artificial_basic_count > tab->m / 2 &&
+            art_sum_pre > fmax(1.0, 1000.0 * RALPH_FEAS_TOL);
         ctx->ratio_status = p1_select_leaving_feasibility(tab,
                                                           entering,
                                                           &ctx->leaving,
                                                           &ctx->theta,
                                                           &feas_score);
         if ((tab->m >= 1000 && tab->n >= 2000) &&
-            (ctx->ratio_status != 0 ||
+            (artificial_heavy ||
+             ctx->ratio_status != 0 ||
             (tab->artificial_basic_count > 0 &&
              feas_score.decrease <= feas_tol &&
              !feas_score.removes_positive_artificial))) {
@@ -1409,6 +1413,24 @@ P1ZoneResult p1_zone_stall_detect(SimplexSolver *solver,
         return P1_ZONE_PROCEED;
     }
 
+    if (rs->progress.feasibility_window.refactor_due) {
+        if (tableau_refactorize_with_reason(
+                tab,
+                RALPH_REFACTOR_REASON_DIRECTION_STABILIZE) == 0) {
+            rs->cycling.use_bland = 1;
+            rs->cycling.stall_count = 0;
+            phase1_recompute_full_with_reason(
+                solver,
+                tab,
+                &rs->numerical.rc_only_streak,
+                LP_PHASE1_RECOMPUTE_REASON_DIR_REFACTOR);
+            if (solver->verbose >= 2) {
+                LP_LOG_STDERR("[simplex_phase1] Progress-window refactor at iter %d (art_sum=%.17g)\n",
+                        iter, art_sum);
+            }
+        }
+    }
+
     if (rs->progress.feasibility_window.cleanup_due) {
         int cleanup_pivots = p1_cleanup_zero_artificials(tab, 1);
         if (cleanup_pivots > 0) {
@@ -1426,6 +1448,27 @@ P1ZoneResult p1_zone_stall_detect(SimplexSolver *solver,
             LP_LOG_STDERR("[simplex_phase1] Progress-window stale at iter %d (art_sum=%.17g); no safe cleanup pivot found\n",
                     iter, art_sum);
         }
+    }
+
+    if (rs->progress.feasibility_window.perturb_due) {
+        double scale;
+        rs->cycling.perturb_attempts++;
+        scale = 1.0 + 2.0 * rs->cycling.perturb_attempts;
+        primal_apply_perturbation_scaled(tab, scale);
+        rs->cycling.use_bland = 0;
+        rs->cycling.degenerate_count = 0;
+        rs->cycling.stall_count = 0;
+        phase1_recompute_full_with_reason(
+            solver,
+            tab,
+            &rs->numerical.rc_only_streak,
+            LP_PHASE1_RECOMPUTE_REASON_PERTURB);
+        if (rs->cycling.pricing_strategy == 4) heap_build(tab);
+        if (solver->verbose >= 2) {
+            LP_LOG_STDERR("[simplex_phase1] Progress-window perturb at iter %d (attempt %d, scale %.1f, art_sum=%.17g)\n",
+                    iter, rs->cycling.perturb_attempts, scale, art_sum);
+        }
+        return P1_ZONE_CONTINUE;
     }
 
     return P1_ZONE_PROCEED;
