@@ -1861,6 +1861,46 @@ int tableau_refactorize(SimplexTableau *tab) {
     return status;
 }
 
+int tableau_refactorize_strict_probe(SimplexTableau *tab) {
+    if (!tab || !tab->lu) return -1;
+
+    SparseMatrix *B = build_basis_matrix(tab);
+    if (!B) return -1;
+
+    {
+        int allow = 0;
+        int reg_limit = 0;
+        if (tab->use_two_phase && ((tab->phase == 1 &&
+             tab->num_redundant > 0) ||
+            (tab->phase == 2 &&
+             tab->num_redundant > 0 &&
+             tab->redundant_rows_zeroed))) {
+            allow = 1;
+            reg_limit = RALPH_PHASE1_MAX_REGULARIZATIONS;
+            if (tab->num_redundant > reg_limit) {
+                reg_limit = tab->num_redundant;
+            }
+            if (reg_limit > tab->m) {
+                reg_limit = tab->m;
+            }
+        }
+        lu_configure_regularization(tab->lu, allow, reg_limit,
+                                    tab->redundant_rows, tab->num_redundant);
+    }
+
+    {
+        double saved_tol = lu_get_pivot_tol(tab->lu);
+        int status;
+        if (tab->phase == 2 && tab->num_redundant > 0 &&
+            tab->redundant_rows_zeroed) {
+            lu_set_pivot_tol(tab->lu, 1e-15);
+        }
+        status = lu_factorize(tab->lu, B);
+        lu_set_pivot_tol(tab->lu, saved_tol);
+        return status;
+    }
+}
+
 /* tableau_refactorize_with_reason is now a static inline in simplex_internal.h */
 
 /* ============================================================================

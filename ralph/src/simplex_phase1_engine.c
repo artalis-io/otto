@@ -599,7 +599,7 @@ int p1_candidate_basis_refactorable(SimplexTableau *tab,
     }
     tab->artificial_basic_count = p1_artificial_basic_count(tab);
 
-    if (tableau_refactorize(tab) != 0) {
+    if (tableau_refactorize_strict_probe(tab) != 0) {
         (void)p1_cleanup_snapshot_restore(tab, &snap);
         p1_cleanup_snapshot_free(&snap);
         return 0;
