@@ -1350,43 +1350,75 @@ void p1_zone_post_pivot_reset(SimplexSolver *solver,
 
 /* ── Zone 7b: Stall detection ──────────────────────────────────────── */
 
-void p1_zone_stall_detect(SimplexSolver *solver,
-                          SimplexTableau *tab,
-                          P1RecoveryState *rs)
+P1ZoneResult p1_zone_stall_detect(SimplexSolver *solver,
+                                  SimplexTableau *tab,
+                                  P1RecoveryState *rs,
+                                  int iter)
 {
-    /* Phase 1 stall detection: re-perturb when objective stalls.
-     * This is critical for problems like recipe (80 artificials) where
-     * Bland's rule grinds forever without making progress. */
-    double obj_tol_p1 =
-        lp_refactor_policy_phase1_stall_obj_tol(rs->cycling.last_obj);
-    double obj_change_p1 = fabs(tab->obj_value - rs->cycling.last_obj);
-    if (obj_change_p1 < obj_tol_p1) {
-        rs->cycling.stall_count++;
-        if (rs->cycling.stall_count >= rs->cycling.stall_threshold) {
-            rs->cycling.perturb_attempts++;
-            if (rs->cycling.perturb_attempts <= rs->cycling.max_perturb_attempts) {
-                double scale = 1.0 + 2.0 * rs->cycling.perturb_attempts;
-                primal_apply_perturbation_scaled(tab, scale);
-                /* Reset Bland's to allow faster pricing */
-                rs->cycling.use_bland = 0;
-                rs->cycling.degenerate_count = 0;
-                rs->cycling.stall_count = 0;
-                phase1_recompute_full_with_reason(
-                    solver,
-                    tab,
-                    &rs->numerical.rc_only_streak,
-                    LP_PHASE1_RECOMPUTE_REASON_PERTURB);
-                if (rs->cycling.pricing_strategy == 4) heap_build(tab);
-                if (solver->verbose) {
-                    LP_LOG_STDERR("[simplex_phase1] Stall detected, re-perturbing (attempt %d, scale %.1f)\n",
-                            rs->cycling.perturb_attempts, scale);
+    double art_sum = p1_artificial_sum(tab);
+    int stale;
+
+    if (!isfinite(art_sum)) {
+        return P1_ZONE_PROCEED;
+    }
+
+    if (tab->m < 1000) {
+        double obj_tol_p1 =
+            lp_refactor_policy_phase1_stall_obj_tol(rs->cycling.last_obj);
+        double obj_change_p1 = fabs(tab->obj_value - rs->cycling.last_obj);
+        if (obj_change_p1 < obj_tol_p1) {
+            rs->cycling.stall_count++;
+            if (rs->cycling.stall_count >= rs->cycling.stall_threshold) {
+                rs->cycling.perturb_attempts++;
+                if (rs->cycling.perturb_attempts <= rs->cycling.max_perturb_attempts) {
+                    double scale = 1.0 + 2.0 * rs->cycling.perturb_attempts;
+                    primal_apply_perturbation_scaled(tab, scale);
+                    rs->cycling.use_bland = 0;
+                    rs->cycling.degenerate_count = 0;
+                    rs->cycling.stall_count = 0;
+                    phase1_recompute_full_with_reason(
+                        solver,
+                        tab,
+                        &rs->numerical.rc_only_streak,
+                        LP_PHASE1_RECOMPUTE_REASON_PERTURB);
+                    if (rs->cycling.pricing_strategy == 4) heap_build(tab);
+                    if (solver->verbose) {
+                        LP_LOG_STDERR("[simplex_phase1] Stall detected, re-perturbing (attempt %d, scale %.1f)\n",
+                                rs->cycling.perturb_attempts, scale);
+                    }
                 }
             }
+        } else {
+            rs->cycling.stall_count = 0;
+            rs->cycling.last_obj = tab->obj_value;
         }
-    } else {
+        return P1_ZONE_PROCEED;
+    }
+
+    stale = p1_progress_window_update(&rs->progress.feasibility_window,
+                                      art_sum,
+                                      64,
+                                      1e-5,
+                                      1e-8,
+                                      1,
+                                      3,
+                                      512);
+    if (!stale) {
         rs->cycling.stall_count = 0;
         rs->cycling.last_obj = tab->obj_value;
+        return P1_ZONE_PROCEED;
     }
+
+    if (rs->progress.feasibility_window.cleanup_due) {
+        rs->cycling.use_bland = 1;
+        rs->cycling.stall_count = 0;
+        if (solver->verbose >= 3) {
+            LP_LOG_STDERR("[simplex_phase1] Progress-window stale at iter %d (art_sum=%.17g); deferring cleanup to safer trigger\n",
+                    iter, art_sum);
+        }
+    }
+
+    return P1_ZONE_PROCEED;
 }
 
 /* ── Zone 7c: Periodic refactorization ─────────────────────────────── */
