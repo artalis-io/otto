@@ -470,10 +470,6 @@ static int p1_select_entering_for_positive_artificial_rows(
                 p1_consider_entering_candidate(tab, row_best_j, best_entering,
                                                best_leaving, best_theta,
                                                best_score);
-                if (best_score->removes_positive_artificial &&
-                    best_score->decrease > RALPH_FEAS_TOL) {
-                    return 1;
-                }
             }
         }
     }
@@ -809,7 +805,7 @@ int p1_select_entering_feasibility(SimplexTableau *tab,
                                                         &best_score)) {
         goto restore_selected;
     }
-    if (evals > 0) {
+    if (evals > 0 && best_score.valid) {
         goto restore_selected;
     }
 
