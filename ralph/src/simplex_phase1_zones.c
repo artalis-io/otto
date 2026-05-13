@@ -774,12 +774,58 @@ P1ZoneResult p1_zone_pricing(SimplexSolver *solver,
     /* Ratio test: select leaving variable */
     {
         double t_ratio_ms = lp_telemetry_timer_start();
-        ctx->ratio_status = primal_ratio_test_with_policy(solver,
-                                                          tab,
-                                                          0,
+        P1FeasScore feas_score;
+        double feas_tol = fmax(1000.0 * RALPH_FEAS_TOL,
+                               1e-9 * fmax(1.0, art_sum_pre));
+        int try_feas_pricing = 0;
+        ctx->ratio_status = p1_select_leaving_feasibility(tab,
                                                           entering,
                                                           &ctx->leaving,
-                                                          &ctx->theta);
+                                                          &ctx->theta,
+                                                          &feas_score);
+        if ((tab->m >= 1000 && tab->n >= 2000) &&
+            (ctx->ratio_status != 0 ||
+            (tab->artificial_basic_count > 0 &&
+             feas_score.decrease <= feas_tol &&
+             !feas_score.removes_positive_artificial))) {
+            try_feas_pricing = 1;
+        }
+        if (try_feas_pricing) {
+            int alt_entering = -1;
+            int alt_leaving = -1;
+            double alt_theta = RALPH_INFINITY;
+            int excluded[3];
+            int excluded_count = 0;
+
+            excluded[excluded_count++] = entering;
+            if (rs->basis.excluded_entering_ttl_a > 0) {
+                excluded[excluded_count++] = rs->basis.excluded_entering_a;
+            }
+            if (rs->basis.excluded_entering_ttl_b > 0) {
+                excluded[excluded_count++] = rs->basis.excluded_entering_b;
+            }
+            if (p1_select_entering_feasibility(tab,
+                                               excluded,
+                                               excluded_count,
+                                               384,
+                                               &alt_entering,
+                                               &alt_leaving,
+                                               &alt_theta,
+                                               &feas_score) == 0) {
+                entering = alt_entering;
+                ctx->leaving = alt_leaving;
+                ctx->theta = alt_theta;
+                ctx->ratio_status = 0;
+            }
+        }
+        if (ctx->ratio_status != 0) {
+            ctx->ratio_status = primal_ratio_test_with_policy(solver,
+                                                              tab,
+                                                              0,
+                                                              entering,
+                                                              &ctx->leaving,
+                                                              &ctx->theta);
+        }
         lp_telemetry_record_ratio_timed(solver, 1, t_ratio_ms);
     }
 

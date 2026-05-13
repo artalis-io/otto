@@ -5,6 +5,133 @@
 #include <math.h>
 #include "simplex_phase1_engine.h"
 
+static double p1_entering_bound_flip_distance(const SimplexTableau *tab,
+                                              int entering) {
+    double dist;
+
+    if (tab->var_status[entering] == RALPH_NONBASIC_UPPER) {
+        if (tab->lb_ext[entering] <= -RALPH_INFINITY / 2.0) {
+            return RALPH_INFINITY;
+        }
+        dist = tab->x[entering] - tab->lb_ext[entering];
+    } else {
+        if (tab->ub_ext[entering] >= RALPH_INFINITY / 2.0) {
+            return RALPH_INFINITY;
+        }
+        dist = tab->ub_ext[entering] - tab->x[entering];
+    }
+    return dist > 0.0 ? dist : 0.0;
+}
+
+static int p1_var_is_artificial(const SimplexTableau *tab, int j) {
+    if (!tab || j < 0 || j >= tab->n) return 0;
+    if (tab->is_artificial_var) return tab->is_artificial_var[j] != 0;
+    for (int k = 0; k < tab->num_artificial; k++) {
+        if (tab->artificial_vars[k] == j) return 1;
+    }
+    return 0;
+}
+
+static int p1_artificial_basic_count(const SimplexTableau *tab) {
+    int count = 0;
+
+    if (!tab || !tab->basis) return 0;
+    for (int k = 0; k < tab->m; k++) {
+        if (p1_var_is_artificial(tab, tab->basis[k])) count++;
+    }
+    return count;
+}
+
+static void p1_zero_redundant_artificial_directions(SimplexTableau *tab) {
+    if (!tab || tab->num_redundant <= 0) return;
+    for (int a = 0; a < tab->num_artificial; a++) {
+        int art_j = tab->artificial_vars[a];
+        if (art_j >= 0 && art_j < tab->n &&
+            tab->var_status[art_j] == RALPH_BASIC) {
+            int pos = tab->basis_pos[art_j];
+            if (pos >= 0 && pos < tab->m) {
+                tab->work2[pos] = 0.0;
+            }
+        }
+    }
+}
+
+static P1FeasScore p1_score_leaving_candidate(const SimplexTableau *tab,
+                                              int entering,
+                                              int leaving,
+                                              double theta,
+                                              double pivot_abs,
+                                              int artificial_basic_before) {
+    P1FeasCandidate candidate;
+    P1FeasScore invalid;
+    int entering_is_artificial;
+    int leaving_is_artificial = 0;
+    int leaving_positive_artificial = 0;
+    int artificial_basic_after;
+
+    invalid.decrease = 0.0;
+    invalid.pivot_abs = 0.0;
+    invalid.theta = 0.0;
+    invalid.removes_positive_artificial = 0;
+    invalid.artificial_basic_after = artificial_basic_before;
+    invalid.valid = 0;
+
+    if (!tab || entering < 0 || entering >= tab->n) return invalid;
+    entering_is_artificial = p1_var_is_artificial(tab, entering);
+    artificial_basic_after = artificial_basic_before;
+
+    if (leaving >= 0 && leaving < tab->m) {
+        int leaving_var = tab->basis[leaving];
+        leaving_is_artificial = p1_var_is_artificial(tab, leaving_var);
+        leaving_positive_artificial =
+            leaving_is_artificial && fabs(tab->x[leaving_var]) > RALPH_FEAS_TOL;
+        if (leaving_is_artificial && !entering_is_artificial) {
+            artificial_basic_after--;
+        } else if (!leaving_is_artificial && entering_is_artificial) {
+            artificial_basic_after++;
+        }
+    }
+    if (artificial_basic_after < 0) artificial_basic_after = 0;
+
+    if (!p1_engine_predict_artificial_sum(tab, entering, leaving, theta,
+                                          &candidate.current_art_sum,
+                                          &candidate.predicted_art_sum)) {
+        return invalid;
+    }
+    candidate.art_delta = candidate.predicted_art_sum - candidate.current_art_sum;
+    candidate.pivot_abs = pivot_abs;
+    candidate.theta = theta;
+    candidate.entering_is_artificial = entering_is_artificial;
+    candidate.leaving_is_artificial = leaving_is_artificial;
+    candidate.leaving_positive_artificial = leaving_positive_artificial;
+    candidate.artificial_basic_before = artificial_basic_before;
+    candidate.artificial_basic_after = artificial_basic_after;
+    return p1_engine_score_candidate(candidate);
+}
+
+static int p1_entering_excluded(int j, const int *excluded_vars, int excluded_count) {
+    if (!excluded_vars || excluded_count <= 0) return 0;
+    for (int k = 0; k < excluded_count; k++) {
+        if (excluded_vars[k] == j) return 1;
+    }
+    return 0;
+}
+
+static int p1_entering_eligible(const SimplexTableau *tab, int j) {
+    double rc;
+    VarStatus st;
+
+    if (!tab || j < 0 || j >= tab->n || !tab->rc || !tab->var_status) return 0;
+    st = tab->var_status[j];
+    if (st == RALPH_BASIC) return 0;
+
+    rc = tab->rc[j];
+    if (st == RALPH_NONBASIC_LOWER && rc < -RALPH_OPT_TOL) return 1;
+    if (st == RALPH_NONBASIC_UPPER && rc > RALPH_OPT_TOL) return 1;
+    if (st == RALPH_NONBASIC_FREE && fabs(rc) > RALPH_OPT_TOL) return 1;
+    return 0;
+}
+
 double p1_engine_artificial_sum(const SimplexTableau *tab) {
     double sum = 0.0;
 
@@ -100,6 +227,196 @@ int p1_engine_direction_preserves_artificial_progress(const SimplexTableau *tab,
     scale = fmax(1.0, current);
     tol = fmax(1000.0 * RALPH_FEAS_TOL, 1e-9 * scale);
     return predicted <= current + tol;
+}
+
+int p1_select_leaving_feasibility(SimplexTableau *tab,
+                                  int entering,
+                                  int *leaving,
+                                  double *theta,
+                                  P1FeasScore *score_out) {
+    int col_nnz;
+    const int *col_idx;
+    const double *col_val;
+    double dir = 1.0;
+    double theta_max = RALPH_INFINITY;
+    double enter_range;
+    int artificial_basic_before;
+    int best_leaving = -1;
+    double best_theta = RALPH_INFINITY;
+    P1FeasScore best_score;
+
+    if (!tab || !leaving || !theta || entering < 0 || entering >= tab->n ||
+        !tab->A_ext || !tab->lu || !tab->work2 || !tab->basis ||
+        !tab->x || !tab->lb_ext || !tab->ub_ext || !tab->var_status) {
+        return -1;
+    }
+
+    sparse_get_column_sparse(tab->A_ext, entering, &col_nnz, &col_idx, &col_val);
+    {
+        double t_ftran_ms = lp_telemetry_timer_start();
+        tab->work2_sparse_valid = 0;
+        tab->work2_sparse_nnz = 0;
+        tab->work2_sparse_entering = -1;
+        lu_ftran_hyper_sparse(tab->lu, col_nnz, col_idx, col_val, tab->work2,
+                              tab->work2_sparse_idx, &tab->work2_sparse_nnz);
+        tab->work2_sparse_valid = 1;
+        tab->work2_sparse_entering = entering;
+        if (tab->owner) {
+            lp_telemetry_add_ftran_timed(tab->owner, t_ftran_ms);
+        }
+    }
+    p1_zero_redundant_artificial_directions(tab);
+
+    if (tab->var_status[entering] == RALPH_NONBASIC_UPPER) {
+        dir = -1.0;
+    }
+
+    enter_range = p1_entering_bound_flip_distance(tab, entering);
+    if (enter_range < RALPH_INFINITY / 2.0) {
+        theta_max = enter_range;
+    }
+
+    for (int k = 0; k < tab->m; k++) {
+        double dk = tab->work2[k] * dir;
+        double abs_dk = fabs(dk);
+        int j;
+        double ratio_harris;
+
+        if (abs_dk < RALPH_PIVOT_TOL) continue;
+        j = tab->basis[k];
+        if (dk > 0.0) {
+            ratio_harris = (tab->x[j] - tab->lb_ext[j] + RALPH_FEAS_TOL) / dk;
+        } else {
+            ratio_harris = (tab->ub_ext[j] - tab->x[j] + RALPH_FEAS_TOL) / (-dk);
+        }
+        if (ratio_harris < theta_max) {
+            theta_max = ratio_harris;
+        }
+    }
+
+    if (theta_max >= RALPH_INFINITY / 2.0) {
+        return -1;
+    }
+
+    best_score.valid = 0;
+    best_score.decrease = 0.0;
+    best_score.pivot_abs = 0.0;
+    best_score.theta = 0.0;
+    best_score.removes_positive_artificial = 0;
+    best_score.artificial_basic_after = p1_artificial_basic_count(tab);
+    artificial_basic_before = best_score.artificial_basic_after;
+
+    for (int k = 0; k < tab->m; k++) {
+        double dk = tab->work2[k] * dir;
+        double abs_dk = fabs(dk);
+        int j;
+        double ratio_exact;
+        double candidate_theta;
+        P1FeasScore score;
+
+        if (abs_dk < RALPH_PIVOT_TOL) continue;
+        j = tab->basis[k];
+        if (dk > 0.0) {
+            ratio_exact = (tab->x[j] - tab->lb_ext[j]) / dk;
+        } else {
+            ratio_exact = (tab->ub_ext[j] - tab->x[j]) / (-dk);
+        }
+        candidate_theta = ratio_exact > 0.0 ? ratio_exact : 0.0;
+        if (candidate_theta > theta_max + RALPH_FEAS_TOL) continue;
+
+        score = p1_score_leaving_candidate(tab, entering, k, candidate_theta,
+                                           abs_dk, artificial_basic_before);
+        if (p1_engine_score_better(score, best_score)) {
+            best_score = score;
+            best_leaving = k;
+            best_theta = candidate_theta;
+        }
+    }
+
+    if (enter_range <= theta_max && enter_range < RALPH_INFINITY / 2.0) {
+        P1FeasScore score =
+            p1_score_leaving_candidate(tab, entering, -2, enter_range,
+                                       RALPH_INFINITY, artificial_basic_before);
+        if (p1_engine_score_better(score, best_score)) {
+            best_score = score;
+            best_leaving = -2;
+            best_theta = enter_range;
+        }
+    }
+
+    if (!best_score.valid) {
+        return -1;
+    }
+
+    *leaving = best_leaving;
+    *theta = best_theta;
+    if (score_out) *score_out = best_score;
+    return 0;
+}
+
+int p1_select_entering_feasibility(SimplexTableau *tab,
+                                   const int *excluded_vars,
+                                   int excluded_count,
+                                   int max_evals,
+                                   int *entering,
+                                   int *leaving,
+                                   double *theta,
+                                   P1FeasScore *score_out) {
+    int best_entering = -1;
+    int best_leaving = -1;
+    double best_theta = RALPH_INFINITY;
+    P1FeasScore best_score;
+    int evals = 0;
+
+    if (!tab || !entering || !leaving || !theta || max_evals == 0) {
+        return -1;
+    }
+
+    best_score.decrease = 0.0;
+    best_score.pivot_abs = 0.0;
+    best_score.theta = 0.0;
+    best_score.removes_positive_artificial = 0;
+    best_score.artificial_basic_after = p1_artificial_basic_count(tab);
+    best_score.valid = 0;
+
+    for (int j = 0; j < tab->n; j++) {
+        int cand_leaving = -1;
+        double cand_theta = RALPH_INFINITY;
+        P1FeasScore cand_score;
+
+        if (p1_entering_excluded(j, excluded_vars, excluded_count)) continue;
+        if (!p1_entering_eligible(tab, j)) continue;
+
+        if (max_evals > 0 && evals >= max_evals) break;
+        evals++;
+
+        if (p1_select_leaving_feasibility(tab, j, &cand_leaving,
+                                          &cand_theta, &cand_score) != 0) {
+            continue;
+        }
+        if (p1_engine_score_better(cand_score, best_score)) {
+            best_score = cand_score;
+            best_entering = j;
+            best_leaving = cand_leaving;
+            best_theta = cand_theta;
+        }
+    }
+
+    if (!best_score.valid || best_entering < 0) {
+        return -1;
+    }
+
+    /* Restore work2 to the selected entering column for simplex_pivot(). */
+    if (p1_select_leaving_feasibility(tab, best_entering, &best_leaving,
+                                      &best_theta, &best_score) != 0) {
+        return -1;
+    }
+
+    *entering = best_entering;
+    *leaving = best_leaving;
+    *theta = best_theta;
+    if (score_out) *score_out = best_score;
+    return 0;
 }
 
 P1FeasScore p1_engine_score_candidate(P1FeasCandidate candidate) {
