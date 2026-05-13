@@ -207,6 +207,69 @@ static int test_score_rejects_artificial_increase(void) {
     return 1;
 }
 
+static int test_progress_window_initializes_on_first_update(void) {
+    P1ProgressWindow window;
+
+    p1_progress_window_init(&window);
+
+    ASSERT_INT_EQ(p1_progress_window_update(&window, 10.0, 3, 0.10, 0.1, 1, 2, 5),
+                  0, "first update is not stale");
+    ASSERT_DBL_NEAR(window.anchor_art_sum, 10.0, 1e-15, "anchor initialized");
+    ASSERT_DBL_NEAR(window.previous_art_sum, 10.0, 1e-15, "previous initialized");
+    ASSERT_INT_EQ(window.window_iters, 0, "window iters reset on init");
+    ASSERT_INT_EQ(window.cleanup_due, 0, "cleanup not due on init");
+    ASSERT_INT_EQ(window.perturb_due, 0, "perturb not due on init");
+    return 1;
+}
+
+static int test_progress_window_resets_on_sufficient_drop(void) {
+    P1ProgressWindow window;
+
+    p1_progress_window_init(&window);
+    p1_progress_window_update(&window, 10.0, 3, 0.10, 0.1, 1, 2, 5);
+    p1_progress_window_update(&window, 9.7, 3, 0.10, 0.1, 1, 2, 5);
+
+    ASSERT_INT_EQ(p1_progress_window_update(&window, 8.8, 3, 0.10, 0.1, 1, 2, 5),
+                  0, "sufficient artificial drop is progress");
+    ASSERT_DBL_NEAR(window.anchor_art_sum, 8.8, 1e-15, "anchor moves to progress point");
+    ASSERT_INT_EQ(window.window_iters, 0, "window resets after progress");
+    ASSERT_INT_EQ(window.stale_windows, 0, "stale count resets after progress");
+    return 1;
+}
+
+static int test_progress_window_triggers_cleanup_before_perturb(void) {
+    P1ProgressWindow window;
+
+    p1_progress_window_init(&window);
+    p1_progress_window_update(&window, 10.0, 2, 0.10, 0.1, 1, 2, 5);
+    ASSERT_INT_EQ(p1_progress_window_update(&window, 9.99, 2, 0.10, 0.1, 1, 2, 5),
+                  0, "first stale iteration not a complete window");
+    ASSERT_INT_EQ(p1_progress_window_update(&window, 9.98, 2, 0.10, 0.1, 1, 2, 5),
+                  1, "stale window detected");
+    ASSERT_INT_EQ(window.refactor_due, 1, "refactor due on stale window");
+    ASSERT_INT_EQ(window.cleanup_due, 1, "cleanup due on stale window");
+    ASSERT_INT_EQ(window.perturb_due, 0, "perturb is not first response");
+    return 1;
+}
+
+static int test_progress_window_perturb_uses_cooldown(void) {
+    P1ProgressWindow window;
+
+    p1_progress_window_init(&window);
+    p1_progress_window_update(&window, 10.0, 1, 0.10, 0.1, 1, 2, 3);
+    p1_progress_window_update(&window, 9.99, 1, 0.10, 0.1, 1, 2, 3);
+    ASSERT_INT_EQ(p1_progress_window_update(&window, 9.98, 1, 0.10, 0.1, 1, 2, 3),
+                  1, "second stale window detected");
+    ASSERT_INT_EQ(window.perturb_due, 1, "perturb due after configured stale windows");
+    ASSERT_INT_EQ(window.perturb_cooldown, 3, "perturb cooldown armed");
+
+    ASSERT_INT_EQ(p1_progress_window_update(&window, 9.97, 1, 0.10, 0.1, 1, 2, 3),
+                  1, "next stale window detected");
+    ASSERT_INT_EQ(window.cleanup_due, 1, "cleanup remains available during cooldown");
+    ASSERT_INT_EQ(window.perturb_due, 0, "cooldown suppresses repeated perturb");
+    return 1;
+}
+
 typedef int (*TestFunc)(void);
 
 static struct { const char *name; TestFunc func; } all_tests[] = {
@@ -218,6 +281,14 @@ static struct { const char *name; TestFunc func; } all_tests[] = {
     {"score_prefers_removing_positive_artificial_on_tie",
      test_score_prefers_removing_positive_artificial_on_tie},
     {"score_rejects_artificial_increase", test_score_rejects_artificial_increase},
+    {"progress_window_initializes_on_first_update",
+     test_progress_window_initializes_on_first_update},
+    {"progress_window_resets_on_sufficient_drop",
+     test_progress_window_resets_on_sufficient_drop},
+    {"progress_window_triggers_cleanup_before_perturb",
+     test_progress_window_triggers_cleanup_before_perturb},
+    {"progress_window_perturb_uses_cooldown",
+     test_progress_window_perturb_uses_cooldown},
 };
 
 int main(void) {

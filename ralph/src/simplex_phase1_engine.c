@@ -151,6 +151,90 @@ static int p1_entering_movable(const SimplexTableau *tab, int j) {
     return st == RALPH_NONBASIC_FREE;
 }
 
+void p1_progress_window_init(P1ProgressWindow *window) {
+    if (!window) return;
+    window->anchor_art_sum = RALPH_INFINITY;
+    window->previous_art_sum = RALPH_INFINITY;
+    window->window_iters = 0;
+    window->stale_windows = 0;
+    window->cleanup_due = 0;
+    window->refactor_due = 0;
+    window->perturb_due = 0;
+    window->perturb_cooldown = 0;
+}
+
+int p1_progress_window_update(P1ProgressWindow *window,
+                              double art_sum,
+                              int window_size,
+                              double rel_drop_target,
+                              double abs_drop_target,
+                              int cleanup_after_stale_windows,
+                              int perturb_after_stale_windows,
+                              int perturb_cooldown_iters) {
+    double anchor;
+    double drop;
+    double target;
+    int stale = 0;
+
+    if (!window || !isfinite(art_sum) || art_sum < 0.0) return 0;
+    if (window_size <= 0) window_size = 1;
+    if (rel_drop_target < 0.0) rel_drop_target = 0.0;
+    if (abs_drop_target < 0.0) abs_drop_target = 0.0;
+    if (cleanup_after_stale_windows <= 0) cleanup_after_stale_windows = 1;
+    if (perturb_after_stale_windows <= 0) perturb_after_stale_windows = 2;
+    if (perturb_cooldown_iters < 0) perturb_cooldown_iters = 0;
+
+    window->cleanup_due = 0;
+    window->refactor_due = 0;
+    window->perturb_due = 0;
+    if (window->perturb_cooldown > 0) window->perturb_cooldown--;
+
+    if (!isfinite(window->anchor_art_sum) ||
+        !isfinite(window->previous_art_sum) ||
+        window->window_iters < 0) {
+        window->anchor_art_sum = art_sum;
+        window->previous_art_sum = art_sum;
+        window->window_iters = 0;
+        window->stale_windows = 0;
+        return 0;
+    }
+
+    anchor = window->anchor_art_sum;
+    drop = anchor - art_sum;
+    target = fmax(abs_drop_target, rel_drop_target * fmax(1.0, fabs(anchor)));
+
+    if (drop >= target) {
+        window->anchor_art_sum = art_sum;
+        window->previous_art_sum = art_sum;
+        window->window_iters = 0;
+        window->stale_windows = 0;
+        return 0;
+    }
+
+    if (window->window_iters < 2147483647) window->window_iters++;
+    if (window->window_iters >= window_size) {
+        stale = 1;
+        window->window_iters = 0;
+        window->anchor_art_sum = art_sum;
+        if (window->stale_windows < 2147483647) window->stale_windows++;
+    }
+
+    if (stale && window->stale_windows >= cleanup_after_stale_windows) {
+        window->refactor_due = 1;
+        window->cleanup_due = 1;
+    }
+    if (stale &&
+        window->stale_windows >= perturb_after_stale_windows &&
+        window->perturb_cooldown <= 0) {
+        window->perturb_due = 1;
+        window->perturb_cooldown = perturb_cooldown_iters;
+        window->stale_windows = 0;
+    }
+
+    window->previous_art_sum = art_sum;
+    return stale;
+}
+
 static int p1_consider_entering_candidate(SimplexTableau *tab,
                                           int j,
                                           int *best_entering,
