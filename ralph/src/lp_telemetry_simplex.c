@@ -1455,6 +1455,41 @@ void lp_telemetry_record_phase1_recompute_guard_forced_full(SimplexSolver *solve
     solver->telemetry.perf_phase1_recompute_rc_guard_forced_full++;
 }
 
+void lp_telemetry_record_phase1_cleanup_attempt(SimplexSolver *solver) {
+    if (!solver_telemetry_enabled(solver)) return;
+    solver->telemetry.perf_phase1_cleanup_attempts++;
+}
+
+void lp_telemetry_record_phase1_cleanup_accepted(SimplexSolver *solver) {
+    if (!solver_telemetry_enabled(solver)) return;
+    solver->telemetry.perf_phase1_cleanup_accepted++;
+}
+
+void lp_telemetry_record_phase1_cleanup_rejected(SimplexSolver *solver) {
+    if (!solver_telemetry_enabled(solver)) return;
+    solver->telemetry.perf_phase1_cleanup_rejected++;
+}
+
+void lp_telemetry_record_phase1_cleanup_candidate_probe_reject(SimplexSolver *solver) {
+    if (!solver_telemetry_enabled(solver)) return;
+    solver->telemetry.perf_phase1_cleanup_candidate_probe_rejects++;
+}
+
+void lp_telemetry_record_phase1_progress_window_refactor(SimplexSolver *solver) {
+    if (!solver_telemetry_enabled(solver)) return;
+    solver->telemetry.perf_phase1_progress_window_refactors++;
+}
+
+void lp_telemetry_record_phase1_progress_window_cleanup(SimplexSolver *solver) {
+    if (!solver_telemetry_enabled(solver)) return;
+    solver->telemetry.perf_phase1_progress_window_cleanups++;
+}
+
+void lp_telemetry_record_phase1_progress_window_perturb(SimplexSolver *solver) {
+    if (!solver_telemetry_enabled(solver)) return;
+    solver->telemetry.perf_phase1_progress_window_perturbs++;
+}
+
 void lp_telemetry_record_phase1_ratio_breakdown_retry(SimplexSolver *solver) {
     if (!solver_telemetry_enabled(solver)) return;
     solver->telemetry.perf_phase1_ratio_breakdown_retries++;

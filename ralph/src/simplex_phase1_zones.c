@@ -1417,6 +1417,7 @@ P1ZoneResult p1_zone_stall_detect(SimplexSolver *solver,
         if (tableau_refactorize_with_reason(
                 tab,
                 RALPH_REFACTOR_REASON_DIRECTION_STABILIZE) == 0) {
+            lp_telemetry_record_phase1_progress_window_refactor(solver);
             rs->cycling.use_bland = 1;
             rs->cycling.stall_count = 0;
             phase1_recompute_full_with_reason(
@@ -1434,6 +1435,7 @@ P1ZoneResult p1_zone_stall_detect(SimplexSolver *solver,
     if (rs->progress.feasibility_window.cleanup_due) {
         int cleanup_pivots = p1_cleanup_zero_artificials(tab, 1);
         if (cleanup_pivots > 0) {
+            lp_telemetry_record_phase1_progress_window_cleanup(solver);
             rs->cycling.stall_count = 0;
             if (rs->cycling.pricing_strategy == 4) heap_build(tab);
             if (solver->verbose >= 2) {
@@ -1463,6 +1465,7 @@ P1ZoneResult p1_zone_stall_detect(SimplexSolver *solver,
             tab,
             &rs->numerical.rc_only_streak,
             LP_PHASE1_RECOMPUTE_REASON_PERTURB);
+        lp_telemetry_record_phase1_progress_window_perturb(solver);
         if (rs->cycling.pricing_strategy == 4) heap_build(tab);
         if (solver->verbose >= 2) {
             LP_LOG_STDERR("[simplex_phase1] Progress-window perturb at iter %d (attempt %d, scale %.1f, art_sum=%.17g)\n",
