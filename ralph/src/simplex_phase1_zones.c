@@ -9,6 +9,7 @@
 
 #include "simplex_phase1_zones.h"
 #include "simplex_internal.h"
+#include "simplex_phase1_engine.h"
 #include "simplex_pricing.h"
 #include "simplex_ratio.h"
 #include "simplex_perturb.h"
@@ -135,83 +136,8 @@ static int p1_entering_still_improves(const SimplexTableau *tab, int entering) {
     return 0;
 }
 
-static int p1_scaled_direction_preserves_artificial_progress(
-    const SimplexTableau *tab,
-    int entering,
-    int leaving,
-    double theta)
-{
-    double current_art_sum = 0.0;
-    double predicted_art_sum = 0.0;
-    double dir;
-    double step;
-
-    if (!tab || entering < 0 || entering >= tab->n ||
-        !isfinite(theta) || theta < 0.0) {
-        return 0;
-    }
-
-    dir = (tab->var_status[entering] == RALPH_NONBASIC_UPPER) ? -1.0 : 1.0;
-    step = theta * dir;
-
-    for (int a = 0; a < tab->num_artificial; a++) {
-        int j = tab->artificial_vars[a];
-        double x_new;
-        int pos;
-
-        if (j < 0 || j >= tab->n) return 0;
-        current_art_sum += fabs(tab->x[j]);
-        x_new = tab->x[j];
-
-        if (j == entering) {
-            if (tab->var_status[entering] == RALPH_NONBASIC_LOWER) {
-                x_new += theta;
-            } else {
-                x_new -= theta;
-            }
-        }
-
-        pos = tab->basis_pos[j];
-        if (pos >= 0 && pos < tab->m) {
-            x_new += -step * tab->work2[pos];
-        }
-
-        if (leaving == -2 && j == entering) {
-            if (tab->var_status[entering] == RALPH_NONBASIC_LOWER) {
-                x_new = tab->ub_ext[entering];
-            } else {
-                x_new = tab->lb_ext[entering];
-            }
-        } else if (leaving >= 0 && leaving < tab->m &&
-                   j == tab->basis[leaving]) {
-            if (tab->work2[leaving] * dir > 0.0) {
-                x_new = tab->lb_ext[j];
-            } else {
-                x_new = tab->ub_ext[j];
-            }
-        }
-
-        if (!isfinite(x_new)) return 0;
-        predicted_art_sum += fabs(x_new);
-    }
-
-    {
-        double scale = fmax(1.0, current_art_sum);
-        double tol = fmax(1000.0 * RALPH_FEAS_TOL, 1e-9 * scale);
-        return predicted_art_sum <= current_art_sum + tol;
-    }
-}
-
 static double p1_artificial_sum(const SimplexTableau *tab) {
-    double art_sum = 0.0;
-
-    if (!tab || !tab->x || !tab->artificial_vars) return RALPH_INFINITY;
-    for (int k = 0; k < tab->num_artificial; k++) {
-        int j = tab->artificial_vars[k];
-        if (j < 0 || j >= tab->n) return RALPH_INFINITY;
-        art_sum += fabs(tab->x[j]);
-    }
-    return art_sum;
+    return p1_engine_artificial_sum(tab);
 }
 
 /* Core defer logic shared by 3 paths in p1_zone_direction_guard():
@@ -2102,7 +2028,7 @@ P1ZoneResult p1_zone_direction_guard(SimplexSolver *solver,
                 lu_hard_trigger,
                 force_dir_refactor_extreme) &&
             p1_entering_still_improves(tab, entering) &&
-            p1_scaled_direction_preserves_artificial_progress(
+            p1_engine_direction_preserves_artificial_progress(
                 tab, entering, leaving, theta);
         if (accept_scaled_direction) {
             rs->numerical.dir_stabilize_moderate_defer_pending = 0;
