@@ -4,6 +4,7 @@
 
 #include <math.h>
 #include "simplex_phase1_engine.h"
+#include "simplex_internal.h"
 
 static double p1_entering_bound_flip_distance(const SimplexTableau *tab,
                                               int entering) {
@@ -572,6 +573,74 @@ restore_selected:
     *theta = best_theta;
     if (score_out) *score_out = best_score;
     return 0;
+}
+
+int p1_cleanup_zero_artificials(SimplexTableau *tab, int max_pivots) {
+    int pivots = 0;
+
+    if (!tab || max_pivots == 0 || !tab->lu || !tab->basis || !tab->basis_pos ||
+        !tab->var_status || !tab->x || !tab->work1 || !tab->work2 ||
+        !tab->work4 || !tab->A_ext) {
+        return 0;
+    }
+
+    for (int a = 0; a < tab->num_artificial; a++) {
+        int art_j = tab->artificial_vars[a];
+        int pos;
+        int best_j = -1;
+        double best_abs_coef = 0.0;
+
+        if (max_pivots > 0 && pivots >= max_pivots) break;
+        if (art_j < 0 || art_j >= tab->n) continue;
+        if (tab->var_status[art_j] != RALPH_BASIC) continue;
+        if (fabs(tab->x[art_j]) > RALPH_FEAS_TOL) continue;
+
+        pos = tab->basis_pos[art_j];
+        if (pos < 0 || pos >= tab->m) continue;
+
+        vec_set_zero(tab->work1, tab->m);
+        tab->work1[pos] = 1.0;
+        lu_solve_transpose(tab->lu, tab->work1, tab->work4);
+
+        for (int pass = 0; pass < 2; pass++) {
+            int j_begin = (pass == 0) ? 0 : tab->num_structural_ext;
+            int j_end = (pass == 0) ? tab->num_structural_ext : tab->n;
+
+            if (j_begin < 0) j_begin = 0;
+            if (j_end > tab->n) j_end = tab->n;
+
+            for (int j = j_begin; j < j_end; j++) {
+                double coef;
+                double abs_coef;
+
+                if (p1_var_is_artificial(tab, j)) continue;
+                if (!p1_entering_movable(tab, j)) continue;
+
+                coef = sparse_dot_column(tab->A_ext, j, tab->work4);
+                abs_coef = fabs(coef);
+                if (abs_coef > best_abs_coef) {
+                    best_abs_coef = abs_coef;
+                    best_j = j;
+                }
+            }
+
+            if (best_abs_coef >= 1e-4) break;
+        }
+
+        if (best_j < 0 || best_abs_coef <= RALPH_PIVOT_TOL) continue;
+
+        sparse_get_column(tab->A_ext, best_j, tab->work1);
+        lu_solve(tab->lu, tab->work1, tab->work2);
+        tab->work2_sparse_valid = 0;
+        tab->work2_sparse_nnz = 0;
+        tab->work2_sparse_entering = -1;
+
+        if (simplex_pivot(tab, best_j, pos, 0.0, 0) == 0) {
+            pivots++;
+        }
+    }
+
+    return pivots;
 }
 
 P1FeasScore p1_engine_score_candidate(P1FeasCandidate candidate) {
