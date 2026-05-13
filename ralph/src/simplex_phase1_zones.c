@@ -1882,6 +1882,12 @@ P1ZoneResult p1_zone_periodic_refactor(SimplexSolver *solver,
             LP_PHASE1_COMPUTE_CTX_REFACTOR_SUCCESS;
         tableau_compute_solution(tab);
         tableau_compute_reduced_costs(tab);
+        if (tab->artificial_basic_count > 0) {
+            double art_sum = p1_artificial_sum(tab);
+            if (isfinite(art_sum) && art_sum <= 1e-4) {
+                (void)p1_cleanup_zero_artificials(tab, 1);
+            }
+        }
         if (solver->pricing_strategy == 4) heap_build(tab);
     } else if (lu_soft_cost_deferred && solver->verbose >= 2) {
         LP_LOG_STDERR("[simplex_phase1] Deferred soft LU-health periodic refactor (updates=%d/%d, degen=%d, iter_ewma=%.3fms, ref_ewma=%.3fms)\n",
