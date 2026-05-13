@@ -158,9 +158,14 @@ typedef struct {
     int n;
     int artificial_basic_count;
     int devex_refcount;
+    int work2_sparse_valid;
+    int work2_sparse_nnz;
+    int work2_sparse_entering;
     int *basis;
+    int *work2_sparse_idx;
     VarStatus *var_status;
     double *x;
+    double *work2;
 } P1CleanupSnapshot;
 
 static int p1_cleanup_snapshot_take(SimplexTableau *tab,
@@ -174,27 +179,47 @@ static int p1_cleanup_snapshot_take(SimplexTableau *tab,
     snap->n = tab->n;
     snap->artificial_basic_count = tab->artificial_basic_count;
     snap->devex_refcount = tab->devex_refcount;
+    snap->work2_sparse_valid = tab->work2_sparse_valid;
+    snap->work2_sparse_nnz = tab->work2_sparse_nnz;
+    snap->work2_sparse_entering = tab->work2_sparse_entering;
     snap->basis = (int*)malloc((size_t)tab->m * sizeof(int));
+    snap->work2_sparse_idx = (tab->work2_sparse_idx && tab->m > 0)
+        ? (int*)malloc((size_t)tab->m * sizeof(int)) : NULL;
     snap->var_status = (VarStatus*)malloc((size_t)tab->n * sizeof(VarStatus));
     snap->x = (double*)malloc((size_t)tab->n * sizeof(double));
-    if (!snap->basis || !snap->var_status || !snap->x) {
+    snap->work2 = (tab->work2 && tab->m > 0)
+        ? (double*)malloc((size_t)tab->m * sizeof(double)) : NULL;
+    if (!snap->basis || !snap->var_status || !snap->x ||
+        (tab->work2_sparse_idx && !snap->work2_sparse_idx) ||
+        (tab->work2 && !snap->work2)) {
         free(snap->basis);
+        free(snap->work2_sparse_idx);
         free(snap->var_status);
         free(snap->x);
+        free(snap->work2);
         memset(snap, 0, sizeof(*snap));
         return -1;
     }
     memcpy(snap->basis, tab->basis, (size_t)tab->m * sizeof(int));
+    if (snap->work2_sparse_idx) {
+        memcpy(snap->work2_sparse_idx, tab->work2_sparse_idx,
+               (size_t)tab->m * sizeof(int));
+    }
     memcpy(snap->var_status, tab->var_status, (size_t)tab->n * sizeof(VarStatus));
     memcpy(snap->x, tab->x, (size_t)tab->n * sizeof(double));
+    if (snap->work2) {
+        memcpy(snap->work2, tab->work2, (size_t)tab->m * sizeof(double));
+    }
     return 0;
 }
 
 static void p1_cleanup_snapshot_free(P1CleanupSnapshot *snap) {
     if (!snap) return;
     free(snap->basis);
+    free(snap->work2_sparse_idx);
     free(snap->var_status);
     free(snap->x);
+    free(snap->work2);
     memset(snap, 0, sizeof(*snap));
 }
 
@@ -207,10 +232,20 @@ static int p1_cleanup_snapshot_restore(SimplexTableau *tab,
     }
 
     memcpy(tab->basis, snap->basis, (size_t)tab->m * sizeof(int));
+    if (snap->work2_sparse_idx && tab->work2_sparse_idx) {
+        memcpy(tab->work2_sparse_idx, snap->work2_sparse_idx,
+               (size_t)tab->m * sizeof(int));
+    }
     memcpy(tab->var_status, snap->var_status, (size_t)tab->n * sizeof(VarStatus));
     memcpy(tab->x, snap->x, (size_t)tab->n * sizeof(double));
+    if (snap->work2 && tab->work2) {
+        memcpy(tab->work2, snap->work2, (size_t)tab->m * sizeof(double));
+    }
     tab->artificial_basic_count = snap->artificial_basic_count;
     tab->devex_refcount = snap->devex_refcount;
+    tab->work2_sparse_valid = snap->work2_sparse_valid;
+    tab->work2_sparse_nnz = snap->work2_sparse_nnz;
+    tab->work2_sparse_entering = snap->work2_sparse_entering;
     for (int j = 0; j < tab->n; j++) {
         tab->basis_pos[j] = -1;
     }
@@ -608,10 +643,6 @@ int p1_candidate_basis_refactorable(SimplexTableau *tab,
     after_art_sum = p1_engine_artificial_sum(tab);
     (void)p1_cleanup_snapshot_restore(tab, &snap);
     p1_cleanup_snapshot_free(&snap);
-
-    tab->work2_sparse_valid = 0;
-    tab->work2_sparse_nnz = 0;
-    tab->work2_sparse_entering = -1;
 
     if (!isfinite(after_art_sum)) return 0;
     return after_art_sum <= before_art_sum + max_artificial_increase;
