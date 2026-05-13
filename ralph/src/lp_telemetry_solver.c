@@ -184,6 +184,13 @@ void lp_telemetry_reset_solver(SimplexSolver *solver) {
     solver->telemetry.perf_phase1_recompute_after_perturb = 0;
     solver->telemetry.perf_phase1_recompute_rc_only_calls = 0;
     solver->telemetry.perf_phase1_recompute_rc_guard_forced_full = 0;
+    solver->telemetry.perf_phase1_cleanup_attempts = 0;
+    solver->telemetry.perf_phase1_cleanup_accepted = 0;
+    solver->telemetry.perf_phase1_cleanup_rejected = 0;
+    solver->telemetry.perf_phase1_cleanup_candidate_probe_rejects = 0;
+    solver->telemetry.perf_phase1_progress_window_refactors = 0;
+    solver->telemetry.perf_phase1_progress_window_cleanups = 0;
+    solver->telemetry.perf_phase1_progress_window_perturbs = 0;
     solver->telemetry.perf_phase1_ratio_breakdown_retries = 0;
     solver->telemetry.perf_phase1_ratio_breakdown_escalations = 0;
     solver->telemetry.perf_phase1_pivot_fail_recovery_exclusions = 0;
@@ -869,6 +876,13 @@ void lp_telemetry_snapshot_solver(const SimplexSolver *solver,
     COPY_SOLVER_FIELD(perf_phase1_recompute_after_perturb);
     COPY_SOLVER_FIELD(perf_phase1_recompute_rc_only_calls);
     COPY_SOLVER_FIELD(perf_phase1_recompute_rc_guard_forced_full);
+    COPY_SOLVER_FIELD(perf_phase1_cleanup_attempts);
+    COPY_SOLVER_FIELD(perf_phase1_cleanup_accepted);
+    COPY_SOLVER_FIELD(perf_phase1_cleanup_rejected);
+    COPY_SOLVER_FIELD(perf_phase1_cleanup_candidate_probe_rejects);
+    COPY_SOLVER_FIELD(perf_phase1_progress_window_refactors);
+    COPY_SOLVER_FIELD(perf_phase1_progress_window_cleanups);
+    COPY_SOLVER_FIELD(perf_phase1_progress_window_perturbs);
     COPY_SOLVER_FIELD(perf_phase1_ratio_breakdown_retries);
     COPY_SOLVER_FIELD(perf_phase1_ratio_breakdown_escalations);
     COPY_SOLVER_FIELD(perf_phase1_pivot_fail_recovery_exclusions);

@@ -367,6 +367,13 @@ typedef struct {
     int phase1_recompute_after_perturb;
     int phase1_recompute_rc_only_calls;
     int phase1_recompute_rc_guard_forced_full;
+    int phase1_cleanup_attempts;
+    int phase1_cleanup_accepted;
+    int phase1_cleanup_rejected;
+    int phase1_cleanup_candidate_probe_rejects;
+    int phase1_progress_window_refactors;
+    int phase1_progress_window_cleanups;
+    int phase1_progress_window_perturbs;
     int phase1_ratio_breakdown_retries;
     int phase1_ratio_breakdown_escalations;
     int phase1_pivot_fail_recovery_exclusions;
@@ -1862,6 +1869,20 @@ static SolveResult solve_with_ralph(const char *problem_path, double time_limit_
                 solver_tel.perf_phase1_recompute_rc_only_calls;
             result.phase1_recompute_rc_guard_forced_full =
                 solver_tel.perf_phase1_recompute_rc_guard_forced_full;
+            result.phase1_cleanup_attempts =
+                solver_tel.perf_phase1_cleanup_attempts;
+            result.phase1_cleanup_accepted =
+                solver_tel.perf_phase1_cleanup_accepted;
+            result.phase1_cleanup_rejected =
+                solver_tel.perf_phase1_cleanup_rejected;
+            result.phase1_cleanup_candidate_probe_rejects =
+                solver_tel.perf_phase1_cleanup_candidate_probe_rejects;
+            result.phase1_progress_window_refactors =
+                solver_tel.perf_phase1_progress_window_refactors;
+            result.phase1_progress_window_cleanups =
+                solver_tel.perf_phase1_progress_window_cleanups;
+            result.phase1_progress_window_perturbs =
+                solver_tel.perf_phase1_progress_window_perturbs;
             result.phase1_ratio_breakdown_retries =
                 solver_tel.perf_phase1_ratio_breakdown_retries;
             result.phase1_ratio_breakdown_escalations =
@@ -3806,6 +3827,20 @@ static void print_json_result(const char *problem_name, const char *source,
             ralph->phase1_recompute_after_perturb);
     fprintf(out, "      \"recompute_rc_only_calls\": %d,\n",
             ralph->phase1_recompute_rc_only_calls);
+    fprintf(out, "      \"cleanup_attempts\": %d,\n",
+            ralph->phase1_cleanup_attempts);
+    fprintf(out, "      \"cleanup_accepted\": %d,\n",
+            ralph->phase1_cleanup_accepted);
+    fprintf(out, "      \"cleanup_rejected\": %d,\n",
+            ralph->phase1_cleanup_rejected);
+    fprintf(out, "      \"cleanup_candidate_probe_rejects\": %d,\n",
+            ralph->phase1_cleanup_candidate_probe_rejects);
+    fprintf(out, "      \"progress_window_refactors\": %d,\n",
+            ralph->phase1_progress_window_refactors);
+    fprintf(out, "      \"progress_window_cleanups\": %d,\n",
+            ralph->phase1_progress_window_cleanups);
+    fprintf(out, "      \"progress_window_perturbs\": %d,\n",
+            ralph->phase1_progress_window_perturbs);
     fprintf(out, "      \"compute_solution_ctx_other\": %d,\n",
             ralph->phase1_compute_solution_ctx_other);
     fprintf(out, "      \"compute_solution_ctx_recompute_full\": %d,\n",
@@ -4408,6 +4443,20 @@ static void print_json_result(const char *problem_name, const char *source,
             ralph->phase1_recompute_rc_only_calls);
     fprintf(out, "    \"phase1_recompute_rc_guard_forced_full\": %d,\n",
             ralph->phase1_recompute_rc_guard_forced_full);
+    fprintf(out, "    \"phase1_cleanup_attempts\": %d,\n",
+            ralph->phase1_cleanup_attempts);
+    fprintf(out, "    \"phase1_cleanup_accepted\": %d,\n",
+            ralph->phase1_cleanup_accepted);
+    fprintf(out, "    \"phase1_cleanup_rejected\": %d,\n",
+            ralph->phase1_cleanup_rejected);
+    fprintf(out, "    \"phase1_cleanup_candidate_probe_rejects\": %d,\n",
+            ralph->phase1_cleanup_candidate_probe_rejects);
+    fprintf(out, "    \"phase1_progress_window_refactors\": %d,\n",
+            ralph->phase1_progress_window_refactors);
+    fprintf(out, "    \"phase1_progress_window_cleanups\": %d,\n",
+            ralph->phase1_progress_window_cleanups);
+    fprintf(out, "    \"phase1_progress_window_perturbs\": %d,\n",
+            ralph->phase1_progress_window_perturbs);
     fprintf(out, "    \"phase1_ratio_breakdown_retries\": %d,\n",
             ralph->phase1_ratio_breakdown_retries);
     fprintf(out, "    \"phase1_ratio_breakdown_escalations\": %d,\n",

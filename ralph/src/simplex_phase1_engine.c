@@ -896,6 +896,7 @@ int p1_cleanup_zero_artificials(SimplexTableau *tab, int max_pivots) {
         double before_art_sum = p1_engine_artificial_sum(tab);
         P1CleanupSnapshot snap;
         if (p1_cleanup_snapshot_take(tab, &snap) != 0) continue;
+        lp_telemetry_record_phase1_cleanup_attempt(tab->owner);
 
         sparse_get_column(tab->A_ext, best_j, tab->work1);
         lu_solve(tab->lu, tab->work1, tab->work2);
@@ -903,10 +904,13 @@ int p1_cleanup_zero_artificials(SimplexTableau *tab, int max_pivots) {
         tab->work2_sparse_nnz = 0;
         tab->work2_sparse_entering = -1;
         if (fabs(tab->work2[pos]) < fmax(1e-4, RALPH_PIVOT_TOL)) {
+            lp_telemetry_record_phase1_cleanup_rejected(tab->owner);
             p1_cleanup_snapshot_free(&snap);
             continue;
         }
         if (!p1_candidate_basis_refactorable(tab, best_j, pos, 0.0, 0.0)) {
+            lp_telemetry_record_phase1_cleanup_candidate_probe_reject(tab->owner);
+            lp_telemetry_record_phase1_cleanup_rejected(tab->owner);
             p1_cleanup_snapshot_free(&snap);
             continue;
         }
@@ -914,6 +918,7 @@ int p1_cleanup_zero_artificials(SimplexTableau *tab, int max_pivots) {
         if (simplex_pivot(tab, best_j, pos, 0.0, 0) == 0) {
             double after_art_sum;
             if (tableau_refactorize(tab) != 0) {
+                lp_telemetry_record_phase1_cleanup_rejected(tab->owner);
                 (void)p1_cleanup_snapshot_restore(tab, &snap);
                 p1_cleanup_snapshot_free(&snap);
                 continue;
@@ -923,13 +928,16 @@ int p1_cleanup_zero_artificials(SimplexTableau *tab, int max_pivots) {
             if (!isfinite(after_art_sum) ||
                 after_art_sum > before_art_sum +
                     fmax(1e-8, 1e-9 * fmax(1.0, before_art_sum))) {
+                lp_telemetry_record_phase1_cleanup_rejected(tab->owner);
                 (void)p1_cleanup_snapshot_restore(tab, &snap);
                 p1_cleanup_snapshot_free(&snap);
                 continue;
             }
             tableau_compute_reduced_costs(tab);
+            lp_telemetry_record_phase1_cleanup_accepted(tab->owner);
             pivots++;
         } else {
+            lp_telemetry_record_phase1_cleanup_rejected(tab->owner);
             (void)p1_cleanup_snapshot_restore(tab, &snap);
         }
         p1_cleanup_snapshot_free(&snap);
