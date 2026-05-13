@@ -156,6 +156,8 @@ static int p1_entering_movable(const SimplexTableau *tab, int j) {
 typedef struct {
     int m;
     int n;
+    int artificial_basic_count;
+    int devex_refcount;
     int *basis;
     VarStatus *var_status;
     double *x;
@@ -170,6 +172,8 @@ static int p1_cleanup_snapshot_take(SimplexTableau *tab,
     memset(snap, 0, sizeof(*snap));
     snap->m = tab->m;
     snap->n = tab->n;
+    snap->artificial_basic_count = tab->artificial_basic_count;
+    snap->devex_refcount = tab->devex_refcount;
     snap->basis = (int*)malloc((size_t)tab->m * sizeof(int));
     snap->var_status = (VarStatus*)malloc((size_t)tab->n * sizeof(VarStatus));
     snap->x = (double*)malloc((size_t)tab->n * sizeof(double));
@@ -205,6 +209,8 @@ static int p1_cleanup_snapshot_restore(SimplexTableau *tab,
     memcpy(tab->basis, snap->basis, (size_t)tab->m * sizeof(int));
     memcpy(tab->var_status, snap->var_status, (size_t)tab->n * sizeof(VarStatus));
     memcpy(tab->x, snap->x, (size_t)tab->n * sizeof(double));
+    tab->artificial_basic_count = snap->artificial_basic_count;
+    tab->devex_refcount = snap->devex_refcount;
     for (int j = 0; j < tab->n; j++) {
         tab->basis_pos[j] = -1;
     }
@@ -545,6 +551,10 @@ int p1_candidate_basis_refactorable(SimplexTableau *tab,
     double before_art_sum;
     double after_art_sum;
     P1CleanupSnapshot snap;
+    int leaving_var;
+    VarStatus entering_old_status;
+    double dir;
+    double pivot;
 
     if (!tab || entering < 0 || entering >= tab->n || !isfinite(theta) ||
         theta < 0.0 || max_artificial_increase < 0.0) {
@@ -566,23 +576,42 @@ int p1_candidate_basis_refactorable(SimplexTableau *tab,
     if (!isfinite(before_art_sum)) return 0;
     if (p1_cleanup_snapshot_take(tab, &snap) != 0) return 0;
 
-    sparse_get_column(tab->A_ext, entering, tab->work1);
-    lu_solve(tab->lu, tab->work1, tab->work2);
-    tab->work2_sparse_valid = 0;
-    tab->work2_sparse_nnz = 0;
-    tab->work2_sparse_entering = -1;
-
-    if (simplex_pivot(tab, entering, leaving, theta, 0) != 0 ||
-        tableau_refactorize(tab) != 0) {
-        (void)p1_cleanup_snapshot_restore(tab, &snap);
+    pivot = tab->work2[leaving];
+    if (!isfinite(pivot) || fabs(pivot) < RALPH_PIVOT_TOL) {
         p1_cleanup_snapshot_free(&snap);
         return 0;
     }
 
+    leaving_var = tab->basis[leaving];
+    entering_old_status = tab->var_status[entering];
+    dir = (entering_old_status == RALPH_NONBASIC_UPPER) ? -1.0 : 1.0;
+
+    tab->basis[leaving] = entering;
+    tab->basis_pos[entering] = leaving;
+    tab->basis_pos[leaving_var] = -1;
+    tab->var_status[entering] = RALPH_BASIC;
+    if (pivot * dir > 0.0) {
+        tab->var_status[leaving_var] = RALPH_NONBASIC_LOWER;
+        tab->x[leaving_var] = tab->lb_ext[leaving_var];
+    } else {
+        tab->var_status[leaving_var] = RALPH_NONBASIC_UPPER;
+        tab->x[leaving_var] = tab->ub_ext[leaving_var];
+    }
+    tab->artificial_basic_count = p1_artificial_basic_count(tab);
+
+    if (tableau_refactorize(tab) != 0) {
+        (void)p1_cleanup_snapshot_restore(tab, &snap);
+        p1_cleanup_snapshot_free(&snap);
+        return 0;
+    }
     tableau_compute_solution(tab);
     after_art_sum = p1_engine_artificial_sum(tab);
     (void)p1_cleanup_snapshot_restore(tab, &snap);
     p1_cleanup_snapshot_free(&snap);
+
+    tab->work2_sparse_valid = 0;
+    tab->work2_sparse_nnz = 0;
+    tab->work2_sparse_entering = -1;
 
     if (!isfinite(after_art_sum)) return 0;
     return after_art_sum <= before_art_sum + max_artificial_increase;
