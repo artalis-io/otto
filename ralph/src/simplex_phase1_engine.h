@@ -34,7 +34,29 @@ typedef struct {
     int valid;
 } P1FeasScore;
 
+typedef struct {
+    double anchor_art_sum;
+    double previous_art_sum;
+    int window_iters;
+    int stale_windows;
+    int cleanup_due;
+    int refactor_due;
+    int perturb_due;
+    int perturb_cooldown;
+} P1ProgressWindow;
+
 double p1_engine_artificial_sum(const SimplexTableau *tab);
+
+void p1_progress_window_init(P1ProgressWindow *window);
+
+int p1_progress_window_update(P1ProgressWindow *window,
+                              double art_sum,
+                              int window_size,
+                              double rel_drop_target,
+                              double abs_drop_target,
+                              int cleanup_after_stale_windows,
+                              int perturb_after_stale_windows,
+                              int perturb_cooldown_iters);
 
 int p1_engine_predict_artificial_sum(const SimplexTableau *tab,
                                      int entering,
