@@ -160,6 +160,7 @@ void p1_recovery_init(P1RecoveryState *rs,
     rs->basis.failed_stabilize_retry_pool_sample_counter = 0;
 
     /* ── Progress ────────────────────────────────────────────────── */
+    p1_progress_window_init(&rs->progress.feasibility_window);
     rs->progress.no_pivot_streak = 0;
     rs->progress.no_pivot_no_progress_streak = 0;
     rs->progress.no_pivot_prev_art_sum = RALPH_INFINITY;

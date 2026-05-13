@@ -3239,7 +3239,11 @@ static int simplex_phase1(SimplexSolver *solver) {
         }
         /* Zone 7: post-pivot (reset + stall detect + periodic refactor) */
         p1_zone_post_pivot_reset(solver, tab, &rs);
-        p1_zone_stall_detect(solver, tab, &rs);
+        {
+            P1ZoneResult stall_result = p1_zone_stall_detect(solver, tab, &rs, iter);
+            if (stall_result == P1_ZONE_CONTINUE) continue;
+            if (stall_result == P1_ZONE_RETURN_FAIL) return -1;
+        }
         {
             P1ZoneResult pp_result = p1_zone_periodic_refactor(solver, tab, &rs, iter, &zctx);
             phase1_hot_ms_prev = zctx.phase1_hot_ms_prev;

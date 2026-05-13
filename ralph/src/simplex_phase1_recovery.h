@@ -16,6 +16,7 @@
 #define SIMPLEX_PHASE1_RECOVERY_H
 
 #include "lp.h"
+#include "simplex_phase1_engine.h"
 
 /* Recovery profile: controls which crisis mechanisms are active */
 typedef enum {
@@ -133,6 +134,9 @@ typedef struct {
 
 /* ── Progress: no-pivot ladder, window pressure, force pivot ──────── */
 typedef struct {
+    /* Feasibility-engine progress window */
+    P1ProgressWindow feasibility_window;
+
     /* No-pivot streak & progress window */
     int no_pivot_streak;
     int no_pivot_no_progress_streak;

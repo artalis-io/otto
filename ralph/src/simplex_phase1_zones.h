@@ -140,10 +140,11 @@ void p1_zone_post_pivot_reset(SimplexSolver *solver,
                               SimplexTableau *tab,
                               P1RecoveryState *rs);
 
-/* Stall detection and re-perturbation. */
-void p1_zone_stall_detect(SimplexSolver *solver,
-                          SimplexTableau *tab,
-                          P1RecoveryState *rs);
+/* Artificial-feasibility progress window for large Phase 1 stalls. */
+P1ZoneResult p1_zone_stall_detect(SimplexSolver *solver,
+                                  SimplexTableau *tab,
+                                  P1RecoveryState *rs,
+                                  int iter);
 
 /* Periodic refactorization: LU health check, periodic policy, reinvert
  * controller, cost gates, and refactorization with recovery.
