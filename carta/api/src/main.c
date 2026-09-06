@@ -25,18 +25,18 @@
 #include <stdlib.h>
 #include <string.h>
 #include <strings.h>  /* For strcasecmp */
-#include <signal.h>
 #include <ctype.h>
 #include <unistd.h>   /* For sleep, sysconf */
 #include <pthread.h>
 #include <sys/time.h> /* For gettimeofday */
 #include <errno.h>    /* For ETIMEDOUT */
-#include "mongoose.h"
+#include <keel/keel.h>
+#include <stddef.h>
 #include "carta.h"
 #include "ct_api.h"
 #include "ct_cache.h"
 #include "shared.h"   /* For sh_ratelimit, sh_workqueue */
-#include "sh_httpserver.h"  /* For sh_mg_set_write_timeout */
+#include "sh_keelserver.h"  /* Keel-backed sh_kl_* helpers */
 #include "sh_completion.h"  /* For ShCompletion */
 #include "sh_worker_pool.h" /* For ShWorkerPool */
 #include "sh_log.h"         /* For structured logging */
@@ -44,6 +44,7 @@
 #include "sh_metrics.h"     /* For metrics collection */
 #include "sh_json.h"        /* For JSON building */
 #include "sh_hash.h"        /* For sh_fnv1a_64 (ETag hashing) */
+#include "sh_query.h"       /* For query-string parameter parsing */
 
 /* ============================================================================
  * Configuration
@@ -111,7 +112,24 @@ static ShWorkQueue *s_work_queue = NULL;
 /* Adaptive capacity tracker (uses shared library) */
 static ShAdaptiveTracker *s_adaptive_tracker = NULL;
 
-/* Render work item - passed through the work queue */
+/* ============================================================================
+ * Render Request Context
+ *
+ * OWNERSHIP / LIFETIME (same rules as Surge, FuelWise and Velo): freed in
+ * exactly one place -- done_fn (the item ran) or cancel_fn (dropped at pool
+ * shutdown before starting). on_cancel and on_deadline never free, because
+ * work_fn may still be running on a worker; they only set `detached`, which
+ * is read and written solely on the event loop thread.
+ *
+ * CONCURRENCY NOTE
+ *   The mongoose server ran N event-loop threads, each with its own mg_mgr
+ *   listening via SO_REUSEPORT, because every one of them blocked in
+ *   render_work_item_wait() for the duration of a render. With KlAsyncOp the
+ *   single Keel loop never blocks, so the multi-listener design is no longer
+ *   needed: one event loop plus the render pool. --threads now sizes the
+ *   render pool.
+ * ============================================================================ */
+
 typedef enum {
     RENDER_TYPE_PNG,
     RENDER_TYPE_MVT,
@@ -119,6 +137,15 @@ typedef enum {
 } RenderType;
 
 typedef struct {
+    KlHttpServer *server;
+    KlThreadPool *pool;
+} AppCtx;
+
+typedef struct {
+    KlAsyncOp op;
+    AppCtx *app;
+    const KlHttpRequest *req;   /* lives inside the conn; valid while suspended */
+
     /* Request info */
     RenderType type;
     int z, x, y;
@@ -126,28 +153,32 @@ typedef struct {
     /* ASCII-specific options */
     CTAsciiOptions ascii_opts;
 
-    /* Response buffer (set by render worker) */
+    /* Response buffer (set by the render worker) */
     uint8_t *response_data;
     size_t response_size;
     int status_code;        /* HTTP status code */
     char content_type[64];
     char error_msg[128];
 
-    /* Completion signaling (uses shared library) */
-    ShCompletion completion;
-} RenderWorkItem;
+    int detached;
+    const char *endpoint;   /* metrics label, static string */
+    ShMetricsTimer timer;
+} RenderCtx;
 
-/* Render worker pool (uses shared library) */
-static ShWorkerPool *s_render_pool = NULL;
-
-/* Worker thread state */
+/*
+ * KlThreadPool exposes no statistics, but /api/v1/stats publishes work-queue
+ * counters, so they are tracked here. Every counter is read and written only
+ * on the event loop thread.
+ */
 typedef struct {
-    int id;
-    pthread_t thread;
-    struct mg_mgr mgr;
-} WorkerThread;
+    uint64_t pushed;
+    uint64_t popped;
+    uint64_t dropped;
+    uint64_t expired;
+} CartaQueueStats;
 
-static WorkerThread *s_workers = NULL;
+static KlThreadPool *s_pool = NULL;
+static CartaQueueStats s_qstats;
 static int s_num_workers = 0;
 static char s_listen_url[SH_URL_MAX] = "";
 
@@ -167,78 +198,31 @@ static void pbf_progress_callback(const char *phase, size_t current,
 }
 
 /* Forward declarations */
-static void ev_handler(struct mg_connection *c, int ev, void *ev_data);
-static CTRenderContext *get_thread_render_ctx(int tile_size);
-
-/* Worker thread function - runs its own mongoose event loop */
-static void *worker_thread_fn(void *arg) {
-    WorkerThread *w = (WorkerThread *)arg;
-
-    /* Initialize mongoose manager for this thread */
-    mg_mgr_init(&w->mgr);
-
-    /* Listen with SO_REUSEPORT for load balancing across threads */
-    struct mg_connection *c = mg_http_listen(&w->mgr, s_listen_url, ev_handler, NULL);
-    if (c == NULL) {
-        fprintf(stderr, "Worker %d: Cannot listen on %s\n", w->id, s_listen_url);
-        return NULL;
-    }
-
-    /* Event loop - render contexts are created lazily via thread-local storage */
-    while (s_signo == 0) {
-        mg_mgr_poll(&w->mgr, 100);
-    }
-
-    mg_mgr_free(&w->mgr);
-
-    /* Thread-local render context is freed by pthread_key destructor */
-    return NULL;
-}
-
-static void signal_handler(int signo) {
-    s_signo = signo;
-}
 
 /* ============================================================================
- * Render Work Queue Functions
+ * Render Context Helpers
  * ============================================================================ */
 
-/* Create a render work item (allocated by caller, initialized here) */
-static void render_work_item_init(RenderWorkItem *item, RenderType type,
-                                  int z, int x, int y)
-{
-    memset(item, 0, sizeof(*item));
-    item->type = type;
-    item->z = z;
-    item->x = x;
-    item->y = y;
-    item->status_code = 500;  /* Default to error */
-    sh_completion_init(&item->completion);
+/* Defined with the other response helpers below. */
+static void send_error_cors(KlHttpResponse *res, const KlHttpRequest *req,
+                            int status, const char *message);
+static void send_tile_cors(KlHttpResponse *res, const KlHttpRequest *req,
+                           const char *content_type, const uint8_t *data,
+                           size_t size);
+
+static void render_ctx_free(RenderCtx *ctx) {
+    if (!ctx) return;
+    free(ctx->response_data);
+    free(ctx);
 }
 
-/* Clean up a render work item */
-static void render_work_item_cleanup(RenderWorkItem *item)
-{
-    sh_completion_cleanup(&item->completion);
-    free(item->response_data);
-    item->response_data = NULL;
+static void record_metrics(ShMetricsTimer timer, const char *endpoint) {
+    sh_metrics_counter_inc("http_requests_total", 1,
+                           "status:200", endpoint, NULL);
+    sh_metrics_timer_observe(timer, "http_request_duration_ms", endpoint, NULL);
 }
 
-/* Wait for render work item completion with timeout */
-static int render_work_item_wait(RenderWorkItem *item, double timeout_sec)
-{
-    int timeout_ms = (int)(timeout_sec * 1000);
-    return sh_completion_wait(&item->completion, timeout_ms);
-}
-
-/* Signal that render work item is completed */
-static void render_work_item_complete(RenderWorkItem *item)
-{
-    sh_completion_signal(&item->completion);
-}
-
-/* Process a PNG tile render request */
-static void process_png_render(RenderWorkItem *item)
+static void process_png_render(RenderCtx *item)
 {
     int z = item->z, x = item->x, y = item->y;
 
@@ -291,7 +275,7 @@ static void process_png_render(RenderWorkItem *item)
 }
 
 /* Process an MVT tile render request */
-static void process_mvt_render(RenderWorkItem *item)
+static void process_mvt_render(RenderCtx *item)
 {
     int z = item->z, x = item->x, y = item->y;
 
@@ -344,7 +328,7 @@ static void process_mvt_render(RenderWorkItem *item)
 }
 
 /* Process an ASCII tile render request */
-static void process_ascii_render(RenderWorkItem *item)
+static void process_ascii_render(RenderCtx *item)
 {
     int z = item->z, x = item->x, y = item->y;
 
@@ -385,33 +369,15 @@ static void process_ascii_render(RenderWorkItem *item)
 }
 
 /* Render worker callback function (called by ShWorkerPool) */
-static void render_worker_callback(ShWorkItem *queue_item, void *ctx)
+/* Worker thread: render the tile. Touches only this context. */
+static void render_work_fn(void *user_data)
 {
-    (void)ctx;
-
-    RenderWorkItem *item = (RenderWorkItem *)queue_item->user_ctx;
-    if (!item) {
-        sh_workqueue_item_free(queue_item);
-        return;
-    }
-
-    /* Check if request has expired or was cancelled by HTTP handler timeout */
-    if (sh_workqueue_item_expired(s_work_queue, queue_item) ||
-        sh_completion_is_cancelled(&item->completion)) {
-        item->status_code = 504;  /* Gateway Timeout */
-        strncpy(item->error_msg, "Request timeout",
-                sizeof(item->error_msg) - 1);
-        item->error_msg[sizeof(item->error_msg) - 1] = '\0';
-        render_work_item_complete(item);
-        sh_workqueue_item_free(queue_item);
-        return;
-    }
+    RenderCtx *item = (RenderCtx *)user_data;
 
     /* Measure render time for adaptive capacity */
     struct timeval render_start, render_end;
     gettimeofday(&render_start, NULL);
 
-    /* Process based on type */
     switch (item->type) {
         case RENDER_TYPE_PNG:
             process_png_render(item);
@@ -424,7 +390,6 @@ static void render_worker_callback(ShWorkItem *queue_item, void *ctx)
             break;
     }
 
-    /* Record response time for adaptive capacity */
     gettimeofday(&render_end, NULL);
     double render_ms = (render_end.tv_sec - render_start.tv_sec) * 1000.0 +
                        (render_end.tv_usec - render_start.tv_usec) / 1000.0;
@@ -432,10 +397,8 @@ static void render_worker_callback(ShWorkItem *queue_item, void *ctx)
     if (s_adaptive_tracker) {
         sh_adaptive_record(s_adaptive_tracker, render_ms);
 
-        /* Check if rate limiter should be updated */
         ShCapacityParams new_params;
         if (sh_adaptive_update(s_adaptive_tracker, &new_params)) {
-            /* Update rate limiter with new parameters */
             if (s_rate_limiter) {
                 sh_ratelimit_update_rate(s_rate_limiter,
                                          new_params.rate_limit_rps,
@@ -443,10 +406,88 @@ static void render_worker_callback(ShWorkItem *queue_item, void *ctx)
             }
         }
     }
+}
 
-    /* Signal completion */
-    render_work_item_complete(item);
-    sh_workqueue_item_free(queue_item);
+/* Write whatever the worker produced. Shared by done_fn and the inline path. */
+static void render_reply(KlHttpResponse *res, const KlHttpRequest *req,
+                         RenderCtx *item)
+{
+    if (item->status_code == 200) {
+        if (item->response_data && item->response_size > 0) {
+            send_tile_cors(res, req, item->content_type, item->response_data,
+                           item->response_size);
+        } else {
+            /* Empty tile: still a valid response */
+            send_tile_cors(res, req, item->content_type, NULL, 0);
+        }
+    } else {
+        send_error_cors(res, req, item->status_code,
+                        item->error_msg[0] ? item->error_msg : "Render failed");
+    }
+}
+
+/* Event loop thread: write the response and resume the connection. */
+static void render_done_fn(void *user_data)
+{
+    RenderCtx *ctx = (RenderCtx *)user_data;
+
+    s_qstats.popped++;
+
+    if (ctx->detached) {
+        render_ctx_free(ctx);
+        return;
+    }
+
+    render_reply(kl_http_conn_response(ctx->op.conn), ctx->req, ctx);
+    record_metrics(ctx->timer, ctx->endpoint);
+
+    kl_async_complete(ctx->app->server, &ctx->op);
+    render_ctx_free(ctx);
+}
+
+/* Pool shutdown dropped the item before it started. */
+static void render_cancel_fn(void *user_data)
+{
+    render_ctx_free((RenderCtx *)user_data);
+}
+
+/*
+ * Declare the send. kl_async_complete() re-arms the fd but leaves the
+ * connection SUSPENDED unless on_resume says what happens next; without this
+ * the response is never written and the client hangs. Keel's
+ * examples/thread_pool and examples/async_thread_pool leave this a no-op and
+ * hang for exactly that reason; tests/smoke_iouring_async.c is the correct
+ * reference, and kl_http_request_send_response() is its public equivalent.
+ */
+static void render_on_resume(KlAsyncOp *op, void *ud)
+{
+    (void)ud;
+    RenderCtx *ctx = (RenderCtx *)((char *)op - offsetof(RenderCtx, op));
+    kl_http_request_send_response(ctx->req);
+}
+
+/* Connection died while suspended; the worker may still be running. */
+static void render_on_cancel(KlAsyncOp *op, void *ud)
+{
+    (void)ud;
+    ((RenderCtx *)((char *)op - offsetof(RenderCtx, op)))->detached = 1;
+}
+
+/* Deadline exceeded: reply 504 now, let done_fn free the context later. */
+static void render_on_deadline(KlAsyncOp *op, void *ud)
+{
+    (void)ud;
+    RenderCtx *ctx = (RenderCtx *)((char *)op - offsetof(RenderCtx, op));
+
+    if (ctx->detached) return;
+    ctx->detached = 1;
+    s_qstats.expired++;
+
+    send_error_cors(kl_http_conn_response(op->conn), ctx->req, 504,
+                    "Request timeout");
+    record_metrics(ctx->timer, ctx->endpoint);
+
+    kl_async_complete(ctx->app->server, op);
 }
 
 /* ============================================================================
@@ -636,44 +677,29 @@ static void load_carta_env(TileServerConfig *cfg) {
  * Extract origin from request.
  * Thread-safe using thread-local storage for origin buffer.
  */
-static const char *get_origin_from_request(struct mg_http_message *hm) {
-    struct mg_str *origin_hdr = hm ? mg_http_get_header(hm, "Origin") : NULL;
-    if (origin_hdr && origin_hdr->len > 0) {
-        static __thread char origin_buf[256];
-        size_t len = origin_hdr->len < sizeof(origin_buf) - 1 ?
-                     origin_hdr->len : sizeof(origin_buf) - 1;
-        memcpy(origin_buf, origin_hdr->buf, len);
-        origin_buf[len] = '\0';
-        return origin_buf;
-    }
-    return NULL;
-}
-
-/* Get CORS preflight headers for an OPTIONS request */
-static void get_cors_preflight_headers(struct mg_http_message *hm, char *buf, size_t size) {
-    sh_cors_preflight_headers(&s_cors, get_origin_from_request(hm), buf, size);
+static const char *get_origin_from_request(const KlHttpRequest *req) {
+    return sh_kl_origin(req);
 }
 
 /* HTTP response helpers - use shared implementation */
-static void send_json_cors(struct mg_connection *c, struct mg_http_message *hm,
+static void send_json_cors(KlHttpResponse *res, const KlHttpRequest *req,
                            int status, const char *json) {
-    sh_mg_reply_json(c, status, &s_cors, get_origin_from_request(hm), json);
+    sh_kl_reply_json(res, status, &s_cors, get_origin_from_request(req), json);
 }
 
-static void send_error_cors(struct mg_connection *c, struct mg_http_message *hm,
+static void send_error_cors(KlHttpResponse *res, const KlHttpRequest *req,
                             int status, const char *message) {
-    sh_mg_reply_error(c, status, &s_cors, get_origin_from_request(hm), message);
+    sh_kl_reply_error(res, status, &s_cors, get_origin_from_request(req), message);
 }
 
-/* send_tile_cors sends binary data with ETag support.
- * If hm is non-NULL, checks If-None-Match for conditional 304. */
-static void send_tile_cors(struct mg_connection *c, struct mg_http_message *hm,
+/*
+ * send_tile_cors sends binary tile data with ETag support.
+ * When req is non-NULL, honours If-None-Match with a conditional 304.
+ */
+static void send_tile_cors(KlHttpResponse *res, const KlHttpRequest *req,
                            const char *content_type, const uint8_t *data, size_t size) {
-    char cors_headers[512];
-    sh_cors_headers(&s_cors, get_origin_from_request(hm), cors_headers, sizeof(cors_headers));
-
     /* Compute ETag from tile bytes */
-    char etag[20];
+    char etag[24];
     if (data && size > 0) {
         uint64_t hash = sh_fnv1a_64(data, size);
         snprintf(etag, sizeof(etag), "\"%016llx\"", (unsigned long long)hash);
@@ -681,45 +707,31 @@ static void send_tile_cors(struct mg_connection *c, struct mg_http_message *hm,
         etag[0] = '\0';
     }
 
-    /* Check If-None-Match for conditional request */
-    if (hm && etag[0]) {
-        struct mg_str *inm = mg_http_get_header(hm, "If-None-Match");
-        if (inm && inm->len > 0 && inm->len == strlen(etag) &&
-            memcmp(inm->buf, etag, inm->len) == 0) {
-            mg_printf(c,
-                "HTTP/1.1 304 Not Modified\r\n"
-                "ETag: %s\r\n"
-                "%s"
-                "Cache-Control: public, max-age=86400\r\n"
-                "Connection: close\r\n"
-                "\r\n",
-                etag, cors_headers);
+    /* Conditional request: If-None-Match */
+    if (req && etag[0]) {
+        const char *inm = kl_http_request_header(req, "If-None-Match");
+        if (inm && strcmp(inm, etag) == 0) {
+            kl_http_response_status(res, 304);
+            kl_http_response_header(res, "ETag", etag);
+            kl_http_response_header(res, "Cache-Control", "public, max-age=86400");
+            sh_kl_apply_cors(res, &s_cors, get_origin_from_request(req));
+            kl_http_response_body_borrow(res, "", 0);
             return;
         }
     }
 
-    mg_printf(c,
-        "HTTP/1.1 200 OK\r\n"
-        "Content-Type: %s\r\n"
-        "Content-Length: %lu\r\n"
-        "%s"
-        "%s%s%s"
-        "Cache-Control: public, max-age=86400\r\n"
-        "Connection: close\r\n"
-        "\r\n",
-        content_type, (unsigned long)size, cors_headers,
-        etag[0] ? "ETag: " : "", etag[0] ? etag : "", etag[0] ? "\r\n" : "");
-    mg_send(c, data, size);
+    kl_http_response_status(res, 200);
+    kl_http_response_header(res, "Content-Type", content_type);
+    kl_http_response_header(res, "Cache-Control", "public, max-age=86400");
+    if (etag[0]) kl_http_response_header(res, "ETag", etag);
+    sh_kl_apply_cors(res, &s_cors, get_origin_from_request(req));
+    /* Copy: Keel body setters borrow, and callers free their buffers. */
+    kl_http_response_body_copy(res, (const char *)data, size);
 }
 
-/* Legacy wrappers without request context (for internal callbacks like work queue) */
-static void send_error(struct mg_connection *c, int status, const char *message) {
-    send_error_cors(c, NULL, status, message);
-}
-
-static void send_tile(struct mg_connection *c, const char *content_type,
-                      const uint8_t *data, size_t size) {
-    send_tile_cors(c, NULL, content_type, data, size);
+/* Legacy wrappers without request context (used by internal callbacks) */
+static void send_error(KlHttpResponse *res, int status, const char *message) {
+    send_error_cors(res, NULL, status, message);
 }
 
 /* ============================================================================
@@ -727,15 +739,20 @@ static void send_tile(struct mg_connection *c, const char *content_type,
  * ============================================================================ */
 
 /* GET /api/v1/health - uses shared helper */
-static void handle_health(struct mg_connection *c, struct mg_http_message *hm) {
-    sh_mg_handle_health(c, &s_cors, get_origin_from_request(hm),
+static void handle_health(KlHttpRequest *req, KlHttpResponse *res, void *ud) {
+    (void)ud;
+    ShMetricsTimer timer = sh_metrics_timer_start();
+    record_metrics(timer, "endpoint:health");
+    sh_kl_handle_health(res, &s_cors, get_origin_from_request(req),
                         "carta-tile-server", ct_version());
 }
 
 /* GET /api/v1/stats */
-static void handle_stats(struct mg_connection *c, struct mg_http_message *hm) {
+static void handle_stats(KlHttpRequest *req, KlHttpResponse *res, void *ud) {
+    (void)ud;
+    ShMetricsTimer timer = sh_metrics_timer_start();
     if (!s_pbf_ctx) {
-        send_error_cors(c, hm, 503, "PBF not loaded");
+        send_error_cors(res, req, 503, "PBF not loaded");
         return;
     }
 
@@ -903,118 +920,127 @@ static void handle_stats(struct mg_connection *c, struct mg_http_message *hm) {
     sh_json_write_object_end(&jw);
 
     char *json = sh_json_buf_take(&jb);
-    send_json_cors(c, hm, 200, json);
+    record_metrics(timer, "endpoint:stats");
+    send_json_cors(res, req, 200, json);
     free(json);
 }
 
 /* GET /tiles.json - TileJSON metadata */
-static void handle_tilejson(struct mg_connection *c, struct mg_http_message *hm) {
+static void handle_tilejson(KlHttpRequest *req, KlHttpResponse *res, void *ud) {
+    (void)ud;
+    ShMetricsTimer timer = sh_metrics_timer_start();
     if (!s_api_ctx) {
-        send_error_cors(c, hm, 503, "API not initialized");
+        send_error_cors(res, req, 503, "API not initialized");
         return;
     }
 
     /* Get host header for building tile URLs */
-    struct mg_str *host_hdr = mg_http_get_header(hm, "Host");
+    (void)timer;  /* recorded at the send site below */
+    const char *host_hdr = kl_http_request_header(req, "Host");
     char host_buf[256] = "localhost:8081";
-    if (host_hdr && host_hdr->len > 0 && host_hdr->len < sizeof(host_buf)) {
-        memcpy(host_buf, host_hdr->buf, host_hdr->len);
-        host_buf[host_hdr->len] = '\0';
+    if (host_hdr && host_hdr[0]) {
+        snprintf(host_buf, sizeof(host_buf), "%s", host_hdr);
     }
 
     /* Use transport-agnostic API to generate TileJSON */
     size_t len;
     char *response = ct_api_generate_tilejson(s_api_ctx, host_buf, &len);
     if (!response) {
-        send_error_cors(c, hm, 500, "TileJSON generation failed");
+        send_error_cors(res, req, 500, "TileJSON generation failed");
         return;
     }
 
-    send_json_cors(c, hm, 200, response);
+    send_json_cors(res, req, 200, response);
     free(response);
 }
 
 /* Submit render work via work queue and send response */
-static int submit_render_work(struct mg_connection *c, RenderWorkItem *item)
+/*
+ * Dispatch a render. Takes ownership of ctx in every path.
+ * Renders inline when the queue is disabled, matching the old behaviour.
+ */
+static void submit_render_work(KlHttpRequest *req, KlHttpResponse *res,
+                               void *ud, RenderCtx *ctx)
 {
-    /* Create queue item */
-    ShWorkItem queue_item = {
-        .data = NULL,       /* No data to transfer, item is on caller's stack */
-        .data_len = 0,
-        .user_ctx = item    /* Pass render item as context */
+    AppCtx *app = (AppCtx *)ud;
+
+    if (!s_pool) {
+        render_work_fn(ctx);
+        render_reply(res, req, ctx);
+        record_metrics(ctx->timer, ctx->endpoint);
+        render_ctx_free(ctx);
+        return;
+    }
+
+    ctx->app = app;
+    ctx->req = req;
+    ctx->op.on_resume = render_on_resume;
+    ctx->op.on_cancel = render_on_cancel;
+    ctx->op.on_deadline = render_on_deadline;
+    if (s_config.server.work_queue_timeout > 0.0) {
+        ctx->op.deadline_ms = kl_monotonic_ms() +
+            (uint64_t)(s_config.server.work_queue_timeout * 1000.0);
+    }
+
+    if (kl_async_suspend(app->server, kl_http_request_conn(req), &ctx->op) < 0) {
+        render_ctx_free(ctx);
+        send_error_cors(res, req, 500, "Failed to suspend request");
+        return;
+    }
+
+    KlWorkItem item = {
+        .work_fn   = render_work_fn,
+        .done_fn   = render_done_fn,
+        .cancel_fn = render_cancel_fn,
+        .user_data = ctx,
     };
 
-    /* Try to push to queue */
-    double pressure;
-    if (!sh_workqueue_try_push(s_work_queue, &queue_item, &pressure)) {
-        /* Queue is full - backpressure */
-        mg_http_reply(c, 503,
-            "Content-Type: text/plain\r\n"
-            "Retry-After: 1\r\n"
-            "Access-Control-Allow-Origin: *\r\n",
-            "Server busy, try again later\n");
-        return 0;
+    if (kl_thread_pool_submit(app->pool, &item) < 0) {
+        /* Queue full - backpressure, same 503 as the old work queue. */
+        s_qstats.dropped++;
+        ctx->detached = 1;
+        send_error_cors(res, req, 503, "Server busy, try again later");
+        record_metrics(ctx->timer, ctx->endpoint);
+        kl_async_complete(app->server, &ctx->op);
+        render_ctx_free(ctx);
+        return;
     }
 
-    /* Wait for completion with timeout */
-    double timeout = s_config.server.work_queue_timeout;
-    if (!render_work_item_wait(item, timeout)) {
-        /* Timeout - mark item as cancelled so worker can skip if not started */
-        sh_completion_cancel(&item->completion);
-        mg_http_reply(c, 504,
-            "Content-Type: text/plain\r\n"
-            "Access-Control-Allow-Origin: *\r\n",
-            "Request timeout\n");
-        return 0;
-    }
+    s_qstats.pushed++;
+}
 
-    /* Send response based on result */
-    if (item->status_code == 200) {
-        if (item->response_data && item->response_size > 0) {
-            send_tile(c, item->content_type, item->response_data,
-                      item->response_size);
-        } else {
-            /* Empty tile */
-            static const uint8_t empty_mvt[] = {0x1a, 0x00};
-            if (strcmp(item->content_type, "application/vnd.mapbox-vector-tile") == 0) {
-                send_tile(c, item->content_type, empty_mvt, 0);
-            } else if (strcmp(item->content_type, "text/plain; charset=utf-8") == 0) {
-                mg_http_reply(c, 200,
-                    "Content-Type: text/plain; charset=utf-8\r\n"
-                    "Access-Control-Allow-Origin: *\r\n",
-                    "");
-            } else {
-                send_tile(c, item->content_type, NULL, 0);
-            }
-        }
-    } else if (item->status_code == 504) {
-        mg_http_reply(c, 504,
-            "Content-Type: text/plain\r\n"
-            "Access-Control-Allow-Origin: *\r\n",
-            "%s\n", item->error_msg);
-    } else {
-        send_error(c, item->status_code, item->error_msg);
-    }
-
-    return 1;
+/* Allocate a render context with the common fields filled in. */
+static RenderCtx *render_ctx_new(RenderType type, int z, int x, int y,
+                                 const char *endpoint, ShMetricsTimer timer)
+{
+    RenderCtx *ctx = calloc(1, sizeof(*ctx));
+    if (!ctx) return NULL;
+    ctx->type = type;
+    ctx->z = z;
+    ctx->x = x;
+    ctx->y = y;
+    ctx->status_code = 500;
+    ctx->endpoint = endpoint;
+    ctx->timer = timer;
+    return ctx;
 }
 
 /* GET /tiles/{z}/{x}/{y}.mvt */
-static void handle_mvt_tile(struct mg_connection *c, struct mg_http_message *hm,
-                            int z, int x, int y) {
+static void handle_mvt_tile(KlHttpRequest *req, KlHttpResponse *res, void *ud,
+                            int z, int x, int y, ShMetricsTimer timer) {
     if (!s_pbf_ctx) {
-        send_error(c, 503, "PBF not loaded");
+        send_error(res, 503, "PBF not loaded");
         return;
     }
 
     if (z < s_config.min_zoom || z > s_config.max_zoom || z > 30) {
-        send_error(c, 400, "Zoom out of range");
+        send_error(res, 400, "Zoom out of range");
         return;
     }
 
     int max_coord = 1 << z;  /* Safe: z <= 30 */
     if (x < 0 || x >= max_coord || y < 0 || y >= max_coord) {
-        send_error(c, 400, "Tile coordinates out of range");
+        send_error(res, 400, "Tile coordinates out of range");
         return;
     }
 
@@ -1030,7 +1056,7 @@ static void handle_mvt_tile(struct mg_connection *c, struct mg_http_message *hm,
             if (copy) {
                 memcpy(copy, cached_data, cached_size);
                 pthread_mutex_unlock(&s_cache_mutex);
-                send_tile_cors(c, hm, "application/vnd.mapbox-vector-tile", copy, cached_size);
+                send_tile_cors(res, req, "application/vnd.mapbox-vector-tile", copy, cached_size);
                 free(copy);
                 return;
             }
@@ -1038,76 +1064,43 @@ static void handle_mvt_tile(struct mg_connection *c, struct mg_http_message *hm,
         pthread_mutex_unlock(&s_cache_mutex);
     }
 
-    /* Use work queue if enabled */
-    if (s_work_queue) {
-        RenderWorkItem item;
-        render_work_item_init(&item, RENDER_TYPE_MVT, z, x, y);
-        submit_render_work(c, &item);
-        render_work_item_cleanup(&item);
+    RenderCtx *ctx = render_ctx_new(RENDER_TYPE_MVT, z, x, y, "endpoint:mvt", timer);
+    if (!ctx) {
+        send_error_cors(res, req, 500, "Memory allocation failed");
         return;
     }
-
-    /* Fallback: direct rendering (work queue disabled) */
-    size_t capacity = 2 * 1024 * 1024;  /* 2MB */
-    uint8_t *buffer = malloc(capacity);
-    if (!buffer) {
-        send_error(c, 500, "Memory allocation failed");
-        return;
-    }
-
-    CTTileCoord coord = {z, x, y};
-    CTMVTOptions opts;
-    ct_mvt_default_options(&opts);
-
-    const CTLODConfig *lod = (s_config.lod_preset != LOD_NONE) ? &s_lod_config : NULL;
-    size_t size = ct_generate_mvt(s_pbf_ctx, coord, &opts, lod, buffer, capacity);
-
-    if (size == 0) {
-        free(buffer);
-        static const uint8_t empty_mvt[] = {0x1a, 0x00};
-        send_tile_cors(c, hm, "application/vnd.mapbox-vector-tile", empty_mvt, 0);
-        return;
-    }
-
-    if (s_mvt_cache) {
-        pthread_mutex_lock(&s_cache_mutex);
-        ct_cache_put(s_mvt_cache, z, x, y, buffer, size);
-        pthread_mutex_unlock(&s_cache_mutex);
-    }
-
-    send_tile_cors(c, hm, "application/vnd.mapbox-vector-tile", buffer, size);
-    free(buffer);
+    submit_render_work(req, res, ud, ctx);
 }
 
 /* Parse query string for a parameter with bounds, returns default if not found/invalid.
- * Converts mongoose mg_str to null-terminated string and uses sh_query_get_int_bounded. */
-static int get_query_int(struct mg_str query, const char *name, int default_val,
+ * Thin wrapper over sh_query_get_int_bounded(). */
+static int get_query_int(const char *query, const char *name, int default_val,
                          int min_val, int max_val) {
-    /* Convert mg_str to null-terminated string for sh_query */
-    char query_buf[512];
-    size_t len = query.len < sizeof(query_buf) - 1 ? query.len : sizeof(query_buf) - 1;
-    memcpy(query_buf, query.buf, len);
-    query_buf[len] = '\0';
-
-    return sh_query_get_int_bounded(query_buf, name, default_val, min_val, max_val);
+    return sh_query_get_int_bounded(query ? query : "", name,
+                                    default_val, min_val, max_val);
 }
 
 /* GET /tiles/{z}/{x}/{y}.txt or .ascii */
-static void handle_ascii_tile(struct mg_connection *c, struct mg_http_message *hm,
-                              int z, int x, int y) {
+static void handle_ascii_tile(KlHttpRequest *req, KlHttpResponse *res, void *ud,
+                              int z, int x, int y, ShMetricsTimer timer) {
+    char query[512];
+    size_t qlen = req->query_len < sizeof(query) - 1 ? req->query_len
+                                                     : sizeof(query) - 1;
+    if (req->query && qlen > 0) memcpy(query, req->query, qlen);
+    query[req->query && qlen > 0 ? qlen : 0] = '\0';
     if (!s_pbf_ctx) {
-        send_error(c, 503, "PBF not loaded");
+        send_error(res, 503, "PBF not loaded");
         return;
     }
 
     if (z < s_config.min_zoom || z > s_config.max_zoom || z > 30) {
-        send_error(c, 400, "Zoom out of range");
+        send_error(res, 400, "Zoom out of range");
         return;
     }
 
     int max_coord = 1 << z;  /* Safe: z <= 30 */
     if (x < 0 || x >= max_coord || y < 0 || y >= max_coord) {
-        send_error(c, 400, "Tile coordinates out of range");
+        send_error(res, 400, "Tile coordinates out of range");
         return;
     }
 
@@ -1115,14 +1108,15 @@ static void handle_ascii_tile(struct mg_connection *c, struct mg_http_message *h
     CTAsciiOptions ascii_opts;
     ct_ascii_default_options(&ascii_opts);
 
-    ascii_opts.width = get_query_int(hm->query, "width", 80, 1, 256);
-    ascii_opts.height = get_query_int(hm->query, "height", 0, 0, 256);  /* 0 = auto */
-    ascii_opts.invert = get_query_int(hm->query, "invert", 0, 0, 1);
-    ascii_opts.color = get_query_int(hm->query, "color", 0, 0, 1);
+    ascii_opts.width = get_query_int(query, "width", 80, 1, 256);
+    ascii_opts.height = get_query_int(query, "height", 0, 0, 256);  /* 0 = auto */
+    ascii_opts.invert = get_query_int(query, "invert", 0, 0, 1);
+    ascii_opts.color = get_query_int(query, "color", 0, 0, 1);
 
     /* Parse charset: simple, extended, blocks, braille */
     char charset_buf[16];
-    if (mg_http_get_var(&hm->query, "charset", charset_buf, sizeof(charset_buf)) > 0) {
+    if (sh_query_get_str(query, "charset",
+                         charset_buf, sizeof(charset_buf)) > 0) {
         if (strcmp(charset_buf, "simple") == 0) {
             ascii_opts.charset = CT_ASCII_SIMPLE;
         } else if (strcmp(charset_buf, "extended") == 0) {
@@ -1139,102 +1133,31 @@ static void handle_ascii_tile(struct mg_connection *c, struct mg_http_message *h
     if (ascii_opts.width > 400) ascii_opts.width = 400;
     if (ascii_opts.height > 200) ascii_opts.height = 200;
 
-    /* Use work queue if enabled */
-    if (s_work_queue) {
-        RenderWorkItem item;
-        render_work_item_init(&item, RENDER_TYPE_ASCII, z, x, y);
-        item.ascii_opts = ascii_opts;  /* Copy parsed options */
-        submit_render_work(c, &item);
-        render_work_item_cleanup(&item);
-        return;
-    }
-
-    /* Fallback: direct rendering (work queue disabled) */
-    int tile_size = 512;
-    CTTileCoord coord = {z, x, y};
-
-    CTRenderContext *render_ctx = ct_render_create(tile_size, tile_size);
-    if (!render_ctx) {
-        send_error(c, 500, "Render context creation failed");
-        return;
-    }
-
-    ct_render_clear(render_ctx);
-    ct_render_from_pbf_mt(render_ctx, s_pbf_ctx, coord,
-                           ct_api_get_metatile_cache(s_api_ctx));
-
-    const uint8_t *pixels = ct_render_pixels(render_ctx);
-
-    size_t ascii_size = ct_ascii_buffer_size(ascii_opts.width,
-                                             ascii_opts.height > 0 ? ascii_opts.height : ascii_opts.width / 2,
-                                             ascii_opts.charset, ascii_opts.color);
-    char *ascii_buf = malloc(ascii_size);
-    if (!ascii_buf) {
-        ct_render_free(render_ctx);
-        send_error(c, 500, "ASCII buffer allocation failed");
-        return;
-    }
-
-    size_t ascii_len = ct_render_ascii(pixels, tile_size, tile_size,
-                                       &ascii_opts, ascii_buf, ascii_size);
-
-    mg_printf(c,
-        "HTTP/1.1 200 OK\r\n"
-        "Content-Type: text/plain; charset=utf-8\r\n"
-        "Content-Length: %lu\r\n"
-        "Access-Control-Allow-Origin: *\r\n"
-        "Cache-Control: public, max-age=86400\r\n"
-        "Connection: close\r\n"
-        "\r\n",
-        (unsigned long)ascii_len);
-    mg_send(c, ascii_buf, ascii_len);
-
-    free(ascii_buf);
-    ct_render_free(render_ctx);
-}
-
-/* Thread-local key for render context */
-static pthread_key_t s_render_ctx_key;
-static pthread_once_t s_render_ctx_key_once = PTHREAD_ONCE_INIT;
-
-static void render_ctx_destructor(void *ptr) {
-    if (ptr) ct_render_free((CTRenderContext *)ptr);
-}
-
-static void create_render_ctx_key(void) {
-    pthread_key_create(&s_render_ctx_key, render_ctx_destructor);
-}
-
-/* Get or create thread-local render context */
-static CTRenderContext *get_thread_render_ctx(int tile_size) {
-    pthread_once(&s_render_ctx_key_once, create_render_ctx_key);
-
-    CTRenderContext *ctx = pthread_getspecific(s_render_ctx_key);
+    RenderCtx *ctx = render_ctx_new(RENDER_TYPE_ASCII, z, x, y, "endpoint:ascii", timer);
     if (!ctx) {
-        ctx = ct_render_create(tile_size, tile_size);
-        if (ctx) {
-            pthread_setspecific(s_render_ctx_key, ctx);
-        }
+        send_error_cors(res, req, 500, "Memory allocation failed");
+        return;
     }
-    return ctx;
+    ctx->ascii_opts = ascii_opts;
+    submit_render_work(req, res, ud, ctx);
 }
 
 /* GET /tiles/{z}/{x}/{y}.png */
-static void handle_png_tile(struct mg_connection *c, struct mg_http_message *hm,
-                            int z, int x, int y) {
+static void handle_png_tile(KlHttpRequest *req, KlHttpResponse *res, void *ud,
+                            int z, int x, int y, ShMetricsTimer timer) {
     if (!s_pbf_ctx) {
-        send_error(c, 503, "PBF not loaded");
+        send_error(res, 503, "PBF not loaded");
         return;
     }
 
     if (z < s_config.min_zoom || z > s_config.max_zoom || z > 30) {
-        send_error(c, 400, "Zoom out of range");
+        send_error(res, 400, "Zoom out of range");
         return;
     }
 
     int max_coord = 1 << z;  /* Safe: z <= 30 */
     if (x < 0 || x >= max_coord || y < 0 || y >= max_coord) {
-        send_error(c, 400, "Tile coordinates out of range");
+        send_error(res, 400, "Tile coordinates out of range");
         return;
     }
 
@@ -1249,7 +1172,7 @@ static void handle_png_tile(struct mg_connection *c, struct mg_http_message *hm,
             if (copy) {
                 memcpy(copy, cached_data, cached_size);
                 pthread_mutex_unlock(&s_cache_mutex);
-                send_tile_cors(c, hm, "image/png", copy, cached_size);
+                send_tile_cors(res, req, "image/png", copy, cached_size);
                 free(copy);
                 return;
             }
@@ -1257,72 +1180,21 @@ static void handle_png_tile(struct mg_connection *c, struct mg_http_message *hm,
         pthread_mutex_unlock(&s_cache_mutex);
     }
 
-    /* Use work queue if enabled */
-    if (s_work_queue) {
-        RenderWorkItem item;
-        render_work_item_init(&item, RENDER_TYPE_PNG, z, x, y);
-        submit_render_work(c, &item);
-        render_work_item_cleanup(&item);
+    RenderCtx *ctx = render_ctx_new(RENDER_TYPE_PNG, z, x, y, "endpoint:png", timer);
+    if (!ctx) {
+        send_error_cors(res, req, 500, "Memory allocation failed");
         return;
     }
-
-    /* Fallback: direct rendering (work queue disabled) */
-    CTTileCoord coord = {z, x, y};
-    CTRenderContext *render = get_thread_render_ctx(s_config.tile_size);
-    if (!render) {
-        send_error(c, 500, "Render context creation failed");
-        return;
-    }
-
-    /* Apply render options */
-    ct_render_set_options(render, &s_render_opts);
-
-    ct_render_clear(render);
-    CTMetatileLabelCache *mt_cache = ct_api_get_metatile_cache(s_api_ctx);
-    if (s_config.lod_preset != LOD_NONE) {
-        ct_render_from_pbf_lod_mt(render, s_pbf_ctx, coord, &s_lod_config,
-                                   mt_cache);
-    } else {
-        ct_render_from_pbf_mt(render, s_pbf_ctx, coord, mt_cache);
-    }
-
-    size_t capacity = ct_png_max_size(s_config.tile_size, s_config.tile_size);
-    uint8_t *buffer = malloc(capacity);
-    if (!buffer) {
-        send_error(c, 500, "Memory allocation failed");
-        return;
-    }
-
-    CTPNGOptions opts;
-    ct_png_default_options(&opts);
-    opts.tile_size = s_config.tile_size;
-
-    size_t size = ct_encode_png(ct_render_pixels(render),
-                                s_config.tile_size, s_config.tile_size,
-                                &opts, buffer, capacity);
-
-    if (size == 0) {
-        send_error(c, 500, "Tile generation failed");
-        free(buffer);
-        return;
-    }
-
-    if (s_png_cache) {
-        pthread_mutex_lock(&s_cache_mutex);
-        ct_cache_put(s_png_cache, z, x, y, buffer, size);
-        pthread_mutex_unlock(&s_cache_mutex);
-    }
-
-    send_tile_cors(c, hm, "image/png", buffer, size);
-    free(buffer);
+    submit_render_work(req, res, ud, ctx);
 }
 
 /* Parse tile coordinates from URI like /tiles/14/9058/5729.png */
-static int parse_tile_uri(struct mg_str uri, int *z, int *x, int *y, char *ext) {
+static int parse_tile_uri(const char *uri, size_t uri_len, int *z, int *x, int *y,
+                          char *ext) {
     /* Skip /tiles/ prefix */
-    if (uri.len < 8) return -1;
-    const char *p = uri.buf + 7;  /* Skip "/tiles/" */
-    const char *end = uri.buf + uri.len;
+    if (uri_len < 8) return -1;
+    const char *p = uri + 7;  /* Skip "/tiles/" */
+    const char *end = uri + uri_len;
 
     /* Parse z */
     char *next;
@@ -1359,107 +1231,165 @@ static int parse_tile_uri(struct mg_str uri, int *z, int *x, int *y, char *ext) 
  * ============================================================================ */
 
 /* Handle /metrics endpoint for Prometheus - uses shared helper */
-static void handle_metrics(struct mg_connection *c) {
-    sh_mg_handle_metrics(c);
+static void handle_metrics(KlHttpRequest *req, KlHttpResponse *res, void *ud) {
+    (void)req; (void)ud;
+    sh_kl_handle_metrics(res);
 }
 
-static void ev_handler(struct mg_connection *c, int ev, void *ev_data) {
-    /* Set socket write timeout on new connections to protect against slow clients */
-    if (ev == MG_EV_ACCEPT) {
-        sh_mg_set_write_timeout(c, 5000);  /* 5 second write timeout */
+/* ============================================================================
+ * Static Files
+ * ============================================================================ */
+
+/* Minimal content-type table for the assets the map client serves. */
+static const char *static_content_type(const char *path) {
+    const char *dot = strrchr(path, '.');
+    if (!dot) return "application/octet-stream";
+    if (strcmp(dot, ".html") == 0) return "text/html; charset=utf-8";
+    if (strcmp(dot, ".js") == 0)   return "text/javascript; charset=utf-8";
+    if (strcmp(dot, ".css") == 0)  return "text/css; charset=utf-8";
+    if (strcmp(dot, ".json") == 0) return "application/json";
+    if (strcmp(dot, ".png") == 0)  return "image/png";
+    if (strcmp(dot, ".svg") == 0)  return "image/svg+xml";
+    if (strcmp(dot, ".wasm") == 0) return "application/wasm";
+    if (strcmp(dot, ".ico") == 0)  return "image/x-icon";
+    return "application/octet-stream";
+}
+
+/*
+ * Serve a file from static_dir. Returns 1 if a response was written.
+ *
+ * Rejects any path containing "..", so a request cannot escape the root.
+ * mg_http_serve_dir() did this internally; with Keel it is our job.
+ */
+static int serve_static_file(const KlHttpRequest *req, KlHttpResponse *res) {
+    char path[SH_PATH_MAX];
+    char rel[512];
+
+    size_t len = req->path_len < sizeof(rel) - 1 ? req->path_len : sizeof(rel) - 1;
+    memcpy(rel, req->path, len);
+    rel[len] = '\0';
+
+    if (strstr(rel, "..")) return 0;              /* no traversal */
+    if (strcmp(rel, "/") == 0) snprintf(rel, sizeof(rel), "/index.html");
+
+    int n = snprintf(path, sizeof(path), "%s%s", s_config.server.static_dir, rel);
+    if (n < 0 || (size_t)n >= sizeof(path)) return 0;
+
+    FILE *f = fopen(path, "rb");
+    if (!f) return 0;
+    if (fseek(f, 0, SEEK_END) != 0) { fclose(f); return 0; }
+    long fsize = ftell(f);
+    if (fsize < 0 || fsize > 32 * 1024 * 1024) { fclose(f); return 0; }
+    rewind(f);
+    char *data = malloc((size_t)fsize + 1);
+    if (!data) { fclose(f); return 0; }
+    size_t size = fread(data, 1, (size_t)fsize, f);
+    fclose(f);
+
+    kl_http_response_status(res, 200);
+    kl_http_response_header(res, "Content-Type", static_content_type(path));
+    sh_kl_apply_cors(res, &s_cors, get_origin_from_request(req));
+    kl_http_response_body_copy(res, data, size);
+    free(data);
+    return 1;
+}
+
+/* ============================================================================
+ * Middleware and Routing
+ * ============================================================================ */
+
+/* CORS preflight, before rate limiting (as in the mongoose server). */
+static int mw_preflight(KlHttpRequest *req, KlHttpResponse *res, void *ud) {
+    (void)ud;
+    sh_trace_from_headers(sh_kl_trace_header_getter, req);
+    sh_kl_reply_preflight(res, &s_cors, get_origin_from_request(req));
+    sh_trace_clear();
+    return 1;  /* short-circuit */
+}
+
+/* Rate limit every request before routing. */
+static int mw_rate_limit(KlHttpRequest *req, KlHttpResponse *res, void *ud) {
+    (void)ud;
+    sh_trace_from_headers(sh_kl_trace_header_getter, req);
+    if (!sh_kl_check_rate_limit(req, res, s_rate_limiter, &s_cors,
+                                get_origin_from_request(req))) {
+        SH_LOG_WARN("Rate limit exceeded", "status", "429");
+        sh_metrics_counter_inc("http_requests_total", 1,
+                               "status:429", "endpoint:ratelimit", NULL);
+        sh_trace_clear();
+        return 1;  /* short-circuit */
+    }
+    return 0;
+}
+
+/* Tile routes: /tiles/{z}/{x}/{y}.{ext} */
+static void handle_tile(KlHttpRequest *req, KlHttpResponse *res, void *ud) {
+    ShMetricsTimer timer = sh_metrics_timer_start();
+    int z, x, y;
+    char ext[8];
+
+    if (parse_tile_uri(req->path, req->path_len, &z, &x, &y, ext) != 0) {
+        send_error_cors(res, req, 400, "Invalid tile URL format");
+        sh_metrics_counter_inc("http_requests_total", 1,
+                               "status:400", "endpoint:tiles", NULL);
+        sh_trace_clear();
         return;
     }
 
-    if (ev == MG_EV_HTTP_MSG) {
-        struct mg_http_message *hm = (struct mg_http_message *)ev_data;
-        ShMetricsTimer req_timer = sh_metrics_timer_start();
-
-        /* Extract or generate trace ID */
-        sh_trace_from_headers(sh_mg_trace_header_getter, hm);
-
-        /* Rate limiting check - uses shared helper */
-        if (!sh_mg_check_rate_limit(c, s_rate_limiter, &s_cors, get_origin_from_request(hm))) {
-            SH_LOG_WARN("Rate limit exceeded", "status", "429");
-            sh_metrics_counter_inc("http_requests_total", 1,
-                                   "status:429", "endpoint:ratelimit", NULL);
-            sh_trace_clear();
-            return;
-        }
-
-        /* CORS preflight */
-        if (mg_match(hm->method, mg_str("OPTIONS"), NULL)) {
-            char cors_headers[512];
-            get_cors_preflight_headers(hm, cors_headers, sizeof(cors_headers));
-            mg_http_reply(c, 204, cors_headers, "");
-            return;
-        }
-
-        /* Route requests */
-        if (mg_match(hm->uri, mg_str("/api/v1/health"), NULL)) {
-            handle_health(c, hm);
-            sh_trace_clear();
-            return;
-        } else if (mg_match(hm->uri, mg_str("/api/v1/stats"), NULL)) {
-            handle_stats(c, hm);
-            sh_trace_clear();
-            return;
-        } else if (mg_match(hm->uri, mg_str("/metrics"), NULL)) {
-            handle_metrics(c);
-            sh_trace_clear();
-            return;
-        } else if (mg_match(hm->uri, mg_str("/tiles.json"), NULL)) {
-            handle_tilejson(c, hm);
-            sh_metrics_timer_observe(req_timer, "http_request_duration_ms",
-                                     "endpoint:tilejson", NULL);
-            sh_metrics_counter_inc("http_requests_total", 1,
-                                   "status:200", "endpoint:tilejson", NULL);
-        } else if (hm->uri.len > 7 && strncmp(hm->uri.buf, "/tiles/", 7) == 0) {
-            /* Parse tile request: /tiles/{z}/{x}/{y}.{ext} */
-            int z, x, y;
-            char ext[8];
-            if (parse_tile_uri(hm->uri, &z, &x, &y, ext) == 0) {
-                if (strcmp(ext, "mvt") == 0 || strcmp(ext, "pbf") == 0) {
-                    handle_mvt_tile(c, hm, z, x, y);
-                    sh_metrics_timer_observe(req_timer, "http_request_duration_ms",
-                                             "endpoint:mvt", NULL);
-                    sh_metrics_counter_inc("http_requests_total", 1,
-                                           "status:200", "endpoint:mvt", NULL);
-                } else if (strcmp(ext, "png") == 0) {
-                    handle_png_tile(c, hm, z, x, y);
-                    sh_metrics_timer_observe(req_timer, "http_request_duration_ms",
-                                             "endpoint:png", NULL);
-                    sh_metrics_counter_inc("http_requests_total", 1,
-                                           "status:200", "endpoint:png", NULL);
-                } else if (strcmp(ext, "txt") == 0 || strcmp(ext, "ascii") == 0) {
-                    handle_ascii_tile(c, hm, z, x, y);
-                    sh_metrics_timer_observe(req_timer, "http_request_duration_ms",
-                                             "endpoint:ascii", NULL);
-                    sh_metrics_counter_inc("http_requests_total", 1,
-                                           "status:200", "endpoint:ascii", NULL);
-                } else {
-                    send_error(c, 400, "Unknown tile format. Use .mvt, .png, .txt, or .ascii");
-                    sh_metrics_counter_inc("http_requests_total", 1,
-                                           "status:400", "endpoint:tiles", NULL);
-                }
-            } else {
-                send_error(c, 400, "Invalid tile URL format");
-                sh_metrics_counter_inc("http_requests_total", 1,
-                                       "status:400", "endpoint:tiles", NULL);
-            }
-        } else {
-            /* Serve static files */
-            struct mg_http_serve_opts opts = {
-                .root_dir = s_config.server.static_dir,
-                .extra_headers = "Access-Control-Allow-Origin: *\r\n"
-            };
-            mg_http_serve_dir(c, hm, &opts);
-            sh_metrics_counter_inc("http_requests_total", 1,
-                                   "status:200", "endpoint:static", NULL);
-        }
-
-        /* Clear trace context at end of request */
-        sh_trace_clear();
+    if (strcmp(ext, "mvt") == 0 || strcmp(ext, "pbf") == 0) {
+        handle_mvt_tile(req, res, ud, z, x, y, timer);
+    } else if (strcmp(ext, "png") == 0) {
+        handle_png_tile(req, res, ud, z, x, y, timer);
+    } else if (strcmp(ext, "txt") == 0 || strcmp(ext, "ascii") == 0) {
+        handle_ascii_tile(req, res, ud, z, x, y, timer);
+    } else {
+        send_error_cors(res, req, 400,
+                        "Unknown tile format. Use .mvt, .png, .txt, or .ascii");
+        sh_metrics_counter_inc("http_requests_total", 1,
+                               "status:400", "endpoint:tiles", NULL);
     }
+    sh_trace_clear();
+}
+
+/*
+ * Anything the route table would not match: static files, else 404.
+ *
+ * Keel route patterns have no wildcard ('*' is only special in middleware
+ * patterns), so both the /tiles/ prefix and the static-file fallback are
+ * handled here rather than as routes. Keel's built-in 404 is also text/plain
+ * with no CORS headers, which the map client would see as an opaque failure.
+ */
+static int mw_fallback(KlHttpRequest *req, KlHttpResponse *res, void *ud) {
+    AppCtx *app = (AppCtx *)ud;
+    KlHttpRoute *matched = NULL;
+    KlHttpParam params[KL_HTTP_ROUTER_MAX_PARAMS];
+    int num_params = 0;
+
+    int rc = kl_http_router_match(&app->server->router,
+                                  req->method, req->method_len,
+                                  req->path, req->path_len,
+                                  &matched, params, &num_params);
+    if (rc == 200) return 0;
+
+    /* /tiles/{z}/{x}/{y}.{ext} is a prefix, not an exact route. */
+    if (req->path_len > 7 && memcmp(req->path, "/tiles/", 7) == 0) {
+        handle_tile(req, res, ud);
+        return 1;
+    }
+
+    /* Static files */
+    if (s_config.server.static_dir[0] && serve_static_file(req, res)) {
+        sh_metrics_counter_inc("http_requests_total", 1,
+                               "status:200", "endpoint:static", NULL);
+        sh_trace_clear();
+        return 1;
+    }
+
+    send_error_cors(res, req, 404, "Not found");
+    sh_metrics_counter_inc("http_requests_total", 1,
+                           "status:404", "endpoint:unknown", NULL);
+    sh_trace_clear();
+    return 1;
 }
 
 /* ============================================================================
@@ -1725,40 +1655,13 @@ int main(int argc, char *argv[]) {
         printf("Rate limit: disabled\n");
     }
 
-    /* Initialize work queue and render worker pool */
-    if (s_config.server.work_queue_enabled) {
-        s_work_queue = sh_workqueue_create(s_config.server.work_queue_depth,
-                                           s_config.server.work_queue_timeout);
-        if (s_work_queue) {
-            /* Create worker pool (0 = auto-detect CPU count) */
-            ShWorkerPoolConfig pool_cfg = {
-                .queue = s_work_queue,
-                .callback = render_worker_callback,
-                .ctx = NULL,
-                .poll_timeout_ms = 100
-            };
-            s_render_pool = sh_worker_pool_create(s_config.render_workers, &pool_cfg);
-            if (s_render_pool) {
-                printf("Work queue: depth %zu, timeout %.1fs, %d render workers\n",
-                       s_config.server.work_queue_depth, s_config.server.work_queue_timeout,
-                       sh_worker_pool_size(s_render_pool));
-            } else {
-                fprintf(stderr, "Warning: Failed to create render worker pool\n");
-                sh_workqueue_free(s_work_queue);
-                s_work_queue = NULL;
-            }
-        } else {
-            fprintf(stderr, "Warning: Failed to create work queue\n");
-        }
-    } else {
-        printf("Work queue: disabled\n");
-    }
+    /* Render pool is created after the HTTP server (it needs the event ctx). */
 
     /* Initialize adaptive capacity tracker */
     if (s_config.server.adaptive_enabled) {
         ShAdaptiveConfig adaptive_cfg;
         sh_adaptive_config_init(&adaptive_cfg);
-        int num_workers = s_render_pool ? sh_worker_pool_size(s_render_pool) : 4;
+        int num_workers = s_config.render_workers > 0 ? s_config.render_workers : 4;
         adaptive_cfg.num_workers = num_workers > 0 ? num_workers : 4;
         adaptive_cfg.target_utilization = s_config.server.target_utilization;
         adaptive_cfg.client_timeout_ms = s_config.server.client_timeout_ms;
@@ -1795,9 +1698,6 @@ int main(int argc, char *argv[]) {
                 "pbf", s_config.pbf_path,
                 "port", s_config.server.host);
 
-    /* Set up signal handlers */
-    signal(SIGINT, signal_handler);
-    signal(SIGTERM, signal_handler);
 
     /* Build listen address (stored globally for worker threads) */
     snprintf(s_listen_url, sizeof(s_listen_url), "http://%s:%d",
@@ -1832,18 +1732,18 @@ int main(int argc, char *argv[]) {
     printf("  GET  /metrics                - Prometheus metrics\n");
     printf("\nPress Ctrl+C to stop.\n\n");
 
-    /* Allocate worker threads */
-    s_num_workers = num_threads;
-    s_workers = calloc(num_threads, sizeof(WorkerThread));
-    if (!s_workers) {
-        fprintf(stderr, "Error: Failed to allocate worker threads\n");
-        /* Cleanup render worker pool and work queue */
-        if (s_render_pool) {
-            sh_worker_pool_stop(s_render_pool);
-            sh_worker_pool_join(s_render_pool);
-            sh_worker_pool_free(s_render_pool);
-        }
-        sh_workqueue_free(s_work_queue);
+    /* Initialize HTTP server */
+    KlHttpServer server;
+    KlHttpServerConfig http_cfg = {
+        .port = s_config.server.port,
+        .bind_addr = s_config.server.host,
+        .install_signal_handlers = 1,
+        .drain_timeout_ms = 5000,
+    };
+
+    if (kl_http_server_init(&server, &http_cfg) < 0) {
+        fprintf(stderr, "Error: Cannot listen on %s:%d\n",
+                s_config.server.host, s_config.server.port);
         sh_ratelimit_free(s_rate_limiter);
         sh_adaptive_free(s_adaptive_tracker);
         ct_cache_free(s_png_cache);
@@ -1854,36 +1754,54 @@ int main(int argc, char *argv[]) {
         return 1;
     }
 
-    /* Start worker threads */
-    int threads_created = 0;
-    for (int i = 0; i < num_threads; i++) {
-        s_workers[i].id = i;
-        s_workers[i].thread = 0;  /* Mark as not created */
-        if (pthread_create(&s_workers[i].thread, NULL, worker_thread_fn, &s_workers[i]) != 0) {
-            fprintf(stderr, "Error: Failed to create worker thread %d\n", i);
-            s_signo = 1;  /* Signal other threads to stop */
-            break;
+    /*
+     * Render pool. --threads used to size the number of mongoose event-loop
+     * threads; with a non-blocking loop it sizes the render pool instead.
+     */
+    if (s_config.server.work_queue_enabled) {
+        s_num_workers = s_config.render_workers > 0 ? s_config.render_workers
+                                                    : num_threads;
+        KlThreadPoolConfig pool_cfg = {
+            .num_workers = s_num_workers,
+            .queue_capacity = (int)s_config.server.work_queue_depth,
+        };
+        s_pool = kl_thread_pool_create(kl_http_server_event_ctx(&server), &pool_cfg);
+        if (s_pool) {
+            printf("Render pool: depth %zu, timeout %.1fs, %d render workers\n",
+                   s_config.server.work_queue_depth,
+                   s_config.server.work_queue_timeout, s_num_workers);
+        } else {
+            fprintf(stderr, "Warning: Failed to create render thread pool\n");
         }
-        threads_created++;
     }
 
-    /* Wait for shutdown signal */
-    while (s_signo == 0) {
-        sleep(1);
-    }
+    AppCtx app = { .server = &server, .pool = s_pool };
+
+    /* Routes. Tiles and static files are handled by mw_fallback: Keel route
+       patterns have no wildcard, so neither a prefix nor a catch-all works. */
+    kl_http_server_route(&server, "GET", "/api/v1/health", handle_health,   NULL, NULL);
+    kl_http_server_route(&server, "GET", "/api/v1/stats",  handle_stats,    NULL, NULL);
+    kl_http_server_route(&server, "GET", "/metrics",       handle_metrics,  NULL, NULL);
+    kl_http_server_route(&server, "GET", "/tiles.json",    handle_tilejson, NULL, NULL);
+
+    /* Middleware runs in registration order, before routing. */
+    kl_http_server_use(&server, "OPTIONS", "/*", mw_preflight, NULL);
+    kl_http_server_use(&server, "*", "/*", mw_rate_limit, NULL);
+    kl_http_server_use(&server, "*", "/*", mw_fallback, &app);
+
+    /* Event loop: blocks until SIGINT/SIGTERM. */
+    kl_http_server_run(&server);
 
     printf("\nShutting down...\n");
 
-    /* Wait for all successfully created HTTP worker threads */
-    for (int i = 0; i < threads_created; i++) {
-        pthread_join(s_workers[i].thread, NULL);
-    }
+    /* Pool first: drains in-flight renders, fires cancel_fn for queued items. */
+    if (s_pool) kl_thread_pool_free(s_pool);
+    kl_http_server_free(&server);
 
-    /* Shutdown render worker pool */
-    if (s_render_pool) {
-        sh_worker_pool_stop(s_render_pool);
-        sh_worker_pool_join(s_render_pool);
-    }
+    printf("Render queue: %lu pushed, %lu popped, %lu dropped, %lu expired\n",
+           (unsigned long)s_qstats.pushed, (unsigned long)s_qstats.popped,
+           (unsigned long)s_qstats.dropped, (unsigned long)s_qstats.expired);
+
 
     /* Print work queue stats */
     if (s_work_queue) {
@@ -1917,9 +1835,6 @@ int main(int argc, char *argv[]) {
         }
     }
 
-    free(s_workers);
-    sh_worker_pool_free(s_render_pool);
-    sh_workqueue_free(s_work_queue);
     sh_ratelimit_free(s_rate_limiter);
     sh_adaptive_free(s_adaptive_tracker);
     ct_cache_free(s_png_cache);

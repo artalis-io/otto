@@ -25,13 +25,17 @@ SRC_DIR = src
 BUILD_DIR = build
 CARTA_DIR = ..
 VENDOR_DIR = ../../vendor
+
+# Keel static library (vendored git submodule, MIT)
+KEEL_DIR = $(VENDOR_DIR)/keel
+KEEL_LIB = $(KEEL_DIR)/libkeel.a
 SHARED_DIR = ../../shared
 
 # Include paths
 INCLUDES = -I$(SRC_DIR) \
            -I$(CARTA_DIR)/include \
            -I$(SHARED_DIR)/include \
-           -I$(VENDOR_DIR)/mongoose \
+           -I$(KEEL_DIR)/include \
            -I$(VENDOR_DIR)/miniz
 
 # Libraries
@@ -39,18 +43,17 @@ LIBS = -L$(CARTA_DIR) -lcarta \
        -L$(SHARED_DIR) -lshared \
        -lm -lpthread
 
-# Mongoose and miniz objects
-VENDOR_OBJS = $(VENDOR_DIR)/mongoose/mongoose.o \
-              $(VENDOR_DIR)/miniz/miniz.o \
+# miniz objects
+VENDOR_OBJS = $(VENDOR_DIR)/miniz/miniz.o \
               $(VENDOR_DIR)/miniz/miniz_tdef.o \
               $(VENDOR_DIR)/miniz/miniz_tinfl.o
 
-# Shared HTTP server (requires mongoose, compiled here not in libshared)
-HTTPSERVER_OBJ = $(BUILD_DIR)/sh_httpserver.o
+# Shared Keel HTTP helpers (need Keel headers, so not in libshared)
+KEELSERVER_OBJ = $(BUILD_DIR)/sh_keelserver.o
 
 # Source files
 SRCS = $(SRC_DIR)/main.c
-OBJS = $(BUILD_DIR)/main.o $(HTTPSERVER_OBJ)
+OBJS = $(BUILD_DIR)/main.o $(KEELSERVER_OBJ)
 
 # Target
 TARGET = carta-tile-server
@@ -60,16 +63,21 @@ TARGET = carta-tile-server
 all: deps $(TARGET)
 
 # Build dependencies first
-deps:
+deps: $(KEEL_LIB)
 	$(MAKE) -C $(CARTA_DIR) lib
 	$(MAKE) -C $(SHARED_DIR) lib
-	@# Build vendor objects if needed
-	@if [ ! -f $(VENDOR_DIR)/mongoose/mongoose.o ]; then \
-		$(CC) $(CFLAGS) -c $(VENDOR_DIR)/mongoose/mongoose.c -o $(VENDOR_DIR)/mongoose/mongoose.o; \
-	fi
 	@if [ ! -f $(VENDOR_DIR)/miniz/miniz.o ]; then \
 		$(MAKE) -C $(VENDOR_DIR)/miniz; \
 	fi
+
+# Build vendored Keel. Core only (no mbedTLS/nghttp2 integrations), so
+# this needs no external libraries.
+$(KEEL_LIB):
+	@if [ ! -f $(KEEL_DIR)/Makefile ]; then \
+		echo "vendor/keel is empty - run: git submodule update --init vendor/keel"; \
+		exit 1; \
+	fi
+	$(MAKE) -C $(KEEL_DIR) CC=$(CC)
 
 $(BUILD_DIR):
 	mkdir -p $(BUILD_DIR)
@@ -77,12 +85,12 @@ $(BUILD_DIR):
 $(BUILD_DIR)/%.o: $(SRC_DIR)/%.c | $(BUILD_DIR)
 	$(CC) $(CFLAGS) $(INCLUDES) -c $< -o $@
 
-# Compile shared HTTP server (requires mongoose includes)
-$(HTTPSERVER_OBJ): $(SHARED_DIR)/src/sh_httpserver.c | $(BUILD_DIR)
+# Compile shared Keel HTTP helpers (require Keel includes)
+$(KEELSERVER_OBJ): $(SHARED_DIR)/src/sh_keelserver.c | $(BUILD_DIR)
 	$(CC) $(CFLAGS) $(INCLUDES) -c $< -o $@
 
-$(TARGET): $(OBJS) $(VENDOR_OBJS)
-	$(CC) $(CFLAGS) -o $@ $^ $(LIBS)
+$(TARGET): $(OBJS) $(VENDOR_OBJS) $(KEEL_LIB)
+	$(CC) $(CFLAGS) -o $@ $(OBJS) $(VENDOR_OBJS) $(KEEL_LIB) $(LIBS)
 
 debug: CFLAGS = $(DEBUG_CFLAGS)
 debug: LIBS += $(DEBUG_LDFLAGS)
