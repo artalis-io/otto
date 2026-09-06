@@ -243,7 +243,7 @@ No HTTP. No request objects. No response writers. Just input → output.
 
 **2) Transport is a thin wrapper**
 
-Mongoose HTTP is one transport:
+Keel HTTP is one transport:
 
 ```c
 static void handle_tile(struct mg_connection *c, struct mg_http_message *hm) {
@@ -300,7 +300,7 @@ They open it, click "Try it", and the real API runs locally.
 │  React UI │ CLI tool │ Browser demo │ Embedded system           │
 ├─────────────────────────────────────────────────────────────────┤
 │                    Transport Layer (thin)                        │
-│  Mongoose HTTP │ WASM+JS │ Unix socket │ Direct C call          │
+│  Keel HTTP │ WASM+JS │ Unix socket │ Direct C call              │
 ├─────────────────────────────────────────────────────────────────┤
 │                    Core API (pure C)                             │
 │  carta_render_tile() │ vl_route() │ lc_search() │ fw_optimize() │

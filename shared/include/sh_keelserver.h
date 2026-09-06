@@ -1,13 +1,11 @@
 /*
  * sh_keelserver.h - Keel-backed HTTP helpers for OTTO API servers
  *
- * Keel-flavoured counterpart to the sh_mg_* helpers in sh_httpserver.h.
- * Same responsibilities (CORS, JSON/error replies, health, metrics, rate
- * limiting, trace propagation), expressed against Keel's KlHttpRequest /
- * KlHttpResponse instead of mongoose's mg_connection.
+ * CORS, JSON/error replies, health, metrics, rate limiting and trace
+ * propagation for Keel-backed API servers.
  *
- * Like sh_httpserver.c, this file is NOT part of libshared.a -- it needs
- * Keel headers, so API servers compile it directly:
+ * This file is NOT part of libshared.a -- it needs Keel headers, so API
+ * servers compile it directly:
  *
  *   $(CC) $(CFLAGS) -I../shared/include -I../vendor/keel/include \
  *         ../shared/src/sh_keelserver.c

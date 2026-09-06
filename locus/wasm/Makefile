@@ -17,7 +17,7 @@ INCLUDES = -I../include -I../../shared/include -I../../vendor/miniz
 # Source files
 LOCUS_SRC = $(wildcard ../src/*.c)
 
-# Shared library sources (core only, no pthread/mongoose-dependent code)
+# Shared library sources (core only, no pthread/HTTP-server-dependent code)
 SHARED_SRC = ../../shared/src/sh_geo.c \
              ../../shared/src/sh_protobuf.c \
              ../../shared/src/sh_inflate.c \

@@ -2,7 +2,7 @@
  * FuelWise Transport-Agnostic API Handler
  *
  * This implementation can be used by:
- * - HTTP servers (Mongoose)
+ * - HTTP servers (Keel)
  * - WASM modules
  * - Unix sockets
  * - Direct C calls

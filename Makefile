@@ -15,7 +15,7 @@
 #     wasm/       - WebAssembly build
 #   locus/        - OSM Geocoding Library (liblocus.a)
 #   shared/       - Shared Utilities (libshared.a)
-#   vendor/       - Third-party libraries (mongoose, miniz)
+#   vendor/       - Third-party libraries (keel, miniz)
 #   scripts/      - Utility scripts (build-, ci-, data-, demo-, test-, util-)
 #   docs/         - Architecture documentation
 
