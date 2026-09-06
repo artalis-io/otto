@@ -742,3 +742,63 @@ GET /api/v1/route?from=...&to=...&profile=truck
 - [ ] PTV DDS data successfully ingested
 - [ ] Routes validated against known truck GPS traces
 - [ ] API accepts truck dimensions
+
+## Keel Migration (Mongoose Removal) — Phase 4 of 6
+
+**Completed for Velo.** `velo/api` no longer links Mongoose.
+
+Rationale and shared context: `docs/roadmaps/surge.md` (Phase 1). Mongoose is
+`GPL-2.0-only or commercial`, incompatible with OTTO's AGPL-3.0 and
+unsublicensable for the commercial tier; Keel is MIT.
+
+### The largest port so far
+
+Velo had 100 `mg_` call sites — and unlike Surge, Ralph and FuelWise it used
+Mongoose for *parsing*, not just transport:
+
+| Mongoose | Replacement |
+|----------|-------------|
+| `mg_http_var(query, "k")` | `sh_query_get_str()` (`shared/include/sh_query.h`) |
+| `mg_json_get_str(body, "$.k")` | `sh_json_parse()` + `sh_json_get_path()` + `sh_json_as_string()` |
+| `mg_json_get_bool(body, "$.k", &b)` | `sh_json_as_bool()` |
+| `mg_match(str, mg_str("x"), NULL)` | `strcmp()` |
+| `struct mg_str` params | `const char *` |
+
+All replacements are existing OTTO shared code, so nothing new was written for
+this and the parsing became transport-agnostic in the process. The JSON body is
+parsed into a scratch `SHArena` that is released before the handler returns.
+
+### Async
+
+`ShWorkQueue` + `ShWorkerPool` + `ShCompletion` give way to `KlThreadPool` +
+`KlAsyncOp`, matching Surge and FuelWise, with the same `RouteCtx` ownership
+rules and the `on_resume` fix (see `docs/roadmaps/fuelwise.md` for why that is
+required). The worker now does route + polyline encode + JSON render and hands
+back a finished response string, so the event loop is free for the whole solve
+rather than blocking in `sh_completion_wait()`.
+
+`/api/v1/stats` keeps its `work_queue` shape; `KlThreadPool` exposes no
+statistics, so `VeloQueueStats` tracks pushed/popped/dropped/expired, all
+touched only on the event loop thread.
+
+### Verification gap
+
+Velo needs an OSM graph to start (`Error: No graph file specified`), and there
+is no graph fixture in the repo, so CI has always been build + `--help` only.
+That is unchanged here. What was verified:
+
+- compiles clean under `-Wall -Wextra`, links, `--help` exits 0;
+- the parsing substitutions above, via a scratch harness: query-string
+  extraction (present/missing/empty), coordinate parse (valid + rejected),
+  JSON body extraction (`from`, `profile`, `geometry:false`, absent key) and
+  malformed-body rejection — 16 checks, all passing.
+
+A real end-to-end test wants a small checked-in `.vlg` fixture; worth doing
+before the remaining two modules land, since Locus and Carta have the same
+data-dependency problem.
+
+### Remaining
+
+Locus (63 `mg_` call sites), Carta (56), plus
+`shared/src/sh_httpserver.c` (41). Delete that file and `vendor/mongoose/`
+once the last server is ported.

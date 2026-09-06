@@ -21,7 +21,6 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <signal.h>
 #include <ctype.h>
 #include <math.h>
 #include <stdint.h>
@@ -30,19 +29,20 @@
 #include <sys/time.h>
 #include <errno.h>
 #include <unistd.h>
-#include "mongoose.h"
+#include <keel/keel.h>
+#include <stddef.h>
 #include "velo.h"
 #include "vl_api.h"
 #include "sh_polyline.h"
 #include "shared.h"   /* For sh_ratelimit, sh_workqueue, sh_cors, sh_capacity */
-#include "sh_httpserver.h"  /* For sh_mg_set_write_timeout */
-#include "sh_completion.h"  /* For ShCompletion */
-#include "sh_worker_pool.h" /* For ShWorkerPool */
+#include "sh_keelserver.h"  /* Keel-backed sh_kl_* helpers */
 #include "sh_args.h"        /* For sh_parse_int, sh_parse_double */
 #include "sh_log.h"
 #include "sh_trace.h"
 #include "sh_metrics.h"
-#include "sh_json.h"  /* For streaming JSON writer */
+#include "sh_json.h"  /* For streaming JSON writer + parser */
+#include "sh_query.h" /* For query-string parameter parsing */
+#include "sh_arena.h" /* Arena for the JSON body parser */
 #include "sh_geo.h"   /* For sh_parse_coord */
 
 /* ============================================================================
@@ -118,7 +118,21 @@ static VLAPIContext *s_api_ctx = NULL;  /* Transport-agnostic API context */
 static ShRateLimiter *s_rate_limiter = NULL;
 
 /* Work queue instance (uses shared library) */
-static ShWorkQueue *s_work_queue = NULL;
+/*
+ * KlThreadPool exposes no statistics, but /api/v1/stats publishes work-queue
+ * counters, so they are tracked here. Every counter is read and written only
+ * on the event loop thread (submit, done_fn, on_deadline and the stats handler
+ * all run there), so plain integers are sufficient.
+ */
+typedef struct {
+    uint64_t pushed;
+    uint64_t popped;    /* completed (done_fn ran) */
+    uint64_t dropped;   /* submit rejected: queue full */
+    uint64_t expired;   /* deadline exceeded */
+} VeloQueueStats;
+
+static KlThreadPool *s_pool = NULL;
+static VeloQueueStats s_qstats;
 
 /* CORS configuration (uses shared library) */
 static ShCorsConfig s_cors_config;
@@ -126,8 +140,26 @@ static ShCorsConfig s_cors_config;
 /* Adaptive capacity tracker (uses shared library) */
 static ShAdaptiveTracker *s_adaptive_tracker = NULL;
 
-/* Route work item - passed through the work queue */
+/* ============================================================================
+ * Route Request Context
+ *
+ * OWNERSHIP / LIFETIME (same rules as Surge and FuelWise):
+ * freed in exactly one place -- done_fn (the item ran) or cancel_fn (dropped
+ * at pool shutdown before starting). on_cancel and on_deadline never free,
+ * because work_fn may still be running on a worker; they only set `detached`,
+ * which is read and written solely on the event loop thread.
+ * ============================================================================ */
+
 typedef struct {
+    KlHttpServer *server;
+    KlThreadPool *pool;
+} AppCtx;
+
+typedef struct {
+    KlAsyncOp op;
+    AppCtx *app;
+    const KlHttpRequest *req;   /* lives inside the conn; valid while suspended */
+
     /* Request parameters */
     double from_lat, from_lon;
     double to_lat, to_lon;
@@ -135,17 +167,17 @@ typedef struct {
     VLWeightType weight;
     int include_geometry;
 
-    /* Response (set by worker) */
+    /* Result (set by the worker) */
     VLRoute route;
     VLStatus status;
+    char *response_json;        /* owned */
+    int status_code;
     char error_msg[128];
 
-    /* Completion signaling (uses shared library) */
-    ShCompletion completion;
-} RouteWorkItem;
+    int detached;
+    ShMetricsTimer timer;
+} RouteCtx;
 
-/* Worker pool (uses shared library) */
-static ShWorkerPool *s_worker_pool = NULL;
 
 static void signal_handler(int signo) {
     s_signo = signo;
@@ -294,35 +326,25 @@ static void load_config_env(RouteServerConfig *cfg) {
 }
 
 /* ============================================================================
- * Route Work Queue Functions
+ * Route Context Helpers
  * ============================================================================ */
 
-/* Initialize a route work item */
-static void route_work_item_init(RouteWorkItem *item) {
-    memset(item, 0, sizeof(*item));
-    item->status = VL_ERROR_INVALID_ARGUMENT;
-    sh_completion_init(&item->completion);
+static void route_ctx_free(RouteCtx *ctx) {
+    if (!ctx) return;
+    vl_free_route(&ctx->route);
+    free(ctx->response_json);
+    free(ctx);
 }
 
-/* Clean up a route work item */
-static void route_work_item_cleanup(RouteWorkItem *item) {
-    sh_completion_cleanup(&item->completion);
-    vl_free_route(&item->route);
-}
-
-/* Wait for route work item completion with timeout */
-static int route_work_item_wait(RouteWorkItem *item, double timeout_sec) {
-    int timeout_ms = (int)(timeout_sec * 1000);
-    return sh_completion_wait(&item->completion, timeout_ms);
-}
-
-/* Signal that route work item is completed */
-static void route_work_item_complete(RouteWorkItem *item) {
-    sh_completion_signal(&item->completion);
+static void record_metrics(ShMetricsTimer timer, const char *endpoint) {
+    sh_metrics_counter_inc("http_requests_total", 1,
+        "endpoint", endpoint, "service", "velo", NULL);
+    sh_metrics_timer_observe(timer, "http_request_duration_ms",
+        "endpoint", endpoint, "service", "velo", NULL);
 }
 
 /* Process a single route request */
-static void process_route_request(RouteWorkItem *item) {
+static void process_route_request(RouteCtx *item) {
     VLRouteOptions opts = {0};
     opts.algorithm = VL_ALGORITHM_ASTAR_BIDIR;
     opts.weight = item->weight;
@@ -376,70 +398,17 @@ static void process_route_request(RouteWorkItem *item) {
     }
 }
 
-/* Route worker callback function (called by ShWorkerPool) */
-static void route_worker_callback(ShWorkItem *queue_item, void *ctx) {
-    (void)ctx;
-
-    RouteWorkItem *item = (RouteWorkItem *)queue_item->user_ctx;
-    if (!item) {
-        sh_workqueue_item_free(queue_item);
-        return;
-    }
-
-    /* Check if request has expired or was cancelled by HTTP handler timeout */
-    if (sh_workqueue_item_expired(s_work_queue, queue_item) ||
-        sh_completion_is_cancelled(&item->completion)) {
-        item->status = VL_ERROR_INTERNAL;  /* Timeout */
-        strncpy(item->error_msg, "Request timeout", sizeof(item->error_msg) - 1);
-        item->error_msg[sizeof(item->error_msg) - 1] = '\0';
-        route_work_item_complete(item);
-        sh_workqueue_item_free(queue_item);
-        return;
-    }
-
-    /* Track timing for adaptive capacity */
-    struct timeval route_start, route_end;
-    gettimeofday(&route_start, NULL);
-
-    /* Process the route request */
-    process_route_request(item);
-
-    /* Record response time for adaptive capacity */
-    gettimeofday(&route_end, NULL);
-    double route_ms = (route_end.tv_sec - route_start.tv_sec) * 1000.0 +
-                      (route_end.tv_usec - route_start.tv_usec) / 1000.0;
-
-    if (s_adaptive_tracker) {
-        sh_adaptive_record(s_adaptive_tracker, route_ms);
-
-        /* Check if rate limiter should be updated */
-        ShCapacityParams new_params;
-        if (sh_adaptive_update(s_adaptive_tracker, &new_params)) {
-            /* Update rate limiter with new parameters */
-            if (s_rate_limiter) {
-                sh_ratelimit_update_rate(s_rate_limiter,
-                                         new_params.rate_limit_rps,
-                                         new_params.rate_limit_burst);
-            }
-        }
-    }
-
-    /* Signal completion */
-    route_work_item_complete(item);
-    sh_workqueue_item_free(queue_item);
-}
-
 /* ============================================================================
  * HTTP Response Helpers
  * ============================================================================ */
 
 /* Compatibility wrappers for simple calls (uses wildcard origin) */
-static void send_json(struct mg_connection *c, int status, const char *json) {
-    sh_mg_reply_json(c, status, &s_cors_config, NULL, json);
+static void send_json(KlHttpResponse *res, int status, const char *json) {
+    sh_kl_reply_json(res, status, &s_cors_config, NULL, json);
 }
 
-static void send_error(struct mg_connection *c, int status, const char *message) {
-    sh_mg_reply_error(c, status, &s_cors_config, NULL, message);
+static void send_error(KlHttpResponse *res, int status, const char *message) {
+    sh_kl_reply_error(res, status, &s_cors_config, NULL, message);
 }
 
 /* Note: json_escape_polyline removed - ShJsonWriter handles escaping */
@@ -448,54 +417,51 @@ static void send_error(struct mg_connection *c, int status, const char *message)
  * Query Parameter Parsing
  * ============================================================================ */
 
-static int parse_coord(struct mg_str str, double *lat, double *lon) {
-    char buf[64];
-    if (str.len == 0 || str.len >= sizeof(buf)) return -1;
-    memcpy(buf, str.buf, str.len);
-    buf[str.len] = '\0';
+static int parse_coord(const char *str, double *lat, double *lon) {
+    if (!str || !*str) return -1;
 
     /* Use shared library coordinate parser */
     SHCoord coord;
-    if (sh_parse_coord(buf, &coord) != 0) return -1;
+    if (sh_parse_coord(str, &coord) != 0) return -1;
     *lat = coord.lat;
     *lon = coord.lon;
     return 0;
 }
 
-static VLProfile parse_profile(struct mg_str str) {
-    if (str.len == 0) return VL_PROFILE_CAR;
+static VLProfile parse_profile(const char *str) {
+    if (!str || !*str) return VL_PROFILE_CAR;
 
-    if (mg_match(str, mg_str("car"), NULL)) return VL_PROFILE_CAR;
-    if (mg_match(str, mg_str("truck"), NULL)) return VL_PROFILE_TRUCK;
-    if (mg_match(str, mg_str("bike"), NULL)) return VL_PROFILE_BIKE;
-    if (mg_match(str, mg_str("bicycle"), NULL)) return VL_PROFILE_BIKE;
-    if (mg_match(str, mg_str("foot"), NULL)) return VL_PROFILE_FOOT;
-    if (mg_match(str, mg_str("pedestrian"), NULL)) return VL_PROFILE_FOOT;
-    if (mg_match(str, mg_str("walk"), NULL)) return VL_PROFILE_FOOT;
+    if (strcmp(str, "car") == 0) return VL_PROFILE_CAR;
+    if (strcmp(str, "truck") == 0) return VL_PROFILE_TRUCK;
+    if (strcmp(str, "bike") == 0) return VL_PROFILE_BIKE;
+    if (strcmp(str, "bicycle") == 0) return VL_PROFILE_BIKE;
+    if (strcmp(str, "foot") == 0) return VL_PROFILE_FOOT;
+    if (strcmp(str, "pedestrian") == 0) return VL_PROFILE_FOOT;
+    if (strcmp(str, "walk") == 0) return VL_PROFILE_FOOT;
 
     return VL_PROFILE_CAR;
 }
 
-static VLWeightType parse_mode(struct mg_str str) {
-    if (str.len == 0) return VL_WEIGHT_DURATION;
+static VLWeightType parse_mode(const char *str) {
+    if (!str || !*str) return VL_WEIGHT_DURATION;
 
-    if (mg_match(str, mg_str("fastest"), NULL)) return VL_WEIGHT_DURATION;
-    if (mg_match(str, mg_str("shortest"), NULL)) return VL_WEIGHT_DISTANCE;
-    if (mg_match(str, mg_str("duration"), NULL)) return VL_WEIGHT_DURATION;
-    if (mg_match(str, mg_str("distance"), NULL)) return VL_WEIGHT_DISTANCE;
+    if (strcmp(str, "fastest") == 0) return VL_WEIGHT_DURATION;
+    if (strcmp(str, "shortest") == 0) return VL_WEIGHT_DISTANCE;
+    if (strcmp(str, "duration") == 0) return VL_WEIGHT_DURATION;
+    if (strcmp(str, "distance") == 0) return VL_WEIGHT_DISTANCE;
 
     return VL_WEIGHT_DURATION;
 }
 
-static int parse_bool(struct mg_str str, int default_val) {
-    if (str.len == 0) return default_val;
+static int parse_bool(const char *str, int default_val) {
+    if (!str || !*str) return default_val;
 
-    if (mg_match(str, mg_str("true"), NULL)) return 1;
-    if (mg_match(str, mg_str("1"), NULL)) return 1;
-    if (mg_match(str, mg_str("yes"), NULL)) return 1;
-    if (mg_match(str, mg_str("false"), NULL)) return 0;
-    if (mg_match(str, mg_str("0"), NULL)) return 0;
-    if (mg_match(str, mg_str("no"), NULL)) return 0;
+    if (strcmp(str, "true") == 0) return 1;
+    if (strcmp(str, "1") == 0) return 1;
+    if (strcmp(str, "yes") == 0) return 1;
+    if (strcmp(str, "false") == 0) return 0;
+    if (strcmp(str, "0") == 0) return 0;
+    if (strcmp(str, "no") == 0) return 0;
 
     return default_val;
 }
@@ -504,21 +470,22 @@ static int parse_bool(struct mg_str str, int default_val) {
  * API Handlers
  * ============================================================================ */
 
-static void handle_health(struct mg_connection *c) {
-    sh_mg_handle_health(c, &s_cors_config, NULL, "velo-route-server", vl_version());
+static void handle_health(KlHttpRequest *req, KlHttpResponse *res, void *ud) {
+    (void)req; (void)ud;
+    ShMetricsTimer timer = sh_metrics_timer_start();
+    sh_kl_handle_health(res, &s_cors_config, NULL, "velo-route-server", vl_version());
+    record_metrics(timer, "health");
+    sh_trace_clear();
 }
 
-static void handle_stats(struct mg_connection *c) {
+static void handle_stats(KlHttpRequest *req, KlHttpResponse *res, void *ud) {
+    (void)req; (void)ud;
+    ShMetricsTimer timer = sh_metrics_timer_start();
     if (!s_graph) {
-        send_error(c, 503, "Graph not loaded");
+        send_error(res, 503, "Graph not loaded");
         return;
     }
 
-    /* Get work queue stats */
-    ShWorkQueueStats wq_stats = {0};
-    if (s_work_queue) {
-        sh_workqueue_stats(s_work_queue, &wq_stats);
-    }
 
     /* Get rate limiter stats */
     ShRateLimitStats rl_stats = {0};
@@ -563,13 +530,13 @@ static void handle_stats(struct mg_connection *c) {
     /* Work queue stats */
     sh_json_write_key(&w, "work_queue");
     sh_json_write_object_start(&w);
-    sh_json_write_kv_bool(&w, "enabled", s_work_queue != NULL);
-    sh_json_write_kv_int(&w, "depth", (int64_t)wq_stats.current_depth);
-    sh_json_write_kv_int(&w, "capacity", (int64_t)wq_stats.max_capacity);
-    sh_json_write_kv_int(&w, "pushed", (int64_t)wq_stats.total_pushed);
-    sh_json_write_kv_int(&w, "popped", (int64_t)wq_stats.total_popped);
-    sh_json_write_kv_int(&w, "dropped", (int64_t)wq_stats.total_dropped);
-    sh_json_write_kv_int(&w, "expired", (int64_t)wq_stats.total_expired);
+    sh_json_write_kv_bool(&w, "enabled", s_pool != NULL);
+    sh_json_write_kv_int(&w, "depth", (int64_t)(s_qstats.pushed - s_qstats.popped));
+    sh_json_write_kv_int(&w, "capacity", (int64_t)s_config.work_queue_depth);
+    sh_json_write_kv_int(&w, "pushed", (int64_t)s_qstats.pushed);
+    sh_json_write_kv_int(&w, "popped", (int64_t)s_qstats.popped);
+    sh_json_write_kv_int(&w, "dropped", (int64_t)s_qstats.dropped);
+    sh_json_write_kv_int(&w, "expired", (int64_t)s_qstats.expired);
     sh_json_write_object_end(&w);
 
     /* Rate limiter stats */
@@ -609,252 +576,74 @@ static void handle_stats(struct mg_connection *c) {
 
     /* Send response */
     if (!sh_json_writer_error(&w) && jb.buf) {
-        send_json(c, 200, jb.buf);
+        send_json(res, 200, jb.buf);
     } else {
-        send_error(c, 500, "Failed to generate response");
+        send_error(res, 500, "Failed to generate response");
     }
 
     sh_json_buf_free(&jb);
+    record_metrics(timer, "stats");
+    sh_trace_clear();
 }
 
 /* GET /metrics - Prometheus metrics endpoint, uses shared helper */
-static void handle_metrics(struct mg_connection *c) {
-    sh_mg_handle_metrics(c);
+static void handle_metrics(KlHttpRequest *req, KlHttpResponse *res, void *ud) {
+    (void)req; (void)ud;
+    sh_kl_handle_metrics(res);
+    sh_trace_clear();
 }
 
-static void handle_route(struct mg_connection *c, struct mg_http_message *hm) {
-    if (!s_graph) {
-        send_error(c, 503, "Graph not loaded");
+/*
+ * Runs on a pool worker thread: route, encode geometry, render the JSON
+ * response. Touches only this context plus the read-only graph/landmarks.
+ */
+static void route_render(RouteCtx *ctx) {
+    struct timeval route_start, route_end;
+    gettimeofday(&route_start, NULL);
+
+    process_route_request(ctx);
+
+    gettimeofday(&route_end, NULL);
+    double route_ms = (route_end.tv_sec - route_start.tv_sec) * 1000.0 +
+                      (route_end.tv_usec - route_start.tv_usec) / 1000.0;
+
+    /* Record response time for adaptive capacity */
+    if (s_adaptive_tracker) {
+        sh_adaptive_record(s_adaptive_tracker, route_ms);
+
+        ShCapacityParams new_params;
+        if (sh_adaptive_update(s_adaptive_tracker, &new_params)) {
+            if (s_rate_limiter) {
+                sh_ratelimit_update_rate(s_rate_limiter,
+                                         new_params.rate_limit_rps,
+                                         new_params.rate_limit_burst);
+            }
+        }
+    }
+
+    if (ctx->status != VL_OK) {
+        ctx->status_code = 404;
         return;
-    }
-
-    /* Extract Origin header for CORS */
-    struct mg_str *origin_hdr = mg_http_get_header(hm, "Origin");
-    char origin[256] = "";
-    if (origin_hdr && origin_hdr->len > 0 && origin_hdr->len < sizeof(origin)) {
-        memcpy(origin, origin_hdr->buf, origin_hdr->len);
-        origin[origin_hdr->len] = '\0';
-    }
-
-    /* Parse parameters */
-    double from_lat = 0, from_lon = 0, to_lat = 0, to_lon = 0;
-    VLProfile profile = VL_PROFILE_CAR;
-    VLWeightType weight = VL_WEIGHT_DURATION;
-    int include_geometry = 1;
-
-    if (mg_match(hm->method, mg_str("POST"), NULL)) {
-        /* Parse JSON body */
-        struct mg_str body = hm->body;
-
-        /* Parse from */
-        char *from_str = mg_json_get_str(body, "$.from");
-        if (from_str) {
-            struct mg_str from_val = mg_str(from_str);
-            if (parse_coord(from_val, &from_lat, &from_lon) != 0) {
-                free(from_str);
-                send_error(c, 400, "Invalid 'from' coordinate");
-                return;
-            }
-            free(from_str);
-        }
-
-        /* Parse to */
-        char *to_str = mg_json_get_str(body, "$.to");
-        if (to_str) {
-            struct mg_str to_val = mg_str(to_str);
-            if (parse_coord(to_val, &to_lat, &to_lon) != 0) {
-                free(to_str);
-                send_error(c, 400, "Invalid 'to' coordinate");
-                return;
-            }
-            free(to_str);
-        }
-
-        /* Parse profile */
-        char *profile_str = mg_json_get_str(body, "$.profile");
-        if (profile_str) {
-            profile = parse_profile(mg_str(profile_str));
-            free(profile_str);
-        }
-
-        /* Parse mode */
-        char *mode_str = mg_json_get_str(body, "$.mode");
-        if (mode_str) {
-            weight = parse_mode(mg_str(mode_str));
-            free(mode_str);
-        }
-
-        /* Parse geometry */
-        bool geom;
-        if (mg_json_get_bool(body, "$.geometry", &geom)) {
-            include_geometry = geom ? 1 : 0;
-        }
-    } else {
-        /* GET request - parse query string */
-        struct mg_str from_val = mg_http_var(hm->query, mg_str("from"));
-        struct mg_str to_val = mg_http_var(hm->query, mg_str("to"));
-        struct mg_str profile_val = mg_http_var(hm->query, mg_str("profile"));
-        struct mg_str mode_val = mg_http_var(hm->query, mg_str("mode"));
-        struct mg_str geom_val = mg_http_var(hm->query, mg_str("geometry"));
-
-        if (from_val.len == 0) {
-            send_error(c, 400, "Missing 'from' parameter");
-            return;
-        }
-        if (to_val.len == 0) {
-            send_error(c, 400, "Missing 'to' parameter");
-            return;
-        }
-
-        if (parse_coord(from_val, &from_lat, &from_lon) != 0) {
-            send_error(c, 400, "Invalid 'from' coordinate (format: lat,lon)");
-            return;
-        }
-        if (parse_coord(to_val, &to_lat, &to_lon) != 0) {
-            send_error(c, 400, "Invalid 'to' coordinate (format: lat,lon)");
-            return;
-        }
-
-        profile = parse_profile(profile_val);
-        weight = parse_mode(mode_val);
-        include_geometry = parse_bool(geom_val, 1);
-    }
-
-    /* Validate coordinates are within graph bounds */
-    if (from_lat < s_graph->bbox_min.lat || from_lat > s_graph->bbox_max.lat ||
-        from_lon < s_graph->bbox_min.lon || from_lon > s_graph->bbox_max.lon) {
-        send_error(c, 400, "Origin coordinate outside graph bounds");
-        return;
-    }
-    if (to_lat < s_graph->bbox_min.lat || to_lat > s_graph->bbox_max.lat ||
-        to_lon < s_graph->bbox_min.lon || to_lon > s_graph->bbox_max.lon) {
-        send_error(c, 400, "Destination coordinate outside graph bounds");
-        return;
-    }
-
-    VLRoute route;
-    VLStatus status;
-
-    /* Use work queue if enabled */
-    if (s_work_queue) {
-        RouteWorkItem item;
-        route_work_item_init(&item);
-        item.from_lat = from_lat;
-        item.from_lon = from_lon;
-        item.to_lat = to_lat;
-        item.to_lon = to_lon;
-        item.profile = profile;
-        item.weight = weight;
-        item.include_geometry = include_geometry;
-
-        /* Create queue item */
-        ShWorkItem queue_item = {
-            .data = NULL,
-            .data_len = 0,
-            .user_ctx = &item
-        };
-
-        /* Try to push to queue */
-        double pressure;
-        if (!sh_workqueue_try_push(s_work_queue, &queue_item, &pressure)) {
-            route_work_item_cleanup(&item);
-            char cors_hdrs[512];
-            sh_cors_headers(&s_cors_config, origin, cors_hdrs, sizeof(cors_hdrs));
-            char headers[600];
-            snprintf(headers, sizeof(headers),
-                     "Content-Type: text/plain\r\n"
-                     "Retry-After: 1\r\n%s", cors_hdrs);
-            mg_http_reply(c, 503, headers, "Server busy, try again later\n");
-            return;
-        }
-
-        /* Wait for completion with timeout */
-        if (!route_work_item_wait(&item, s_config.work_queue_timeout)) {
-            /* Mark item as cancelled so worker can skip if not started */
-            sh_completion_cancel(&item.completion);
-            route_work_item_cleanup(&item);
-            char cors_hdrs[512];
-            sh_cors_headers(&s_cors_config, origin, cors_hdrs, sizeof(cors_hdrs));
-            char headers[600];
-            snprintf(headers, sizeof(headers),
-                     "Content-Type: text/plain\r\n%s", cors_hdrs);
-            mg_http_reply(c, 504, headers, "Request timeout\n");
-            return;
-        }
-
-        status = item.status;
-        if (status != VL_OK) {
-            send_error(c, 404, item.error_msg);
-            route_work_item_cleanup(&item);
-            return;
-        }
-
-        /* Move route from item to local variable */
-        route = item.route;
-        memset(&item.route, 0, sizeof(item.route));  /* Prevent double-free */
-        route_work_item_cleanup(&item);
-    } else {
-        /* Direct routing (work queue disabled) */
-        VLRouteOptions opts = {0};
-        opts.algorithm = VL_ALGORITHM_ASTAR_BIDIR;
-        opts.weight = weight;
-        opts.profile = profile;
-        opts.include_geometry = include_geometry;
-
-        VLCoord from = {from_lat, from_lon};
-        VLCoord to = {to_lat, to_lon};
-
-        if (s_landmarks) {
-            /* Use landmarks for faster routing - need to find nearest nodes first */
-            uint32_t from_node = vl_graph_nearest_node_grid(s_graph, from);
-            uint32_t to_node = vl_graph_nearest_node_grid(s_graph, to);
-
-            if (from_node == VL_INVALID_NODE) {
-                send_error(c, 400, "Could not find road near origin");
-                return;
-            }
-            if (to_node == VL_INVALID_NODE) {
-                send_error(c, 400, "Could not find road near destination");
-                return;
-            }
-
-            status = vl_route_astar_landmarks_bidir(s_graph, s_landmarks, from_node, to_node, &opts, &route);
-        } else {
-            /* Use vl_route_coords which handles nearest-node lookup internally */
-            status = vl_route_coords(s_graph, from, to, &opts, &route);
-        }
-
-        if (status != VL_OK) {
-            const char *msg = "Routing failed";
-            switch (status) {
-                case VL_ERROR_NO_ROUTE: msg = "No route found"; break;
-                case VL_ERROR_NODE_NOT_FOUND: msg = "Could not find road near coordinate"; break;
-                case VL_ERROR_INVALID_ARGUMENT: msg = "Invalid argument"; break;
-                default: break;
-            }
-            send_error(c, 404, msg);
-            return;
-        }
     }
 
     /* Encode polyline if geometry requested */
     char *polyline = NULL;
-    if (include_geometry && route.num_coords > 0) {
-        size_t max_len = sh_polyline_max_encoded_size(route.num_coords);
+    if (ctx->include_geometry && ctx->route.num_coords > 0) {
+        size_t max_len = sh_polyline_max_encoded_size(ctx->route.num_coords);
         polyline = malloc(max_len);
         if (polyline) {
             /* Convert VLCoord array to double array (check for overflow first) */
             double *coords = NULL;
-            if ((size_t)route.num_coords <= SIZE_MAX / (2 * sizeof(double))) {
-                size_t coord_size = (size_t)route.num_coords * 2 * sizeof(double);
+            if ((size_t)ctx->route.num_coords <= SIZE_MAX / (2 * sizeof(double))) {
+                size_t coord_size = (size_t)ctx->route.num_coords * 2 * sizeof(double);
                 coords = malloc(coord_size);
             }
             if (coords) {
-                for (int i = 0; i < route.num_coords; i++) {
-                    coords[i * 2] = route.coords[i].lat;
-                    coords[i * 2 + 1] = route.coords[i].lon;
+                for (int i = 0; i < ctx->route.num_coords; i++) {
+                    coords[i * 2] = ctx->route.coords[i].lat;
+                    coords[i * 2 + 1] = ctx->route.coords[i].lon;
                 }
-                sh_polyline_encode(coords, route.num_coords, 5, polyline, max_len);
+                sh_polyline_encode(coords, ctx->route.num_coords, 5, polyline, max_len);
                 free(coords);
             } else {
                 free(polyline);
@@ -871,37 +660,37 @@ static void handle_route(struct mg_connection *c, struct mg_http_message *hm) {
     sh_json_writer_init(&jw, sh_json_buf_write, &jb);
 
     const char *profile_str = "car";
-    switch (profile) {
+    switch (ctx->profile) {
         case VL_PROFILE_TRUCK: profile_str = "truck"; break;
         case VL_PROFILE_BIKE: profile_str = "bike"; break;
         case VL_PROFILE_FOOT: profile_str = "foot"; break;
         default: break;
     }
 
-    const char *mode_str = weight == VL_WEIGHT_DISTANCE ? "shortest" : "fastest";
+    const char *mode_str = ctx->weight == VL_WEIGHT_DISTANCE ? "shortest" : "fastest";
 
     sh_json_write_object_start(&jw);
     sh_json_write_kv_string(&jw, "status", "ok");
 
     sh_json_write_key(&jw, "route");
     sh_json_write_object_start(&jw);
-    sh_json_write_kv_double_fmt(&jw, "distance", route.distance_m, 2);
-    sh_json_write_kv_double_fmt(&jw, "duration", route.duration_s, 2);
+    sh_json_write_kv_double_fmt(&jw, "distance", ctx->route.distance_m, 2);
+    sh_json_write_kv_double_fmt(&jw, "duration", ctx->route.duration_s, 2);
     sh_json_write_kv_string(&jw, "profile", profile_str);
     sh_json_write_kv_string(&jw, "mode", mode_str);
 
     /* from: [lat, lon] */
     sh_json_write_key(&jw, "from");
     sh_json_write_array_start(&jw);
-    sh_json_write_double_fmt(&jw, from_lat, 6);
-    sh_json_write_double_fmt(&jw, from_lon, 6);
+    sh_json_write_double_fmt(&jw, ctx->from_lat, 6);
+    sh_json_write_double_fmt(&jw, ctx->from_lon, 6);
     sh_json_write_array_end(&jw);
 
     /* to: [lat, lon] */
     sh_json_write_key(&jw, "to");
     sh_json_write_array_start(&jw);
-    sh_json_write_double_fmt(&jw, to_lat, 6);
-    sh_json_write_double_fmt(&jw, to_lon, 6);
+    sh_json_write_double_fmt(&jw, ctx->to_lat, 6);
+    sh_json_write_double_fmt(&jw, ctx->to_lon, 6);
     sh_json_write_array_end(&jw);
 
     /* geometry (optional) - ShJsonWriter handles escaping */
@@ -914,98 +703,349 @@ static void handle_route(struct mg_connection *c, struct mg_http_message *hm) {
     /* meta object */
     sh_json_write_key(&jw, "meta");
     sh_json_write_object_start(&jw);
-    sh_json_write_kv_int(&jw, "nodes_explored", (int64_t)route.nodes_explored);
-    sh_json_write_kv_double_fmt(&jw, "search_time_ms", route.search_time_ms, 2);
+    sh_json_write_kv_int(&jw, "nodes_explored", (int64_t)ctx->route.nodes_explored);
+    sh_json_write_kv_double_fmt(&jw, "search_time_ms", ctx->route.search_time_ms, 2);
     sh_json_write_object_end(&jw);
 
     sh_json_write_object_end(&jw);  /* Close root */
 
     if (polyline) free(polyline);
-    vl_free_route(&route);
 
     if (!sh_json_writer_error(&jw) && jb.buf) {
-        send_json(c, 200, jb.buf);
+        ctx->response_json = sh_json_buf_take(&jb);
+        ctx->status_code = 200;
     } else {
-        send_error(c, 500, "Failed to generate response");
+        ctx->status_code = 500;
+        snprintf(ctx->error_msg, sizeof(ctx->error_msg),
+                 "Failed to generate response");
     }
-
     sh_json_buf_free(&jb);
 }
 
 /* ============================================================================
- * Main Event Handler
+ * Async Plumbing
  * ============================================================================ */
 
-static void ev_handler(struct mg_connection *c, int ev, void *ev_data) {
-    /* Set socket write timeout on new connections to protect against slow clients */
-    if (ev == MG_EV_ACCEPT) {
-        sh_mg_set_write_timeout(c, 5000);  /* 5 second write timeout */
+static void route_work_fn(void *user_data) {
+    route_render((RouteCtx *)user_data);
+}
+
+static void route_done_fn(void *user_data) {
+    RouteCtx *ctx = (RouteCtx *)user_data;
+
+    s_qstats.popped++;
+
+    if (ctx->detached) {
+        route_ctx_free(ctx);
         return;
     }
 
-    if (ev == MG_EV_HTTP_MSG) {
-        struct mg_http_message *hm = (struct mg_http_message *)ev_data;
-
-        /* Start request timing */
-        ShMetricsTimer req_timer = sh_metrics_timer_start();
-
-        /* Extract or generate trace ID */
-        sh_trace_from_headers(sh_mg_trace_header_getter, hm);
-
-        /* Extract Origin header for CORS */
-        struct mg_str *origin_hdr = mg_http_get_header(hm, "Origin");
-        char origin[256] = "";
-        if (origin_hdr && origin_hdr->len > 0 && origin_hdr->len < sizeof(origin)) {
-            memcpy(origin, origin_hdr->buf, origin_hdr->len);
-            origin[origin_hdr->len] = '\0';
-        }
-
-        /* Rate limiting check - uses shared helper */
-        if (!sh_mg_check_rate_limit(c, s_rate_limiter, &s_cors_config, origin)) {
-            sh_metrics_counter_inc("http_requests_total", 1,
-                "endpoint", "rate_limited", "status", "429", NULL);
-            sh_trace_clear();
-            return;
-        }
-
-        /* CORS preflight */
-        if (mg_match(hm->method, mg_str("OPTIONS"), NULL)) {
-            char cors_hdrs[512];
-            sh_cors_preflight_headers(&s_cors_config, origin, cors_hdrs, sizeof(cors_hdrs));
-            mg_http_reply(c, 204, cors_hdrs, "");
-            sh_trace_clear();
-            return;
-        }
-
-        /* Route requests */
-        const char *endpoint = "unknown";
-        if (mg_match(hm->uri, mg_str("/api/v1/health"), NULL)) {
-            endpoint = "health";
-            handle_health(c);
-        } else if (mg_match(hm->uri, mg_str("/api/v1/stats"), NULL)) {
-            endpoint = "stats";
-            handle_stats(c);
-        } else if (mg_match(hm->uri, mg_str("/metrics"), NULL)) {
-            endpoint = "metrics";
-            handle_metrics(c);
-        } else if (mg_match(hm->uri, mg_str("/api/v1/route"), NULL)) {
-            endpoint = "route";
-            handle_route(c, hm);
-        } else {
-            endpoint = "not_found";
-            send_error(c, 404, "Not found");
-        }
-
-        /* Record metrics */
-        sh_metrics_counter_inc("http_requests_total", 1,
-            "endpoint", endpoint, "service", "velo", NULL);
-        sh_metrics_timer_observe(req_timer, "http_request_duration_ms",
-            "endpoint", endpoint, "service", "velo", NULL);
-
-        /* Clear trace context */
-        sh_trace_clear();
+    KlHttpResponse *res = kl_http_conn_response(ctx->op.conn);
+    if (ctx->status_code == 200 && ctx->response_json) {
+        send_json(res, 200, ctx->response_json);
+    } else if (ctx->status_code == 404) {
+        send_error(res, 404, ctx->error_msg[0] ? ctx->error_msg : "Routing failed");
+    } else {
+        send_error(res, 500, ctx->error_msg[0] ? ctx->error_msg
+                                               : "Failed to generate response");
     }
+    record_metrics(ctx->timer, "route");
+
+    kl_async_complete(ctx->app->server, &ctx->op);
+    route_ctx_free(ctx);
 }
+
+/* Pool shutdown dropped the item before it started. */
+static void route_cancel_fn(void *user_data) {
+    route_ctx_free((RouteCtx *)user_data);
+}
+
+/*
+ * Declare the send. kl_async_complete() re-arms the fd but leaves the
+ * connection SUSPENDED unless on_resume says what happens next; without this
+ * the response is never written and the client hangs. Keel's
+ * examples/thread_pool and examples/async_thread_pool leave this a no-op and
+ * hang for exactly that reason; tests/smoke_iouring_async.c is the correct
+ * reference, and kl_http_request_send_response() is its public equivalent.
+ */
+static void route_on_resume(KlAsyncOp *op, void *ud) {
+    (void)ud;
+    RouteCtx *ctx = (RouteCtx *)((char *)op - offsetof(RouteCtx, op));
+    kl_http_request_send_response(ctx->req);
+}
+
+/* Connection died while suspended; the worker may still be running. */
+static void route_on_cancel(KlAsyncOp *op, void *ud) {
+    (void)ud;
+    ((RouteCtx *)((char *)op - offsetof(RouteCtx, op)))->detached = 1;
+}
+
+/* Deadline exceeded: reply 504 now, let done_fn free the context later. */
+static void route_on_deadline(KlAsyncOp *op, void *ud) {
+    (void)ud;
+    RouteCtx *ctx = (RouteCtx *)((char *)op - offsetof(RouteCtx, op));
+
+    if (ctx->detached) return;
+    ctx->detached = 1;
+    s_qstats.expired++;
+
+    send_error(kl_http_conn_response(op->conn), 504, "Request timeout");
+    record_metrics(ctx->timer, "route");
+
+    kl_async_complete(ctx->app->server, op);
+}
+
+/* ============================================================================
+ * Route Handler
+ * ============================================================================ */
+
+static void handle_route(KlHttpRequest *req, KlHttpResponse *res, void *ud) {
+    AppCtx *app = (AppCtx *)ud;
+    ShMetricsTimer timer = sh_metrics_timer_start();
+
+    if (!s_graph) {
+        send_error(res, 503, "Graph not loaded");
+        return;
+    }
+
+    /* Parse parameters */
+    double from_lat = 0, from_lon = 0, to_lat = 0, to_lon = 0;
+    VLProfile profile = VL_PROFILE_CAR;
+    VLWeightType weight = VL_WEIGHT_DURATION;
+    int include_geometry = 1;
+
+    int is_post = (req->method_len == 4 && memcmp(req->method, "POST", 4) == 0);
+
+    if (is_post) {
+        /* Parse JSON body */
+        KlHttpBufReader *br = (KlHttpBufReader *)req->body_reader;
+        if (!br || br->len == 0) {
+            send_error(res, 400, "Empty request body");
+            return;
+        }
+
+        /* Arena-backed parse; released before we return. */
+        SHArena *arena = sh_arena_create(br->len * 4 + 4096);
+        if (!arena) {
+            send_error(res, 500, "Out of memory");
+            return;
+        }
+
+        ShJsonValue *root = NULL;
+        if (sh_json_parse(br->data, br->len, arena, &root) != SH_JSON_OK) {
+            sh_arena_free(arena);
+            send_error(res, 400, "Invalid JSON body");
+            return;
+        }
+
+        const char *from_str = sh_json_as_string(sh_json_get_path(root, "from"), NULL);
+        if (from_str && parse_coord(from_str, &from_lat, &from_lon) != 0) {
+            sh_arena_free(arena);
+            send_error(res, 400, "Invalid 'from' coordinate");
+            return;
+        }
+
+        const char *to_str = sh_json_as_string(sh_json_get_path(root, "to"), NULL);
+        if (to_str && parse_coord(to_str, &to_lat, &to_lon) != 0) {
+            sh_arena_free(arena);
+            send_error(res, 400, "Invalid 'to' coordinate");
+            return;
+        }
+
+        profile = parse_profile(sh_json_as_string(sh_json_get_path(root, "profile"), NULL));
+        weight = parse_mode(sh_json_as_string(sh_json_get_path(root, "mode"), NULL));
+
+        ShJsonValue *geom = sh_json_get_path(root, "geometry");
+        if (geom) include_geometry = sh_json_as_bool(geom, true) ? 1 : 0;
+
+        sh_arena_free(arena);
+    } else {
+        /* GET request - parse query string */
+        char query[1024];
+        size_t qlen = req->query_len < sizeof(query) - 1 ? req->query_len
+                                                         : sizeof(query) - 1;
+        if (req->query && qlen > 0) memcpy(query, req->query, qlen);
+        query[req->query && qlen > 0 ? qlen : 0] = '\0';
+
+        char from_val[128] = "", to_val[128] = "";
+        char profile_val[32] = "", mode_val[32] = "", geom_val[16] = "";
+
+        sh_query_get_str(query, "from", from_val, sizeof(from_val));
+        sh_query_get_str(query, "to", to_val, sizeof(to_val));
+        sh_query_get_str(query, "profile", profile_val, sizeof(profile_val));
+        sh_query_get_str(query, "mode", mode_val, sizeof(mode_val));
+        sh_query_get_str(query, "geometry", geom_val, sizeof(geom_val));
+
+        if (from_val[0] == '\0') {
+            send_error(res, 400, "Missing 'from' parameter");
+            return;
+        }
+        if (to_val[0] == '\0') {
+            send_error(res, 400, "Missing 'to' parameter");
+            return;
+        }
+        if (parse_coord(from_val, &from_lat, &from_lon) != 0) {
+            send_error(res, 400, "Invalid 'from' coordinate (format: lat,lon)");
+            return;
+        }
+        if (parse_coord(to_val, &to_lat, &to_lon) != 0) {
+            send_error(res, 400, "Invalid 'to' coordinate (format: lat,lon)");
+            return;
+        }
+
+        profile = parse_profile(profile_val);
+        weight = parse_mode(mode_val);
+        include_geometry = parse_bool(geom_val, 1);
+    }
+
+    /* Validate coordinates are within graph bounds */
+    if (from_lat < s_graph->bbox_min.lat || from_lat > s_graph->bbox_max.lat ||
+        from_lon < s_graph->bbox_min.lon || from_lon > s_graph->bbox_max.lon) {
+        send_error(res, 400, "Origin coordinate outside graph bounds");
+        return;
+    }
+    if (to_lat < s_graph->bbox_min.lat || to_lat > s_graph->bbox_max.lat ||
+        to_lon < s_graph->bbox_min.lon || to_lon > s_graph->bbox_max.lon) {
+        send_error(res, 400, "Destination coordinate outside graph bounds");
+        return;
+    }
+
+    RouteCtx *ctx = calloc(1, sizeof(*ctx));
+    if (!ctx) {
+        send_error(res, 500, "Out of memory");
+        return;
+    }
+    ctx->status = VL_ERROR_INVALID_ARGUMENT;
+    ctx->from_lat = from_lat;
+    ctx->from_lon = from_lon;
+    ctx->to_lat = to_lat;
+    ctx->to_lon = to_lon;
+    ctx->profile = profile;
+    ctx->weight = weight;
+    ctx->include_geometry = include_geometry;
+    ctx->timer = timer;
+
+    /* Work queue disabled: route inline on the event loop, as before. */
+    if (!s_pool) {
+        route_render(ctx);
+        if (ctx->status_code == 200 && ctx->response_json) {
+            send_json(res, 200, ctx->response_json);
+        } else if (ctx->status_code == 404) {
+            send_error(res, 404, ctx->error_msg[0] ? ctx->error_msg : "Routing failed");
+        } else {
+            send_error(res, 500, "Failed to generate response");
+        }
+        record_metrics(timer, "route");
+        route_ctx_free(ctx);
+        return;
+    }
+
+    ctx->app = app;
+    ctx->req = req;
+    ctx->op.on_resume = route_on_resume;
+    ctx->op.on_cancel = route_on_cancel;
+    ctx->op.on_deadline = route_on_deadline;
+    if (s_config.work_queue_timeout > 0.0) {
+        ctx->op.deadline_ms = kl_monotonic_ms() +
+            (uint64_t)(s_config.work_queue_timeout * 1000.0);
+    }
+
+    if (kl_async_suspend(app->server, kl_http_request_conn(req), &ctx->op) < 0) {
+        route_ctx_free(ctx);
+        send_error(res, 500, "Failed to suspend request");
+        return;
+    }
+
+    KlWorkItem item = {
+        .work_fn   = route_work_fn,
+        .done_fn   = route_done_fn,
+        .cancel_fn = route_cancel_fn,
+        .user_data = ctx,
+    };
+
+    if (kl_thread_pool_submit(app->pool, &item) < 0) {
+        /* Queue full - backpressure, same 503 as the old work queue. */
+        s_qstats.dropped++;
+        ctx->detached = 1;
+        send_error(res, 503, "Server busy, try again later");
+        record_metrics(timer, "route");
+        kl_async_complete(app->server, &ctx->op);
+        route_ctx_free(ctx);
+        return;
+    }
+
+    s_qstats.pushed++;
+}
+
+/* ============================================================================
+ * Middleware
+ * ============================================================================ */
+
+/* CORS preflight, before rate limiting (as in the mongoose server). */
+static int mw_preflight(KlHttpRequest *req, KlHttpResponse *res, void *ud) {
+    (void)ud;
+    sh_trace_from_headers(sh_kl_trace_header_getter, req);
+    sh_kl_reply_preflight(res, &s_cors_config, sh_kl_origin(req));
+    sh_trace_clear();
+    return 1;  /* short-circuit */
+}
+
+/* Rate limit every request before routing. */
+static int mw_rate_limit(KlHttpRequest *req, KlHttpResponse *res, void *ud) {
+    (void)ud;
+    sh_trace_from_headers(sh_kl_trace_header_getter, req);
+    if (!sh_kl_check_rate_limit(req, res, s_rate_limiter, &s_cors_config,
+                                sh_kl_origin(req))) {
+        sh_metrics_counter_inc("http_requests_total", 1,
+            "endpoint", "rate_limited", "status", "429", NULL);
+        sh_trace_clear();
+        return 1;  /* short-circuit */
+    }
+    return 0;
+}
+
+/*
+ * Anything the route table would not match.
+ *
+ * Keel route patterns have no wildcard -- '*' is only special in middleware
+ * patterns -- so a catch-all route is not expressible, and Keel's built-in 404
+ * is text/plain with no CORS headers.
+ */
+static int mw_not_found(KlHttpRequest *req, KlHttpResponse *res, void *ud) {
+    KlHttpServer *server = (KlHttpServer *)ud;
+    KlHttpRoute *matched = NULL;
+    KlHttpParam params[KL_HTTP_ROUTER_MAX_PARAMS];
+    int num_params = 0;
+
+    int rc = kl_http_router_match(&server->router, req->method, req->method_len,
+                                  req->path, req->path_len,
+                                  &matched, params, &num_params);
+    if (rc == 200) return 0;
+
+    if (rc == 405) {
+        send_error(res, 405, "Method not allowed");
+        sh_metrics_counter_inc("http_requests_total", 1,
+            "endpoint", "method_not_allowed", "service", "velo", NULL);
+    } else {
+        send_error(res, 404, "Not found");
+        sh_metrics_counter_inc("http_requests_total", 1,
+            "endpoint", "not_found", "service", "velo", NULL);
+    }
+    sh_trace_clear();
+    return 1;  /* short-circuit */
+}
+
+/* Body reader factory: kl_http_body_reader_buffer() reads max_size from the
+   route's user_data, so wrap it to keep the cap explicit. */
+#define VELO_MAX_BODY_SIZE (1u * 1024u * 1024u)
+static KlHttpBodyReader *route_body_reader(KlAllocator *alloc,
+                                           const KlHttpRequest *req,
+                                           void *user_data) {
+    (void)user_data;
+    return kl_http_body_reader_buffer(alloc, req,
+                                      (void *)(size_t)VELO_MAX_BODY_SIZE);
+}
+
 
 /* ============================================================================
  * Main
@@ -1197,35 +1237,6 @@ int main(int argc, char *argv[]) {
         printf("Rate limit: disabled\n");
     }
 
-    /* Initialize work queue and worker pool */
-    if (s_config.work_queue_enabled) {
-        s_work_queue = sh_workqueue_create(s_config.work_queue_depth,
-                                           s_config.work_queue_timeout);
-        if (s_work_queue) {
-            /* Create worker pool (0 = auto-detect CPU count) */
-            ShWorkerPoolConfig pool_cfg = {
-                .queue = s_work_queue,
-                .callback = route_worker_callback,
-                .ctx = NULL,
-                .poll_timeout_ms = 100
-            };
-            s_worker_pool = sh_worker_pool_create(s_config.route_workers, &pool_cfg);
-            if (s_worker_pool) {
-                printf("Work queue: depth %zu, timeout %.1fs, %d route workers\n",
-                       s_config.work_queue_depth, s_config.work_queue_timeout,
-                       sh_worker_pool_size(s_worker_pool));
-            } else {
-                fprintf(stderr, "Warning: Failed to create worker pool\n");
-                sh_workqueue_free(s_work_queue);
-                s_work_queue = NULL;
-            }
-        } else {
-            fprintf(stderr, "Warning: Failed to create work queue\n");
-        }
-    } else {
-        printf("Work queue: disabled\n");
-    }
-
     /* Initialize CORS configuration */
     sh_cors_init(&s_cors_config);
     sh_cors_set_methods(&s_cors_config, "GET, POST, OPTIONS");
@@ -1241,7 +1252,7 @@ int main(int argc, char *argv[]) {
     if (s_config.adaptive_enabled) {
         ShAdaptiveConfig adaptive_cfg;
         sh_adaptive_config_init(&adaptive_cfg);
-        int num_workers = s_worker_pool ? sh_worker_pool_size(s_worker_pool) : 4;
+        int num_workers = s_config.route_workers > 0 ? s_config.route_workers : 4;
         adaptive_cfg.num_workers = num_workers > 0 ? num_workers : 4;
         adaptive_cfg.target_utilization = s_config.target_utilization;
         adaptive_cfg.client_timeout_ms = s_config.client_timeout_ms;
@@ -1278,32 +1289,41 @@ int main(int argc, char *argv[]) {
 
     SH_LOG_INFO("Starting velo route server", "version", vl_version(), NULL);
 
-    /* Initialize mongoose */
-    struct mg_mgr mgr;
-    mg_mgr_init(&mgr);
+    /* Initialize HTTP server */
+    KlHttpServer server;
+    KlHttpServerConfig http_cfg = {
+        .port = s_config.port,
+        .bind_addr = s_config.listen_addr,
+        .install_signal_handlers = 1,
+        .max_body_size = VELO_MAX_BODY_SIZE,
+        .drain_timeout_ms = 5000,
+    };
 
-    /* Build listen address */
-    char listen_url[SH_URL_MAX];
-    snprintf(listen_url, sizeof(listen_url), "http://%s:%d",
-             s_config.listen_addr, s_config.port);
-
-    /* Start listening */
-    struct mg_connection *c = mg_http_listen(&mgr, listen_url, ev_handler, NULL);
-    if (c == NULL) {
-        fprintf(stderr, "Error: Cannot listen on %s\n", listen_url);
-        /* Cleanup worker pool and work queue */
-        if (s_worker_pool) {
-            sh_worker_pool_stop(s_worker_pool);
-            sh_worker_pool_join(s_worker_pool);
-            sh_worker_pool_free(s_worker_pool);
-        }
-        sh_workqueue_free(s_work_queue);
+    if (kl_http_server_init(&server, &http_cfg) < 0) {
+        fprintf(stderr, "Error: Cannot listen on %s:%d\n",
+                s_config.listen_addr, s_config.port);
         sh_adaptive_free(s_adaptive_tracker);
         sh_ratelimit_free(s_rate_limiter);
         vl_api_free(s_api_ctx);
         if (s_landmarks) vl_landmarks_free(s_landmarks);
         vl_graph_free(s_graph);
         return 1;
+    }
+
+    /* Solve pool. queue_capacity gives the backpressure ShWorkQueue used to. */
+    if (s_config.work_queue_enabled) {
+        KlThreadPoolConfig pool_cfg = {
+            .num_workers = s_config.route_workers,
+            .queue_capacity = (int)s_config.work_queue_depth,
+        };
+        s_pool = kl_thread_pool_create(kl_http_server_event_ctx(&server), &pool_cfg);
+        if (s_pool) {
+            printf("Route pool: depth %zu, timeout %.1fs, %d route workers\n",
+                   s_config.work_queue_depth, s_config.work_queue_timeout,
+                   s_config.route_workers);
+        } else {
+            fprintf(stderr, "Warning: Failed to create route thread pool\n");
+        }
     }
 
     printf("\nVelo Route Server v%s\n", vl_version());
@@ -1321,33 +1341,38 @@ int main(int argc, char *argv[]) {
     printf("  geometry=true|false\n");
     printf("\nPress Ctrl+C to stop.\n\n");
 
-    /* Event loop */
-    while (s_signo == 0) {
-        mg_mgr_poll(&mgr, 1000);
-    }
+    AppCtx app = { .server = &server, .pool = s_pool };
+
+    /* Routes. POST /api/v1/route needs a body reader; GET does not. */
+    kl_http_server_route(&server, "GET",  "/api/v1/health", handle_health,  NULL, NULL);
+    kl_http_server_route(&server, "GET",  "/api/v1/stats",  handle_stats,   NULL, NULL);
+    kl_http_server_route(&server, "GET",  "/metrics",       handle_metrics, NULL, NULL);
+    kl_http_server_route(&server, "GET",  "/api/v1/route",  handle_route,   &app, NULL);
+    kl_http_server_route(&server, "POST", "/api/v1/route",  handle_route,   &app,
+                         route_body_reader);
+
+    /*
+     * Middleware runs in registration order, before routing. Preflight first
+     * (it must not be rate limited), then the limiter, then the fallback,
+     * which must be last because it short-circuits unmatched requests.
+     */
+    kl_http_server_use(&server, "OPTIONS", "/*", mw_preflight, NULL);
+    kl_http_server_use(&server, "*", "/*", mw_rate_limit, NULL);
+    kl_http_server_use(&server, "*", "/*", mw_not_found, &server);
+
+    /* Event loop: blocks until SIGINT/SIGTERM. */
+    kl_http_server_run(&server);
 
     printf("\nShutting down...\n");
 
-    /* Shutdown worker pool */
-    if (s_worker_pool) {
-        sh_worker_pool_stop(s_worker_pool);
-        sh_worker_pool_join(s_worker_pool);
-    }
+    /* Pool first: drains in-flight work, fires cancel_fn for queued items. */
+    if (s_pool) kl_thread_pool_free(s_pool);
 
-    /* Print work queue stats */
-    if (s_work_queue) {
-        ShWorkQueueStats wq_stats;
-        sh_workqueue_stats(s_work_queue, &wq_stats);
-        printf("Work queue: %lu pushed, %lu popped, %lu dropped, %lu expired\n",
-               (unsigned long)wq_stats.total_pushed,
-               (unsigned long)wq_stats.total_popped,
-               (unsigned long)wq_stats.total_dropped,
-               (unsigned long)wq_stats.total_expired);
-    }
+    printf("Route queue: %lu pushed, %lu popped, %lu dropped, %lu expired\n",
+           (unsigned long)s_qstats.pushed, (unsigned long)s_qstats.popped,
+           (unsigned long)s_qstats.dropped, (unsigned long)s_qstats.expired);
 
-    mg_mgr_free(&mgr);
-    sh_worker_pool_free(s_worker_pool);
-    sh_workqueue_free(s_work_queue);
+    kl_http_server_free(&server);
     sh_adaptive_free(s_adaptive_tracker);
     sh_ratelimit_free(s_rate_limiter);
     vl_api_free(s_api_ctx);
