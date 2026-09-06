@@ -781,21 +781,28 @@ rather than blocking in `sh_completion_wait()`.
 statistics, so `VeloQueueStats` tracks pushed/popped/dropped/expired, all
 touched only on the event loop thread.
 
-### Verification gap
+### Verification
 
-Velo needs an OSM graph to start (`Error: No graph file specified`), and there
-is no graph fixture in the repo, so CI has always been build + `--help` only.
-That is unchanged here. What was verified:
+Velo needs an OSM graph to start, which is why CI was build + `--help` only.
+That is fixed: `make data/monaco.vlg` already knew how to fetch Monaco (~700KB)
+and build the index, so `velo/api/test_api.sh` now starts the server against it
+and exercises the endpoints, gated in CI (exits non-zero on failure).
 
-- compiles clean under `-Wall -Wextra`, links, `--help` exits 0;
-- the parsing substitutions above, via a scratch harness: query-string
-  extraction (present/missing/empty), coordinate parse (valid + rejected),
-  JSON body extraction (`from`, `profile`, `geometry:false`, absent key) and
-  malformed-body rejection — 16 checks, all passing.
+Verified by hand against `data/monaco.vlg` (7,334 nodes / 11,826 edges):
 
-A real end-to-end test wants a small checked-in `.vlg` fixture; worth doing
-before the remaining two modules land, since Locus and Carta have the same
-data-dependency problem.
+| Check | Result |
+|---|---|
+| `GET /route` query string | `"status":"ok"`, 2.4km / 170s, polyline returned |
+| `POST /route` JSON body | truck + `mode:shortest` honoured, 2.3km / 190s |
+| `geometry=false` / `"geometry":false` | geometry key omitted (both GET and POST) |
+| Missing / invalid / out-of-bounds coords | 400 with the expected messages |
+| Malformed JSON body | `{"error":"Invalid JSON body"}` |
+| Unknown path / wrong method / preflight | 404 / 405 / 204 |
+| Async dispatch | `pushed`/`popped` counters advance; 5 concurrent routes ~1ms each, health 0.78ms during |
+
+GET and POST were cross-checked on the same inputs: `foot`+`shortest` returns
+"No route found" on both, confirming the JSON path and the query path agree
+rather than one silently mis-parsing.
 
 ### Remaining
 

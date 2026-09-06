@@ -177,6 +177,40 @@ jobs:
 
 
   # ==========================================================================
+  # Velo API (Keel-backed)
+  #
+  # Standalone, and unlike the old build-only step this actually starts the
+  # server and issues routes. Velo needs an OSM graph, so the job builds one
+  # from Monaco (~700KB, the Makefile already fetches it).
+  # ==========================================================================
+  test-velo-api:
+    name: Test Velo API
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential libomp-dev
+
+      - name: Build Velo API
+        run: |
+          make velo-api
+          ./velo/api/velo-route-server --help > /dev/null
+
+      - name: Build Monaco graph
+        run: make data/monaco.vlg
+
+      - name: Test Velo API
+        timeout-minutes: 5
+        run: bash velo/api/test_api.sh
+
+  # ==========================================================================
   # Build and test API servers
   # ==========================================================================
   test-api:
@@ -201,13 +235,6 @@ jobs:
           make carta-api
           ./carta/api/carta-tile-server --help > /dev/null
 
-      # Velo API is served by Keel (vendor/keel submodule), not mongoose.
-      # Build + --help only: velo-route-server needs an OSM graph to start and
-      # there is no graph fixture in the repo. See docs/roadmaps/velo.md.
-      - name: Build Velo API
-        run: |
-          make velo-api
-          ./velo/api/velo-route-server --help > /dev/null
 
       - name: Build Locus API
         run: |
