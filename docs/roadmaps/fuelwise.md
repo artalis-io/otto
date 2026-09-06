@@ -2028,3 +2028,78 @@ The FuelWise-specific context is:
 - FuelWise is the primary use case for Ralph's Benders solver
 - The suboptimal convergence was discovered during FuelWise benchmark testing
 - Fixes should be validated against FuelWise test cases before closing
+
+## Keel Migration (Mongoose Removal) — Phase 3 of 6
+
+**Completed for FuelWise.** `fuelwise/api` no longer links Mongoose.
+
+Rationale and shared context: `docs/roadmaps/surge.md` (Phase 1). Mongoose is
+`GPL-2.0-only or commercial`, incompatible with OTTO's AGPL-3.0 and
+unsublicensable for the commercial tier; Keel is MIT.
+
+### Shape of the port
+
+A **transport swap only**. `ShWorkQueue` + `ShWorkerPool` + `ShCompletion` are
+kept exactly as the mongoose server used them, including the
+`sh_completion_wait()` on the event loop thread. Behaviour, response shapes and
+`/api/v1/stats` counters are unchanged.
+
+- `sh_mg_*` → `sh_kl_*` (`shared/src/sh_keelserver.c`). FuelWise is the first
+  module to exercise those helpers end to end; Ralph needed none of them.
+- `mw_not_found` answers 404/405 via `kl_http_router_match()`, since Keel route
+  patterns have no wildcard and its built-in 404 carries no CORS headers.
+- Rate-limit exemptions (`/api/v1/health`, `/api/v1/stats`, `/metrics`) are
+  checked inside the middleware: middleware patterns support a trailing
+  slash-star prefix but not alternation.
+
+### Fixed in passing
+
+The mongoose handler leaked `work->request_path` on the queue-full (503) path —
+it freed `request_body` and the item but not the `strdup`'d path. There is now
+a single `solve_work_item_free()` that releases everything.
+
+### Resolved: async suspend/resume needs on_resume to declare the send
+
+The first attempt at `KlAsyncOp` + `KlThreadPool` hung: the suspended
+connection never resumed, so `POST /api/v1/solve` never answered.
+
+The cause was ours. `kl_async_complete()` re-arms the fd and drives the state
+machine, but the connection stays `SUSPENDED` unless `on_resume` says what
+happens next. Keel's `examples/thread_pool` and `examples/async_thread_pool`
+both leave `on_resume` a no-op, and both hang on their async route for exactly
+this reason — that is what was copied here. The correct reference is
+`tests/smoke_iouring_async.c`:
+
+```c
+static void on_resume(KlAsyncOp *op, void *ud) {   /* declare the send */
+    op->conn->state = KL_HTTP_CONN_SENDING;
+}
+```
+
+That reaches into `src/protocols/http/http_conn_internal.h` (white-box).
+`kl_http_request_send_response()` is the public equivalent, so `SolveCtx`
+carries the `KlHttpRequest *` (it lives inside the connection and stays valid
+while suspended) and `on_resume` calls that instead of touching Keel
+internals.
+
+Worth noting for anyone else starting from the examples: Keel's own e2e checks
+these endpoints with `check_contains_soft`, which *skips* rather than fails on
+an empty response ("async mechanism may not work in this environment"), and the
+hard async gates (`smoke-pollcomp-async`, `smoke-iouring-async`,
+`smoke-iocp-async`) all use the white-box smoke harness. So the examples'
+no-op `on_resume` does not fail anything upstream.
+
+### Pre-existing issue found while verifying (NOT fixed here)
+
+`fuelwise-api --help` **exits 1**. `main()` treats any negative return from
+`sh_args_parse()` as an error, but `-2` means "help was requested"; Ralph gets
+this right with `if (arg_index == -2) { print_usage(...); return 0; }`. The
+`-h`/`--help` loop later in `main()` is unreachable as a result. Left alone
+because it is an exit-code behaviour change; it is why the CI job has no
+`--help` smoke check, unlike Surge and Ralph.
+
+### Remaining
+
+Velo (100 `mg_` call sites), Locus (63), Carta (56), plus
+`shared/src/sh_httpserver.c` (41). Delete that file and `vendor/mongoose/`
+once the last server is ported.

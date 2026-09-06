@@ -1,33 +1,38 @@
 /*
  * FuelWise REST API Server
  *
- * A lightweight HTTP API for fuel optimization using mongoose.
- * Features rate limiting, work queue for CPU-intensive operations,
- * and configurable through CLI args and environment variables.
+ * A lightweight HTTP API for fuel optimization, served by Keel (MIT).
+ * Features rate limiting, a bounded solve queue for CPU-intensive operations,
+ * and configuration through CLI args and environment variables.
  *
  * Uses the transport-agnostic fw_api_handle() for core processing.
  *
+ * Solves run on a Keel thread pool with the connection suspended via
+ * KlAsyncOp, so the event loop keeps serving while a solve is in flight. The
+ * previous mongoose server blocked the loop in sh_completion_wait(), which
+ * serialized every request behind the running solve. See solve_on_resume()
+ * for the one non-obvious part of the Keel async contract.
+ *
  * Endpoints:
- *   GET  /api/v1/health         - Health check (bypasses queue)
- *   GET  /api/v1/stats          - Server statistics (bypasses queue)
+ *   GET  /api/v1/health         - Health check (bypasses queue + rate limit)
+ *   GET  /api/v1/stats          - Server statistics (bypasses queue + rate limit)
  *   POST /api/v1/filter         - Filter stations to route
  *   POST /api/v1/solve          - Solve refueling problem
  *   POST /api/v1/optimize       - Full optimization pipeline
  */
 
+#include <keel/keel.h>
+
+#include <stddef.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <signal.h>
-#include <pthread.h>
 #include <stdint.h>
-#include "mongoose.h"
+
 #include "fuelwise.h"
 #include "fw_api.h"  /* Transport-agnostic API handler */
-#include "shared.h"  /* For sh_ratelimit, sh_workqueue, sh_args */
-#include "sh_httpserver.h"  /* For sh_mg_set_write_timeout */
-#include "sh_completion.h"  /* For ShCompletion */
-#include "sh_worker_pool.h" /* For ShWorkerPool */
+#include "shared.h"  /* For sh_ratelimit, sh_args */
+#include "sh_keelserver.h"
 #include "sh_log.h"
 #include "sh_trace.h"
 #include "sh_metrics.h"
@@ -37,14 +42,8 @@
  * Configuration
  * ============================================================================ */
 
-/* Global state */
-static volatile sig_atomic_t s_signo = 0;
-
 /* Rate limiter instance */
 static ShRateLimiter *s_rate_limiter = NULL;
-
-/* Work queue instance */
-static ShWorkQueue *s_work_queue = NULL;
 
 /* Server configuration (from sh_args) */
 static ShServerConfig s_config;
@@ -52,119 +51,290 @@ static ShServerConfig s_config;
 /* CORS configuration */
 static ShCorsConfig s_cors;
 
-/* Work item for CPU-intensive operations */
-typedef struct {
-    char *request_path;      /* Copy of request path (owned) */
-    char *request_body;      /* Copy of request body (owned) */
-    size_t request_len;
+/*
+ * Request body cap. Keel's default is 1 MB; station lists can be larger.
+ */
+#define FW_MAX_BODY_SIZE (16u * 1024u * 1024u)
 
-    /* Response buffer (set by worker) */
-    char *response_data;
+/* ============================================================================
+ * Solve Queue
+ *
+ * KlThreadPool replaces ShWorkQueue + ShWorkerPool + ShCompletion. It exposes
+ * no statistics of its own, but /api/v1/stats publishes work-queue counters
+ * that test_api.sh asserts on, so they are tracked here.
+ *
+ * Every counter is read and written only on the event loop thread (submit,
+ * done_fn, on_deadline and the stats handler all run there), so plain
+ * integers are sufficient.
+ * ============================================================================ */
+
+typedef struct {
+    uint64_t pushed;
+    uint64_t popped;    /* completed (done_fn ran) */
+    uint64_t dropped;   /* submit rejected: queue full */
+    uint64_t expired;   /* deadline exceeded */
+} FWQueueStats;
+
+static KlThreadPool *s_pool = NULL;
+static FWQueueStats s_qstats;
+
+typedef struct {
+    KlHttpServer *server;
+    KlThreadPool *pool;
+} AppCtx;
+
+/* ============================================================================
+ * Solve Work Item
+ *
+ * OWNERSHIP / LIFETIME (identical to Surge's, see surge/api/src/main.c):
+ * the context is freed in exactly one place -- done_fn (item ran) or
+ * cancel_fn (dropped at pool shutdown before starting). on_cancel and
+ * on_deadline never free, because work_fn may still be running on a worker;
+ * they only set `detached`.
+ * ============================================================================ */
+
+typedef struct {
+    KlAsyncOp op;
+    AppCtx *app;
+    const KlHttpRequest *req;   /* lives inside the conn; valid while suspended */
+
+    const char *path;        /* static string, not owned */
+    char *body;              /* owned copy */
+    size_t body_len;
+
+    char *response_data;     /* owned, from fw_api_handle */
     size_t response_size;
     int status_code;
 
-    /* Completion signaling (uses shared library) */
-    ShCompletion completion;
-} SolveWorkItem;
+    int detached;
+    const char *endpoint;    /* metrics label, static string */
+    ShMetricsTimer timer;
+} SolveCtx;
 
-/* Worker pool (uses shared library) */
-static ShWorkerPool *s_worker_pool = NULL;
-
-/* Signal handler */
-static void signal_handler(int signo) {
-    s_signo = signo;
+static void solve_ctx_free(SolveCtx *ctx) {
+    if (!ctx) return;
+    free(ctx->response_data);
+    free(ctx->body);
+    free(ctx);
 }
-
-/* JSON parsing and request handling moved to fw_api.c (transport-agnostic) */
 
 /* ============================================================================
- * Response Building
+ * Response Helpers
  * ============================================================================ */
 
-/* Build error response - uses shared helper */
-static void send_error(struct mg_connection *c, int status, const char *message) {
-    sh_mg_reply_error(c, status, &s_cors, NULL, message);
+static void send_error(KlHttpResponse *res, int status, const char *message) {
+    sh_kl_reply_error(res, status, &s_cors, NULL, message);
 }
 
-/* Build success response with JSON body - uses shared helper */
-static void send_json(struct mg_connection *c, const char *json) {
-    sh_mg_reply_json(c, 200, &s_cors, NULL, json);
+static void send_json_status(KlHttpResponse *res, int status, const char *json) {
+    sh_kl_reply_json(res, status, &s_cors, NULL, json);
 }
 
-/* Build response with custom status code and JSON body - uses shared helper */
-static void send_json_status(struct mg_connection *c, int status, const char *json) {
-    sh_mg_reply_json(c, status, &s_cors, NULL, json);
+static void send_json(KlHttpResponse *res, const char *json) {
+    send_json_status(res, 200, json);
 }
 
-/* Core processing functions moved to fw_api.c (transport-agnostic) */
+static void record_metrics(ShMetricsTimer timer, const char *endpoint) {
+    sh_metrics_counter_inc("http_requests_total", 1,
+        "endpoint", endpoint, "service", "fuelwise", NULL);
+    sh_metrics_timer_observe(timer, "http_request_duration_ms",
+        "endpoint", endpoint, "service", "fuelwise", NULL);
+}
 
 /* ============================================================================
- * Worker Pool Callback
+ * Solve Pipeline
  * ============================================================================ */
 
-static void worker_callback(ShWorkItem *item, void *ctx) {
-    (void)ctx;
+/* Worker thread: run the optimization. Touches only this context. */
+static void solve_work_fn(void *user_data) {
+    SolveCtx *ctx = (SolveCtx *)user_data;
 
-    /* Check if item expired */
-    if (sh_workqueue_item_expired(s_work_queue, item)) {
-        sh_workqueue_item_free(item);
-        return;
-    }
-
-    /* Get the work item */
-    SolveWorkItem *work = (SolveWorkItem *)item->user_ctx;
-    if (!work) {
-        sh_workqueue_item_free(item);
-        return;
-    }
-
-    /* Check if HTTP handler already timed out and cancelled */
-    if (sh_completion_is_cancelled(&work->completion)) {
-        /* Clean up the cancelled work item */
-        free(work->request_path);
-        free(work->request_body);
-        sh_completion_cleanup(&work->completion);
-        free(work);
-        sh_workqueue_item_free(item);
-        return;
-    }
-
-    /* Build API request and call transport-agnostic handler */
     FWAPIRequest req = {
-        .path = work->request_path,
+        .path = ctx->path,
         .query = NULL,
-        .body = work->request_body,
-        .body_len = work->request_len,
+        .body = ctx->body,
+        .body_len = ctx->body_len,
         .host = NULL
     };
 
     FWAPIResponse resp;
     fw_api_handle(NULL, &req, &resp);
 
-    /* Store result and signal completion */
-    work->response_data = resp.body;
-    work->response_size = resp.body_len;
-    work->status_code = resp.status_code;
-    sh_completion_signal(&work->completion);
+    ctx->response_data = resp.body;
+    ctx->response_size = resp.body_len;
+    ctx->status_code = resp.status_code;
+}
 
-    sh_workqueue_item_free(item);
+/* Event loop thread: write the response and resume the connection. */
+static void solve_done_fn(void *user_data) {
+    SolveCtx *ctx = (SolveCtx *)user_data;
+
+    s_qstats.popped++;
+
+    if (ctx->detached) {
+        solve_ctx_free(ctx);
+        return;
+    }
+
+    KlHttpResponse *res = kl_http_conn_response(ctx->op.conn);
+    if (ctx->response_data) {
+        send_json_status(res, ctx->status_code, ctx->response_data);
+    } else {
+        send_error(res, 500, "Processing failed");
+    }
+    record_metrics(ctx->timer, ctx->endpoint);
+
+    kl_async_complete(ctx->app->server, &ctx->op);
+    solve_ctx_free(ctx);
+}
+
+/* Pool shutdown dropped the item before it started; no worker will touch it. */
+static void solve_cancel_fn(void *user_data) {
+    solve_ctx_free((SolveCtx *)user_data);
+}
+
+/*
+ * Declare the send. kl_async_complete() re-arms the fd but leaves the
+ * connection SUSPENDED unless on_resume says what happens next; without this
+ * the response is never written and the client hangs. Keel's
+ * examples/thread_pool and examples/async_thread_pool leave this a no-op and
+ * hang for exactly that reason; tests/smoke_iouring_async.c is the correct
+ * reference, and kl_http_request_send_response() is its public equivalent.
+ */
+static void solve_on_resume(KlAsyncOp *op, void *ud) {
+    (void)ud;
+    SolveCtx *ctx = (SolveCtx *)((char *)op - offsetof(SolveCtx, op));
+    kl_http_request_send_response(ctx->req);
+}
+
+/* Connection died while suspended. The worker may still be running. */
+static void solve_on_cancel(KlAsyncOp *op, void *ud) {
+    (void)ud;
+    ((SolveCtx *)((char *)op - offsetof(SolveCtx, op)))->detached = 1;
+}
+
+/* Deadline exceeded: reply 504 now, let done_fn free the context later. */
+static void solve_on_deadline(KlAsyncOp *op, void *ud) {
+    (void)ud;
+    SolveCtx *ctx = (SolveCtx *)((char *)op - offsetof(SolveCtx, op));
+
+    if (ctx->detached) return;
+    ctx->detached = 1;
+    s_qstats.expired++;
+
+    send_error(kl_http_conn_response(op->conn), 504, "Gateway timeout");
+    record_metrics(ctx->timer, ctx->endpoint);
+
+    kl_async_complete(ctx->app->server, op);
+}
+
+/*
+ * Route a CPU-intensive endpoint through the solve pool, or run it inline
+ * when the queue is disabled (--queue-off), matching the old behaviour.
+ */
+static void handle_via_queue(KlHttpRequest *req, KlHttpResponse *res, void *ud,
+                             const char *path, const char *endpoint) {
+    AppCtx *app = (AppCtx *)ud;
+    ShMetricsTimer timer = sh_metrics_timer_start();
+
+    KlHttpBufReader *br = (KlHttpBufReader *)req->body_reader;
+    const char *body = (br && br->len > 0) ? br->data : NULL;
+    size_t body_len = (br && br->len > 0) ? br->len : 0;
+
+    /* Work queue disabled - process synchronously. */
+    if (!s_pool) {
+        FWAPIRequest api_req = {
+            .path = path, .query = NULL,
+            .body = body, .body_len = body_len, .host = NULL
+        };
+        FWAPIResponse resp;
+        fw_api_handle(NULL, &api_req, &resp);
+
+        if (resp.body) {
+            send_json_status(res, resp.status_code, resp.body);
+            fw_api_response_free(&resp);
+        } else {
+            send_error(res, 500, "Processing failed");
+        }
+        record_metrics(timer, endpoint);
+        return;
+    }
+
+    SolveCtx *ctx = calloc(1, sizeof(*ctx));
+    if (!ctx) {
+        send_error(res, 500, "Memory allocation failed");
+        return;
+    }
+
+    /* Copy the body: it belongs to the connection, the worker outlives it. */
+    ctx->body = malloc(body_len + 1);
+    if (!ctx->body) {
+        free(ctx);
+        send_error(res, 500, "Memory allocation failed");
+        return;
+    }
+    if (body_len > 0) memcpy(ctx->body, body, body_len);
+    ctx->body[body_len] = '\0';
+    ctx->body_len = body_len;
+
+    ctx->app = app;
+    ctx->req = req;
+    ctx->path = path;
+    ctx->endpoint = endpoint;
+    ctx->timer = timer;
+    ctx->status_code = 500;
+
+    ctx->op.on_resume = solve_on_resume;
+    ctx->op.on_cancel = solve_on_cancel;
+    ctx->op.on_deadline = solve_on_deadline;
+    if (s_config.work_queue_timeout > 0.0) {
+        ctx->op.deadline_ms = kl_monotonic_ms() +
+            (uint64_t)(s_config.work_queue_timeout * 1000.0);
+    }
+
+    if (kl_async_suspend(app->server, kl_http_request_conn(req), &ctx->op) < 0) {
+        solve_ctx_free(ctx);
+        send_error(res, 500, "Failed to suspend request");
+        return;
+    }
+
+    KlWorkItem item = {
+        .work_fn   = solve_work_fn,
+        .done_fn   = solve_done_fn,
+        .cancel_fn = solve_cancel_fn,
+        .user_data = ctx,
+    };
+
+    if (kl_thread_pool_submit(app->pool, &item) < 0) {
+        /* Queue full - backpressure, same 503 as the old work queue. */
+        s_qstats.dropped++;
+        ctx->detached = 1;
+        send_error(res, 503, "Service unavailable - queue full");
+        record_metrics(timer, endpoint);
+        kl_async_complete(app->server, &ctx->op);
+        solve_ctx_free(ctx);
+        return;
+    }
+
+    s_qstats.pushed++;
 }
 
 /* ============================================================================
  * API Handlers
  * ============================================================================ */
 
-/* GET /api/v1/health - bypasses work queue, uses shared helper */
-static void handle_health(struct mg_connection *c, struct mg_http_message *hm) {
-    (void)hm;
-    sh_mg_handle_health(c, &s_cors, NULL, "fuelwise-api", fw_version());
+static void handle_health(KlHttpRequest *req, KlHttpResponse *res, void *ud) {
+    (void)req; (void)ud;
+    ShMetricsTimer timer = sh_metrics_timer_start();
+    sh_kl_handle_health(res, &s_cors, NULL, "fuelwise-api", fw_version());
+    record_metrics(timer, "health");
+    sh_trace_clear();
 }
 
-/* GET /api/v1/stats - bypasses work queue */
-static void handle_stats(struct mg_connection *c, struct mg_http_message *hm) {
-    (void)hm;
+static void handle_stats(KlHttpRequest *req, KlHttpResponse *res, void *ud) {
+    (void)req; (void)ud;
+    ShMetricsTimer timer = sh_metrics_timer_start();
 
-    /* Build JSON response using streaming writer */
     ShJsonBuf jb;
     sh_json_buf_init(&jb);
 
@@ -177,28 +347,26 @@ static void handle_stats(struct mg_connection *c, struct mg_http_message *hm) {
     sh_json_write_key(&jw, "version");
     sh_json_write_string(&jw, fw_version());
 
-    /* Work queue stats */
+    /* Work queue stats (now backed by the Keel thread pool) */
     sh_json_write_key(&jw, "work_queue");
     sh_json_write_object_start(&jw);
-    if (s_work_queue) {
-        ShWorkQueueStats wq_stats;
-        sh_workqueue_stats(s_work_queue, &wq_stats);
+    if (s_pool) {
         sh_json_write_key(&jw, "enabled");
         sh_json_write_bool(&jw, true);
         sh_json_write_key(&jw, "depth");
-        sh_json_write_int(&jw, (int64_t)wq_stats.current_depth);
+        sh_json_write_int(&jw, (int64_t)(s_qstats.pushed - s_qstats.popped));
         sh_json_write_key(&jw, "capacity");
-        sh_json_write_int(&jw, (int64_t)wq_stats.max_capacity);
+        sh_json_write_int(&jw, (int64_t)s_config.work_queue_depth);
         sh_json_write_key(&jw, "pushed");
-        sh_json_write_int(&jw, (int64_t)wq_stats.total_pushed);
+        sh_json_write_int(&jw, (int64_t)s_qstats.pushed);
         sh_json_write_key(&jw, "popped");
-        sh_json_write_int(&jw, (int64_t)wq_stats.total_popped);
+        sh_json_write_int(&jw, (int64_t)s_qstats.popped);
         sh_json_write_key(&jw, "dropped");
-        sh_json_write_int(&jw, (int64_t)wq_stats.total_dropped);
+        sh_json_write_int(&jw, (int64_t)s_qstats.dropped);
         sh_json_write_key(&jw, "expired");
-        sh_json_write_int(&jw, (int64_t)wq_stats.total_expired);
+        sh_json_write_int(&jw, (int64_t)s_qstats.expired);
         sh_json_write_key(&jw, "timeout_sec");
-        sh_json_write_double(&jw, wq_stats.timeout_sec);
+        sh_json_write_double(&jw, s_config.work_queue_timeout);
     } else {
         sh_json_write_key(&jw, "enabled");
         sh_json_write_bool(&jw, false);
@@ -234,229 +402,117 @@ static void handle_stats(struct mg_connection *c, struct mg_http_message *hm) {
     sh_json_write_object_end(&jw);
 
     char *json = sh_json_buf_take(&jb);
-    send_json(c, json);
+    send_json(res, json);
     free(json);
+
+    record_metrics(timer, "stats");
+    sh_trace_clear();
 }
 
-/* Generic handler that uses work queue */
-static void handle_via_queue(struct mg_connection *c, struct mg_http_message *hm, const char *path) {
-    if (!s_work_queue) {
-        /* Work queue disabled - process synchronously using transport-agnostic handler */
-        FWAPIRequest req = {
-            .path = path,
-            .query = NULL,
-            .body = hm->body.buf,
-            .body_len = hm->body.len,
-            .host = NULL
-        };
-
-        FWAPIResponse resp;
-        fw_api_handle(NULL, &req, &resp);
-
-        if (resp.body) {
-            send_json_status(c, resp.status_code, resp.body);
-            fw_api_response_free(&resp);
-        } else {
-            send_error(c, 500, "Processing failed");
-        }
-        return;
-    }
-
-    /* Create work item */
-    SolveWorkItem *work = calloc(1, sizeof(SolveWorkItem));
-    if (!work) {
-        send_error(c, 500, "Memory allocation failed");
-        return;
-    }
-
-    /* Copy path */
-    work->request_path = strdup(path);
-    if (!work->request_path) {
-        free(work);
-        send_error(c, 500, "Memory allocation failed");
-        return;
-    }
-
-    /* Copy body */
-    work->request_body = malloc(hm->body.len + 1);
-    if (!work->request_body) {
-        free(work->request_path);
-        free(work);
-        send_error(c, 500, "Memory allocation failed");
-        return;
-    }
-    memcpy(work->request_body, hm->body.buf, hm->body.len);
-    work->request_body[hm->body.len] = '\0';
-    work->request_len = hm->body.len;
-
-    sh_completion_init(&work->completion);
-
-    /* Push to work queue */
-    ShWorkItem item = {
-        .data = NULL,  /* We manage our own data */
-        .data_len = 0,
-        .user_ctx = work
-    };
-
-    double pressure = 0.0;
-    if (!sh_workqueue_try_push(s_work_queue, &item, &pressure)) {
-        /* Queue full - backpressure */
-        sh_completion_cleanup(&work->completion);
-        free(work->request_body);
-        free(work);
-        send_error(c, 503, "Service unavailable - queue full");
-        return;
-    }
-
-    /* Wait for completion with timeout */
-    int timeout_ms = (int)(s_config.work_queue_timeout * 1000);
-    if (!sh_completion_wait(&work->completion, timeout_ms)) {
-        /* Timeout - mark item as cancelled so worker can skip if not started */
-        sh_completion_cancel(&work->completion);
-        send_error(c, 504, "Gateway timeout");
-        /* Note: work (including request_path and request_body) will be cleaned up when worker processes it */
-        return;
-    }
-
-    /* Send response */
-    if (work->response_data) {
-        send_json_status(c, work->status_code, work->response_data);
-        free(work->response_data);
-    } else {
-        send_error(c, 500, "Processing failed");
-    }
-
-    /* Cleanup */
-    sh_completion_cleanup(&work->completion);
-    free(work->request_path);
-    free(work->request_body);
-    free(work);
+static void handle_metrics(KlHttpRequest *req, KlHttpResponse *res, void *ud) {
+    (void)req; (void)ud;
+    sh_kl_handle_metrics(res);
+    sh_trace_clear();
 }
 
-/* POST /api/v1/solve */
-static void handle_solve(struct mg_connection *c, struct mg_http_message *hm) {
-    handle_via_queue(c, hm, "/api/v1/solve");
+static void handle_solve(KlHttpRequest *req, KlHttpResponse *res, void *ud) {
+    handle_via_queue(req, res, ud, "/api/v1/solve", "solve");
+    sh_trace_clear();
 }
 
-/* POST /api/v1/filter */
-static void handle_filter(struct mg_connection *c, struct mg_http_message *hm) {
-    handle_via_queue(c, hm, "/api/v1/filter");
+static void handle_filter(KlHttpRequest *req, KlHttpResponse *res, void *ud) {
+    handle_via_queue(req, res, ud, "/api/v1/filter", "filter");
+    sh_trace_clear();
 }
 
-/* POST /api/v1/optimize */
-static void handle_optimize(struct mg_connection *c, struct mg_http_message *hm) {
-    handle_via_queue(c, hm, "/api/v1/optimize");
-}
-
-/* GET /metrics - Prometheus metrics endpoint, uses shared helper */
-static void handle_metrics(struct mg_connection *c) {
-    sh_mg_handle_metrics(c);
-}
-
-/* OPTIONS handler for CORS preflight */
-static void handle_options(struct mg_connection *c) {
-    char cors_headers[512];
-    sh_cors_preflight_headers(&s_cors, NULL, cors_headers, sizeof(cors_headers));
-    mg_http_reply(c, 204, cors_headers, "");
+static void handle_optimize(KlHttpRequest *req, KlHttpResponse *res, void *ud) {
+    handle_via_queue(req, res, ud, "/api/v1/optimize", "optimize");
+    sh_trace_clear();
 }
 
 /* ============================================================================
- * Main Event Handler
+ * Middleware
  * ============================================================================ */
 
-static void ev_handler(struct mg_connection *c, int ev, void *ev_data) {
-    /* Set socket write timeout on new connections to protect against slow clients */
-    if (ev == MG_EV_ACCEPT) {
-        sh_mg_set_write_timeout(c, 5000);  /* 5 second write timeout */
-        return;
+/* CORS preflight, before rate limiting (as in the mongoose server). */
+static int mw_preflight(KlHttpRequest *req, KlHttpResponse *res, void *ud) {
+    (void)ud;
+    sh_trace_from_headers(sh_kl_trace_header_getter, req);
+    sh_kl_reply_preflight(res, &s_cors, NULL);
+    sh_trace_clear();
+    return 1;  /* short-circuit */
+}
+
+/*
+ * Rate limit everything except health, stats and metrics.
+ *
+ * Middleware patterns support a trailing slash-star prefix but not
+ * alternation, so the exemptions are checked here rather than by registering
+ * this on several patterns.
+ */
+static int mw_rate_limit(KlHttpRequest *req, KlHttpResponse *res, void *ud) {
+    (void)ud;
+
+    sh_trace_from_headers(sh_kl_trace_header_getter, req);
+
+    static const char *exempt[] = {
+        "/api/v1/health", "/api/v1/stats", "/metrics"
+    };
+    for (size_t i = 0; i < sizeof(exempt) / sizeof(exempt[0]); i++) {
+        size_t len = strlen(exempt[i]);
+        if (req->path_len == len && memcmp(req->path, exempt[i], len) == 0)
+            return 0;
     }
 
-    if (ev == MG_EV_HTTP_MSG) {
-        struct mg_http_message *hm = (struct mg_http_message *)ev_data;
-
-        /* Start request timing */
-        ShMetricsTimer req_timer = sh_metrics_timer_start();
-
-        /* Extract or generate trace ID */
-        sh_trace_from_headers(sh_mg_trace_header_getter, hm);
-
-        /* Handle CORS preflight - no rate limiting */
-        if (mg_match(hm->method, mg_str("OPTIONS"), NULL)) {
-            handle_options(c);
-            sh_trace_clear();
-            return;
-        }
-
-        /* Health, stats, and metrics bypass rate limiting and work queue */
-        if (mg_match(hm->uri, mg_str("/api/v1/health"), NULL)) {
-            handle_health(c, hm);
-            sh_metrics_counter_inc("http_requests_total", 1,
-                "endpoint", "health", "service", "fuelwise", NULL);
-            sh_metrics_timer_observe(req_timer, "http_request_duration_ms",
-                "endpoint", "health", "service", "fuelwise", NULL);
-            sh_trace_clear();
-            return;
-        }
-        if (mg_match(hm->uri, mg_str("/api/v1/stats"), NULL)) {
-            handle_stats(c, hm);
-            sh_metrics_counter_inc("http_requests_total", 1,
-                "endpoint", "stats", "service", "fuelwise", NULL);
-            sh_metrics_timer_observe(req_timer, "http_request_duration_ms",
-                "endpoint", "stats", "service", "fuelwise", NULL);
-            sh_trace_clear();
-            return;
-        }
-        if (mg_match(hm->uri, mg_str("/metrics"), NULL)) {
-            handle_metrics(c);
-            sh_trace_clear();
-            return;
-        }
-
-        /* Check rate limit for all other endpoints - uses shared helper */
-        if (!sh_mg_check_rate_limit(c, s_rate_limiter, &s_cors, NULL)) {
-            sh_metrics_counter_inc("http_requests_total", 1,
-                "endpoint", "rate_limited", "status", "429", NULL);
-            sh_trace_clear();
-            return;
-        }
-
-        /* Route requests */
-        const char *endpoint = "unknown";
-        if (mg_match(hm->uri, mg_str("/api/v1/solve"), NULL)) {
-            endpoint = "solve";
-            if (mg_match(hm->method, mg_str("POST"), NULL)) {
-                handle_solve(c, hm);
-            } else {
-                send_error(c, 405, "Method not allowed");
-            }
-        } else if (mg_match(hm->uri, mg_str("/api/v1/optimize"), NULL)) {
-            endpoint = "optimize";
-            if (mg_match(hm->method, mg_str("POST"), NULL)) {
-                handle_optimize(c, hm);
-            } else {
-                send_error(c, 405, "Method not allowed");
-            }
-        } else if (mg_match(hm->uri, mg_str("/api/v1/filter"), NULL)) {
-            endpoint = "filter";
-            if (mg_match(hm->method, mg_str("POST"), NULL)) {
-                handle_filter(c, hm);
-            } else {
-                send_error(c, 405, "Method not allowed");
-            }
-        } else {
-            endpoint = "not_found";
-            send_error(c, 404, "Not found");
-        }
-
-        /* Record metrics */
+    if (!sh_kl_check_rate_limit(req, res, s_rate_limiter, &s_cors, NULL)) {
         sh_metrics_counter_inc("http_requests_total", 1,
-            "endpoint", endpoint, "service", "fuelwise", NULL);
-        sh_metrics_timer_observe(req_timer, "http_request_duration_ms",
-            "endpoint", endpoint, "service", "fuelwise", NULL);
-
-        /* Clear trace context */
+            "endpoint", "rate_limited", "status", "429", NULL);
         sh_trace_clear();
+        return 1;  /* short-circuit */
     }
+    return 0;
+}
+
+/*
+ * Anything the route table would not match.
+ *
+ * Keel route patterns have no wildcard -- '*' is only special in middleware
+ * patterns -- so a catch-all route is not expressible, and Keel's built-in 404
+ * is text/plain with no CORS headers.
+ */
+static int mw_not_found(KlHttpRequest *req, KlHttpResponse *res, void *ud) {
+    AppCtx *app = (AppCtx *)ud;
+    KlHttpRoute *matched = NULL;
+    KlHttpParam params[KL_HTTP_ROUTER_MAX_PARAMS];
+    int num_params = 0;
+
+    int rc = kl_http_router_match(&app->server->router,
+                                  req->method, req->method_len,
+                                  req->path, req->path_len,
+                                  &matched, params, &num_params);
+    if (rc == 200) return 0;
+
+    if (rc == 405) {
+        send_error(res, 405, "Method not allowed");
+        sh_metrics_counter_inc("http_requests_total", 1,
+            "endpoint", "method_not_allowed", "service", "fuelwise", NULL);
+    } else {
+        send_error(res, 404, "Not found");
+        sh_metrics_counter_inc("http_requests_total", 1,
+            "endpoint", "not_found", "service", "fuelwise", NULL);
+    }
+    sh_trace_clear();
+    return 1;  /* short-circuit */
+}
+
+/* Body reader factory: kl_http_body_reader_buffer() reads max_size from the
+   route's user_data, so wrap it to keep the cap explicit. */
+static KlHttpBodyReader *api_body_reader(KlAllocator *alloc,
+                                         const KlHttpRequest *req,
+                                         void *user_data) {
+    (void)user_data;
+    return kl_http_body_reader_buffer(alloc, req,
+                                      (void *)(size_t)FW_MAX_BODY_SIZE);
 }
 
 /* ============================================================================
@@ -505,10 +561,6 @@ int main(int argc, char *argv[]) {
         }
     }
 
-    /* Set up signal handlers */
-    signal(SIGINT, signal_handler);
-    signal(SIGTERM, signal_handler);
-
     /* Initialize logging */
     ShLogConfig log_cfg = SH_LOG_CONFIG_DEFAULT;
     log_cfg.service = "fuelwise";
@@ -535,49 +587,60 @@ int main(int argc, char *argv[]) {
         }
     }
 
-    /* Initialize work queue and workers */
+    /* Initialize HTTP server */
+    KlHttpServer server;
+    KlHttpServerConfig http_cfg = {
+        .port = s_config.port,
+        .bind_addr = s_config.host[0] ? s_config.host : "0.0.0.0",
+        .install_signal_handlers = 1,
+        .max_body_size = FW_MAX_BODY_SIZE,
+        .drain_timeout_ms = 5000,
+    };
+
+    if (kl_http_server_init(&server, &http_cfg) < 0) {
+        fprintf(stderr, "Error: Cannot listen on %s:%d\n",
+            s_config.host[0] ? s_config.host : "0.0.0.0", s_config.port);
+        sh_ratelimit_free(s_rate_limiter);
+        return 1;
+    }
+
+    /* Solve pool. queue_capacity gives the backpressure ShWorkQueue used to. */
     if (s_config.work_queue_enabled) {
-        s_work_queue = sh_workqueue_create(
-            s_config.work_queue_depth,
-            s_config.work_queue_timeout
-        );
-        if (!s_work_queue) {
-            fprintf(stderr, "Error: Failed to create work queue\n");
-            sh_ratelimit_free(s_rate_limiter);
-            return 1;
-        }
-
-        /* Start worker pool */
-        int num_workers = s_config.worker_threads > 0 ? s_config.worker_threads : 0;
-        ShWorkerPoolConfig pool_cfg = {
-            .queue = s_work_queue,
-            .callback = worker_callback,
-            .ctx = NULL
+        KlThreadPoolConfig pool_cfg = {
+            .num_workers = s_config.worker_threads > 0 ? s_config.worker_threads : 0,
+            .queue_capacity = (int)s_config.work_queue_depth,
         };
-        s_worker_pool = sh_worker_pool_create(num_workers, &pool_cfg);
-        if (!s_worker_pool) {
-            fprintf(stderr, "Error: Failed to create worker pool\n");
-            sh_workqueue_free(s_work_queue);
+        s_pool = kl_thread_pool_create(kl_http_server_event_ctx(&server), &pool_cfg);
+        if (!s_pool) {
+            fprintf(stderr, "Error: Failed to create solve thread pool\n");
+            kl_http_server_free(&server);
             sh_ratelimit_free(s_rate_limiter);
             return 1;
         }
     }
 
-    /* Initialize mongoose */
-    struct mg_mgr mgr;
-    mg_mgr_init(&mgr);
+    AppCtx app = { .server = &server, .pool = s_pool };
 
-    /* Build listen address */
-    char listen_addr[SH_URL_MAX];
-    snprintf(listen_addr, sizeof(listen_addr), "http://%s:%d",
-        s_config.host[0] ? s_config.host : "0.0.0.0", s_config.port);
+    /*
+     * Routes are method-specific, so a wrong method (e.g. GET /api/v1/solve)
+     * makes kl_http_router_match() return 405 and mw_not_found answers with
+     * "Method not allowed" -- the same response the mongoose server gave.
+     */
+    kl_http_server_route(&server, "GET",  "/api/v1/health",   handle_health,   NULL, NULL);
+    kl_http_server_route(&server, "GET",  "/api/v1/stats",    handle_stats,    NULL, NULL);
+    kl_http_server_route(&server, "GET",  "/metrics",         handle_metrics,  NULL, NULL);
+    kl_http_server_route(&server, "POST", "/api/v1/solve",    handle_solve,    &app, api_body_reader);
+    kl_http_server_route(&server, "POST", "/api/v1/filter",   handle_filter,   &app, api_body_reader);
+    kl_http_server_route(&server, "POST", "/api/v1/optimize", handle_optimize, &app, api_body_reader);
 
-    /* Start listening */
-    struct mg_connection *c = mg_http_listen(&mgr, listen_addr, ev_handler, NULL);
-    if (c == NULL) {
-        fprintf(stderr, "Error: Cannot listen on %s\n", listen_addr);
-        goto cleanup;
-    }
+    /*
+     * Middleware runs in registration order, before routing. Preflight first
+     * (it must not be rate limited), then the limiter, then the fallback,
+     * which must be last because it short-circuits unmatched requests.
+     */
+    kl_http_server_use(&server, "OPTIONS", "/*", mw_preflight, NULL);
+    kl_http_server_use(&server, "*", "/*", mw_rate_limit, NULL);
+    kl_http_server_use(&server, "*", "/*", mw_not_found, &app);
 
     /* Print startup message */
     printf("FuelWise API Server v%s\n", fw_version());
@@ -591,10 +654,10 @@ int main(int argc, char *argv[]) {
     }
     printf("\n");
     printf("  Work queue: %s", s_config.work_queue_enabled ? "enabled" : "disabled");
-    if (s_config.work_queue_enabled && s_worker_pool) {
+    if (s_pool) {
         printf(" (depth %zu, timeout %.1fs, %d workers)",
             s_config.work_queue_depth, s_config.work_queue_timeout,
-            sh_worker_pool_size(s_worker_pool));
+            s_config.worker_threads > 0 ? s_config.worker_threads : 0);
     }
     printf("\n");
     printf("\n");
@@ -605,25 +668,17 @@ int main(int argc, char *argv[]) {
     printf("  POST /api/v1/filter    - Filter stations to route\n");
     printf("  POST /api/v1/optimize  - Full optimization pipeline\n");
     printf("\nPress Ctrl+C to stop.\n\n");
+    fflush(stdout);
 
-    /* Event loop */
-    while (s_signo == 0) {
-        mg_mgr_poll(&mgr, 1000);
-    }
+    /* Event loop: blocks until SIGINT/SIGTERM. */
+    kl_http_server_run(&server);
 
     printf("\nShutting down...\n");
 
-cleanup:
-    /* Shutdown worker pool */
-    if (s_worker_pool) {
-        sh_worker_pool_stop(s_worker_pool);
-        sh_worker_pool_join(s_worker_pool);
-        sh_worker_pool_free(s_worker_pool);
-    }
+    /* Pool first: drains in-flight work, fires cancel_fn for queued items. */
+    if (s_pool) kl_thread_pool_free(s_pool);
 
-    /* Cleanup */
-    mg_mgr_free(&mgr);
-    sh_workqueue_free(s_work_queue);
+    kl_http_server_free(&server);
     sh_ratelimit_free(s_rate_limiter);
 
     return 0;

@@ -151,6 +151,40 @@ jobs:
         run: make -C ralph/api test
 
   # ==========================================================================
+  # FuelWise API (Keel-backed)
+  #
+  # Standalone for the same reason as test-surge / test-ralph-api: this
+  # lived in test-api, which is gated behind test-c, so an unrelated
+  # failure there skipped it. test_api.sh exits non-zero on failure, so
+  # unlike the Ralph target this one is a real gate.
+  # ==========================================================================
+  test-fuelwise-api:
+    name: Test FuelWise API
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential libomp-dev
+
+      # NOTE: no --help smoke here. fuelwise-api exits 1 on --help (it treats
+      # sh_args_parse's help return as an error); see docs/roadmaps/fuelwise.md.
+      - name: Build FuelWise API
+        run: make -C fuelwise/api
+
+      - name: Test FuelWise API
+        run: make -C fuelwise/api test
+
+
+
+
+  # ==========================================================================
   # Build and test API servers
   # ==========================================================================
   test-api:
@@ -168,10 +202,6 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y build-essential libomp-dev
-
-      # FuelWise API has full test suite (starts server, tests endpoints, stops)
-      - name: Test FuelWise API
-        run: make -C fuelwise/api test
 
       # APIs that need OSM data - just verify they build and show help
       - name: Build Carta API
