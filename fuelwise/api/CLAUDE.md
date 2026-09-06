@@ -4,7 +4,7 @@
 
 ## Overview
 
-The FuelWise API is a lightweight REST server built with mongoose (embedded HTTP library). It exposes the FuelWise optimization library via JSON endpoints with production-grade features including rate limiting, work queue for CPU-intensive operations, and configurable through CLI args and environment variables.
+The FuelWise API is a lightweight REST server built with Keel (embedded HTTP library, MIT). It exposes the FuelWise optimization library via JSON endpoints with production-grade features including rate limiting, work queue for CPU-intensive operations, and configurable through CLI args and environment variables.
 
 ## Quick Start
 
@@ -21,7 +21,7 @@ make test-quick   # Quick smoke test
 |------|---------|
 | `src/main.c` | Complete server implementation |
 | `test_api.sh` | API test suite |
-| `../../vendor/mongoose/mongoose.c` | Vendored HTTP library |
+| `../../vendor/keel/` | Vendored HTTP library (git submodule) |
 | `../../shared/include/sh_ratelimit.h` | Rate limiting |
 | `../../shared/include/sh_workqueue.h` | Work queue |
 | `../../shared/include/sh_args.h` | CLI/env argument parsing |

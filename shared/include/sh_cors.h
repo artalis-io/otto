@@ -2,7 +2,7 @@
  * sh_cors.h - CORS Header Utilities
  *
  * Server-side utilities for generating CORS (Cross-Origin Resource Sharing)
- * headers. Use with mongoose or other HTTP servers.
+ * headers. Use with Keel or other HTTP servers.
  *
  * Usage:
  *   ShCorsConfig cors;

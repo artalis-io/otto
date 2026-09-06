@@ -2780,7 +2780,7 @@
 <pre><span class="comment">// Core function: transport-agnostic, runs anywhere</span>
 <span class="type">int</span> carta_render_tile(<span class="type">int</span> z, <span class="type">int</span> x, <span class="type">int</span> y, <span class="type">uint8_t</span> **out, <span class="type">size_t</span> *len);
 
-<span class="comment">// HTTP wrapper (Mongoose): ~10 lines</span>
+<span class="comment">// HTTP wrapper (Keel): ~10 lines</span>
 <span class="comment">// WASM wrapper (Emscripten): ~10 lines</span>
 <span class="comment">// Embedded call: direct invocation</span></pre>
                 </div>
@@ -2871,7 +2871,7 @@ cs_input(CS_ID(<span class="string">"search"</span>), text, &amp;len, max, <span
 <pre><span class="comment">// Same handler interface works in ALL deployment modes:</span>
 <span class="type">int</span> vl_api_handle(VLAPIContext *ctx, <span class="keyword">const</span> VLAPIRequest *req, VLAPIResponse *resp);
 
-<span class="comment">// In-process:  Mongoose → sh_worker_pool → handler (systemd sandbox)</span>
+<span class="comment">// In-process:  Keel → KlThreadPool → handler (systemd sandbox)</span>
 <span class="comment">// WASM:        Browser → WASM module → handler (WASM sandbox)</span>
 <span class="comment">// Process pool: Parser processes ↔ IPC ↔ handler (process isolation)</span></pre>
                 </div>
@@ -3134,7 +3134,7 @@ cs_input(CS_ID(<span class="string">"search"</span>), text, &amp;len, max, <span
                           ▼
 ┌───────────────────────────────────────────────────┐
 │                                                   │
-│        Vendor: miniz + mongoose + Clay            │
+│        Vendor: miniz + Keel + Clay                │
 │                                                   │
 └───────────────────────────────────────────────────┘
 
@@ -3145,7 +3145,7 @@ Dependencies:
   Velo, Carta, Locus ──► Shared (geo, protobuf)
   Shared ──► miniz (compression)
   ClayShards ──► Clay (layout)
-  APIs ──► mongoose (HTTP)
+  APIs ──► Keel (HTTP)
 </pre>
             </div>
             </div>

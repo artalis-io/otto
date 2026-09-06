@@ -2,7 +2,7 @@
  * Carta API Handler Implementation
  *
  * Transport-agnostic request handling for Carta tile generation.
- * Used by both Mongoose HTTP server and WASM exports.
+ * Used by both the Keel HTTP server and WASM exports.
  */
 
 #include "carta.h"

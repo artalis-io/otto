@@ -2,7 +2,7 @@
  * Carta API Handler - Transport-agnostic request handling
  *
  * This module provides request handling logic that can be used by:
- * - Mongoose HTTP server (production)
+ * - Keel HTTP server (production)
  * - WASM exports (browser demo)
  * - Direct C API calls (testing)
  *
@@ -172,7 +172,7 @@ CTAPIContext *ct_api_create(const uint8_t *pbf_data, size_t pbf_len,
  * Create API context from an existing PBF context.
  *
  * This allows sharing a PBF context between the API handler and other
- * code (e.g., the mongoose server's caching layer).
+ * code (e.g., the tile server's caching layer).
  *
  * The PBF context is NOT owned by the API context - caller must keep
  * it alive and free it separately.

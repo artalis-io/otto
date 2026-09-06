@@ -217,7 +217,7 @@ make clean
 ## Dependencies
 
 - **velo** - Routing engine
-- **mongoose** - HTTP server (vendor)
+- **Keel** - HTTP server (vendor submodule, MIT)
 - POSIX threads (pthread)
 
 ## Docker

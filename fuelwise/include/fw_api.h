@@ -2,7 +2,7 @@
  * FuelWise Transport-Agnostic API Handler
  *
  * This header defines the API interface for FuelWise that can be used by:
- * - HTTP servers (Mongoose)
+ * - HTTP servers (Keel)
  * - WASM modules
  * - Unix sockets
  * - Direct C calls

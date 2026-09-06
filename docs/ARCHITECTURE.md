@@ -12,7 +12,7 @@ OTTO (**O**ptimization for **T**rucking and **T**ransport **O**perations) is a c
 ├─────────────────────────────────────────────────────────────────────────────┤
 │  ┌─────────────┐     ┌─────────────┐     ┌─────────────┐                   │
 │  │  React UI   │     │    WASM     │     │  REST API   │                   │
-│  │  (Leaflet)  │     │  (Browser)  │     │ (mongoose)  │                   │
+│  │  (Leaflet)  │     │  (Browser)  │     │   (Keel)    │                   │
 │  └──────┬──────┘     └──────┬──────┘     └──────┬──────┘                   │
 │         └───────────────────┼───────────────────┘                           │
 ├─────────────────────────────┼───────────────────────────────────────────────┤
@@ -126,7 +126,7 @@ otto/
 │
 ├── vendor/             # Third-party code (vendored)
 │   ├── miniz/          #   Public domain zlib implementation
-│   ├── mongoose/       #   Embedded HTTP server
+│   ├── keel/           #   Embedded HTTP server (git submodule, MIT)
 │   ├── sqlite/         #   Embedded SQL database [PLANNED]
 │   └── clay/           #   UI layout library
 │
@@ -306,13 +306,13 @@ Common code used by velo, carta, and API servers:
 
 Vendored libraries (each has its own `CLAUDE.md` with API documentation):
 - **miniz**: Public domain zlib implementation for DEFLATE compression ([vendor/miniz/CLAUDE.md](../vendor/miniz/CLAUDE.md))
-- **mongoose**: Embedded HTTP server library ([vendor/mongoose/CLAUDE.md](../vendor/mongoose/CLAUDE.md))
+- **Keel**: Embedded HTTP server library, MIT (git submodule: [vendor/keel](https://github.com/artalis-io/keel))
 - **sqlite**: Embedded SQL database (planned, for Forge job persistence)
 - **clay**: High-performance 2D UI layout library ([vendor/clay/CLAUDE.md](../vendor/clay/CLAUDE.md))
 
 ### Forge - Async Job Queue [PLANNED]
 **Location:** `forge/`
-**Dependencies:** `vendor/sqlite`, `vendor/mongoose`
+**Dependencies:** `vendor/sqlite`, `vendor/keel`
 
 Generic job broker for long-running async tasks. See [roadmaps/forge.md](roadmaps/forge.md) for full specification.
 
