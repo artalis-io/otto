@@ -2028,3 +2028,62 @@ The FuelWise-specific context is:
 - FuelWise is the primary use case for Ralph's Benders solver
 - The suboptimal convergence was discovered during FuelWise benchmark testing
 - Fixes should be validated against FuelWise test cases before closing
+
+## Keel Migration (Mongoose Removal) — Phase 3 of 6
+
+**Completed for FuelWise.** `fuelwise/api` no longer links Mongoose.
+
+Rationale and shared context: `docs/roadmaps/surge.md` (Phase 1). Mongoose is
+`GPL-2.0-only or commercial`, incompatible with OTTO's AGPL-3.0 and
+unsublicensable for the commercial tier; Keel is MIT.
+
+### Shape of the port
+
+FuelWise is Surge-shaped, so it follows the same pattern:
+
+- `ShWorkQueue` + `ShWorkerPool` + `ShCompletion` → `KlThreadPool` + `KlAsyncOp`.
+  The old handler called `sh_completion_wait()` on the event loop thread, so
+  every request serialized behind the running solve. The loop is now free while
+  a solve is in flight.
+- Same `SolveCtx` ownership rules as Surge: freed only in `done_fn` or
+  `cancel_fn`; `on_cancel`/`on_deadline` only set `detached`, because a worker
+  may still be running.
+- `sh_mg_*` → `sh_kl_*` (`shared/src/sh_keelserver.c`).
+- `mw_not_found` answers 404/405 via `kl_http_router_match()`, since Keel route
+  patterns have no wildcard and its built-in 404 carries no CORS headers.
+- Rate-limit exemptions (`/api/v1/health`, `/api/v1/stats`, `/metrics`) are
+  checked inside the middleware: middleware patterns support a trailing
+  slash-star prefix but not alternation.
+
+### Work-queue statistics
+
+`/api/v1/stats` publishes `work_queue` counters that `test_api.sh` asserts on
+(`capacity`, `timeout_sec`, `enabled`). `KlThreadPool` exposes no statistics,
+so `FWQueueStats` tracks `pushed` / `popped` / `dropped` / `expired` and the
+JSON keys are unchanged. Every counter is touched only on the event loop
+thread (submit, `done_fn`, `on_deadline`, and the stats handler all run
+there), so plain integers are sufficient.
+
+`--queue-off` keeps the old synchronous path: no pool is created, solves run
+inline, and stats report `"enabled": false`.
+
+### Fixed in passing
+
+The mongoose handler leaked `work->request_path` on the queue-full (503) path
+— it freed `request_body` and the item but not the `strdup`'d path. The
+restructured code has a single `solve_ctx_free()` that releases everything.
+
+### Pre-existing issue found while verifying (NOT fixed here)
+
+`fuelwise-api --help` **exits 1**. `main()` treats any negative return from
+`sh_args_parse()` as an error, but `-2` means "help was requested"; Ralph gets
+this right with `if (arg_index == -2) { print_usage(...); return 0; }`. The
+`-h`/`--help` loop later in `main()` is unreachable for that reason. Left
+alone because it is an exit-code behaviour change; it is why the CI job has no
+`--help` smoke check, unlike Surge and Ralph.
+
+### Remaining
+
+Velo (100 `mg_` call sites), Locus (63), Carta (56), plus
+`shared/src/sh_httpserver.c` (41). Delete that file and `vendor/mongoose/`
+once the last server is ported.

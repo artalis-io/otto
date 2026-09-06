@@ -20,7 +20,7 @@ DEBUG_CFLAGS = -Wall -Wextra -g -O0 -DDEBUG \
                -fsanitize=address,undefined -fno-omit-frame-pointer
 DEBUG_LDFLAGS = -fsanitize=address,undefined
 
-INCLUDES = -I../include -I../../ralph/include -I../../vendor/mongoose -I../../shared/include
+INCLUDES = -I../include -I../../ralph/include -I$(KEEL_DIR)/include -I../../shared/include
 
 # OpenMP support (required when linking against libralph.a which uses OpenMP)
 UNAME_S := $(shell uname -s)
@@ -34,7 +34,9 @@ endif
 
 # Source files
 SRC_DIR = src
-MONGOOSE_DIR = ../../vendor/mongoose
+# Keel static library (vendored git submodule, MIT)
+KEEL_DIR = ../../vendor/keel
+KEEL_LIB = $(KEEL_DIR)/libkeel.a
 SHARED_DIR = ../../shared
 
 # Libraries
@@ -47,11 +49,11 @@ TARGET = fuelwise-api
 BUILD_DIR = build
 
 # Source files
-SRCS = $(SRC_DIR)/main.c $(MONGOOSE_DIR)/mongoose.c
+SRCS = $(SRC_DIR)/main.c
 OBJS = $(SRCS:.c=.o)
 
-# Shared HTTP server (requires mongoose, compiled here not in libshared)
-HTTPSERVER_OBJ = $(BUILD_DIR)/sh_httpserver.o
+# Shared Keel HTTP helpers (need Keel headers, so not in libshared)
+KEELSERVER_OBJ = $(BUILD_DIR)/sh_keelserver.o
 
 # Default target
 all: $(BUILD_DIR) $(TARGET)
@@ -60,18 +62,24 @@ $(BUILD_DIR):
 	mkdir -p $(BUILD_DIR)
 
 # Build the API server
-$(TARGET): $(OBJS) $(HTTPSERVER_OBJ) $(FUELWISE_LIB) $(RALPH_LIB) $(SHARED_LIB)
-	$(CC) $(CFLAGS) $(INCLUDES) -o $@ $(OBJS) $(HTTPSERVER_OBJ) $(FUELWISE_LIB) $(RALPH_LIB) $(SHARED_LIB) -lm -lpthread $(OPENMP_LDFLAGS)
+$(TARGET): $(OBJS) $(KEELSERVER_OBJ) $(FUELWISE_LIB) $(RALPH_LIB) $(SHARED_LIB) $(KEEL_LIB)
+	$(CC) $(CFLAGS) $(INCLUDES) -o $@ $(OBJS) $(KEELSERVER_OBJ) $(FUELWISE_LIB) $(RALPH_LIB) $(SHARED_LIB) $(KEEL_LIB) -lm -lpthread $(OPENMP_LDFLAGS)
+
+# Build vendored Keel. Core only (no mbedTLS/nghttp2 integrations), so
+# this needs no external libraries.
+$(KEEL_LIB):
+	@if [ ! -f $(KEEL_DIR)/Makefile ]; then \
+		echo "vendor/keel is empty - run: git submodule update --init vendor/keel"; \
+		exit 1; \
+	fi
+	$(MAKE) -C $(KEEL_DIR) CC=$(CC)
 
 # Compile source files
 $(SRC_DIR)/%.o: $(SRC_DIR)/%.c
 	$(CC) $(CFLAGS) $(INCLUDES) -c $< -o $@
 
-$(MONGOOSE_DIR)/%.o: $(MONGOOSE_DIR)/%.c
-	$(CC) $(CFLAGS) -DMG_ENABLE_LINES=0 -c $< -o $@
-
-# Compile shared HTTP server (requires mongoose includes)
-$(HTTPSERVER_OBJ): $(SHARED_DIR)/src/sh_httpserver.c | $(BUILD_DIR)
+# Compile shared Keel HTTP helpers (require Keel includes)
+$(KEELSERVER_OBJ): $(SHARED_DIR)/src/sh_keelserver.c | $(BUILD_DIR)
 	$(CC) $(CFLAGS) $(INCLUDES) -c $< -o $@
 
 # Ensure dependencies are built
@@ -110,6 +118,6 @@ test-queue: $(TARGET)
 
 # Clean build artifacts
 clean:
-	rm -rf $(TARGET) $(SRC_DIR)/*.o $(MONGOOSE_DIR)/*.o $(BUILD_DIR)
+	rm -rf $(TARGET) $(SRC_DIR)/*.o $(BUILD_DIR)
 
 .PHONY: all clean run run-port test
