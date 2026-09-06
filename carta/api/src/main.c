@@ -1370,6 +1370,19 @@ static int mw_fallback(KlHttpRequest *req, KlHttpResponse *res, void *ud) {
                                   &matched, params, &num_params);
     if (rc == 200) return 0;
 
+    /*
+     * A /tiles/ path that did not match the route is malformed (too few or
+     * too many segments). The mongoose server answered 400 there; keep that
+     * rather than letting it fall through to the static handler.
+     */
+    if (req->path_len > 7 && memcmp(req->path, "/tiles/", 7) == 0) {
+        send_error_cors(res, req, 400, "Invalid tile URL format");
+        sh_metrics_counter_inc("http_requests_total", 1,
+                               "status:400", "endpoint:tiles", NULL);
+        sh_trace_clear();
+        return 1;
+    }
+
     /* Static files */
     if (s_config.server.static_dir[0] && serve_static_file(req, res)) {
         sh_metrics_counter_inc("http_requests_total", 1,
