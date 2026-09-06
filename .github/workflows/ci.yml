@@ -110,6 +110,34 @@ jobs:
           make surge-api
           ./surge/api/surge-solver --help > /dev/null
 
+  # TEMPORARY diagnostic: Surge async over readiness (epoll, default) vs
+  # completion (io_uring). Remove once answered.
+  surge-backend-probe:
+    name: Surge backend probe (temporary)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - name: Install deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential libomp-dev liburing-dev
+      - name: Backend A - default (epoll, readiness)
+        run: |
+          make -C vendor/keel
+          make surge-api
+          cd surge/api
+          timeout 150 bash test_api.sh; echo "EXIT=$?"
+      - name: Backend B - io_uring (completion)
+        run: |
+          make -C vendor/keel clean
+          make -C vendor/keel BACKEND=iouring
+          rm -f surge/api/surge-solver
+          make -C surge/api
+          cd surge/api
+          timeout 150 bash test_api.sh; echo "EXIT=$?"
+
   # ==========================================================================
   # Build and test API servers
   # ==========================================================================
