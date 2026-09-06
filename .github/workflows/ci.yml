@@ -119,6 +119,38 @@ jobs:
 
 
   # ==========================================================================
+  # Ralph API (Keel-backed)
+  #
+  # Standalone for the same reason as test-surge: this lived in test-api,
+  # which is gated behind test-c, so an unrelated failure there skipped it.
+  # ==========================================================================
+  test-ralph-api:
+    name: Test Ralph API
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential libomp-dev
+
+      - name: Build Ralph API
+        run: |
+          make ralph-api
+          ./ralph/api/ralph-solver-server --help > /dev/null
+
+      # NOTE: this target reports PASS/FAIL but always exits 0, so it cannot
+      # fail the build. See docs/roadmaps/ralph.md (Keel Migration) before
+      # relying on it as a gate.
+      - name: Test Ralph API
+        run: make -C ralph/api test
+
+  # ==========================================================================
   # Build and test API servers
   # ==========================================================================
   test-api:
@@ -140,10 +172,6 @@ jobs:
       # FuelWise API has full test suite (starts server, tests endpoints, stops)
       - name: Test FuelWise API
         run: make -C fuelwise/api test
-
-      # Ralph API has full test suite (no external data needed)
-      - name: Test Ralph API
-        run: make -C ralph/api test
 
       # APIs that need OSM data - just verify they build and show help
       - name: Build Carta API

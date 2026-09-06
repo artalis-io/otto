@@ -309,3 +309,55 @@ For deep-dive documentation, see [docs/internals/](../internals/):
 | `ralph/include/netflow.h` | Network flow API |
 | `ralph/include/detect.h` | Problem structure detection |
 | `docs/archive/ralph-roadmap-pre-r4.md` | Full historical roadmap (3,977 lines) |
+
+## Keel Migration (Mongoose Removal) — Phase 2 of 6
+
+**Completed for Ralph.** `ralph/api` no longer links Mongoose.
+
+Rationale and the shared context are in `docs/roadmaps/surge.md` (Phase 1):
+Mongoose is `GPL-2.0-only or commercial`, which is incompatible with OTTO's
+AGPL-3.0 and unsublicensable for the commercial tier. Keel is MIT.
+
+### Shape of the port
+
+Ralph's transport layer is a thin dispatcher — it marshals a `RalphAPIRequest`
+and hands everything to `ralph_api_handle()`, which owns all routing. That is
+preserved exactly:
+
+- Three routes (`/api/v1/health`, `/api/v1/formats`, `/api/v1/solve`) all
+  forward to a single `dispatch()`.
+- `mw_fallback` catches anything the route table misses and forwards it to the
+  *same* `dispatch()`, so unknown paths and wrong methods get Ralph's own
+  `{"error":"Endpoint not found"}` rather than a transport-invented body. This
+  is required because Keel route patterns have no wildcard (`*` is only special
+  in middleware patterns) and Keel's built-in 404 is `text/plain` with no CORS.
+- CORS headers are the same four the mongoose server emitted on every response.
+
+Ralph needs **no** `sh_keelserver.c` helpers — it uses neither `sh_cors`,
+`sh_metrics`, `sh_ratelimit` nor `sh_trace`. Its handlers are fully
+synchronous, so no `KlAsyncOp`/`KlThreadPool` wiring either. This made it the
+cheapest second module.
+
+### Two pre-existing issues found while verifying (NOT fixed here)
+
+Both predate this migration and are independent of transport.
+
+**1. Status-case mismatch.** `ralph/src/ralph_api.c:140` returns lowercase
+`"optimal"`, but `ralph/api/Makefile`'s test greps for `'"status":"OPTIMAL"'`
+and prints `FAIL: Solve endpoint`. Surge was moved to uppercase in
+`fix(surge): uppercase API status strings per OTTO convention`; Ralph was not.
+So Ralph is inconsistent with both its own test and the stated convention.
+Fixing it is a client-visible API change and wants an explicit decision.
+
+**2. The API test cannot fail.** The `test:` target echoes `PASS`/`FAIL` and
+ends with `kill`, never exiting non-zero — so `make -C ralph/api test` is
+green in CI regardless of what the assertions actually found. That is why (1)
+has gone unnoticed.
+
+Recommended order: decide (1), then make the test strict so it can gate.
+
+### Remaining
+
+Velo (100 `mg_` call sites), Locus (63), Carta (56), FuelWise (47), plus
+`shared/src/sh_httpserver.c` (41). Delete that file and `vendor/mongoose/`
+once the last server is ported.
