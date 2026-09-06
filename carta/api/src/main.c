@@ -1354,9 +1354,9 @@ static void handle_tile(KlHttpRequest *req, KlHttpResponse *res, void *ud) {
  * Anything the route table would not match: static files, else 404.
  *
  * Keel route patterns have no wildcard ('*' is only special in middleware
- * patterns), so both the /tiles/ prefix and the static-file fallback are
- * handled here rather than as routes. Keel's built-in 404 is also text/plain
- * with no CORS headers, which the map client would see as an opaque failure.
+ * patterns), so the static-file fallback is handled here rather than as a
+ * route. Keel's built-in 404 is also text/plain with no CORS headers, which
+ * the map client would see as an opaque failure.
  */
 static int mw_fallback(KlHttpRequest *req, KlHttpResponse *res, void *ud) {
     AppCtx *app = (AppCtx *)ud;
@@ -1369,12 +1369,6 @@ static int mw_fallback(KlHttpRequest *req, KlHttpResponse *res, void *ud) {
                                   req->path, req->path_len,
                                   &matched, params, &num_params);
     if (rc == 200) return 0;
-
-    /* /tiles/{z}/{x}/{y}.{ext} is a prefix, not an exact route. */
-    if (req->path_len > 7 && memcmp(req->path, "/tiles/", 7) == 0) {
-        handle_tile(req, res, ud);
-        return 1;
-    }
 
     /* Static files */
     if (s_config.server.static_dir[0] && serve_static_file(req, res)) {
@@ -1776,12 +1770,20 @@ int main(int argc, char *argv[]) {
 
     AppCtx app = { .server = &server, .pool = s_pool };
 
-    /* Routes. Tiles and static files are handled by mw_fallback: Keel route
-       patterns have no wildcard, so neither a prefix nor a catch-all works. */
+    /* Routes. Static files stay in mw_fallback: Keel route patterns have no
+       wildcard, so a catch-all is not expressible. */
     kl_http_server_route(&server, "GET", "/api/v1/health", handle_health,   NULL, NULL);
     kl_http_server_route(&server, "GET", "/api/v1/stats",  handle_stats,    NULL, NULL);
     kl_http_server_route(&server, "GET", "/metrics",       handle_metrics,  NULL, NULL);
     kl_http_server_route(&server, "GET", "/tiles.json",    handle_tilejson, NULL, NULL);
+    /*
+     * Tiles must be a real route, not middleware: kl_async_suspend() is only
+     * honoured after a route handler (conn_process checks for SUSPENDED). A
+     * middleware short-circuit goes straight to SENDING, so the connection is
+     * sent and recycled while the op is still suspended, and done_fn then
+     * writes into a freed response. Route params give us the prefix match.
+     */
+    kl_http_server_route(&server, "GET", "/tiles/:z/:x/:y", handle_tile,   &app, NULL);
 
     /* Middleware runs in registration order, before routing. */
     kl_http_server_use(&server, "OPTIONS", "/*", mw_preflight, NULL);
