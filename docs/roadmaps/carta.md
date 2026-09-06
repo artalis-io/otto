@@ -813,3 +813,96 @@ curl -sI http://localhost:8081/tiles/14/8529/5974.mvt | grep ETag
 | MSDF Font | `shared/sh_font.*` | Text measurement and rendering |
 | miniz | `vendor/miniz/` | PNG compression |
 | Font assets | `clayshards/fonts/` | ui-font.json, ui-font.png |
+
+## Keel Migration (Mongoose Removal) — Phase 5 of 6
+
+**Completed for Carta.** `carta/api` no longer links Mongoose.
+
+Rationale and shared context: `docs/roadmaps/surge.md` (Phase 1).
+
+### The concurrency model collapsed
+
+Carta ran **N mongoose event-loop threads**, each with its own `mg_mgr`
+listening on the same port via SO_REUSEPORT. That existed because every one of
+those threads blocked in `render_work_item_wait()` for the duration of a
+render — N loops was the only way to serve more than one tile at a time.
+
+With `KlAsyncOp` the single Keel loop never blocks, so the multi-listener
+design is gone: one event loop plus the render pool. `--threads` now sizes the
+render pool rather than the number of listeners, and `WorkerThread`,
+`worker_thread_fn` and the thread-local render-context key all went with it.
+
+The three direct-render fallbacks (taken when the queue was disabled) also
+went: `submit_render_work()` renders inline when there is no pool, so the
+duplicated code paths collapsed into one. Net ~100 lines smaller.
+
+### Transport replacements
+
+| Mongoose | Replacement |
+|----------|-------------|
+| `mg_http_get_var()` | `sh_query_get_str()` |
+| `mg_http_get_header()` | `kl_http_request_header()` / `sh_kl_origin()` |
+| `mg_printf()` + `mg_send()` (tiles) | `kl_http_response_*` + `body_copy` |
+| `mg_http_serve_dir()` | `serve_static_file()` (see below) |
+| `mg_match()` | `strcmp()` / route table |
+
+ETag and the conditional `304 Not Modified` are preserved exactly, now built
+from `kl_http_request_header(req, "If-None-Match")`.
+
+### Static files
+
+`mg_http_serve_dir()` has no Keel equivalent, so `serve_static_file()` reads
+the file and responds. **It rejects any path containing `..`** — mongoose did
+that containment internally, and with Keel it is our job. Keel's own
+`examples/static_files.c` registers `"/*"` as a *route*, which cannot match
+(route patterns have no wildcard), so it was not usable as a model; static
+serving lives in `mw_fallback` alongside the `/tiles/` prefix and the 404.
+
+### Async suspend must come from a route handler, not middleware
+
+Worth knowing before porting Locus. The first attempt served tiles from
+`mw_fallback` (Keel route patterns have no wildcard, so a `/tiles/` prefix
+looked like middleware's job). The server answered the first tile 200 and then
+died. ASan:
+
+```
+SEGV on unknown address 0x000000000000  (WRITE)
+  #1 hdr_append
+  #2 kl_http_response_header
+  #3 send_tile_cors      src/main.c:723
+  #4 render_reply        src/main.c:416
+  #5 render_done_fn      src/main.c:440
+  #6 thread_pool_on_pipe
+```
+
+`kl_async_suspend()` is only honoured after a *route handler*: `conn_process()`
+checks for `KL_HTTP_CONN_SUSPENDED` once the handler returns. A middleware
+short-circuit instead transitions straight to `SENDING`, so the connection was
+sent and recycled while the op was still suspended, and `done_fn` then wrote
+into a freed response.
+
+Keel route params express the prefix: `/tiles/:z/:x/:y` matches
+`/tiles/14/8529/5975.mvt`, and `parse_tile_uri()` still reads the extension off
+the full path. `mw_fallback` keeps only synchronous work — static files, the
+JSON 404, and a 400 for `/tiles/` paths with the wrong segment count (which
+mongoose's prefix check used to answer).
+
+**Rule of thumb: anything that suspends must be a route; middleware may only
+answer synchronously.**
+
+### Verification
+
+`carta/api/test_api.sh` starts the server against Monaco and gates CI —
+**19/19**: health, stats, TileJSON, MVT/PNG/ASCII tiles (including a real PNG
+signature check), ETag + conditional 304, error handling (bad format, zoom out
+of range, malformed path, 404), CORS on both preflight and tile responses, and
+async dispatch under concurrent renders.
+
+Not verified locally: Carta needs `mmap`/`sys/mman.h`, which MinGW lacks, so
+unlike Velo this port could not be smoke-tested on Windows first. CI found both
+bugs instead.
+
+### Remaining
+
+Locus (63 `mg_` call sites) is the last module, then
+`shared/src/sh_httpserver.c` (41) and `vendor/mongoose/` can be deleted.

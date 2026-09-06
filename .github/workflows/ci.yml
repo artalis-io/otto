@@ -222,6 +222,39 @@ jobs:
         run: bash velo/api/test_api.sh
 
   # ==========================================================================
+  # Carta API (Keel-backed)
+  #
+  # Standalone, and it starts the server and renders real tiles. Carta needs
+  # an OSM PBF, so the job uses Monaco (~700KB, fetched by the Makefile).
+  # ==========================================================================
+  test-carta-api:
+    name: Test Carta API
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential libomp-dev
+
+      - name: Build Carta API
+        run: |
+          make carta-api
+          ./carta/api/carta-tile-server --help > /dev/null
+
+      - name: Fetch Monaco PBF
+        run: make data/monaco-latest.osm.pbf
+
+      - name: Test Carta API
+        timeout-minutes: 5
+        run: bash carta/api/test_api.sh
+
+  # ==========================================================================
   # Build and test API servers
   # ==========================================================================
   test-api:
@@ -241,10 +274,6 @@ jobs:
           sudo apt-get install -y build-essential libomp-dev
 
       # APIs that need OSM data - just verify they build and show help
-      - name: Build Carta API
-        run: |
-          make carta-api
-          ./carta/api/carta-tile-server --help > /dev/null
 
 
       - name: Build Locus API
