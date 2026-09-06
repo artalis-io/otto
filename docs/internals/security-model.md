@@ -23,7 +23,7 @@ The system is designed so that **compromise collapses into a crash or a bounded 
 
 ## 1. Core Design Goal
 
-* Support **multiple transports** (HTTP/Mongoose today; gRPC, WebSocket, UNIX socket tomorrow).
+* Support **multiple transports** (HTTP/Keel today; gRPC, WebSocket, UNIX socket tomorrow).
 * Keep **transport logic disposable**.
 * Keep **logic/compute reusable**, optionally packaged as **WASM**.
 * Enforce **least privilege by construction**, not by convention.
@@ -52,7 +52,7 @@ Long-lived logic MUST NOT live here.
 
 Examples:
 
-* HTTP (Mongoose or other)
+* HTTP (Keel or other)
 * gRPC
 * WebSocket
 * UNIX domain socket
@@ -109,7 +109,7 @@ This role exists to **absorb parsing bugs safely**.
 │  │ Transport │ ───────────────► │   Worker Pool     │  │
 │  │  (Role B) │                  │ (Roles P + C)     │  │
 │  │           │ ◄─────────────── │ parse → compute   │  │
-│  │ Mongoose  │   sh_completion  │ sh_worker_pool    │  │
+│  │   Keel    │   KlAsyncOp      │ KlThreadPool      │  │
 │  └───────────┘                  └───────────────────┘  │
 └─────────────────────────────────────────────────────────┘
 ```
@@ -221,7 +221,7 @@ Security boundary is the **process + systemd hardening**:
 │            systemd sandbox             │
 │  ┌──────────────────────────────────┐ │
 │  │     Single Process (B + P + C)   │ │
-│  │  Mongoose → sh_worker_pool       │ │
+│  │  Keel → KlThreadPool             │ │
 │  └──────────────────────────────────┘ │
 └────────────────────────────────────────┘
 ```
@@ -375,7 +375,7 @@ In WASM mode, parsing and compute are in the **same module**. This is correct be
 // Same handler interface works in all modes:
 int vl_api_handle(VLAPIContext *ctx, const VLAPIRequest *req, VLAPIResponse *resp);
 
-// Native HTTP: Mongoose calls this from worker thread
+// Native HTTP: Keel calls this from a pool worker thread
 // Native process-isolated: Parser process calls this after parsing
 // WASM: JavaScript wrapper calls this directly
 ```

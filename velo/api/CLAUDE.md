@@ -53,7 +53,7 @@ route-server/
 ### main.c
 
 - Configuration loading (env vars, CLI, YAML file)
-- Mongoose HTTP server setup
+- Keel HTTP server setup
 - Request routing and parameter parsing
 - Velo graph loading and landmark creation
 - Route calculation using velo API
@@ -194,5 +194,5 @@ Enable landmarks:
 ## Dependencies
 
 - **velo** - Routing engine library
-- **mongoose** - HTTP server (../vendor/mongoose)
+- **Keel** - HTTP server (../vendor/keel, git submodule, MIT)
 - **pthread** - Thread support

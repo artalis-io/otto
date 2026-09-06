@@ -430,7 +430,7 @@ lc_reverse_result_free(&rev);</pre></div>
             </div>
 
             <h3>Server Architecture</h3>
-            <p>Transport-agnostic handler pattern. Core logic in <code>lc_api.c</code>, thin wrappers for HTTP (Mongoose) and WASM. Rate limiting, work queue, CORS, structured stats&mdash;all via shared infrastructure.</p>
+            <p>Transport-agnostic handler pattern. Core logic in <code>lc_api.c</code>, thin wrappers for HTTP (Keel) and WASM. Rate limiting, work queue, CORS, structured stats&mdash;all via shared infrastructure.</p>
 
             <div class="code-block"><span class="label">Architecture</span><pre>
 locus/
@@ -457,7 +457,7 @@ locus/
 │   ├── lc_trie.c          # Prefix trie (234 lines)
 │   ├── lc_types.c         # Entity/address (327 lines)
 │   └── lc_query.c         # Address parsing (169 lines)
-├── api/src/main.c         # Mongoose HTTP wrapper
+├── api/src/main.c         # Keel HTTP wrapper
 ├── wasm/                  # WASM wrapper
 └── tests/test_locus.c     # 68 tests</pre></div>
         </section>

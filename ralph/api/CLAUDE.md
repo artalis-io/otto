@@ -25,7 +25,7 @@ curl -X POST http://localhost:8084/api/v1/solve \
 ```
 api/
 ├── src/
-│   └── main.c        # HTTP server (Mongoose wrapper)
+│   └── main.c        # HTTP server (Keel wrapper)
 ├── Makefile
 └── CLAUDE.md         # This file
 ```
@@ -166,7 +166,7 @@ Error response:
 ```
 HTTP Request
     ↓
-main.c (Mongoose)
+main.c (Keel)
     ↓
 ralph_api_handle() ← Transport-agnostic handler
     ↓
@@ -181,7 +181,7 @@ The server is a thin wrapper around the transport-agnostic `ralph_api_handle()` 
 
 - **ralph** - LP/MIP solver library
 - **shared** - Arena allocator
-- **mongoose** - HTTP server (vendor)
+- **Keel** - HTTP server (vendor submodule, MIT)
 - **pthread** - Thread support
 
 ## Performance Notes

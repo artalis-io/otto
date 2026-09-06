@@ -33,7 +33,7 @@ The assessment was performed by auditing every source file across all modules, r
 | **Scripts** | 3,374 | CI/CD, orchestration, benchmarks |
 | **Docs** | 40,324 | Architecture, manifesto, internals, roadmaps |
 | | | |
-| **Total proprietary** | **~297K LOC** | Excludes vendor (mongoose/miniz/clay ~46K) |
+| **Total proprietary** | **~297K LOC** | Excludes vendor (keel/miniz/clay) |
 
 ---
 
@@ -130,7 +130,7 @@ The most complex and valuable component. A production-grade LP/MIP solver with:
 43 headers, 53 source files covering:
 - Geographic computing (Haversine, projections, tile math, bearing)
 - Protocol buffers (varint, zigzag, delta, MVT encoding)
-- HTTP server wrapper (Mongoose integration, request routing)
+- HTTP server wrapper (Keel integration, request routing)
 - Concurrency (thread-safe work queue, backpressure, timeout)
 - JSON parser (full spec with error recovery)
 - CSV parser (RFC4180 compliant)
