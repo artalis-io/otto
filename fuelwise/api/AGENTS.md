@@ -2,7 +2,7 @@
 
 ## Overview
 
-The FuelWise API is a lightweight HTTP server providing REST endpoints for refueling optimization. It uses mongoose for HTTP handling and the FuelWise library for optimization.
+The FuelWise API is a lightweight HTTP server providing REST endpoints for refueling optimization. It uses Keel for HTTP handling and the FuelWise library for optimization.
 
 ## Directory Structure
 
@@ -10,9 +10,6 @@ The FuelWise API is a lightweight HTTP server providing REST endpoints for refue
 api/
 ├── src/
 │   └── main.c        # Complete server (handlers + routing)
-├── mongoose/
-│   ├── mongoose.c    # mongoose HTTP library
-│   └── mongoose.h
 ├── Makefile
 ├── AGENTS.md         # This file
 └── CLAUDE.md
@@ -62,7 +59,7 @@ send_error()        // Send JSON error
 send_json()         // Send JSON response
 
 // Event handler
-ev_handler()        // Main mongoose event handler
+handle_solve()      // Keel route handler (see also mw_* middleware)
 
 // Entry point
 main()              // Server initialization
@@ -176,6 +173,6 @@ curl -X POST http://localhost:8080/api/v1/optimize \
 
 ## Dependencies
 
-- mongoose (vendored in `mongoose/`)
+- Keel (vendored git submodule in `../../vendor/keel/`)
 - libfuelwise.a
 - libralph.a
