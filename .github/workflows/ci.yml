@@ -173,8 +173,9 @@ jobs:
       - name: Test FuelWise API
         run: make -C fuelwise/api test
 
-  # TEMPORARY diagnostic: does Keel rc.3 async work on Linux, using Keel's
-  # OWN unmodified example? Remove once answered.
+
+
+  # TEMPORARY diagnostic. Remove once answered.
   keel-async-probe:
     name: Keel async probe (temporary)
     runs-on: ubuntu-latest
@@ -182,21 +183,34 @@ jobs:
       - uses: actions/checkout@v4
         with:
           submodules: recursive
-      - name: Build Keel + example
+      - name: Keel own test suite
+        run: make -C vendor/keel test 2>&1 | tail -30
+      - name: Build examples
         run: |
           make -C vendor/keel
           make -C vendor/keel examples
-      - name: Probe sync vs async
+      - name: Probe examples/thread_pool
         run: |
-          ./vendor/keel/examples/async_thread_pool &
+          cd vendor/keel
+          ./examples/thread_pool > /tmp/tp.log 2>&1 &
+          echo $! > /tmp/tp.pid
           sleep 2
-          echo "--- sync route / ---"
-          curl -s -m 10 -o /dev/null -w "sync code=%{http_code} time=%{time_total} " http://127.0.0.1:8080/ && echo OK || echo "sync FAILED"
-          echo "--- async route /fast ---"
-          curl -s -m 10 -o /dev/null -w "fast code=%{http_code} time=%{time_total} " http://127.0.0.1:8080/fast && echo OK || echo "async /fast FAILED"
-          echo "--- async route /slow ---"
-          curl -s -m 10 -o /dev/null -w "slow code=%{http_code} time=%{time_total} " http://127.0.0.1:8080/slow && echo OK || echo "async /slow FAILED"
-
+          echo "alive: $(ps -p $(cat /tmp/tp.pid) -o comm= || echo DEAD)"
+          curl -s -m 8 -o /dev/null -w "sync  code=%{http_code} t=%{time_total}" http://127.0.0.1:8080/ ; echo
+          curl -s -m 8 -o /dev/null -w "query code=%{http_code} t=%{time_total}" http://127.0.0.1:8080/query ; echo
+          echo "--- server log ---"; cat /tmp/tp.log
+          kill $(cat /tmp/tp.pid) || true
+      - name: Probe examples/async_thread_pool
+        run: |
+          cd vendor/keel
+          ./examples/async_thread_pool > /tmp/atp.log 2>&1 &
+          echo $! > /tmp/atp.pid
+          sleep 2
+          echo "alive: $(ps -p $(cat /tmp/atp.pid) -o comm= || echo DEAD)"
+          curl -s -m 8 -o /dev/null -w "sync code=%{http_code} t=%{time_total}" http://127.0.0.1:8080/ ; echo
+          curl -s -m 8 -o /dev/null -w "fast code=%{http_code} t=%{time_total}" http://127.0.0.1:8080/fast ; echo
+          echo "--- server log ---"; cat /tmp/atp.log
+          kill $(cat /tmp/atp.pid) || true
 
   # ==========================================================================
   # Build and test API servers
