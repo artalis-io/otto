@@ -136,11 +136,9 @@ jobs:
           make ralph-api
           ./ralph/api/ralph-solver-server --help > /dev/null
 
-      # NOTE: this target reports PASS/FAIL but always exits 0, so it cannot
-      # fail the build. See docs/roadmaps/ralph.md (Keel Migration) before
-      # relying on it as a gate.
       - name: Test Ralph API
-        run: make -C ralph/api test
+        timeout-minutes: 5
+        run: bash ralph/api/test_api.sh
 
   # ==========================================================================
   # FuelWise API (Keel-backed)
@@ -165,10 +163,10 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y build-essential libomp-dev
 
-      # NOTE: no --help smoke here. fuelwise-api exits 1 on --help (it treats
-      # sh_args_parse's help return as an error); see docs/roadmaps/fuelwise.md.
       - name: Build FuelWise API
-        run: make -C fuelwise/api
+        run: |
+          make -C fuelwise/api
+          ./fuelwise/api/fuelwise-api --help > /dev/null
 
       - name: Test FuelWise API
         run: make -C fuelwise/api test
