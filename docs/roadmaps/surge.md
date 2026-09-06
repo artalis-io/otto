@@ -4187,3 +4187,64 @@ Full `/c-audit surge` passed with 0 issues across all categories:
 **Files modified:** `sg_internal.h`, `sg_solve.c`, `sg_postprocess.c`, `sg_repair.c`,
 `sg_parallel.c`, `sg_profile_matrix.c`, `test_surge.c`, `test_profile_matrix.c`.
 ~870 new lines.
+
+## Keel Migration (Mongoose Removal) — Phase 1 of 6
+
+**Completed for Surge.** Surge's API server no longer links Mongoose.
+
+### Why
+
+`vendor/mongoose/mongoose.h` is `SPDX-License-Identifier: GPL-2.0-only or
+commercial`. GPL-2.0-**only** (not "or later") cannot combine with OTTO's
+AGPL-3.0, and the commercial tier in `docs/business/STRATEGY.md` cannot
+sublicense it either. Keel is MIT, which clears both paths.
+
+Secondary win: the mongoose server called `sh_completion_wait()` on the event
+loop thread, so every request serialized behind the running solve. Surge now
+suspends the connection (`KlAsyncOp`) and solves on a `KlThreadPool`.
+
+### What landed
+
+| Change | File |
+|--------|------|
+| Keel v3.0.0-rc.3 as a submodule | `.gitmodules`, `vendor/keel` |
+| Keel-side HTTP helpers (`sh_kl_*`) | `shared/{include,src}/sh_keelserver.{h,c}` |
+| Surge API ported off mongoose | `surge/api/src/main.c` |
+| Mongoose dropped from the build | `surge/api/Makefile` |
+| `make surge-api`, CI coverage | `Makefile`, `.github/workflows/ci.yml` |
+
+Core Keel only — no mbedTLS/nghttp2 integrations, so no new external build
+dependencies. No OTTO API server uses TLS today.
+
+### Notes for the next module
+
+- `sh_keelserver.c` is deliberately **not** in `libshared.a` (it needs Keel
+  headers), mirroring how `sh_httpserver.c` is compiled by each API server.
+  The `sh_kl_*` helpers are a 1:1 map of the `sh_mg_*` set, so porting the
+  next server is mostly mechanical.
+- Two Keel behaviours that differ from mongoose and cost time here:
+  1. `kl_http_response_json()` / `_error()` **borrow** their body. Anything
+     heap-allocated or stack-scoped must use `kl_http_response_body_copy()`.
+     The `sh_kl_*` helpers already copy.
+  2. Route patterns have **no wildcard** — `*` is only special in *middleware*
+     patterns. A catch-all route is not expressible; the JSON 404/405 is done
+     by a last-registered middleware that calls `kl_http_router_match()`
+     directly. Without it, unmatched paths fall to Keel's built-in
+     `text/plain` 404, which carries no CORS headers.
+- `kl_http_body_reader_buffer()` takes its `max_size` from the *route's*
+  `user_data`. If the route also needs an app context, wrap the factory
+  (see `solve_body_reader`) or the cap silently becomes a pointer value.
+
+### Remaining
+
+Carta (56 `mg_` call sites), Velo (100), Locus (63), FuelWise (47), Ralph (30),
+plus `shared/src/sh_httpserver.c` (41) — delete that file once the last server
+is ported, along with `vendor/mongoose/`.
+
+### Known issue (upstream, not blocking)
+
+Keel v3.0.0-rc.3's async path does not work on Windows: `examples/async_thread_pool`
+hangs on WSAPoll and returns no valid response on IOCP, while sync routes work on
+both. Reproduced with Keel's own unmodified example, so it is not OTTO code.
+Linux (the deploy and CI target) is unaffected; it only means the Surge API server
+cannot be smoke-tested on a Windows dev box.

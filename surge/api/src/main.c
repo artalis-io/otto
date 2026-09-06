@@ -2,42 +2,47 @@
  * Surge API Server
  *
  * REST API for VRP/PDPTW solving.
- * Uses Mongoose for HTTP serving.
+ * Uses Keel (MIT) for HTTP serving.
  *
  * Features:
  * - Rate limiting (per-IP token bucket)
- * - Work queue with backpressure
- * - Socket timeout protection
+ * - Bounded solve queue with backpressure
+ * - Read/body timeout protection
  * - Structured logging
  * - Distributed tracing
  * - Prometheus metrics
  *
  * Architecture:
- *   Each solve request is fully self-contained: JSON in → SGContext build →
- *   solve → JSON out. No shared mutable state between requests.
+ *   Each solve request is fully self-contained: JSON in -> SGContext build ->
+ *   solve -> JSON out. No shared mutable state between requests.
+ *
+ *   Solves run on a Keel thread pool. The connection is suspended via
+ *   KlAsyncOp for the duration, so the event loop keeps accepting and serving
+ *   other requests while a solve is in flight. (The previous mongoose server
+ *   blocked the event loop in sh_completion_wait(), which serialized every
+ *   request behind the running solve.)
  */
 
 #include "surge.h"
 #include "sg_api.h"
-#include "mongoose.h"
+
+#include <keel/keel.h>
+
+#include <stddef.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <signal.h>
-#include <time.h>
-#include <unistd.h>
-#include <pthread.h>
-#include <sys/time.h>
 
 /* Shared library includes */
 #include "shared.h"
-#include "sh_httpserver.h"
-#include "sh_log.h"
-#include "sh_trace.h"
-#include "sh_metrics.h"
-#include "sh_completion.h"
-#include "sh_worker_pool.h"
+#include "sh_keelserver.h"
+#include "sh_args.h"
+#include "sh_cors.h"
 #include "sh_json.h"
+#include "sh_log.h"
+#include "sh_metrics.h"
+#include "sh_ratelimit.h"
+#include "sh_trace.h"
 
 /* ============================================================================
  * Configuration
@@ -53,6 +58,12 @@ static SurgeServerConfig s_config;
 /* CORS configuration */
 static ShCorsConfig s_cors;
 
+/*
+ * Maximum accepted solve payload. Keel's default body limit is 1 MB, which is
+ * well under a realistic large VRP instance, so raise it explicitly.
+ */
+#define SURGE_MAX_BODY_SIZE (32u * 1024u * 1024u)
+
 /* ============================================================================
  * Global State
  *
@@ -60,11 +71,9 @@ static ShCorsConfig s_cors;
  *
  * Unlike Locus/Carta, Surge has no shared read-only index. Each solve
  * request creates its own SGContext, so there is no shared mutable state
- * between requests. The only shared resources are the work queue and
- * rate limiter, which are internally thread-safe.
+ * between requests. The only shared resource is the rate limiter, which is
+ * internally thread-safe.
  * ============================================================================ */
-
-static volatile sig_atomic_t s_signo = 0;
 
 /* Transport-agnostic API context */
 static SGAPIContext *s_api_ctx = NULL;
@@ -72,18 +81,40 @@ static SGAPIContext *s_api_ctx = NULL;
 /* Rate limiter instance */
 static ShRateLimiter *s_rate_limiter = NULL;
 
-/* Work queue instance */
-static ShWorkQueue *s_work_queue = NULL;
-
-/* Worker pool for solving */
-static ShWorkerPool *s_worker_pool = NULL;
-
 /* ============================================================================
- * Solve Work Item
+ * Application Context
  * ============================================================================ */
 
 typedef struct {
-    /* Request body (copied from HTTP request) */
+    KlHttpServer *server;
+    KlThreadPool *pool;
+} AppCtx;
+
+/* ============================================================================
+ * Solve Work Item
+ *
+ * OWNERSHIP / LIFETIME
+ *
+ *   work_fn     runs on a pool worker thread and touches only `body` and the
+ *               response_* fields.
+ *   done_fn     runs on the event loop thread after work_fn returns.
+ *   on_cancel   runs on the event loop thread if the connection dies while
+ *               the op is suspended.
+ *   on_deadline runs on the event loop thread when the solve budget expires.
+ *
+ * The context is freed in exactly one place: done_fn (the item ran) or
+ * cancel_fn (the item was dropped during pool shutdown before starting).
+ * on_cancel and on_deadline never free, because work_fn may still be running
+ * on a worker thread; they only set `detached`. `detached` is a plain int:
+ * every reader and writer of it runs on the event loop thread.
+ * ============================================================================ */
+
+typedef struct {
+    KlAsyncOp op;
+    AppCtx *app;
+    const KlHttpRequest *req;   /* lives inside the conn; valid while suspended */
+
+    /* Request body (copied out of the buffer reader before suspending) */
     char *body;
     size_t body_len;
 
@@ -93,26 +124,17 @@ typedef struct {
     int status_code;
     char error_msg[128];
 
-    /* Completion signaling */
-    ShCompletion completion;
-} SolveWorkItem;
+    /* 1 once the connection is gone or the deadline already replied. */
+    int detached;
 
-static void solve_work_item_init(SolveWorkItem *item) {
-    memset(item, 0, sizeof(*item));
-    item->status_code = 500;
-    sh_completion_init(&item->completion);
-}
+    ShMetricsTimer solve_timer;
+} SolveCtx;
 
-static void solve_work_item_cleanup(SolveWorkItem *item) {
-    sh_completion_cleanup(&item->completion);
-    free(item->response_json);
-    item->response_json = NULL;
-    free(item->body);
-    item->body = NULL;
-}
-
-static void signal_handler(int signo) {
-    s_signo = signo;
+static void solve_ctx_free(SolveCtx *ctx) {
+    if (!ctx) return;
+    free(ctx->response_json);
+    free(ctx->body);
+    free(ctx);
 }
 
 /* ============================================================================
@@ -157,286 +179,338 @@ static void load_surge_env(SurgeServerConfig *cfg) {
 }
 
 /* ============================================================================
- * HTTP Response Helpers
- * ============================================================================ */
-
-static const char *get_origin_from_request(struct mg_http_message *hm) {
-    struct mg_str *origin_hdr = hm ? mg_http_get_header(hm, "Origin") : NULL;
-    if (origin_hdr && origin_hdr->len > 0) {
-        static __thread char origin_buf[256];
-        size_t len = origin_hdr->len < sizeof(origin_buf) - 1 ?
-                     origin_hdr->len : sizeof(origin_buf) - 1;
-        memcpy(origin_buf, origin_hdr->buf, len);
-        origin_buf[len] = '\0';
-        return origin_buf;
-    }
-    return NULL;
-}
-
-static void get_cors_preflight_headers(struct mg_http_message *hm,
-                                       char *buf, size_t size) {
-    sh_cors_preflight_headers(&s_cors, get_origin_from_request(hm), buf, size);
-}
-
-static void send_json_cors(struct mg_connection *c, struct mg_http_message *hm,
-                           int status, const char *json) {
-    sh_mg_reply_json(c, status, &s_cors, get_origin_from_request(hm), json);
-}
-
-static void send_error_cors(struct mg_connection *c, struct mg_http_message *hm,
-                            int status, const char *message) {
-    sh_mg_reply_error(c, status, &s_cors, get_origin_from_request(hm), message);
-}
-
-/* ============================================================================
  * Solve Worker
  * ============================================================================ */
 
 /*
- * Process a solve request.
- * Called by the worker pool on a background thread.
+ * Process a solve request. Runs on a pool worker thread.
  */
-static void process_solve(SolveWorkItem *item) {
+static void process_solve(SolveCtx *ctx) {
     int status_code = 500;
     size_t out_len = 0;
 
-    char *result = sg_api_solve(item->body, item->body_len,
-                                &status_code, &out_len);
+    char *result = sg_api_solve(ctx->body, ctx->body_len, &status_code, &out_len);
 
     if (result) {
-        item->response_json = result;
-        item->response_len = out_len;
-        item->status_code = status_code;
+        ctx->response_json = result;
+        ctx->response_len = out_len;
+        ctx->status_code = status_code;
     } else {
-        item->status_code = 500;
-        snprintf(item->error_msg, sizeof(item->error_msg), "Solver internal error");
+        ctx->status_code = 500;
+        snprintf(ctx->error_msg, sizeof(ctx->error_msg), "Solver internal error");
     }
 }
 
-/*
- * Worker pool callback — dispatches solve work items.
- */
-static void solve_worker_callback(ShWorkItem *queue_item, void *ctx) {
-    (void)ctx;
+/* Worker thread: run the solve. Touches only this context. */
+static void solve_work_fn(void *user_data) {
+    process_solve((SolveCtx *)user_data);
+}
 
-    SolveWorkItem *item = (SolveWorkItem *)queue_item->user_ctx;
-    if (!item) {
-        sh_workqueue_item_free(queue_item);
-        return;
-    }
+/* Event loop thread: write the response and resume the connection. */
+static void solve_done_fn(void *user_data) {
+    SolveCtx *ctx = (SolveCtx *)user_data;
 
-    /* Check for expiry or cancellation */
-    if (sh_workqueue_item_expired(s_work_queue, queue_item) ||
-        sh_completion_is_cancelled(&item->completion)) {
-        item->status_code = 504;
-        snprintf(item->error_msg, sizeof(item->error_msg), "Request timeout");
-        sh_completion_signal(&item->completion);
-        sh_workqueue_item_free(queue_item);
-        return;
-    }
-
-    /* Measure solve time */
-    ShMetricsTimer solve_timer = sh_metrics_timer_start();
-
-    process_solve(item);
-
-    sh_metrics_timer_observe(solve_timer, "surge_solve_duration_ms",
+    sh_metrics_timer_observe(ctx->solve_timer, "surge_solve_duration_ms",
                              "endpoint:solve", NULL);
 
-    sh_completion_signal(&item->completion);
-    sh_workqueue_item_free(queue_item);
+    /* Connection already gone, or the deadline already sent a 504. */
+    if (ctx->detached) {
+        solve_ctx_free(ctx);
+        return;
+    }
+
+    KlHttpResponse *res = kl_http_conn_response(ctx->op.conn);
+
+    if (ctx->status_code >= 200 && ctx->status_code < 300) {
+        if (ctx->response_json && ctx->response_len > 0) {
+            sh_kl_reply_json(res, ctx->status_code, &s_cors, NULL,
+                             ctx->response_json);
+        } else {
+            sh_kl_reply_json(res, 200, &s_cors, NULL, "{}");
+        }
+        sh_metrics_counter_inc("http_requests_total", 1,
+                               "status:200", "endpoint:solve", NULL);
+    } else {
+        if (ctx->response_json && ctx->response_len > 0) {
+            sh_kl_reply_json(res, ctx->status_code, &s_cors, NULL,
+                             ctx->response_json);
+        } else {
+            sh_kl_reply_error(res, ctx->status_code, &s_cors, NULL,
+                              ctx->error_msg[0] ? ctx->error_msg
+                                                : "Internal error");
+        }
+        sh_metrics_counter_inc("http_requests_total", 1,
+                               "status:500", "endpoint:solve", NULL);
+    }
+
+    kl_async_complete(ctx->app->server, &ctx->op);
+    solve_ctx_free(ctx);
 }
 
 /*
- * Submit solve work via work queue and send response.
+ * Pool shutdown dropped the item before it started. No worker will ever touch
+ * this context, so it is safe to free here.
  */
-static int submit_solve_work(struct mg_connection *c, struct mg_http_message *hm,
-                             SolveWorkItem *item) {
-    ShWorkItem queue_item = {
-        .data = NULL,
-        .data_len = 0,
-        .user_ctx = item
-    };
+static void solve_cancel_fn(void *user_data) {
+    solve_ctx_free((SolveCtx *)user_data);
+}
 
-    double pressure;
-    if (!sh_workqueue_try_push(s_work_queue, &queue_item, &pressure)) {
-        send_error_cors(c, hm, 503, "Server busy, try again later");
-        return 0;
+/* Connection died while suspended. The worker may still be running. */
+static void solve_on_cancel(KlAsyncOp *op, void *user_data) {
+    (void)user_data;
+    SolveCtx *ctx = (SolveCtx *)((char *)op - offsetof(SolveCtx, op));
+    ctx->detached = 1;
+}
+
+/*
+ * Declare the send. kl_async_complete() re-arms the fd and drives the state
+ * machine, but the connection is left SUSPENDED unless on_resume says what
+ * happens next -- without this the response is never written and the client
+ * hangs. (Keel's examples/thread_pool and examples/async_thread_pool leave
+ * this a no-op and hang for exactly that reason; tests/smoke_iouring_async.c
+ * is the correct reference.)
+ */
+static void solve_on_resume(KlAsyncOp *op, void *user_data) {
+    (void)user_data;
+    SolveCtx *ctx = (SolveCtx *)((char *)op - offsetof(SolveCtx, op));
+    kl_http_request_send_response(ctx->req);
+}
+
+/*
+ * Solve budget expired. Reply 504 and resume the connection now; the worker
+ * keeps running and done_fn will free the context without touching it.
+ */
+static void solve_on_deadline(KlAsyncOp *op, void *user_data) {
+    (void)user_data;
+    SolveCtx *ctx = (SolveCtx *)((char *)op - offsetof(SolveCtx, op));
+
+    if (ctx->detached) return;
+    ctx->detached = 1;
+
+    sh_kl_reply_error(kl_http_conn_response(op->conn), 504, &s_cors, NULL,
+                      "Solve timeout");
+    sh_metrics_counter_inc("http_requests_total", 1,
+                           "status:504", "endpoint:solve", NULL);
+    SH_LOG_WARN("Solve deadline exceeded", "status", "504");
+
+    kl_async_complete(ctx->app->server, op);
+}
+
+/* ============================================================================
+ * Middleware
+ * ============================================================================ */
+
+/* Rate limit every request before routing. */
+static int mw_rate_limit(KlHttpRequest *req, KlHttpResponse *res, void *ud) {
+    (void)ud;
+
+    /* Extract or generate trace ID for this request. */
+    sh_trace_from_headers(sh_kl_trace_header_getter, req);
+
+    if (!sh_kl_check_rate_limit(req, res, s_rate_limiter, &s_cors,
+                                sh_kl_origin(req))) {
+        SH_LOG_WARN("Rate limit exceeded", "status", "429");
+        sh_metrics_counter_inc("http_requests_total", 1,
+                               "status:429", "endpoint:ratelimit", NULL);
+        sh_trace_clear();
+        return 1;  /* short-circuit */
     }
+    return 0;
+}
 
-    double timeout = s_config.server.work_queue_timeout;
-    if (!sh_completion_wait(&item->completion, (int)(timeout * 1000))) {
-        sh_completion_cancel(&item->completion);
-        send_error_cors(c, hm, 504, "Solve timeout");
-        return 0;
-    }
+/* CORS preflight. */
+static int mw_preflight(KlHttpRequest *req, KlHttpResponse *res, void *ud) {
+    (void)ud;
+    sh_kl_reply_preflight(res, &s_cors, sh_kl_origin(req));
+    sh_trace_clear();
+    return 1;  /* short-circuit */
+}
 
-    if (item->status_code >= 200 && item->status_code < 300) {
-        if (item->response_json && item->response_len > 0) {
-            send_json_cors(c, hm, item->status_code, item->response_json);
-        } else {
-            send_json_cors(c, hm, 200, "{}");
-        }
+/*
+ * Unmatched paths.
+ *
+ * Keel route patterns have no wildcard -- '*' is only special in middleware
+ * patterns -- so a catch-all route is not expressible, and an unmatched path
+ * would otherwise fall through to Keel's built-in text/plain 404, which
+ * carries no CORS headers (a browser would see an opaque CORS failure rather
+ * than a clean 404). Ask the router what it would do and answer in the same
+ * JSON+CORS shape the mongoose server used.
+ */
+static int mw_not_found(KlHttpRequest *req, KlHttpResponse *res, void *ud) {
+    AppCtx *app = (AppCtx *)ud;
+    KlHttpRoute *matched = NULL;
+    KlHttpParam params[KL_HTTP_ROUTER_MAX_PARAMS];
+    int num_params = 0;
+
+    int rc = kl_http_router_match(&app->server->router,
+                                  req->method, req->method_len,
+                                  req->path, req->path_len,
+                                  &matched, params, &num_params);
+    if (rc == 200) return 0;  /* a route will handle this */
+
+    if (rc == 405) {
+        sh_kl_reply_error(res, 405, &s_cors, sh_kl_origin(req),
+                          "Method not allowed");
+        sh_metrics_counter_inc("http_requests_total", 1,
+                               "status:405", "endpoint:unknown", NULL);
     } else {
-        if (item->response_json && item->response_len > 0) {
-            send_json_cors(c, hm, item->status_code, item->response_json);
-        } else {
-            send_error_cors(c, hm, item->status_code,
-                            item->error_msg[0] ? item->error_msg : "Internal error");
-        }
+        sh_kl_reply_error(res, 404, &s_cors, sh_kl_origin(req), "Not found");
+        sh_metrics_counter_inc("http_requests_total", 1,
+                               "status:404", "endpoint:unknown", NULL);
     }
-
-    return 1;
+    sh_trace_clear();
+    return 1;  /* short-circuit */
 }
 
 /* ============================================================================
  * Request Handlers
  * ============================================================================ */
 
-static void handle_health(struct mg_connection *c, struct mg_http_message *hm) {
-    sh_mg_handle_health(c, &s_cors, get_origin_from_request(hm),
-                        "surge", sg_version());
+static void handle_health(KlHttpRequest *req, KlHttpResponse *res, void *ud) {
+    (void)ud;
+    sh_kl_handle_health(res, &s_cors, sh_kl_origin(req), "surge", sg_version());
+    sh_metrics_counter_inc("http_requests_total", 1,
+                           "status:200", "endpoint:health", NULL);
+    sh_trace_clear();
 }
 
-static void handle_version(struct mg_connection *c, struct mg_http_message *hm) {
+static void handle_version(KlHttpRequest *req, KlHttpResponse *res, void *ud) {
+    (void)ud;
     size_t out_len;
     char *json = sg_api_version(&out_len);
     if (json) {
-        send_json_cors(c, hm, 200, json);
+        sh_kl_reply_json(res, 200, &s_cors, sh_kl_origin(req), json);
         free(json);
     } else {
-        send_error_cors(c, hm, 500, "Failed to generate version response");
+        sh_kl_reply_error(res, 500, &s_cors, sh_kl_origin(req),
+                          "Failed to generate version response");
     }
+    sh_metrics_counter_inc("http_requests_total", 1,
+                           "status:200", "endpoint:version", NULL);
+    sh_trace_clear();
 }
 
-static void handle_solve(struct mg_connection *c, struct mg_http_message *hm) {
-    /* Verify POST method */
-    if (!mg_match(hm->method, mg_str("POST"), NULL)) {
-        send_error_cors(c, hm, 405, "Method not allowed. Use POST.");
-        return;
-    }
-
-    if (hm->body.len == 0) {
-        send_error_cors(c, hm, 400, "Empty request body");
-        return;
-    }
-
-    /* Use work queue if enabled */
-    if (s_work_queue) {
-        SolveWorkItem item;
-        solve_work_item_init(&item);
-
-        /* Copy body for worker thread */
-        item.body = malloc(hm->body.len + 1);
-        if (!item.body) {
-            solve_work_item_cleanup(&item);
-            send_error_cors(c, hm, 500, "Out of memory");
-            return;
-        }
-        memcpy(item.body, hm->body.buf, hm->body.len);
-        item.body[hm->body.len] = '\0';
-        item.body_len = hm->body.len;
-
-        submit_solve_work(c, hm, &item);
-        solve_work_item_cleanup(&item);
-        return;
-    }
-
-    /* Fallback: direct execution (work queue disabled) */
-    int status_code = 500;
-    size_t out_len = 0;
-    char *result = sg_api_solve(hm->body.buf, hm->body.len,
-                                &status_code, &out_len);
-
-    if (result) {
-        send_json_cors(c, hm, status_code, result);
-        free(result);
-    } else {
-        send_error_cors(c, hm, 500, "Solver internal error");
-    }
-}
-
-static void handle_stats(struct mg_connection *c, struct mg_http_message *hm) {
-    SGAPIRequest req = { .path = "/api/v1/stats" };
+static void handle_stats(KlHttpRequest *req, KlHttpResponse *res, void *ud) {
+    (void)ud;
+    SGAPIRequest api_req = { .path = "/api/v1/stats" };
     SGAPIResponse resp = {0};
 
-    if (sg_api_handle(s_api_ctx, &req, &resp) == 0 && resp.body) {
-        send_json_cors(c, hm, resp.status_code, resp.body);
+    if (sg_api_handle(s_api_ctx, &api_req, &resp) == 0 && resp.body) {
+        sh_kl_reply_json(res, resp.status_code, &s_cors, sh_kl_origin(req),
+                         resp.body);
     } else {
-        send_error_cors(c, hm, 500, "Failed to generate stats response");
+        sh_kl_reply_error(res, 500, &s_cors, sh_kl_origin(req),
+                          "Failed to generate stats response");
     }
     sg_api_response_free(&resp);
+
+    sh_metrics_counter_inc("http_requests_total", 1,
+                           "status:200", "endpoint:stats", NULL);
+    sh_trace_clear();
 }
 
-static void handle_metrics(struct mg_connection *c) {
-    sh_mg_handle_metrics(c);
+static void handle_metrics(KlHttpRequest *req, KlHttpResponse *res, void *ud) {
+    (void)req; (void)ud;
+    sh_kl_handle_metrics(res);
+    sh_trace_clear();
+}
+
+static void handle_solve(KlHttpRequest *req, KlHttpResponse *res, void *ud) {
+    AppCtx *app = (AppCtx *)ud;
+    const char *origin = sh_kl_origin(req);
+
+    /* Registered for "*" so a non-POST gets 405 rather than the catch-all 404. */
+    if (req->method_len != 4 || memcmp(req->method, "POST", 4) != 0) {
+        sh_kl_reply_error(res, 405, &s_cors, origin,
+                          "Method not allowed. Use POST.");
+        sh_trace_clear();
+        return;
+    }
+
+    KlHttpBufReader *br = (KlHttpBufReader *)req->body_reader;
+    if (!br || br->len == 0) {
+        sh_kl_reply_error(res, 400, &s_cors, origin, "Empty request body");
+        sh_trace_clear();
+        return;
+    }
+
+    SolveCtx *ctx = calloc(1, sizeof(*ctx));
+    if (!ctx) {
+        sh_kl_reply_error(res, 500, &s_cors, origin, "Out of memory");
+        sh_trace_clear();
+        return;
+    }
+
+    /*
+     * Copy the body: br->data belongs to the connection and is recycled once
+     * the response is sent, but the worker reads it afterwards.
+     */
+    ctx->body = malloc(br->len + 1);
+    if (!ctx->body) {
+        free(ctx);
+        sh_kl_reply_error(res, 500, &s_cors, origin, "Out of memory");
+        sh_trace_clear();
+        return;
+    }
+    memcpy(ctx->body, br->data, br->len);
+    ctx->body[br->len] = '\0';
+    ctx->body_len = br->len;
+
+    ctx->app = app;
+    ctx->req = req;
+    ctx->status_code = 500;
+    ctx->solve_timer = sh_metrics_timer_start();
+
+    ctx->op.on_resume = solve_on_resume;
+    ctx->op.on_cancel = solve_on_cancel;
+    ctx->op.on_deadline = solve_on_deadline;
+    if (s_config.server.work_queue_timeout > 0.0) {
+        ctx->op.deadline_ms = kl_monotonic_ms() +
+            (uint64_t)(s_config.server.work_queue_timeout * 1000.0);
+    }
+
+    if (kl_async_suspend(app->server, kl_http_request_conn(req), &ctx->op) < 0) {
+        solve_ctx_free(ctx);
+        sh_kl_reply_error(res, 500, &s_cors, origin, "Failed to suspend request");
+        sh_trace_clear();
+        return;
+    }
+
+    KlWorkItem item = {
+        .work_fn   = solve_work_fn,
+        .done_fn   = solve_done_fn,
+        .cancel_fn = solve_cancel_fn,
+        .user_data = ctx,
+    };
+
+    if (kl_thread_pool_submit(app->pool, &item) < 0) {
+        /* Queue full: backpressure, same 503 the old work queue returned. */
+        ctx->detached = 1;
+        sh_kl_reply_error(res, 503, &s_cors, origin,
+                          "Server busy, try again later");
+        sh_metrics_counter_inc("http_requests_total", 1,
+                               "status:503", "endpoint:solve", NULL);
+        kl_async_complete(app->server, &ctx->op);
+        solve_ctx_free(ctx);
+    }
+
+    sh_trace_clear();
 }
 
 /* ============================================================================
- * Request Router
+ * Body Reader
  * ============================================================================ */
 
-static void handle_request(struct mg_connection *c, int ev, void *ev_data) {
-    if (ev == MG_EV_ACCEPT) {
-        sh_mg_set_write_timeout(c, 5000);
-        return;
-    }
-
-    if (ev == MG_EV_HTTP_MSG) {
-        struct mg_http_message *hm = (struct mg_http_message *)ev_data;
-        ShMetricsTimer req_timer = sh_metrics_timer_start();
-
-        /* Extract or generate trace ID */
-        sh_trace_from_headers(sh_mg_trace_header_getter, hm);
-
-        /* Rate limiting */
-        if (!sh_mg_check_rate_limit(c, s_rate_limiter, &s_cors,
-                                    get_origin_from_request(hm))) {
-            SH_LOG_WARN("Rate limit exceeded", "status", "429");
-            sh_metrics_counter_inc("http_requests_total", 1,
-                                   "status:429", "endpoint:ratelimit", NULL);
-            sh_trace_clear();
-            return;
-        }
-
-        /* CORS preflight */
-        if (mg_match(hm->method, mg_str("OPTIONS"), NULL)) {
-            char cors_headers[512];
-            get_cors_preflight_headers(hm, cors_headers, sizeof(cors_headers));
-            mg_http_reply(c, 204, cors_headers, "");
-            sh_trace_clear();
-            return;
-        }
-
-        /* Route requests */
-        if (mg_match(hm->uri, mg_str("/api/v1/health"), NULL)) {
-            handle_health(c, hm);
-            sh_metrics_counter_inc("http_requests_total", 1,
-                                   "status:200", "endpoint:health", NULL);
-        } else if (mg_match(hm->uri, mg_str("/api/v1/version"), NULL)) {
-            handle_version(c, hm);
-            sh_metrics_counter_inc("http_requests_total", 1,
-                                   "status:200", "endpoint:version", NULL);
-        } else if (mg_match(hm->uri, mg_str("/api/v1/stats"), NULL)) {
-            handle_stats(c, hm);
-            sh_metrics_counter_inc("http_requests_total", 1,
-                                   "status:200", "endpoint:stats", NULL);
-        } else if (mg_match(hm->uri, mg_str("/api/v1/solve"), NULL)) {
-            handle_solve(c, hm);
-            sh_metrics_timer_observe(req_timer, "http_request_duration_ms",
-                                     "endpoint:solve", NULL);
-            sh_metrics_counter_inc("http_requests_total", 1,
-                                   "status:200", "endpoint:solve", NULL);
-        } else if (mg_match(hm->uri, mg_str("/metrics"), NULL)) {
-            handle_metrics(c);
-        } else {
-            send_error_cors(c, hm, 404, "Not found");
-            sh_metrics_counter_inc("http_requests_total", 1,
-                                   "status:404", "endpoint:unknown", NULL);
-        }
-
-        sh_trace_clear();
-    }
+/*
+ * kl_http_body_reader_buffer() reads its max_size from the route's user_data,
+ * which we need for the app context. Wrap it so the cap stays explicit.
+ */
+static KlHttpBodyReader *solve_body_reader(KlAllocator *alloc,
+                                           const KlHttpRequest *req,
+                                           void *user_data) {
+    (void)user_data;
+    return kl_http_body_reader_buffer(alloc, req,
+                                      (void *)(size_t)SURGE_MAX_BODY_SIZE);
 }
 
 /* ============================================================================
@@ -519,35 +593,6 @@ int main(int argc, char *argv[]) {
         printf("Rate limit: disabled\n");
     }
 
-    /* Initialize work queue and worker pool */
-    if (s_config.server.work_queue_enabled) {
-        s_work_queue = sh_workqueue_create(s_config.server.work_queue_depth,
-                                           s_config.server.work_queue_timeout);
-        if (s_work_queue) {
-            ShWorkerPoolConfig pool_cfg = {
-                .queue = s_work_queue,
-                .callback = solve_worker_callback,
-                .ctx = NULL,
-                .poll_timeout_ms = 100
-            };
-            s_worker_pool = sh_worker_pool_create(s_config.num_workers, &pool_cfg);
-            if (s_worker_pool) {
-                printf("Work queue: depth %zu, timeout %.1fs, %d workers\n",
-                       s_config.server.work_queue_depth,
-                       s_config.server.work_queue_timeout,
-                       sh_worker_pool_size(s_worker_pool));
-            } else {
-                fprintf(stderr, "Warning: Failed to create worker pool\n");
-                sh_workqueue_free(s_work_queue);
-                s_work_queue = NULL;
-            }
-        } else {
-            fprintf(stderr, "Warning: Failed to create work queue\n");
-        }
-    } else {
-        printf("Work queue: disabled\n");
-    }
-
     /* Initialize metrics */
     ShMetricsConfig metrics_cfg = SH_METRICS_CONFIG_DEFAULT;
     metrics_cfg.service = "surge";
@@ -561,69 +606,87 @@ int main(int argc, char *argv[]) {
         }
     }
 
-    SH_LOG_INFO("Server initializing",
-                "port", s_config.server.host);
+    /* Initialize HTTP server */
+    KlHttpServer server;
+    KlHttpServerConfig http_cfg = {
+        .port = s_config.server.port,
+        .install_signal_handlers = 1,
+        .max_body_size = SURGE_MAX_BODY_SIZE,
+        .drain_timeout_ms = 5000,
+    };
 
-    /* Setup signal handlers */
-    signal(SIGINT, signal_handler);
-    signal(SIGTERM, signal_handler);
-
-    /* Start HTTP server */
-    struct mg_mgr mgr;
-    mg_mgr_init(&mgr);
-
-    char listen_addr[SH_URL_MAX];
-    snprintf(listen_addr, sizeof(listen_addr), "http://%s:%d",
-             s_config.server.host, s_config.server.port);
-
-    struct mg_connection *conn = mg_http_listen(&mgr, listen_addr,
-                                                handle_request, NULL);
-    if (!conn) {
-        fprintf(stderr, "Error: Failed to listen on %s\n", listen_addr);
-        if (s_worker_pool) {
-            sh_worker_pool_stop(s_worker_pool);
-            sh_worker_pool_join(s_worker_pool);
-            sh_worker_pool_free(s_worker_pool);
-        }
-        sh_workqueue_free(s_work_queue);
-        sh_ratelimit_free(s_rate_limiter);
+    if (kl_http_server_init(&server, &http_cfg) < 0) {
+        fprintf(stderr, "Error: Failed to initialize HTTP server on port %d\n",
+                s_config.server.port);
+        sg_api_free(s_api_ctx);
         return 1;
     }
 
-    printf("\nSurge VRP Solver Server v%s\n", sg_version());
-    printf("Listening on http://%s:%d\n",
-           s_config.server.host, s_config.server.port);
-    printf("\nEndpoints:\n");
-    printf("  POST /api/v1/solve     - Solve VRP problem\n");
+    /*
+     * Solve thread pool. queue_capacity provides the same backpressure the old
+     * ShWorkQueue did; a full queue yields 503.
+     */
+    KlThreadPoolConfig pool_cfg = {
+        .num_workers = s_config.num_workers,
+        .queue_capacity = (int)s_config.server.work_queue_depth,
+    };
+    KlThreadPool *pool = kl_thread_pool_create(kl_http_server_event_ctx(&server),
+                                               &pool_cfg);
+    if (!pool) {
+        fprintf(stderr, "Error: Failed to create solve thread pool\n");
+        kl_http_server_free(&server);
+        sg_api_free(s_api_ctx);
+        return 1;
+    }
+    printf("Solve pool: queue depth %zu, timeout %.1fs, %d workers\n",
+           s_config.server.work_queue_depth,
+           s_config.server.work_queue_timeout,
+           s_config.num_workers);
+
+    AppCtx app = { .server = &server, .pool = pool };
+
+    /* Routes. */
+    kl_http_server_route(&server, "GET", "/api/v1/health",  handle_health,  NULL, NULL);
+    kl_http_server_route(&server, "GET", "/api/v1/version", handle_version, NULL, NULL);
+    kl_http_server_route(&server, "GET", "/api/v1/stats",   handle_stats,   NULL, NULL);
+    kl_http_server_route(&server, "*",   "/api/v1/solve",   handle_solve,   &app,
+                         solve_body_reader);
+    kl_http_server_route(&server, "GET", "/metrics",        handle_metrics, NULL, NULL);
+
+    /*
+     * Middleware runs in registration order, before routing. mw_not_found must
+     * come last: it short-circuits anything the route table would not match.
+     */
+    kl_http_server_use(&server, "*", "/*", mw_rate_limit, NULL);
+    kl_http_server_use(&server, "OPTIONS", "/*", mw_preflight, NULL);
+    kl_http_server_use(&server, "*", "/*", mw_not_found, &app);
+
+    /*
+     * sh_log reads every field value with va_arg(..., const char *), so the
+     * value must be a string -- passing the int port here dereferenced it as
+     * a pointer and crashed on startup.
+     */
+    char port_str[16];
+    snprintf(port_str, sizeof(port_str), "%d", s_config.server.port);
+    SH_LOG_INFO("Server starting", "port", port_str);
+
+    printf("\nSurge VRP Solver Server\n");
+    printf("Listening on http://0.0.0.0:%d\n\n", s_config.server.port);
+    printf("Endpoints:\n");
     printf("  GET  /api/v1/health    - Health check\n");
     printf("  GET  /api/v1/version   - Version info\n");
+    printf("  POST /api/v1/solve     - Solve VRP/PDPTW\n");
     printf("  GET  /api/v1/stats     - Statistics\n");
     printf("  GET  /metrics          - Prometheus metrics\n");
     printf("\nPress Ctrl+C to stop.\n\n");
 
-    /* Event loop */
-    while (s_signo == 0) {
-        mg_mgr_poll(&mgr, 100);
-    }
+    /* Event loop: blocks until SIGINT/SIGTERM. */
+    kl_http_server_run(&server);
 
     printf("\nShutting down...\n");
 
-    /* Shutdown worker pool first */
-    if (s_worker_pool) {
-        sh_worker_pool_stop(s_worker_pool);
-        sh_worker_pool_join(s_worker_pool);
-    }
-
-    /* Print work queue stats */
-    if (s_work_queue) {
-        ShWorkQueueStats wq_stats;
-        sh_workqueue_stats(s_work_queue, &wq_stats);
-        printf("Work queue: %lu pushed, %lu popped, %lu dropped, %lu expired\n",
-               (unsigned long)wq_stats.total_pushed,
-               (unsigned long)wq_stats.total_popped,
-               (unsigned long)wq_stats.total_dropped,
-               (unsigned long)wq_stats.total_expired);
-    }
+    /* Pool first: drains in-flight solves, fires cancel_fn for queued ones. */
+    kl_thread_pool_free(pool);
 
     /* Print rate limiter stats */
     if (s_rate_limiter) {
@@ -635,9 +698,7 @@ int main(int argc, char *argv[]) {
     }
 
     /* Cleanup */
-    mg_mgr_free(&mgr);
-    sh_worker_pool_free(s_worker_pool);
-    sh_workqueue_free(s_work_queue);
+    kl_http_server_free(&server);
     sh_ratelimit_free(s_rate_limiter);
     sg_api_free(s_api_ctx);
 

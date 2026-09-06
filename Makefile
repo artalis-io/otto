@@ -20,7 +20,7 @@
 #   docs/         - Architecture documentation
 
 .PHONY: all lib clean test help
-.PHONY: ralph fuelwise velo carta locus shared arbor surge
+.PHONY: ralph fuelwise velo carta locus shared arbor surge surge-api
 .PHONY: fuelwise-api carta-api velo-api
 .PHONY: wasm wasm-fuelwise wasm-velo wasm-carta wasm-locus wasm-types wasm-test wasm-api-demos
 .PHONY: fuelwise-ui fuelwise-ui-dev carta-ui carta-ui-dev clay-map clay-map-serve site-build site-serve
@@ -106,6 +106,10 @@ locus-api:
 # Ralph LP/MIP solver server (api/Makefile handles deps)
 ralph-api:
 	$(MAKE) -C ralph/api
+
+# Surge VRP/PDPTW solver server (Keel-backed; api/Makefile handles deps)
+surge-api:
+	$(MAKE) -C surge/api
 
 # Run servers
 run-fuelwise-api: fuelwise-api
