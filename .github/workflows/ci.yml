@@ -173,6 +173,33 @@ jobs:
       - name: Test FuelWise API
         run: make -C fuelwise/api test
 
+  # TEMPORARY diagnostic: does Keel rc.3 async work on Linux, using Keel's
+  # OWN unmodified example? Remove once answered.
+  keel-async-probe:
+    name: Keel async probe (temporary)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - name: Build Keel + example
+        run: |
+          make -C vendor/keel
+          make -C vendor/keel examples
+      - name: Probe sync vs async
+        run: |
+          ./vendor/keel/examples/async_thread_pool &
+          sleep 2
+          echo "--- sync route / ---"
+          curl -s -m 10 -o /dev/null -w "sync:  code=%{http_code} time=%{time_total}
+" http://127.0.0.1:8080/ || echo "sync FAILED"
+          echo "--- async route /fast ---"
+          curl -s -m 10 -o /dev/null -w "async: code=%{http_code} time=%{time_total}
+" http://127.0.0.1:8080/fast || echo "async FAILED (timeout)"
+          echo "--- async route /slow ---"
+          curl -s -m 10 -o /dev/null -w "async: code=%{http_code} time=%{time_total}
+" http://127.0.0.1:8080/slow || echo "async FAILED (timeout)"
+
   # ==========================================================================
   # Build and test API servers
   # ==========================================================================
