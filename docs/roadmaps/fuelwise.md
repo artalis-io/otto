@@ -2039,47 +2039,69 @@ unsublicensable for the commercial tier; Keel is MIT.
 
 ### Shape of the port
 
-FuelWise is Surge-shaped, so it follows the same pattern:
+A **transport swap only**. `ShWorkQueue` + `ShWorkerPool` + `ShCompletion` are
+kept exactly as the mongoose server used them, including the
+`sh_completion_wait()` on the event loop thread. Behaviour, response shapes and
+`/api/v1/stats` counters are unchanged.
 
-- `ShWorkQueue` + `ShWorkerPool` + `ShCompletion` → `KlThreadPool` + `KlAsyncOp`.
-  The old handler called `sh_completion_wait()` on the event loop thread, so
-  every request serialized behind the running solve. The loop is now free while
-  a solve is in flight.
-- Same `SolveCtx` ownership rules as Surge: freed only in `done_fn` or
-  `cancel_fn`; `on_cancel`/`on_deadline` only set `detached`, because a worker
-  may still be running.
-- `sh_mg_*` → `sh_kl_*` (`shared/src/sh_keelserver.c`).
+- `sh_mg_*` → `sh_kl_*` (`shared/src/sh_keelserver.c`). FuelWise is the first
+  module to exercise those helpers end to end; Ralph needed none of them.
 - `mw_not_found` answers 404/405 via `kl_http_router_match()`, since Keel route
   patterns have no wildcard and its built-in 404 carries no CORS headers.
 - Rate-limit exemptions (`/api/v1/health`, `/api/v1/stats`, `/metrics`) are
   checked inside the middleware: middleware patterns support a trailing
   slash-star prefix but not alternation.
 
-### Work-queue statistics
-
-`/api/v1/stats` publishes `work_queue` counters that `test_api.sh` asserts on
-(`capacity`, `timeout_sec`, `enabled`). `KlThreadPool` exposes no statistics,
-so `FWQueueStats` tracks `pushed` / `popped` / `dropped` / `expired` and the
-JSON keys are unchanged. Every counter is touched only on the event loop
-thread (submit, `done_fn`, `on_deadline`, and the stats handler all run
-there), so plain integers are sufficient.
-
-`--queue-off` keeps the old synchronous path: no pool is created, solves run
-inline, and stats report `"enabled": false`.
-
 ### Fixed in passing
 
-The mongoose handler leaked `work->request_path` on the queue-full (503) path
-— it freed `request_body` and the item but not the `strdup`'d path. The
-restructured code has a single `solve_ctx_free()` that releases everything.
+The mongoose handler leaked `work->request_path` on the queue-full (503) path —
+it freed `request_body` and the item but not the `strdup`'d path. There is now
+a single `solve_work_item_free()` that releases everything.
+
+### Open: Keel async suspend/resume
+
+The obvious follow-up is to replace the work queue with `KlAsyncOp` +
+`KlThreadPool` so the event loop stays free during a solve (the current
+`sh_completion_wait()` serializes requests — a limitation inherited from the
+mongoose server, not introduced here).
+
+That was implemented first and reverted, because the suspended connection never
+resumed and clients hung. What we measured on v3.0.0-rc.3, using **Keel's own
+unmodified examples**, no OTTO code involved:
+
+| Environment | `make -C vendor/keel test` | sync route | async route |
+|---|---|---|---|
+| Linux / epoll (ubuntu-latest) | **passes** | `200` in 0.28 ms | `000` — times out |
+| Windows / WSAPoll | — | `200` | hangs |
+| Windows / IOCP | — | `200` | no valid response |
+
+Reproduce (`examples/thread_pool` and `examples/async_thread_pool` behave the
+same):
+
+```bash
+make -C vendor/keel && make -C vendor/keel examples
+./vendor/keel/examples/thread_pool &
+curl -m 8 localhost:8080/        # 200, immediate
+curl -m 8 localhost:8080/query   # times out
+```
+
+Note Keel's own test suite passes in the same job, so whatever this is, its
+unit tests do not cover the live server + thread pool + resume path.
+**Unresolved with upstream** — if it turns out to be a usage or build
+requirement on our side rather than a defect, switching over touches only
+`handle_via_queue()` and `main()`.
+
+The same applies to Surge (Phase 1), which *did* land on `KlAsyncOp`; its CI
+only builds the API and never issues a request, so this would not have been
+caught there.
 
 ### Pre-existing issue found while verifying (NOT fixed here)
 
 `fuelwise-api --help` **exits 1**. `main()` treats any negative return from
 `sh_args_parse()` as an error, but `-2` means "help was requested"; Ralph gets
 this right with `if (arg_index == -2) { print_usage(...); return 0; }`. The
-`-h`/`--help` loop later in `main()` is unreachable for that reason. Left
-alone because it is an exit-code behaviour change; it is why the CI job has no
+`-h`/`--help` loop later in `main()` is unreachable as a result. Left alone
+because it is an exit-code behaviour change; it is why the CI job has no
 `--help` smoke check, unlike Surge and Ralph.
 
 ### Remaining
