@@ -21,7 +21,7 @@ DEBUG_CFLAGS = -Wall -Wextra -g -O0 -std=c11 -D_POSIX_C_SOURCE=200809L -DDEBUG \
 DEBUG_LDFLAGS = -fsanitize=address,undefined
 
 # Include paths
-INCLUDES = -I../include -I../../shared/include -I../../vendor/mongoose -I../../vendor/miniz -Isrc
+INCLUDES = -I../include -I../../shared/include -I$(KEEL_DIR)/include -I../../vendor/miniz -Isrc
 
 # Shared library path
 SHARED_DIR = ../../shared
@@ -33,11 +33,12 @@ LDFLAGS = -L.. -lvelo -L$(SHARED_DIR) -lshared -lm -lpthread
 SRCS = src/main.c
 OBJS = $(SRCS:src/%.c=build/%.o)
 
-# Mongoose object (shared)
-MONGOOSE_OBJ = ../../vendor/mongoose/mongoose.o
+# Keel static library (vendored git submodule, MIT)
+KEEL_DIR = ../../vendor/keel
+KEEL_LIB = $(KEEL_DIR)/libkeel.a
 
-# Shared HTTP server (requires mongoose, compiled here not in libshared)
-HTTPSERVER_OBJ = build/sh_httpserver.o
+# Shared Keel HTTP helpers (need Keel headers, so not in libshared)
+KEELSERVER_OBJ = build/sh_keelserver.o
 
 TARGET = velo-route-server
 
@@ -45,21 +46,27 @@ TARGET = velo-route-server
 
 all: deps $(TARGET)
 
-deps:
+deps: $(KEEL_LIB)
 	$(MAKE) -C .. NOMP=1 lib
 	$(MAKE) -C $(SHARED_DIR) lib
-	@if [ ! -f $(MONGOOSE_OBJ) ]; then \
-		$(CC) -c ../../vendor/mongoose/mongoose.c -o $(MONGOOSE_OBJ); \
-	fi
 
-$(TARGET): $(OBJS) $(HTTPSERVER_OBJ)
-	$(CC) $(CFLAGS) -o $@ $(OBJS) $(HTTPSERVER_OBJ) $(MONGOOSE_OBJ) $(LDFLAGS)
+# Build vendored Keel. Core only (no mbedTLS/nghttp2 integrations), so
+# this needs no external libraries.
+$(KEEL_LIB):
+	@if [ ! -f $(KEEL_DIR)/Makefile ]; then \
+		echo "vendor/keel is empty - run: git submodule update --init vendor/keel"; \
+		exit 1; \
+	fi
+	$(MAKE) -C $(KEEL_DIR) CC=$(CC)
+
+$(TARGET): $(OBJS) $(KEELSERVER_OBJ) $(KEEL_LIB)
+	$(CC) $(CFLAGS) -o $@ $(OBJS) $(KEELSERVER_OBJ) $(KEEL_LIB) $(LDFLAGS)
 
 build/%.o: src/%.c | build
 	$(CC) $(CFLAGS) $(INCLUDES) -c $< -o $@
 
-# Compile shared HTTP server (requires mongoose includes)
-$(HTTPSERVER_OBJ): $(SHARED_DIR)/src/sh_httpserver.c | build
+# Compile shared Keel HTTP helpers (require Keel includes)
+$(KEELSERVER_OBJ): $(SHARED_DIR)/src/sh_keelserver.c | build
 	$(CC) $(CFLAGS) $(INCLUDES) -c $< -o $@
 
 build:

@@ -742,3 +742,70 @@ GET /api/v1/route?from=...&to=...&profile=truck
 - [ ] PTV DDS data successfully ingested
 - [ ] Routes validated against known truck GPS traces
 - [ ] API accepts truck dimensions
+
+## Keel Migration (Mongoose Removal) — Phase 4 of 6
+
+**Completed for Velo.** `velo/api` no longer links Mongoose.
+
+Rationale and shared context: `docs/roadmaps/surge.md` (Phase 1). Mongoose is
+`GPL-2.0-only or commercial`, incompatible with OTTO's AGPL-3.0 and
+unsublicensable for the commercial tier; Keel is MIT.
+
+### The largest port so far
+
+Velo had 100 `mg_` call sites — and unlike Surge, Ralph and FuelWise it used
+Mongoose for *parsing*, not just transport:
+
+| Mongoose | Replacement |
+|----------|-------------|
+| `mg_http_var(query, "k")` | `sh_query_get_str()` (`shared/include/sh_query.h`) |
+| `mg_json_get_str(body, "$.k")` | `sh_json_parse()` + `sh_json_get_path()` + `sh_json_as_string()` |
+| `mg_json_get_bool(body, "$.k", &b)` | `sh_json_as_bool()` |
+| `mg_match(str, mg_str("x"), NULL)` | `strcmp()` |
+| `struct mg_str` params | `const char *` |
+
+All replacements are existing OTTO shared code, so nothing new was written for
+this and the parsing became transport-agnostic in the process. The JSON body is
+parsed into a scratch `SHArena` that is released before the handler returns.
+
+### Async
+
+`ShWorkQueue` + `ShWorkerPool` + `ShCompletion` give way to `KlThreadPool` +
+`KlAsyncOp`, matching Surge and FuelWise, with the same `RouteCtx` ownership
+rules and the `on_resume` fix (see `docs/roadmaps/fuelwise.md` for why that is
+required). The worker now does route + polyline encode + JSON render and hands
+back a finished response string, so the event loop is free for the whole solve
+rather than blocking in `sh_completion_wait()`.
+
+`/api/v1/stats` keeps its `work_queue` shape; `KlThreadPool` exposes no
+statistics, so `VeloQueueStats` tracks pushed/popped/dropped/expired, all
+touched only on the event loop thread.
+
+### Verification
+
+Velo needs an OSM graph to start, which is why CI was build + `--help` only.
+That is fixed: `make data/monaco.vlg` already knew how to fetch Monaco (~700KB)
+and build the index, so `velo/api/test_api.sh` now starts the server against it
+and exercises the endpoints, gated in CI (exits non-zero on failure).
+
+Verified by hand against `data/monaco.vlg` (7,334 nodes / 11,826 edges):
+
+| Check | Result |
+|---|---|
+| `GET /route` query string | `"status":"ok"`, 2.4km / 170s, polyline returned |
+| `POST /route` JSON body | truck + `mode:shortest` honoured, 2.3km / 190s |
+| `geometry=false` / `"geometry":false` | geometry key omitted (both GET and POST) |
+| Missing / invalid / out-of-bounds coords | 400 with the expected messages |
+| Malformed JSON body | `{"error":"Invalid JSON body"}` |
+| Unknown path / wrong method / preflight | 404 / 405 / 204 |
+| Async dispatch | `pushed`/`popped` counters advance; 5 concurrent routes ~1ms each, health 0.78ms during |
+
+GET and POST were cross-checked on the same inputs: `foot`+`shortest` returns
+"No route found" on both, confirming the JSON path and the query path agree
+rather than one silently mis-parsing.
+
+### Remaining
+
+Locus (63 `mg_` call sites), Carta (56), plus
+`shared/src/sh_httpserver.c` (41). Delete that file and `vendor/mongoose/`
+once the last server is ported.
