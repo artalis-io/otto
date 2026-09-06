@@ -547,15 +547,24 @@ int main(int argc, char *argv[]) {
     sh_args_load_env(&s_config, SH_API_FUELWISE);
 
     /* Parse command line (overrides env) */
+    /*
+     * sh_args_parse() returns -2 for --help and -1 for a parse error.
+     * Treating both as an error made --help exit 1 and left the -h/--help
+     * loop below unreachable.
+     */
     int first_arg = sh_args_parse(&s_config, argc, argv);
+    if (first_arg == -2) {
+        print_usage(argv[0]);
+        return 0;
+    }
     if (first_arg < 0) {
         print_usage(argv[0]);
         return 1;
     }
 
-    /* Check for help flag */
+    /* -h is not handled by sh_args_parse */
     for (int i = 1; i < argc; i++) {
-        if (strcmp(argv[i], "-h") == 0 || strcmp(argv[i], "--help") == 0) {
+        if (strcmp(argv[i], "-h") == 0) {
             print_usage(argv[0]);
             return 0;
         }
