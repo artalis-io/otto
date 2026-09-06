@@ -338,23 +338,34 @@ Ralph needs **no** `sh_keelserver.c` helpers — it uses neither `sh_cors`,
 synchronous, so no `KlAsyncOp`/`KlThreadPool` wiring either. This made it the
 cheapest second module.
 
-### Two pre-existing issues found while verifying (NOT fixed here)
+### Two pre-existing issues found while verifying — now fixed
 
-Both predate this migration and are independent of transport.
+**1. The API test could not fail.** The `test:` target echoed `PASS`/`FAIL` and
+ended with `kill`, never exiting non-zero, so `make -C ralph/api test` was green
+regardless of what the assertions found. Replaced with
+`ralph/api/test_api.sh`, which starts the server itself and exits non-zero on
+failure. CI runs the script directly.
 
-**1. Status-case mismatch.** `ralph/src/ralph_api.c:140` returns lowercase
-`"optimal"`, but `ralph/api/Makefile`'s test greps for `'"status":"OPTIMAL"'`
-and prints `FAIL: Solve endpoint`. Surge was moved to uppercase in
-`fix(surge): uppercase API status strings per OTTO convention`; Ralph was not.
-So Ralph is inconsistent with both its own test and the stated convention.
-Fixing it is a client-visible API change and wants an explicit decision.
+**2. The status-case mismatch was in the test, not the API.**
 
-**2. The API test cannot fail.** The `test:` target echoes `PASS`/`FAIL` and
-ends with `kill`, never exiting non-zero — so `make -C ralph/api test` is
-green in CI regardless of what the assertions actually found. That is why (1)
-has gone unnoticed.
+An earlier note here claimed Ralph should be uppercased to match Surge. That
+was wrong. Ralph's HTTP and WASM APIs are **documented as lowercase** —
+`ralph/api/CLAUDE.md` and `ralph/wasm/CLAUDE.md` both show
+`"status": "optimal"` — and `status_to_json()` carries an explicit
+`lowercase for JSON` comment. The old Makefile target grepped for
+`"status":"OPTIMAL"`, which never matched, which is why it printed
+`FAIL: Solve endpoint` while returning the correct answer.
 
-Recommended order: decide (1), then make the test strict so it can gate.
+The new suite asserts the documented lowercase form. **No API behaviour
+changed.**
+
+Note the C library is a separate surface and does use uppercase
+(`ralph_netflow_status_string()` returns `"OPTIMAL"`, and `ralph/tests/` assert
+that). Library-uppercase / JSON-lowercase is a deliberate split, not a bug.
+
+That said, JSON status case is inconsistent *across modules*: Ralph is
+lowercase while FuelWise and Surge are uppercase. Worth settling one way, but
+it is an API-contract decision touching documented behaviour, not a cleanup.
 
 ### Remaining
 
