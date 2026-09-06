@@ -38,11 +38,6 @@ jobs:
           make shared
           make test-shared
 
-      - name: Build and test Arbor
-        run: |
-          make arbor
-          make test-arbor
-
       - name: Build and test Ralph
         run: |
           make ralph
@@ -77,10 +72,43 @@ jobs:
           make locus
           make test-locus
 
+  # ==========================================================================
+  # Arbor + Surge (Keel-backed API)
+  #
+  # Deliberately a standalone job with no `needs:`. These ran nowhere before,
+  # and folding them into test-c would mean an unrelated failure earlier in
+  # that sequential job silently skips them.
+  # ==========================================================================
+  test-surge:
+    name: Test Arbor + Surge
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential libomp-dev
+
+      - name: Build and test Arbor
+        run: |
+          make arbor
+          make test-arbor
+
       - name: Build and test Surge
         run: |
           make surge
           make test-surge
+
+      # Surge API is served by Keel (vendor/keel submodule), not mongoose
+      - name: Build Surge API
+        run: |
+          make surge-api
+          ./surge/api/surge-solver --help > /dev/null
 
   # ==========================================================================
   # Build and test API servers
@@ -124,12 +152,6 @@ jobs:
         run: |
           make locus-api
           ./locus/api/locus-geocoder --help > /dev/null
-
-      # Surge API is served by Keel (vendor/keel submodule), not mongoose
-      - name: Build Surge API
-        run: |
-          make surge-api
-          ./surge/api/surge-solver --help > /dev/null
 
   # ==========================================================================
   # Build WebAssembly
