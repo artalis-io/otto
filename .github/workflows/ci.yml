@@ -191,14 +191,12 @@ jobs:
           ./vendor/keel/examples/async_thread_pool &
           sleep 2
           echo "--- sync route / ---"
-          curl -s -m 10 -o /dev/null -w "sync:  code=%{http_code} time=%{time_total}
-" http://127.0.0.1:8080/ || echo "sync FAILED"
+          curl -s -m 10 -o /dev/null -w "sync code=%{http_code} time=%{time_total} " http://127.0.0.1:8080/ && echo OK || echo "sync FAILED"
           echo "--- async route /fast ---"
-          curl -s -m 10 -o /dev/null -w "async: code=%{http_code} time=%{time_total}
-" http://127.0.0.1:8080/fast || echo "async FAILED (timeout)"
+          curl -s -m 10 -o /dev/null -w "fast code=%{http_code} time=%{time_total} " http://127.0.0.1:8080/fast && echo OK || echo "async /fast FAILED"
           echo "--- async route /slow ---"
-          curl -s -m 10 -o /dev/null -w "async: code=%{http_code} time=%{time_total}
-" http://127.0.0.1:8080/slow || echo "async FAILED (timeout)"
+          curl -s -m 10 -o /dev/null -w "slow code=%{http_code} time=%{time_total} " http://127.0.0.1:8080/slow && echo OK || echo "async /slow FAILED"
+
 
   # ==========================================================================
   # Build and test API servers
