@@ -4,136 +4,176 @@
  * A simple HTTP wrapper around the transport-agnostic Ralph API.
  * Designed for WASM demos and lightweight deployments.
  *
+ * Served by Keel (MIT). The transport layer stays thin: every request is
+ * marshalled into a RalphAPIRequest and handed to ralph_api_handle(), which
+ * owns all routing and status decisions -- including 404 for unknown paths.
+ *
  * Port: 8084 (default)
  * Endpoints: /api/v1/health, /api/v1/formats, /api/v1/solve
  */
 
+#include <keel/keel.h>
+
+#include <stddef.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <signal.h>
 
-#include "mongoose.h"
 #include "ralph_api.h"
 #include "sh_args.h"
 
 /* Configuration (uses shared library) */
 static ShServerConfig s_config;
-static volatile sig_atomic_t s_running = 1;
 
 /* Global API context */
 static RalphAPIContext *s_ctx = NULL;
 
-/* Signal handler for graceful shutdown */
-static void signal_handler(int sig) {
-    (void)sig;
-    s_running = 0;
+/*
+ * Request body cap. Ralph tops out at 100 vars/constraints, so payloads are
+ * small, but MPS is verbose; Keel's own default is 1 MB.
+ */
+#define RALPH_MAX_BODY_SIZE (4u * 1024u * 1024u)
+
+/* ============================================================================
+ * Response Helpers
+ * ============================================================================ */
+
+/* Same four headers the mongoose server emitted on every response. */
+static void add_cors_headers(KlHttpResponse *res) {
+    kl_http_response_header(res, "Access-Control-Allow-Origin", "*");
+    kl_http_response_header(res, "Access-Control-Allow-Methods",
+                            "GET, POST, OPTIONS");
+    kl_http_response_header(res, "Access-Control-Allow-Headers", "Content-Type");
+    kl_http_response_header(res, "Access-Control-Max-Age", "86400");
 }
 
-/* Add CORS headers */
-static void add_cors_headers(struct mg_connection *c) {
-    mg_printf(c,
-        "Access-Control-Allow-Origin: *\r\n"
-        "Access-Control-Allow-Methods: GET, POST, OPTIONS\r\n"
-        "Access-Control-Allow-Headers: Content-Type\r\n"
-        "Access-Control-Max-Age: 86400\r\n");
-}
-
-/* Extract path from URI (without query string) */
-static void extract_path(struct mg_str uri, char *buf, size_t buf_size) {
-    size_t len = uri.len;
-    const char *q = memchr(uri.buf, '?', uri.len);
-    if (q) {
-        len = (size_t)(q - uri.buf);
-    }
-    if (len >= buf_size) {
-        len = buf_size - 1;
-    }
-    memcpy(buf, uri.buf, len);
+/* Copy a Keel string slice into a NUL-terminated buffer. */
+static void slice_to_buf(const char *src, size_t src_len, char *buf,
+                         size_t buf_size) {
+    size_t len = src_len;
+    if (!src) { buf[0] = '\0'; return; }
+    if (len >= buf_size) len = buf_size - 1;
+    memcpy(buf, src, len);
     buf[len] = '\0';
 }
 
-/* Extract query string from URI */
-static void extract_query(struct mg_str uri, char *buf, size_t buf_size) {
-    const char *q = memchr(uri.buf, '?', uri.len);
-    if (q) {
-        size_t len = uri.len - (size_t)(q - uri.buf) - 1;
-        if (len >= buf_size) {
-            len = buf_size - 1;
-        }
-        memcpy(buf, q + 1, len);
-        buf[len] = '\0';
-    } else {
-        buf[0] = '\0';
+/* ============================================================================
+ * Dispatch
+ * ============================================================================ */
+
+/*
+ * Marshal a Keel request into a RalphAPIRequest and write back whatever
+ * ralph_api_handle() decides. Used by every route and by the catch-all
+ * middleware, so unknown paths and wrong methods get Ralph's own 404 body
+ * rather than a transport-invented one.
+ */
+static void dispatch(KlHttpRequest *req, KlHttpResponse *res) {
+    char method[16];
+    char path[256];
+    char query[1024];
+
+    slice_to_buf(req->method, req->method_len, method, sizeof(method));
+    slice_to_buf(req->path, req->path_len, path, sizeof(path));
+    slice_to_buf(req->query, req->query_len, query, sizeof(query));
+
+    /*
+     * Body is passed as (pointer, length) exactly as the mongoose server did:
+     * neither mongoose's slice nor Keel's buffer reader NUL-terminates it.
+     */
+    const char *body = NULL;
+    size_t body_len = 0;
+    KlHttpBufReader *br = (KlHttpBufReader *)req->body_reader;
+    if (br && br->len > 0) {
+        body = br->data;
+        body_len = br->len;
     }
-}
 
-/* Extract method string */
-static const char *method_str(struct mg_str method) {
-    if (mg_strcmp(method, mg_str("GET")) == 0) return "GET";
-    if (mg_strcmp(method, mg_str("POST")) == 0) return "POST";
-    if (mg_strcmp(method, mg_str("OPTIONS")) == 0) return "OPTIONS";
-    return "UNKNOWN";
-}
+    RalphAPIRequest api_req = {
+        .method = method,
+        .path = path,
+        .query = query[0] ? query : NULL,
+        .body = body,
+        .body_len = body_len
+    };
 
-/* HTTP event handler */
-static void ev_handler(struct mg_connection *c, int ev, void *ev_data) {
-    if (ev == MG_EV_HTTP_MSG) {
-        struct mg_http_message *hm = ev_data;
-
-        /* Handle CORS preflight */
-        if (mg_strcmp(hm->method, mg_str("OPTIONS")) == 0) {
-            mg_printf(c, "HTTP/1.1 204 No Content\r\n");
-            add_cors_headers(c);
-            mg_printf(c, "\r\n");
-            return;
-        }
-
-        /* Extract request info */
-        char path[256];
-        char query[1024];
-        extract_path(hm->uri, path, sizeof(path));
-        extract_query(hm->uri, query, sizeof(query));
-
-        /* Build API request */
-        RalphAPIRequest req = {
-            .method = method_str(hm->method),
-            .path = path,
-            .query = query[0] ? query : NULL,
-            .body = hm->body.len > 0 ? hm->body.buf : NULL,
-            .body_len = hm->body.len
-        };
-
-        /* Call transport-agnostic handler */
-        RalphAPIResponse resp;
-        int result = ralph_api_handle(s_ctx, &req, &resp);
-
-        if (result != 0) {
-            /* Handler error - shouldn't happen */
-            mg_printf(c, "HTTP/1.1 500 Internal Server Error\r\n");
-            add_cors_headers(c);
-            mg_printf(c, "Content-Type: application/json\r\n\r\n");
-            mg_printf(c, "{\"error\":\"Internal server error\"}");
-            return;
-        }
-
-        /* Send HTTP response */
-        mg_printf(c, "HTTP/1.1 %d %s\r\n", resp.status_code,
-            resp.status_code == 200 ? "OK" :
-            resp.status_code == 400 ? "Bad Request" :
-            resp.status_code == 404 ? "Not Found" :
-            resp.status_code == 408 ? "Request Timeout" :
-            resp.status_code == 413 ? "Payload Too Large" :
-            "Error");
-        add_cors_headers(c);
-        mg_printf(c, "Content-Type: %s\r\n", resp.content_type);
-        mg_printf(c, "Content-Length: %lu\r\n\r\n", (unsigned long)resp.body_len);
-        mg_send(c, resp.body, resp.body_len);
-
-        /* Clean up */
-        ralph_api_response_free(&resp);
+    RalphAPIResponse resp;
+    if (ralph_api_handle(s_ctx, &api_req, &resp) != 0) {
+        /* Handler error - shouldn't happen */
+        static const char err[] = "{\"error\":\"Internal server error\"}";
+        kl_http_response_status(res, 500);
+        add_cors_headers(res);
+        kl_http_response_header(res, "Content-Type", "application/json");
+        kl_http_response_body_copy(res, err, sizeof(err) - 1);
+        return;
     }
+
+    kl_http_response_status(res, resp.status_code);
+    add_cors_headers(res);
+    kl_http_response_header(res, "Content-Type",
+                            resp.content_type ? resp.content_type
+                                              : "application/json");
+    /* Copy: resp.body is freed below, and Keel's body setters borrow. */
+    kl_http_response_body_copy(res, (const char *)resp.body, resp.body_len);
+
+    ralph_api_response_free(&resp);
 }
+
+/* ============================================================================
+ * Handlers and Middleware
+ * ============================================================================ */
+
+static void handle_api(KlHttpRequest *req, KlHttpResponse *res, void *ud) {
+    (void)ud;
+    dispatch(req, res);
+}
+
+/* CORS preflight: 204 + headers, same as before. */
+static int mw_preflight(KlHttpRequest *req, KlHttpResponse *res, void *ud) {
+    (void)req; (void)ud;
+    kl_http_response_status(res, 204);
+    add_cors_headers(res);
+    kl_http_response_body_borrow(res, "", 0);
+    return 1;  /* short-circuit */
+}
+
+/*
+ * Anything the route table would not match.
+ *
+ * Keel route patterns have no wildcard -- '*' is only special in middleware
+ * patterns -- so a catch-all route is not expressible. Without this, unmatched
+ * paths would hit Keel's built-in text/plain 404, losing both the CORS headers
+ * and Ralph's own {"error":"Endpoint not found"} body. Forwarding to dispatch()
+ * keeps Ralph the single source of truth for status and body, exactly as when
+ * mongoose handed it every request.
+ */
+static int mw_fallback(KlHttpRequest *req, KlHttpResponse *res, void *ud) {
+    KlHttpServer *server = (KlHttpServer *)ud;
+    KlHttpRoute *matched = NULL;
+    KlHttpParam params[KL_HTTP_ROUTER_MAX_PARAMS];
+    int num_params = 0;
+
+    int rc = kl_http_router_match(&server->router, req->method, req->method_len,
+                                  req->path, req->path_len,
+                                  &matched, params, &num_params);
+    if (rc == 200) return 0;  /* a route will handle this */
+
+    dispatch(req, res);
+    return 1;  /* short-circuit */
+}
+
+/* Body reader factory: kl_http_body_reader_buffer() reads max_size from the
+   route's user_data, so wrap it to keep the cap explicit. */
+static KlHttpBodyReader *solve_body_reader(KlAllocator *alloc,
+                                           const KlHttpRequest *req,
+                                           void *user_data) {
+    (void)user_data;
+    return kl_http_body_reader_buffer(alloc, req,
+                                      (void *)(size_t)RALPH_MAX_BODY_SIZE);
+}
+
+/* ============================================================================
+ * Main
+ * ============================================================================ */
 
 static void print_usage(const char *prog) {
     printf("Ralph LP/MIP Solver - HTTP Server\n\n");
@@ -160,10 +200,6 @@ int main(int argc, char *argv[]) {
         return 0;
     }
 
-    /* Set up signal handlers */
-    signal(SIGINT, signal_handler);
-    signal(SIGTERM, signal_handler);
-
     /* Create API context */
     s_ctx = ralph_api_create();
     if (!s_ctx) {
@@ -176,31 +212,45 @@ int main(int argc, char *argv[]) {
     printf("Timeout: 5s default, 30s max\n\n");
 
     /* Create HTTP server */
-    struct mg_mgr mgr;
-    mg_mgr_init(&mgr);
+    KlHttpServer server;
+    KlHttpServerConfig http_cfg = {
+        .port = s_config.port,
+        .bind_addr = s_config.host,
+        .install_signal_handlers = 1,
+        .max_body_size = RALPH_MAX_BODY_SIZE,
+        .drain_timeout_ms = 5000,
+    };
 
-    char url[SH_URL_MAX];
-    snprintf(url, sizeof(url), "http://%s:%d", s_config.host, s_config.port);
-
-    struct mg_connection *c = mg_http_listen(&mgr, url, ev_handler, NULL);
-    if (!c) {
-        fprintf(stderr, "Failed to bind to %s\n", url);
+    if (kl_http_server_init(&server, &http_cfg) < 0) {
+        fprintf(stderr, "Failed to bind to %s:%d\n", s_config.host,
+                s_config.port);
         ralph_api_free(s_ctx);
         return 1;
     }
 
-    printf("Listening on %s\n", url);
+    /* Routes. All three forward to Ralph's own dispatcher. */
+    kl_http_server_route(&server, "GET",  "/api/v1/health",  handle_api, NULL, NULL);
+    kl_http_server_route(&server, "GET",  "/api/v1/formats", handle_api, NULL, NULL);
+    kl_http_server_route(&server, "POST", "/api/v1/solve",   handle_api, NULL,
+                         solve_body_reader);
+
+    /*
+     * Middleware runs in registration order, before routing. mw_fallback must
+     * come last: it short-circuits anything the route table would not match.
+     */
+    kl_http_server_use(&server, "OPTIONS", "/*", mw_preflight, NULL);
+    kl_http_server_use(&server, "*", "/*", mw_fallback, &server);
+
+    printf("Listening on http://%s:%d\n", s_config.host, s_config.port);
     printf("Press Ctrl+C to stop\n\n");
 
-    /* Event loop */
-    while (s_running) {
-        mg_mgr_poll(&mgr, 100);
-    }
+    /* Event loop: blocks until SIGINT/SIGTERM. */
+    kl_http_server_run(&server);
 
     printf("\nShutting down...\n");
 
     /* Cleanup */
-    mg_mgr_free(&mgr);
+    kl_http_server_free(&server);
     ralph_api_free(s_ctx);
 
     return 0;
