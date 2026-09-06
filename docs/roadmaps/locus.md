@@ -172,3 +172,57 @@ typedef struct {
 | `locus/CLAUDE.md` | Development guide, API reference |
 | `locus/include/locus.h` | Public API |
 | `locus/api/` | REST API server |
+
+## Keel Migration (Mongoose Removal) — Phase 6 of 6
+
+**Completed for Locus.** `locus/api` no longer links Mongoose, and with it the
+last Mongoose dependency in an OTTO API server is gone.
+
+Rationale and shared context: `docs/roadmaps/surge.md` (Phase 1).
+
+### Shape of the port
+
+The most mechanical of the six — same structure as FuelWise, with no static
+files, no ETag and no multi-listener model:
+
+- `ShWorkQueue` + `ShWorkerPool` + `ShCompletion` → `KlThreadPool` +
+  `KlAsyncOp`, same `GeoCtx` ownership rules and the `on_resume` fix.
+- `mg_http_var()` → `sh_query_get_str()`.
+- `sh_mg_*` → `sh_kl_*`.
+- The three direct-execution fallbacks collapsed into `submit_geocode_work()`,
+  which runs inline when there is no pool.
+- All six endpoints are exact paths, so all six are real routes — which matters,
+  because `kl_async_suspend()` is only honoured after a route handler (see
+  `docs/roadmaps/carta.md`).
+
+`/api/v1/stats` keeps its `work_queue` shape via `LocusQueueStats`.
+
+### Verification
+
+`locus/api/test_api.sh` starts the server against Monaco and gates CI: health,
+stats, search, autocomplete, reverse, missing/invalid parameters, 404, 405,
+CORS preflight, and async dispatch under concurrent searches.
+
+Not verified locally: Locus needs `mmap`/`sys/mman.h` (`lc_index.c`,
+`lc_serialize.c`), which MinGW lacks, so like Carta this could not be
+smoke-tested on Windows first.
+
+### CI structure
+
+With Locus done, every API server has its own standalone gating job, so the
+`test-api` job that used to hold them was empty and has been removed. The jobs
+no longer depend on `test-c`, which means an unrelated failure there can no
+longer silently skip API coverage.
+
+## Mongoose removal: what is left
+
+All six servers are ported. Still to delete, once these PRs land:
+
+- `shared/src/sh_httpserver.c` + `shared/include/sh_httpserver.h` (41 `mg_`
+  call sites) — nothing references them any more.
+- `vendor/mongoose/` (`mongoose.c`, `mongoose.h`, `CLAUDE.md`).
+- The Mongoose entry in `docs/ARCHITECTURE.md`'s vendor table and any
+  remaining references in module `CLAUDE.md` files.
+
+That removal is deliberately a separate change: it is pure deletion, and it is
+easier to review once every server has landed on Keel.

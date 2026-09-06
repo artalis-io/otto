@@ -31,7 +31,7 @@ VENDOR_DIR = ../../vendor
 INCLUDES = -I$(SRC_DIR) \
            -I$(LOCUS_DIR)/include \
            -I$(SHARED_DIR)/include \
-           -I$(VENDOR_DIR)/mongoose \
+           -I$(KEEL_DIR)/include \
            -I$(VENDOR_DIR)/miniz
 
 # Libraries
@@ -39,15 +39,17 @@ LIBS = -L$(LOCUS_DIR) -llocus \
        -L$(SHARED_DIR) -lshared \
        -lm -lpthread
 
-# Mongoose object (compiled separately)
-MONGOOSE_OBJ = $(VENDOR_DIR)/mongoose/mongoose.o
+# Keel library
+# Keel static library (vendored git submodule, MIT)
+KEEL_DIR = $(VENDOR_DIR)/keel
+KEEL_LIB = $(KEEL_DIR)/libkeel.a
 
-# Shared HTTP server (requires mongoose, compiled here not in libshared)
-HTTPSERVER_OBJ = $(BUILD_DIR)/sh_httpserver.o
+# Shared Keel HTTP helpers (need Keel headers, so not in libshared)
+KEELSERVER_OBJ = $(BUILD_DIR)/sh_keelserver.o
 
 # Source files
 SRCS = $(SRC_DIR)/main.c
-OBJS = $(BUILD_DIR)/main.o $(HTTPSERVER_OBJ)
+OBJS = $(BUILD_DIR)/main.o $(KEELSERVER_OBJ)
 
 # Output
 TARGET = locus-geocoder
@@ -57,13 +59,18 @@ TARGET = locus-geocoder
 all: deps $(TARGET)
 
 # Build dependencies
-deps:
+deps: $(KEEL_LIB)
 	$(MAKE) -C $(LOCUS_DIR) lib
 	$(MAKE) -C $(SHARED_DIR) lib
-	@# Build mongoose object if needed
-	@if [ ! -f $(MONGOOSE_OBJ) ]; then \
-		$(CC) $(CFLAGS) -c $(VENDOR_DIR)/mongoose/mongoose.c -o $(MONGOOSE_OBJ); \
+
+# Build vendored Keel. Core only (no mbedTLS/nghttp2 integrations), so
+# this needs no external libraries.
+$(KEEL_LIB):
+	@if [ ! -f $(KEEL_DIR)/Makefile ]; then \
+		echo "vendor/keel is empty - run: git submodule update --init vendor/keel"; \
+		exit 1; \
 	fi
+	$(MAKE) -C $(KEEL_DIR) CC=$(CC)
 
 $(BUILD_DIR):
 	mkdir -p $(BUILD_DIR)
@@ -71,13 +78,13 @@ $(BUILD_DIR):
 $(BUILD_DIR)/%.o: $(SRC_DIR)/%.c | $(BUILD_DIR)
 	$(CC) $(CFLAGS) $(INCLUDES) -c $< -o $@
 
-# Compile shared HTTP server (requires mongoose includes)
-$(HTTPSERVER_OBJ): $(SHARED_DIR)/src/sh_httpserver.c | $(BUILD_DIR)
+# Compile shared Keel HTTP helpers (require Keel includes)
+$(KEELSERVER_OBJ): $(SHARED_DIR)/src/sh_keelserver.c | $(BUILD_DIR)
 	$(CC) $(CFLAGS) $(INCLUDES) -c $< -o $@
 
 # Build server
-$(TARGET): $(OBJS) $(MONGOOSE_OBJ)
-	$(CC) $(CFLAGS) -o $@ $^ $(LIBS)
+$(TARGET): $(OBJS) $(KEEL_LIB)
+	$(CC) $(CFLAGS) -o $@ $(OBJS) $(KEEL_LIB) $(LIBS)
 
 # Run server
 run: $(TARGET)

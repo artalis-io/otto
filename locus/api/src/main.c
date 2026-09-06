@@ -17,11 +17,11 @@
 #include "locus.h"
 #include "lc_serialize.h"
 #include "lc_mmap.h"
-#include "mongoose.h"
+#include <keel/keel.h>
+#include <stddef.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <signal.h>
 #include <time.h>
 #include <unistd.h>
 #include <pthread.h>
@@ -30,13 +30,14 @@
 
 /* Shared library includes */
 #include "shared.h"
-#include "sh_httpserver.h"
+#include "sh_keelserver.h"
 #include "sh_log.h"
 #include "sh_trace.h"
 #include "sh_metrics.h"
 #include "sh_completion.h"
 #include "sh_worker_pool.h"
 #include "sh_json.h"
+#include "sh_query.h"
 
 /* ============================================================================
  * Configuration
@@ -72,24 +73,30 @@ static ShCorsConfig s_cors;
  *   - All search operations are read-only on the index
  *   - Thread-safe: no concurrent writes
  *
- * s_signo:
- *   - Volatile sig_atomic_t for signal handler communication
- *   - Written only by signal handler
- *   - Read by main event loop
- *   - Thread-safe: atomic access guaranteed by sig_atomic_t
+ * Queue counters:
+ *   - Read and written only on the event loop thread (submit, done_fn,
+ *     on_deadline and the stats handler all run there)
  * ============================================================================ */
 
 static LCIndex *g_index = NULL;
-static volatile sig_atomic_t s_signo = 0;
 
 /* Rate limiter instance (uses shared library) */
 static ShRateLimiter *s_rate_limiter = NULL;
 
-/* Work queue instance (uses shared library) */
-static ShWorkQueue *s_work_queue = NULL;
+/*
+ * KlThreadPool exposes no statistics, but /api/v1/stats publishes work-queue
+ * counters, so they are tracked here.
+ */
+typedef struct {
+    uint64_t pushed;
+    uint64_t popped;
+    uint64_t dropped;
+    uint64_t expired;
+} LocusQueueStats;
 
-/* Worker pool for geocoding (uses shared library) */
-static ShWorkerPool *s_worker_pool = NULL;
+/* Geocode thread pool */
+static KlThreadPool *s_pool = NULL;
+static LocusQueueStats s_qstats;
 
 /* Adaptive capacity tracker (uses shared library) */
 static ShAdaptiveTracker *s_adaptive_tracker = NULL;
@@ -102,6 +109,21 @@ typedef enum {
 } GeoWorkType;
 
 typedef struct {
+    KlHttpServer *server;
+    KlThreadPool *pool;
+} AppCtx;
+
+/*
+ * OWNERSHIP / LIFETIME (same rules as Surge, FuelWise, Velo and Carta):
+ * freed in exactly one place -- done_fn (the item ran) or cancel_fn (dropped
+ * at pool shutdown before starting). on_cancel and on_deadline never free,
+ * because work_fn may still be running on a worker; they only set `detached`.
+ */
+typedef struct {
+    KlAsyncOp op;
+    AppCtx *app;
+    const KlHttpRequest *req;   /* lives inside the conn; valid while suspended */
+
     /* Request info */
     GeoWorkType type;
     char query[256];
@@ -114,13 +136,10 @@ typedef struct {
     int status_code;
     char error_msg[128];
 
-    /* Completion signaling (uses shared library) */
-    ShCompletion completion;
-} GeoWorkItem;
-
-static void signal_handler(int signo) {
-    s_signo = signo;
-}
+    int detached;
+    const char *endpoint;   /* metrics label, static string */
+    ShMetricsTimer timer;
+} GeoCtx;
 
 /* JSON building is handled by sh_json.h (ShJsonWriter + ShJsonBuf) */
 
@@ -185,33 +204,20 @@ static void load_locus_env(LocusServerConfig *cfg) {
  * Extract origin from request.
  * Thread-safe using thread-local storage for origin buffer.
  */
-static const char *get_origin_from_request(struct mg_http_message *hm) {
-    struct mg_str *origin_hdr = hm ? mg_http_get_header(hm, "Origin") : NULL;
-    if (origin_hdr && origin_hdr->len > 0) {
-        static __thread char origin_buf[256];
-        size_t len = origin_hdr->len < sizeof(origin_buf) - 1 ?
-                     origin_hdr->len : sizeof(origin_buf) - 1;
-        memcpy(origin_buf, origin_hdr->buf, len);
-        origin_buf[len] = '\0';
-        return origin_buf;
-    }
-    return NULL;
+static const char *get_origin_from_request(const KlHttpRequest *req) {
+    return sh_kl_origin(req);
 }
 
-/* Get CORS preflight headers for an OPTIONS request */
-static void get_cors_preflight_headers(struct mg_http_message *hm, char *buf, size_t size) {
-    sh_cors_preflight_headers(&s_cors, get_origin_from_request(hm), buf, size);
-}
 
 /* HTTP response helpers - use shared implementation */
-static void send_json_cors(struct mg_connection *c, struct mg_http_message *hm,
+static void send_json_cors(KlHttpResponse *res, const KlHttpRequest *req,
                            int status, const char *json) {
-    sh_mg_reply_json(c, status, &s_cors, get_origin_from_request(hm), json);
+    sh_kl_reply_json(res, status, &s_cors, get_origin_from_request(req), json);
 }
 
-static void send_error_cors(struct mg_connection *c, struct mg_http_message *hm,
+static void send_error_cors(KlHttpResponse *res, const KlHttpRequest *req,
                             int status, const char *message) {
-    sh_mg_reply_error(c, status, &s_cors, get_origin_from_request(hm), message);
+    sh_kl_reply_error(res, status, &s_cors, get_origin_from_request(req), message);
 }
 
 /* ============================================================================
@@ -219,33 +225,31 @@ static void send_error_cors(struct mg_connection *c, struct mg_http_message *hm,
  * ============================================================================ */
 
 /* Initialize a geocode work item */
-static void geo_work_item_init(GeoWorkItem *item, GeoWorkType type) {
-    memset(item, 0, sizeof(*item));
-    item->type = type;
-    item->status_code = 500;  /* Default to error */
-    sh_completion_init(&item->completion);
+static void geo_ctx_free(GeoCtx *ctx) {
+    if (!ctx) return;
+    free(ctx->response_json);
+    free(ctx);
 }
 
-/* Clean up a geocode work item */
-static void geo_work_item_cleanup(GeoWorkItem *item) {
-    sh_completion_cleanup(&item->completion);
-    free(item->response_json);
-    item->response_json = NULL;
+static void record_metrics(ShMetricsTimer timer, const char *endpoint) {
+    sh_metrics_counter_inc("http_requests_total", 1,
+                           "status:200", endpoint, NULL);
+    sh_metrics_timer_observe(timer, "http_request_duration_ms", endpoint, NULL);
 }
 
-/* Wait for geocode work item completion with timeout */
-static int geo_work_item_wait(GeoWorkItem *item, double timeout_sec) {
-    int timeout_ms = (int)(timeout_sec * 1000);
-    return sh_completion_wait(&item->completion, timeout_ms);
+/* Allocate a geocode context with the common fields filled in. */
+static GeoCtx *geo_ctx_new(GeoWorkType type, const char *endpoint,
+                           ShMetricsTimer timer) {
+    GeoCtx *ctx = calloc(1, sizeof(*ctx));
+    if (!ctx) return NULL;
+    ctx->type = type;
+    ctx->status_code = 500;
+    ctx->endpoint = endpoint;
+    ctx->timer = timer;
+    return ctx;
 }
 
-/* Signal that geocode work item is completed */
-static void geo_work_item_complete(GeoWorkItem *item) {
-    sh_completion_signal(&item->completion);
-}
-
-/* Process a search request */
-static void process_search(GeoWorkItem *item) {
+static void process_search(GeoCtx *item) {
     if (!g_index) {
         item->status_code = 503;
         snprintf(item->error_msg, sizeof(item->error_msg), "Index not loaded");
@@ -363,7 +367,7 @@ static void process_search(GeoWorkItem *item) {
 }
 
 /* Process an autocomplete request */
-static void process_autocomplete(GeoWorkItem *item) {
+static void process_autocomplete(GeoCtx *item) {
     if (!g_index) {
         item->status_code = 503;
         snprintf(item->error_msg, sizeof(item->error_msg), "Index not loaded");
@@ -418,7 +422,7 @@ static void process_autocomplete(GeoWorkItem *item) {
 }
 
 /* Process a reverse geocode request */
-static void process_reverse(GeoWorkItem *item) {
+static void process_reverse(GeoCtx *item) {
     if (!g_index) {
         item->status_code = 503;
         snprintf(item->error_msg, sizeof(item->error_msg), "Index not loaded");
@@ -481,54 +485,28 @@ static void process_reverse(GeoWorkItem *item) {
 }
 
 /* Geocode worker callback function (called by ShWorkerPool) */
-static void geocode_worker_callback(ShWorkItem *queue_item, void *ctx) {
-    (void)ctx;
+/* Worker thread: run the geocode. Touches only this context. */
+static void geo_work_fn(void *user_data) {
+    GeoCtx *item = (GeoCtx *)user_data;
 
-    GeoWorkItem *item = (GeoWorkItem *)queue_item->user_ctx;
-    if (!item) {
-        sh_workqueue_item_free(queue_item);
-        return;
-    }
+    struct timeval t0, t1;
+    gettimeofday(&t0, NULL);
 
-    /* Check if request has expired or was cancelled by HTTP handler timeout */
-    if (sh_workqueue_item_expired(s_work_queue, queue_item) ||
-        sh_completion_is_cancelled(&item->completion)) {
-        item->status_code = 504;  /* Gateway Timeout */
-        snprintf(item->error_msg, sizeof(item->error_msg), "Request timeout");
-        geo_work_item_complete(item);
-        sh_workqueue_item_free(queue_item);
-        return;
-    }
-
-    /* Measure response time for adaptive capacity */
-    struct timeval work_start, work_end;
-    gettimeofday(&work_start, NULL);
-
-    /* Process based on type */
     switch (item->type) {
-        case GEO_TYPE_SEARCH:
-            process_search(item);
-            break;
-        case GEO_TYPE_AUTOCOMPLETE:
-            process_autocomplete(item);
-            break;
-        case GEO_TYPE_REVERSE:
-            process_reverse(item);
-            break;
+        case GEO_TYPE_SEARCH:       process_search(item); break;
+        case GEO_TYPE_AUTOCOMPLETE: process_autocomplete(item); break;
+        case GEO_TYPE_REVERSE:      process_reverse(item); break;
     }
 
-    /* Record response time for adaptive capacity */
-    gettimeofday(&work_end, NULL);
-    double work_ms = (work_end.tv_sec - work_start.tv_sec) * 1000.0 +
-                     (work_end.tv_usec - work_start.tv_usec) / 1000.0;
+    gettimeofday(&t1, NULL);
+    double ms = (t1.tv_sec - t0.tv_sec) * 1000.0 +
+                (t1.tv_usec - t0.tv_usec) / 1000.0;
 
     if (s_adaptive_tracker) {
-        sh_adaptive_record(s_adaptive_tracker, work_ms);
+        sh_adaptive_record(s_adaptive_tracker, ms);
 
-        /* Check if rate limiter should be updated */
         ShCapacityParams new_params;
         if (sh_adaptive_update(s_adaptive_tracker, &new_params)) {
-            /* Update rate limiter with new parameters */
             if (s_rate_limiter) {
                 sh_ratelimit_update_rate(s_rate_limiter,
                                          new_params.rate_limit_rps,
@@ -536,65 +514,153 @@ static void geocode_worker_callback(ShWorkItem *queue_item, void *ctx) {
             }
         }
     }
+}
 
-    /* Signal completion */
-    geo_work_item_complete(item);
-    sh_workqueue_item_free(queue_item);
+/* Write whatever the worker produced. Shared by done_fn and the inline path. */
+static void geo_reply(KlHttpResponse *res, const KlHttpRequest *req, GeoCtx *ctx) {
+    if (ctx->status_code == 200) {
+        if (ctx->response_json && ctx->response_len > 0) {
+            send_json_cors(res, req, 200, ctx->response_json);
+        } else {
+            send_json_cors(res, req, 200, "{}");
+        }
+    } else {
+        send_error_cors(res, req, ctx->status_code,
+                        ctx->error_msg[0] ? ctx->error_msg : "Geocode failed");
+    }
+}
+
+/* Event loop thread: write the response and resume the connection. */
+static void geo_done_fn(void *user_data) {
+    GeoCtx *ctx = (GeoCtx *)user_data;
+
+    s_qstats.popped++;
+
+    if (ctx->detached) {
+        geo_ctx_free(ctx);
+        return;
+    }
+
+    geo_reply(kl_http_conn_response(ctx->op.conn), ctx->req, ctx);
+    record_metrics(ctx->timer, ctx->endpoint);
+
+    kl_async_complete(ctx->app->server, &ctx->op);
+    geo_ctx_free(ctx);
+}
+
+/* Pool shutdown dropped the item before it started. */
+static void geo_cancel_fn(void *user_data) {
+    geo_ctx_free((GeoCtx *)user_data);
+}
+
+/*
+ * Declare the send. kl_async_complete() re-arms the fd but leaves the
+ * connection SUSPENDED unless on_resume says what happens next; without this
+ * the response is never written and the client hangs. Keel's
+ * examples/thread_pool and examples/async_thread_pool leave this a no-op and
+ * hang for exactly that reason; tests/smoke_iouring_async.c is the correct
+ * reference, and kl_http_request_send_response() is its public equivalent.
+ */
+static void geo_on_resume(KlAsyncOp *op, void *ud) {
+    (void)ud;
+    GeoCtx *ctx = (GeoCtx *)((char *)op - offsetof(GeoCtx, op));
+    kl_http_request_send_response(ctx->req);
+}
+
+/* Connection died while suspended; the worker may still be running. */
+static void geo_on_cancel(KlAsyncOp *op, void *ud) {
+    (void)ud;
+    ((GeoCtx *)((char *)op - offsetof(GeoCtx, op)))->detached = 1;
+}
+
+/* Deadline exceeded: reply 504 now, let done_fn free the context later. */
+static void geo_on_deadline(KlAsyncOp *op, void *ud) {
+    (void)ud;
+    GeoCtx *ctx = (GeoCtx *)((char *)op - offsetof(GeoCtx, op));
+
+    if (ctx->detached) return;
+    ctx->detached = 1;
+    s_qstats.expired++;
+
+    send_error_cors(kl_http_conn_response(op->conn), ctx->req, 504,
+                    "Request timeout");
+    record_metrics(ctx->timer, ctx->endpoint);
+
+    kl_async_complete(ctx->app->server, op);
 }
 
 /* Submit geocode work via work queue and send response */
-static int submit_geocode_work(struct mg_connection *c, struct mg_http_message *hm,
-                               GeoWorkItem *item) {
-    /* Create queue item */
-    ShWorkItem queue_item = {
-        .data = NULL,       /* No data to transfer, item is on caller's stack */
-        .data_len = 0,
-        .user_ctx = item    /* Pass work item as context */
+/*
+ * Dispatch a geocode. Takes ownership of ctx in every path.
+ * Runs inline when the queue is disabled, matching the old behaviour.
+ */
+static void submit_geocode_work(KlHttpRequest *req, KlHttpResponse *res,
+                                void *ud, GeoCtx *ctx) {
+    AppCtx *app = (AppCtx *)ud;
+
+    if (!s_pool) {
+        geo_work_fn(ctx);
+        geo_reply(res, req, ctx);
+        record_metrics(ctx->timer, ctx->endpoint);
+        geo_ctx_free(ctx);
+        return;
+    }
+
+    ctx->app = app;
+    ctx->req = req;
+    ctx->op.on_resume = geo_on_resume;
+    ctx->op.on_cancel = geo_on_cancel;
+    ctx->op.on_deadline = geo_on_deadline;
+    if (s_config.server.work_queue_timeout > 0.0) {
+        ctx->op.deadline_ms = kl_monotonic_ms() +
+            (uint64_t)(s_config.server.work_queue_timeout * 1000.0);
+    }
+
+    if (kl_async_suspend(app->server, kl_http_request_conn(req), &ctx->op) < 0) {
+        geo_ctx_free(ctx);
+        send_error_cors(res, req, 500, "Failed to suspend request");
+        return;
+    }
+
+    KlWorkItem item = {
+        .work_fn   = geo_work_fn,
+        .done_fn   = geo_done_fn,
+        .cancel_fn = geo_cancel_fn,
+        .user_data = ctx,
     };
 
-    /* Try to push to queue */
-    double pressure;
-    if (!sh_workqueue_try_push(s_work_queue, &queue_item, &pressure)) {
-        /* Queue is full - backpressure */
-        send_error_cors(c, hm, 503, "Server busy, try again later");
-        return 0;
+    if (kl_thread_pool_submit(app->pool, &item) < 0) {
+        /* Queue full - backpressure, same 503 as the old work queue. */
+        s_qstats.dropped++;
+        ctx->detached = 1;
+        send_error_cors(res, req, 503, "Server busy, try again later");
+        record_metrics(ctx->timer, ctx->endpoint);
+        kl_async_complete(app->server, &ctx->op);
+        geo_ctx_free(ctx);
+        return;
     }
 
-    /* Wait for completion with timeout */
-    double timeout = s_config.server.work_queue_timeout;
-    if (!geo_work_item_wait(item, timeout)) {
-        /* Timeout - mark item as cancelled so worker can skip if not started */
-        sh_completion_cancel(&item->completion);
-        send_error_cors(c, hm, 504, "Request timeout");
-        return 0;
-    }
-
-    /* Send response based on result */
-    if (item->status_code == 200) {
-        if (item->response_json && item->response_len > 0) {
-            send_json_cors(c, hm, 200, item->response_json);
-        } else {
-            send_json_cors(c, hm, 200, "{}");
-        }
-    } else {
-        send_error_cors(c, hm, item->status_code, item->error_msg);
-    }
-
-    return 1;
+    s_qstats.pushed++;
 }
 
 /* ============================================================================
  * Request Handlers
  * ============================================================================ */
 
-static void handle_health(struct mg_connection *c, struct mg_http_message *hm) {
-    sh_mg_handle_health(c, &s_cors, get_origin_from_request(hm),
-                        "locus", lc_version());
+static void handle_health(KlHttpRequest *req, KlHttpResponse *res, void *ud) {
+    (void)ud;
+    ShMetricsTimer timer = sh_metrics_timer_start();
+    sh_kl_handle_health(res, &s_cors, get_origin_from_request(req),
+                        "locus-geocoder", lc_version());
+    record_metrics(timer, "endpoint:health");
+    sh_trace_clear();
 }
 
-static void handle_stats(struct mg_connection *c, struct mg_http_message *hm) {
+static void handle_stats(KlHttpRequest *req, KlHttpResponse *res, void *ud) {
+    (void)ud;
+    ShMetricsTimer timer = sh_metrics_timer_start();
     if (!g_index) {
-        send_error_cors(c, hm, 503, "Index not loaded");
+        send_error_cors(res, req, 503, "Index not loaded");
         return;
     }
 
@@ -607,10 +673,6 @@ static void handle_stats(struct mg_connection *c, struct mg_http_message *hm) {
     }
 
     /* Get work queue stats */
-    ShWorkQueueStats wq_stats = {0};
-    if (s_work_queue) {
-        sh_workqueue_stats(s_work_queue, &wq_stats);
-    }
 
     /* Get adaptive capacity stats */
     ShAdaptiveStats adaptive_stats = {0};
@@ -664,19 +726,19 @@ static void handle_stats(struct mg_connection *c, struct mg_http_message *hm) {
     sh_json_write_key(&jw, "work_queue");
     sh_json_write_object_start(&jw);
     sh_json_write_key(&jw, "enabled");
-    sh_json_write_bool(&jw, s_work_queue != NULL);
+    sh_json_write_bool(&jw, s_pool != NULL);
     sh_json_write_key(&jw, "depth");
-    sh_json_write_int(&jw, (int64_t)wq_stats.current_depth);
+    sh_json_write_int(&jw, (int64_t)(s_qstats.pushed - s_qstats.popped));
     sh_json_write_key(&jw, "capacity");
-    sh_json_write_int(&jw, (int64_t)wq_stats.max_capacity);
+    sh_json_write_int(&jw, (int64_t)s_config.server.work_queue_depth);
     sh_json_write_key(&jw, "pushed");
-    sh_json_write_int(&jw, (int64_t)wq_stats.total_pushed);
+    sh_json_write_int(&jw, (int64_t)s_qstats.pushed);
     sh_json_write_key(&jw, "popped");
-    sh_json_write_int(&jw, (int64_t)wq_stats.total_popped);
+    sh_json_write_int(&jw, (int64_t)s_qstats.popped);
     sh_json_write_key(&jw, "dropped");
-    sh_json_write_int(&jw, (int64_t)wq_stats.total_dropped);
+    sh_json_write_int(&jw, (int64_t)s_qstats.dropped);
     sh_json_write_key(&jw, "expired");
-    sh_json_write_int(&jw, (int64_t)wq_stats.total_expired);
+    sh_json_write_int(&jw, (int64_t)s_qstats.expired);
     sh_json_write_object_end(&jw);
 
     /* adaptive object */
@@ -700,268 +762,194 @@ static void handle_stats(struct mg_connection *c, struct mg_http_message *hm) {
     sh_json_write_object_end(&jw);
 
     char *json = sh_json_buf_take(&jb);
-    send_json_cors(c, hm, 200, json);
+    record_metrics(timer, "endpoint:stats");
+    send_json_cors(res, req, 200, json);
     free(json);
 }
 
-static void handle_search(struct mg_connection *c, struct mg_http_message *hm) {
+static void handle_search(KlHttpRequest *req, KlHttpResponse *res, void *ud) {
+    ShMetricsTimer timer = sh_metrics_timer_start();
+
     if (!g_index) {
-        send_error_cors(c, hm, 503, "Index not loaded");
+        send_error_cors(res, req, 503, "Index not loaded");
         return;
     }
 
-    /* Parse query parameters */
-    char query[256] = "";
-    char limit_str[16] = "10";
-
-    struct mg_str q = mg_http_var(hm->query, mg_str("q"));
-    if (q.buf && q.len > 0 && q.len < sizeof(query)) {
-        memcpy(query, q.buf, q.len);
-        query[q.len] = '\0';
-    }
-
-    struct mg_str l = mg_http_var(hm->query, mg_str("limit"));
-    if (l.buf && l.len > 0 && l.len < sizeof(limit_str)) {
-        memcpy(limit_str, l.buf, l.len);
-        limit_str[l.len] = '\0';
-    }
-
-    if (strlen(query) == 0) {
-        send_error_cors(c, hm, 400, "Missing 'q' parameter");
-        return;
-    }
-
-    /* Use work queue if enabled */
-    if (s_work_queue) {
-        GeoWorkItem item;
-        geo_work_item_init(&item, GEO_TYPE_SEARCH);
-        strncpy(item.query, query, sizeof(item.query) - 1);
-        item.query[sizeof(item.query) - 1] = '\0';
-        item.limit = sh_parse_int(limit_str, 10, 1, 100);
-
-        submit_geocode_work(c, hm, &item);
-        geo_work_item_cleanup(&item);
-        return;
-    }
-
-    /* Fallback: direct execution (work queue disabled) */
-    GeoWorkItem item;
-    geo_work_item_init(&item, GEO_TYPE_SEARCH);
-    strncpy(item.query, query, sizeof(item.query) - 1);
-    item.query[sizeof(item.query) - 1] = '\0';
-    item.limit = sh_parse_int(limit_str, 10, 1, 100);
-
-    process_search(&item);
-
-    if (item.status_code == 200 && item.response_json) {
-        send_json_cors(c, hm, 200, item.response_json);
-    } else {
-        send_error_cors(c, hm, item.status_code, item.error_msg);
-    }
-
-    geo_work_item_cleanup(&item);
-}
-
-static void handle_autocomplete(struct mg_connection *c, struct mg_http_message *hm) {
-    if (!g_index) {
-        send_error_cors(c, hm, 503, "Index not loaded");
-        return;
-    }
+    char query_buf[512];
+    size_t qlen = req->query_len < sizeof(query_buf) - 1 ? req->query_len
+                                                         : sizeof(query_buf) - 1;
+    if (req->query && qlen > 0) memcpy(query_buf, req->query, qlen);
+    query_buf[req->query && qlen > 0 ? qlen : 0] = '\0';
 
     char query[256] = "";
     char limit_str[16] = "10";
+    sh_query_get_str(query_buf, "q", query, sizeof(query));
+    sh_query_get_str(query_buf, "limit", limit_str, sizeof(limit_str));
 
-    struct mg_str q = mg_http_var(hm->query, mg_str("q"));
-    if (q.buf && q.len > 0 && q.len < sizeof(query)) {
-        memcpy(query, q.buf, q.len);
-        query[q.len] = '\0';
-    }
-
-    struct mg_str l = mg_http_var(hm->query, mg_str("limit"));
-    if (l.buf && l.len > 0 && l.len < sizeof(limit_str)) {
-        memcpy(limit_str, l.buf, l.len);
-        limit_str[l.len] = '\0';
-    }
-
-    if (strlen(query) == 0) {
-        send_error_cors(c, hm, 400, "Missing 'q' parameter");
+    if (query[0] == '\0') {
+        send_error_cors(res, req, 400, "Missing 'q' parameter");
         return;
     }
 
-    /* Use work queue if enabled */
-    if (s_work_queue) {
-        GeoWorkItem item;
-        geo_work_item_init(&item, GEO_TYPE_AUTOCOMPLETE);
-        strncpy(item.query, query, sizeof(item.query) - 1);
-        item.query[sizeof(item.query) - 1] = '\0';
-        item.limit = sh_parse_int(limit_str, 10, 1, 100);
-
-        submit_geocode_work(c, hm, &item);
-        geo_work_item_cleanup(&item);
+    GeoCtx *ctx = geo_ctx_new(GEO_TYPE_SEARCH, "endpoint:search", timer);
+    if (!ctx) {
+        send_error_cors(res, req, 500, "Out of memory");
         return;
     }
+    snprintf(ctx->query, sizeof(ctx->query), "%s", query);
+    ctx->limit = sh_parse_int(limit_str, 10, 1, 100);
 
-    /* Fallback: direct execution */
-    GeoWorkItem item;
-    geo_work_item_init(&item, GEO_TYPE_AUTOCOMPLETE);
-    strncpy(item.query, query, sizeof(item.query) - 1);
-    item.query[sizeof(item.query) - 1] = '\0';
-    item.limit = sh_parse_int(limit_str, 10, 1, 100);
-
-    process_autocomplete(&item);
-
-    if (item.status_code == 200 && item.response_json) {
-        send_json_cors(c, hm, 200, item.response_json);
-    } else {
-        send_error_cors(c, hm, item.status_code, item.error_msg);
-    }
-
-    geo_work_item_cleanup(&item);
+    submit_geocode_work(req, res, ud, ctx);
+    sh_trace_clear();
 }
 
-static void handle_reverse(struct mg_connection *c, struct mg_http_message *hm) {
+static void handle_autocomplete(KlHttpRequest *req, KlHttpResponse *res, void *ud) {
+    ShMetricsTimer timer = sh_metrics_timer_start();
+
     if (!g_index) {
-        send_error_cors(c, hm, 503, "Index not loaded");
+        send_error_cors(res, req, 503, "Index not loaded");
         return;
     }
+
+    char query_buf[512];
+    size_t qlen = req->query_len < sizeof(query_buf) - 1 ? req->query_len
+                                                         : sizeof(query_buf) - 1;
+    if (req->query && qlen > 0) memcpy(query_buf, req->query, qlen);
+    query_buf[req->query && qlen > 0 ? qlen : 0] = '\0';
+
+    char query[256] = "";
+    char limit_str[16] = "10";
+    sh_query_get_str(query_buf, "q", query, sizeof(query));
+    sh_query_get_str(query_buf, "limit", limit_str, sizeof(limit_str));
+
+    if (query[0] == '\0') {
+        send_error_cors(res, req, 400, "Missing 'q' parameter");
+        return;
+    }
+
+    GeoCtx *ctx = geo_ctx_new(GEO_TYPE_AUTOCOMPLETE, "endpoint:autocomplete", timer);
+    if (!ctx) {
+        send_error_cors(res, req, 500, "Out of memory");
+        return;
+    }
+    snprintf(ctx->query, sizeof(ctx->query), "%s", query);
+    ctx->limit = sh_parse_int(limit_str, 10, 1, 100);
+
+    submit_geocode_work(req, res, ud, ctx);
+    sh_trace_clear();
+}
+
+static void handle_reverse(KlHttpRequest *req, KlHttpResponse *res, void *ud) {
+    ShMetricsTimer timer = sh_metrics_timer_start();
+
+    if (!g_index) {
+        send_error_cors(res, req, 503, "Index not loaded");
+        return;
+    }
+
+    char query_buf[512];
+    size_t qlen = req->query_len < sizeof(query_buf) - 1 ? req->query_len
+                                                         : sizeof(query_buf) - 1;
+    if (req->query && qlen > 0) memcpy(query_buf, req->query, qlen);
+    query_buf[req->query && qlen > 0 ? qlen : 0] = '\0';
 
     char lat_str[32] = "";
     char lon_str[32] = "";
+    sh_query_get_str(query_buf, "lat", lat_str, sizeof(lat_str));
+    sh_query_get_str(query_buf, "lon", lon_str, sizeof(lon_str));
 
-    struct mg_str lat = mg_http_var(hm->query, mg_str("lat"));
-    struct mg_str lon = mg_http_var(hm->query, mg_str("lon"));
-
-    if (lat.buf && lat.len > 0 && lat.len < sizeof(lat_str)) {
-        memcpy(lat_str, lat.buf, lat.len);
-        lat_str[lat.len] = '\0';
-    }
-    if (lon.buf && lon.len > 0 && lon.len < sizeof(lon_str)) {
-        memcpy(lon_str, lon.buf, lon.len);
-        lon_str[lon.len] = '\0';
-    }
-
-    if (strlen(lat_str) == 0 || strlen(lon_str) == 0) {
-        send_error_cors(c, hm, 400, "Missing 'lat' or 'lon' parameter");
+    if (lat_str[0] == '\0' || lon_str[0] == '\0') {
+        send_error_cors(res, req, 400, "Missing 'lat' or 'lon' parameter");
         return;
     }
 
     double lat_val = sh_parse_double(lat_str, NAN, -90.0, 90.0);
     double lon_val = sh_parse_double(lon_str, NAN, -180.0, 180.0);
     if (isnan(lat_val) || isnan(lon_val)) {
-        send_error_cors(c, hm, 400, "Invalid coordinates");
+        send_error_cors(res, req, 400, "Invalid coordinates");
         return;
     }
 
-    SHCoord coord;
-    coord.lat = lat_val;
-    coord.lon = lon_val;
-
-    /* Use work queue if enabled */
-    if (s_work_queue) {
-        GeoWorkItem item;
-        geo_work_item_init(&item, GEO_TYPE_REVERSE);
-        item.coord = coord;
-
-        submit_geocode_work(c, hm, &item);
-        geo_work_item_cleanup(&item);
+    GeoCtx *ctx = geo_ctx_new(GEO_TYPE_REVERSE, "endpoint:reverse", timer);
+    if (!ctx) {
+        send_error_cors(res, req, 500, "Out of memory");
         return;
     }
+    ctx->coord.lat = lat_val;
+    ctx->coord.lon = lon_val;
 
-    /* Fallback: direct execution */
-    GeoWorkItem item;
-    geo_work_item_init(&item, GEO_TYPE_REVERSE);
-    item.coord = coord;
-
-    process_reverse(&item);
-
-    if (item.status_code == 200 && item.response_json) {
-        send_json_cors(c, hm, 200, item.response_json);
-    } else {
-        send_error_cors(c, hm, item.status_code, item.error_msg);
-    }
-
-    geo_work_item_cleanup(&item);
+    submit_geocode_work(req, res, ud, ctx);
+    sh_trace_clear();
 }
 
 /* Handle /metrics endpoint for Prometheus */
-static void handle_metrics(struct mg_connection *c) {
-    sh_mg_handle_metrics(c);
+static void handle_metrics(KlHttpRequest *req, KlHttpResponse *res, void *ud) {
+    (void)req; (void)ud;
+    sh_kl_handle_metrics(res);
+    sh_trace_clear();
 }
 
 /* ============================================================================
  * Request Router
  * ============================================================================ */
 
-static void handle_request(struct mg_connection *c, int ev, void *ev_data) {
-    /* Set socket write timeout on new connections to protect against slow clients */
-    if (ev == MG_EV_ACCEPT) {
-        sh_mg_set_write_timeout(c, 5000);  /* 5 second write timeout */
-        return;
-    }
+/* ============================================================================
+ * Middleware
+ * ============================================================================ */
 
-    if (ev == MG_EV_HTTP_MSG) {
-        struct mg_http_message *hm = (struct mg_http_message *)ev_data;
-        ShMetricsTimer req_timer = sh_metrics_timer_start();
+/* CORS preflight, before rate limiting (as in the mongoose server). */
+static int mw_preflight(KlHttpRequest *req, KlHttpResponse *res, void *ud) {
+    (void)ud;
+    sh_trace_from_headers(sh_kl_trace_header_getter, req);
+    sh_kl_reply_preflight(res, &s_cors, get_origin_from_request(req));
+    sh_trace_clear();
+    return 1;  /* short-circuit */
+}
 
-        /* Extract or generate trace ID */
-        sh_trace_from_headers(sh_mg_trace_header_getter, hm);
-
-        /* Rate limiting check */
-        if (!sh_mg_check_rate_limit(c, s_rate_limiter, &s_cors, get_origin_from_request(hm))) {
-            SH_LOG_WARN("Rate limit exceeded", "status", "429");
-            sh_metrics_counter_inc("http_requests_total", 1,
-                                   "status:429", "endpoint:ratelimit", NULL);
-            sh_trace_clear();
-            return;  /* 429 already sent */
-        }
-
-        /* CORS preflight */
-        if (mg_match(hm->method, mg_str("OPTIONS"), NULL)) {
-            char cors_headers[512];
-            get_cors_preflight_headers(hm, cors_headers, sizeof(cors_headers));
-            mg_http_reply(c, 204, cors_headers, "");
-            sh_trace_clear();
-            return;
-        }
-
-        /* Route requests */
-        if (mg_match(hm->uri, mg_str("/api/v1/health"), NULL)) {
-            handle_health(c, hm);
-            sh_metrics_counter_inc("http_requests_total", 1,
-                                   "status:200", "endpoint:health", NULL);
-        } else if (mg_match(hm->uri, mg_str("/api/v1/stats"), NULL)) {
-            handle_stats(c, hm);
-            sh_metrics_counter_inc("http_requests_total", 1,
-                                   "status:200", "endpoint:stats", NULL);
-        } else if (mg_match(hm->uri, mg_str("/metrics"), NULL)) {
-            handle_metrics(c);
-        } else if (mg_match(hm->uri, mg_str("/api/v1/search"), NULL)) {
-            handle_search(c, hm);
-            sh_metrics_timer_observe(req_timer, "http_request_duration_ms",
-                                     "endpoint:search", NULL);
-            sh_metrics_counter_inc("http_requests_total", 1,
-                                   "status:200", "endpoint:search", NULL);
-        } else if (mg_match(hm->uri, mg_str("/api/v1/autocomplete"), NULL)) {
-            handle_autocomplete(c, hm);
-            sh_metrics_timer_observe(req_timer, "http_request_duration_ms",
-                                     "endpoint:autocomplete", NULL);
-            sh_metrics_counter_inc("http_requests_total", 1,
-                                   "status:200", "endpoint:autocomplete", NULL);
-        } else if (mg_match(hm->uri, mg_str("/api/v1/reverse"), NULL)) {
-            handle_reverse(c, hm);
-            sh_metrics_timer_observe(req_timer, "http_request_duration_ms",
-                                     "endpoint:reverse", NULL);
-            sh_metrics_counter_inc("http_requests_total", 1,
-                                   "status:200", "endpoint:reverse", NULL);
-        } else {
-            send_error_cors(c, hm, 404, "Not found");
-            sh_metrics_counter_inc("http_requests_total", 1,
-                                   "status:404", "endpoint:unknown", NULL);
-        }
-
-        /* Clear trace context at end of request */
+/* Rate limit every request before routing. */
+static int mw_rate_limit(KlHttpRequest *req, KlHttpResponse *res, void *ud) {
+    (void)ud;
+    sh_trace_from_headers(sh_kl_trace_header_getter, req);
+    if (!sh_kl_check_rate_limit(req, res, s_rate_limiter, &s_cors,
+                                get_origin_from_request(req))) {
+        sh_metrics_counter_inc("http_requests_total", 1,
+                               "status:429", "endpoint:ratelimit", NULL);
         sh_trace_clear();
+        return 1;  /* short-circuit */
     }
+    return 0;
+}
+
+/*
+ * Anything the route table would not match.
+ *
+ * Keel route patterns have no wildcard ('*' is only special in middleware
+ * patterns), so a catch-all route is not expressible, and Keel's built-in 404
+ * is text/plain with no CORS headers.
+ */
+static int mw_not_found(KlHttpRequest *req, KlHttpResponse *res, void *ud) {
+    AppCtx *app = (AppCtx *)ud;
+    KlHttpRoute *matched = NULL;
+    KlHttpParam params[KL_HTTP_ROUTER_MAX_PARAMS];
+    int num_params = 0;
+
+    int rc = kl_http_router_match(&app->server->router,
+                                  req->method, req->method_len,
+                                  req->path, req->path_len,
+                                  &matched, params, &num_params);
+    if (rc == 200) return 0;
+
+    if (rc == 405) {
+        send_error_cors(res, req, 405, "Method not allowed");
+        sh_metrics_counter_inc("http_requests_total", 1,
+                               "status:405", "endpoint:unknown", NULL);
+    } else {
+        send_error_cors(res, req, 404, "Not found");
+        sh_metrics_counter_inc("http_requests_total", 1,
+                               "status:404", "endpoint:unknown", NULL);
+    }
+    sh_trace_clear();
+    return 1;  /* short-circuit */
 }
 
 /* ============================================================================
@@ -1115,40 +1103,13 @@ int main(int argc, char *argv[]) {
         printf("Rate limit: disabled\n");
     }
 
-    /* Initialize work queue and worker pool */
-    if (s_config.server.work_queue_enabled) {
-        s_work_queue = sh_workqueue_create(s_config.server.work_queue_depth,
-                                           s_config.server.work_queue_timeout);
-        if (s_work_queue) {
-            /* Create worker pool (0 = auto-detect CPU count) */
-            ShWorkerPoolConfig pool_cfg = {
-                .queue = s_work_queue,
-                .callback = geocode_worker_callback,
-                .ctx = NULL,
-                .poll_timeout_ms = 100
-            };
-            s_worker_pool = sh_worker_pool_create(s_config.num_workers, &pool_cfg);
-            if (s_worker_pool) {
-                printf("Work queue: depth %zu, timeout %.1fs, %d workers\n",
-                       s_config.server.work_queue_depth, s_config.server.work_queue_timeout,
-                       sh_worker_pool_size(s_worker_pool));
-            } else {
-                fprintf(stderr, "Warning: Failed to create worker pool\n");
-                sh_workqueue_free(s_work_queue);
-                s_work_queue = NULL;
-            }
-        } else {
-            fprintf(stderr, "Warning: Failed to create work queue\n");
-        }
-    } else {
-        printf("Work queue: disabled\n");
-    }
+    /* Geocode pool is created after the HTTP server (it needs the event ctx). */
 
     /* Initialize adaptive capacity tracker */
     if (s_config.server.adaptive_enabled) {
         ShAdaptiveConfig adaptive_cfg;
         sh_adaptive_config_init(&adaptive_cfg);
-        int num_workers = s_worker_pool ? sh_worker_pool_size(s_worker_pool) : 4;
+        int num_workers = s_config.num_workers > 0 ? s_config.num_workers : 4;
         adaptive_cfg.num_workers = num_workers > 0 ? num_workers : 4;
         adaptive_cfg.target_utilization = s_config.server.target_utilization;
         adaptive_cfg.client_timeout_ms = s_config.server.client_timeout_ms;
@@ -1185,33 +1146,55 @@ int main(int argc, char *argv[]) {
                 "data_file", s_config.data_file,
                 "port", s_config.server.host);
 
-    /* Setup signal handlers */
-    signal(SIGINT, signal_handler);
-    signal(SIGTERM, signal_handler);
 
-    /* Start HTTP server */
-    struct mg_mgr mgr;
-    mg_mgr_init(&mgr);
+    /* Initialize HTTP server */
+    KlHttpServer server;
+    KlHttpServerConfig http_cfg = {
+        .port = s_config.server.port,
+        .bind_addr = s_config.server.host,
+        .install_signal_handlers = 1,
+        .drain_timeout_ms = 5000,
+    };
 
-    char listen_addr[SH_URL_MAX];
-    snprintf(listen_addr, sizeof(listen_addr), "http://%s:%d",
-             s_config.server.host, s_config.server.port);
-
-    struct mg_connection *conn = mg_http_listen(&mgr, listen_addr, handle_request, NULL);
-    if (!conn) {
-        fprintf(stderr, "Error: Failed to listen on %s\n", listen_addr);
-        /* Cleanup */
-        if (s_worker_pool) {
-            sh_worker_pool_stop(s_worker_pool);
-            sh_worker_pool_join(s_worker_pool);
-            sh_worker_pool_free(s_worker_pool);
-        }
-        sh_workqueue_free(s_work_queue);
+    if (kl_http_server_init(&server, &http_cfg) < 0) {
+        fprintf(stderr, "Error: Failed to listen on %s:%d\n",
+                s_config.server.host, s_config.server.port);
         sh_ratelimit_free(s_rate_limiter);
         sh_adaptive_free(s_adaptive_tracker);
         lc_index_free(g_index);
         return 1;
     }
+
+    /* Geocode pool. queue_capacity gives the backpressure ShWorkQueue used to. */
+    if (s_config.server.work_queue_enabled) {
+        KlThreadPoolConfig pool_cfg = {
+            .num_workers = s_config.num_workers,
+            .queue_capacity = (int)s_config.server.work_queue_depth,
+        };
+        s_pool = kl_thread_pool_create(kl_http_server_event_ctx(&server), &pool_cfg);
+        if (s_pool) {
+            printf("Geocode pool: depth %zu, timeout %.1fs, %d workers\n",
+                   s_config.server.work_queue_depth,
+                   s_config.server.work_queue_timeout, s_config.num_workers);
+        } else {
+            fprintf(stderr, "Warning: Failed to create geocode thread pool\n");
+        }
+    }
+
+    AppCtx app = { .server = &server, .pool = s_pool };
+
+    /* Routes. Every handler that suspends must be a route, not middleware. */
+    kl_http_server_route(&server, "GET", "/api/v1/health",       handle_health,       NULL, NULL);
+    kl_http_server_route(&server, "GET", "/api/v1/stats",        handle_stats,        NULL, NULL);
+    kl_http_server_route(&server, "GET", "/metrics",             handle_metrics,      NULL, NULL);
+    kl_http_server_route(&server, "GET", "/api/v1/search",       handle_search,       &app, NULL);
+    kl_http_server_route(&server, "GET", "/api/v1/autocomplete", handle_autocomplete, &app, NULL);
+    kl_http_server_route(&server, "GET", "/api/v1/reverse",      handle_reverse,      &app, NULL);
+
+    /* Middleware runs in registration order, before routing. */
+    kl_http_server_use(&server, "OPTIONS", "/*", mw_preflight, NULL);
+    kl_http_server_use(&server, "*", "/*", mw_rate_limit, NULL);
+    kl_http_server_use(&server, "*", "/*", mw_not_found, &app);
 
     printf("\nLocus Geocoder Server v%s\n", lc_version());
     printf("Listening on http://%s:%d\n", s_config.server.host, s_config.server.port);
@@ -1224,29 +1207,18 @@ int main(int argc, char *argv[]) {
     printf("  GET  /metrics\n");
     printf("\nPress Ctrl+C to stop.\n\n");
 
-    /* Event loop */
-    while (s_signo == 0) {
-        mg_mgr_poll(&mgr, 100);
-    }
+    /* Event loop: blocks until SIGINT/SIGTERM. */
+    kl_http_server_run(&server);
 
     printf("\nShutting down...\n");
 
-    /* Shutdown worker pool first */
-    if (s_worker_pool) {
-        sh_worker_pool_stop(s_worker_pool);
-        sh_worker_pool_join(s_worker_pool);
-    }
+    /* Pool first: drains in-flight work, fires cancel_fn for queued items. */
+    if (s_pool) kl_thread_pool_free(s_pool);
+    kl_http_server_free(&server);
 
-    /* Print work queue stats */
-    if (s_work_queue) {
-        ShWorkQueueStats wq_stats;
-        sh_workqueue_stats(s_work_queue, &wq_stats);
-        printf("Work queue: %lu pushed, %lu popped, %lu dropped, %lu expired\n",
-               (unsigned long)wq_stats.total_pushed,
-               (unsigned long)wq_stats.total_popped,
-               (unsigned long)wq_stats.total_dropped,
-               (unsigned long)wq_stats.total_expired);
-    }
+    printf("Geocode queue: %lu pushed, %lu popped, %lu dropped, %lu expired\n",
+           (unsigned long)s_qstats.pushed, (unsigned long)s_qstats.popped,
+           (unsigned long)s_qstats.dropped, (unsigned long)s_qstats.expired);
 
     /* Print rate limiter stats */
     if (s_rate_limiter) {
@@ -1258,9 +1230,6 @@ int main(int argc, char *argv[]) {
     }
 
     /* Cleanup */
-    mg_mgr_free(&mgr);
-    sh_worker_pool_free(s_worker_pool);
-    sh_workqueue_free(s_work_queue);
     sh_ratelimit_free(s_rate_limiter);
     sh_adaptive_free(s_adaptive_tracker);
     lc_index_free(g_index);

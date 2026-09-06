@@ -247,12 +247,14 @@ jobs:
         run: bash carta/api/test_api.sh
 
   # ==========================================================================
-  # Build and test API servers
+  # Locus API (Keel-backed)
+  #
+  # Standalone, and it starts the server and issues real geocode queries.
+  # Locus needs an OSM PBF, so the job uses Monaco (fetched by the Makefile).
   # ==========================================================================
-  test-api:
-    name: Test API Servers
+  test-locus-api:
+    name: Test Locus API
     runs-on: ubuntu-latest
-    needs: test-c
 
     steps:
       - name: Checkout code
@@ -265,13 +267,17 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y build-essential libomp-dev
 
-      # APIs that need OSM data - just verify they build and show help
-
-
       - name: Build Locus API
         run: |
           make locus-api
           ./locus/api/locus-geocoder --help > /dev/null
+
+      - name: Fetch Monaco PBF
+        run: make data/monaco-latest.osm.pbf
+
+      - name: Test Locus API
+        timeout-minutes: 5
+        run: bash locus/api/test_api.sh
 
   # ==========================================================================
   # Build WebAssembly
