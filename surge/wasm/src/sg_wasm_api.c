@@ -7,7 +7,7 @@
  * Unlike Velo/Carta which embed pre-built data, Surge VRP problems are
  * fully specified in each request JSON. No initialization data needed.
  *
- * All API endpoints work identically to the Mongoose server.
+ * All API endpoints work identically to the Keel server.
  */
 
 #include <stdlib.h>
