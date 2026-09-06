@@ -25,6 +25,8 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
+        with:
+          submodules: recursive
 
       - name: Install dependencies
         run: |
@@ -35,6 +37,11 @@ jobs:
         run: |
           make shared
           make test-shared
+
+      - name: Build and test Arbor
+        run: |
+          make arbor
+          make test-arbor
 
       - name: Build and test Ralph
         run: |
@@ -70,6 +77,11 @@ jobs:
           make locus
           make test-locus
 
+      - name: Build and test Surge
+        run: |
+          make surge
+          make test-surge
+
   # ==========================================================================
   # Build and test API servers
   # ==========================================================================
@@ -81,6 +93,8 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
+        with:
+          submodules: recursive
 
       - name: Install dependencies
         run: |
@@ -111,6 +125,12 @@ jobs:
           make locus-api
           ./locus/api/locus-geocoder --help > /dev/null
 
+      # Surge API is served by Keel (vendor/keel submodule), not mongoose
+      - name: Build Surge API
+        run: |
+          make surge-api
+          ./surge/api/surge-solver --help > /dev/null
+
   # ==========================================================================
   # Build WebAssembly
   # ==========================================================================
@@ -122,6 +142,8 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
+        with:
+          submodules: recursive
 
       - name: Install dependencies
         run: |
@@ -192,6 +214,8 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
+        with:
+          submodules: recursive
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
