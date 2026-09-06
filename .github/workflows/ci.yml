@@ -203,8 +203,11 @@ jobs:
           make velo-api
           ./velo/api/velo-route-server --help > /dev/null
 
+      # bench_pbf is the PBF->.vlg builder; it is not part of `make velo`.
       - name: Build Monaco graph
-        run: make data/monaco.vlg
+        run: |
+          make -C velo bench_pbf
+          make data/monaco.vlg
 
       - name: Test Velo API
         timeout-minutes: 5
