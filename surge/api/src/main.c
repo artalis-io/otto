@@ -112,6 +112,7 @@ typedef struct {
 typedef struct {
     KlAsyncOp op;
     AppCtx *app;
+    const KlHttpRequest *req;   /* lives inside the conn; valid while suspended */
 
     /* Request body (copied out of the buffer reader before suspending) */
     char *body;
@@ -261,8 +262,18 @@ static void solve_on_cancel(KlAsyncOp *op, void *user_data) {
     ctx->detached = 1;
 }
 
+/*
+ * Declare the send. kl_async_complete() re-arms the fd and drives the state
+ * machine, but the connection is left SUSPENDED unless on_resume says what
+ * happens next -- without this the response is never written and the client
+ * hangs. (Keel's examples/thread_pool and examples/async_thread_pool leave
+ * this a no-op and hang for exactly that reason; tests/smoke_iouring_async.c
+ * is the correct reference.)
+ */
 static void solve_on_resume(KlAsyncOp *op, void *user_data) {
-    (void)op; (void)user_data;
+    (void)user_data;
+    SolveCtx *ctx = (SolveCtx *)((char *)op - offsetof(SolveCtx, op));
+    kl_http_request_send_response(ctx->req);
 }
 
 /*
@@ -446,6 +457,7 @@ static void handle_solve(KlHttpRequest *req, KlHttpResponse *res, void *ud) {
     ctx->body_len = br->len;
 
     ctx->app = app;
+    ctx->req = req;
     ctx->status_code = 500;
     ctx->solve_timer = sh_metrics_timer_start();
 
