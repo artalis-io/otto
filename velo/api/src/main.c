@@ -109,7 +109,6 @@ static RouteServerConfig s_config = {
 };
 
 /* Global state */
-static volatile sig_atomic_t s_signo = 0;
 static VLGraph *s_graph = NULL;
 static VLLandmarks *s_landmarks = NULL;
 static VLAPIContext *s_api_ctx = NULL;  /* Transport-agnostic API context */
@@ -178,10 +177,6 @@ typedef struct {
     ShMetricsTimer timer;
 } RouteCtx;
 
-
-static void signal_handler(int signo) {
-    s_signo = signo;
-}
 
 /* ============================================================================
  * Configuration Loading
@@ -1271,10 +1266,6 @@ int main(int argc, char *argv[]) {
     } else {
         printf("Adaptive capacity: disabled\n");
     }
-
-    /* Set up signal handlers */
-    signal(SIGINT, signal_handler);
-    signal(SIGTERM, signal_handler);
 
     /* Initialize logging */
     ShLogConfig log_cfg = SH_LOG_CONFIG_DEFAULT;
