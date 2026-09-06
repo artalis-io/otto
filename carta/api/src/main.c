@@ -2,7 +2,7 @@
  * Carta Tile Server
  *
  * A lightweight tile server that serves vector (MVT), raster (PNG), and
- * ASCII art tiles from OSM PBF files using carta and mongoose.
+ * ASCII art tiles from OSM PBF files using carta and Keel.
  *
  * Endpoints:
  *   GET /                         - Tile viewer (served from static dir)

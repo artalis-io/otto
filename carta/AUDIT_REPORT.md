@@ -458,7 +458,7 @@ The Carta codebase is production-quality with comprehensive memory safety. **All
 
 1. **ct_serialize.c** - Binary index serialization (mmap-based)
 2. **ct_ascii.c** - ASCII art rendering
-3. **api/src/main.c** - Tile server (mongoose-based)
+3. **api/src/main.c** - Tile server (Keel-based)
 
 ### ct_serialize.c - Binary Index Serialization
 
@@ -529,15 +529,20 @@ struct mg_http_serve_opts opts = {
 };
 mg_http_serve_dir(c, hm, &opts);
 ```
-**Risk:** Mongoose handles path sanitization, but worth noting.
-**Recommendation:** Document that static_dir should be carefully controlled.
+**Risk:** Mongoose handled path sanitization internally.
+**UPDATE (Keel migration):** `mg_http_serve_dir()` is gone. Static files are
+now served by `serve_static_file()` in `carta/api/src/main.c`, which rejects
+any path containing `..` before joining it to `static_dir`. The containment
+guarantee is ours now, not the HTTP library's.
+**Recommendation:** Keep the `..` rejection covered by a test, and document
+that static_dir should be carefully controlled.
 
 ### Summary of New Findings
 
 | ID | Severity | File | Issue | Status |
 |----|----------|------|-------|--------|
 | S12 | Medium | ct_serialize.c | Unchecked malloc for offset arrays | ✅ Fixed |
-| S13 | Low | api/src/main.c | Static file serving (mongoose handles) | Acceptable |
+| S13 | Low | api/src/main.c | Static file serving (now ours: `..` rejected in `serve_static_file()`) | Re-checked after Keel migration |
 
 ### Thread Safety Review (Updated)
 

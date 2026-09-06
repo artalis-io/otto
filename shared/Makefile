@@ -69,10 +69,10 @@ SRCS = src/sh_geo.c \
        src/sh_fs.c \
        src/sh_eov.c
 
-# HTTP server components (requires mongoose - compile separately by API servers)
-# API servers should compile sh_httpserver.c directly with mongoose includes.
-# Usage: $(CC) $(CFLAGS) -I../shared/include -I../vendor/mongoose src/sh_httpserver.c
-HTTPSERVER_SRC = src/sh_httpserver.c
+# Keel HTTP helpers (require Keel headers - compiled separately by API servers)
+# Usage: $(CC) $(CFLAGS) -I../shared/include -I../vendor/keel/include \
+#            src/sh_keelserver.c
+KEELSERVER_SRC = src/sh_keelserver.c
 
 MINIZ_SRCS = $(VENDOR_DIR)/miniz.c \
              $(VENDOR_DIR)/miniz_tdef.c \

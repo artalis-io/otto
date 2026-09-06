@@ -123,7 +123,7 @@ This is not needed for Docker builds (Linux) or Intel Macs.
 ├─────────────────────────────────────────────────────────────────┤
 │  Core: Ralph (LP/MIP) │ Shared (geo, protobuf, rate limiting)   │
 ├─────────────────────────────────────────────────────────────────┤
-│  Vendor: miniz (zlib) │ mongoose (HTTP) │ Clay (UI layout)      │
+│  Vendor: miniz (zlib) │ Keel (HTTP) │ Clay (UI layout)          │
 └─────────────────────────────────────────────────────────────────┘
 ```
 
@@ -254,7 +254,7 @@ int carta_render_tile(int z, int x, int y, uint8_t **out, size_t *len);
 int vl_route(VLGraph *g, int from, int to, VLRoute *route);
 ```
 
-HTTP (Mongoose) and WASM (Emscripten) are just thin wrappers (~10 lines each) over the same core. This means:
+HTTP (Keel) and WASM (Emscripten) are just thin wrappers (~10 lines each) over the same core. This means:
 
 - **The demo IS the product** - Browser WASM demos run the actual algorithms
 - **Zero-infrastructure evaluation** - Send a single HTML file, no server needed

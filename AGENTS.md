@@ -15,7 +15,7 @@ FuelWise is a truck fleet optimization platform that combines route planning, fu
 | `carta/` | C | Map tile generator (MVT, PNG) |
 | `fuelwise/` | C | Refueling domain library |
 | `shared/` | C | Common geo utilities |
-| `vendor/` | C | Third-party libs (mongoose, miniz) |
+| `vendor/` | C | Third-party libs (Keel, miniz) |
 | `fuelwise/api/` | C | FuelWise REST API server |
 | `velo/api/` | C | Route server REST API |
 | `carta/api/` | C | Tile server REST API |
@@ -70,7 +70,7 @@ fuelwise-platform/
 │   └── src/                    # Implementation (sh_geo.c)
 │
 ├── vendor/                     # Third-party Libraries
-│   ├── mongoose/               # HTTP server
+│   ├── keel/                   # HTTP server (submodule)
 │   ├── miniz/                  # zlib compression
 │   └── clay/                   # UI layout (future)
 │
@@ -242,7 +242,7 @@ make run-velo-api     # Show Velo route server usage
 
 ### API Issues
 - Use `curl -v` to see full request/response
-- Check mongoose debug output in terminal
+- Check the server log output in terminal
 - Verify CORS headers for browser requests
 
 ### UI Issues

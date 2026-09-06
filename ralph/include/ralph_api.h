@@ -2,7 +2,7 @@
  * Ralph API Handler - Transport-agnostic request handling
  *
  * This module provides request handling logic that can be used by:
- * - Mongoose HTTP server (REST API)
+ * - Keel HTTP server (REST API)
  * - WASM exports (browser demo)
  * - Direct C API calls (testing)
  *

@@ -5,7 +5,7 @@
  * architecture parity between server and browser deployments.
  *
  * The Monaco geocoding index is embedded at compile time for a self-contained demo.
- * All API endpoints work identically to the mongoose server.
+ * All API endpoints work identically to the Keel server.
  */
 
 #include <stdlib.h>

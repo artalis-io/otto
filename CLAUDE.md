@@ -377,7 +377,7 @@ make site-serve   # Build and serve on :8000
 ├─────────────────────────────────────────────────────┤
 │  Core: Ralph (LP/MIP) │ Shared (geo, proto, rate)   │
 ├─────────────────────────────────────────────────────┤
-│  Vendor: miniz │ mongoose │ Clay                    │
+│  Vendor: miniz │ Keel │ Clay                        │
 └─────────────────────────────────────────────────────┘
 ```
 
@@ -390,7 +390,7 @@ OTTO APIs follow a transport-agnostic pattern. Core logic is pure C functions; H
 ```
 ┌─────────────────────────────────────────────────────┐
 │  Transport Layer (thin, ~10 lines each)             │
-│  Mongoose HTTP │ WASM+JS │ Unix socket │ Embedded   │
+│  Keel HTTP     │ WASM+JS │ Unix socket │ Embedded   │
 ├─────────────────────────────────────────────────────┤
 │  Core API (pure C functions)                        │
 │  carta_render_tile() │ vl_route() │ lc_search()     │
@@ -482,7 +482,7 @@ Deep-dive documentation in `docs/internals/`:
 | Library | Location | Purpose |
 |---------|----------|---------|
 | miniz | `vendor/miniz/` | zlib compression |
-| mongoose | `vendor/mongoose/` | HTTP server |
+| Keel | `vendor/keel/` | HTTP server (git submodule, MIT) |
 | Clay | `vendor/clay/` | UI layout |
 
 Each has its own `CLAUDE.md` with API documentation.

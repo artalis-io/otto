@@ -4,7 +4,7 @@
 
 ## Overview
 
-The Locus API server provides RESTful geocoding endpoints using the Locus library. It runs on port 8083 by default and uses mongoose for HTTP handling.
+The Locus API server provides RESTful geocoding endpoints using the Locus library. It runs on port 8083 by default and uses Keel for HTTP handling.
 
 Features:
 - Rate limiting (per-IP token bucket)
@@ -285,4 +285,4 @@ export LOCUS_CORS_ORIGINS="https://app.example.com,https://staging.example.com"
 
 - **liblocus.a**: Locus geocoding library
 - **libshared.a**: Shared utilities (rate limiting, work queue, logging)
-- **mongoose**: Embedded HTTP server (from vendor/)
+- **Keel**: Embedded HTTP server (vendor submodule, MIT)

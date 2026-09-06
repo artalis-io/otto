@@ -321,3 +321,45 @@ Client Request
 - [ ] Add trace ID propagation to work queue
 - [ ] Create Grafana dashboard templates
 - [ ] Document alerting thresholds
+
+## Mongoose Removal — Complete
+
+`vendor/mongoose/` and `shared/src/sh_httpserver.c` are gone. All six API
+servers run on Keel (`vendor/keel`, MIT, git submodule pinned to v3.0.0-rc.3).
+
+### Why this mattered
+
+`vendor/mongoose/mongoose.h` declared
+`SPDX-License-Identifier: GPL-2.0-only or commercial`. GPL-2.0-**only** (not
+"or later") cannot combine with OTTO's AGPL-3.0 — GPLv2-or-later can upgrade
+into AGPLv3, `-only` cannot — and the commercial tier in
+`docs/business/STRATEGY.md` could not sublicense it either. Porting the servers
+made the code independent of it; **this deletion is what actually resolves the
+conflict**, because until now the GPL-2.0-only source was still in the tree.
+
+### Removed
+
+| Path | Size |
+|------|------|
+| `vendor/mongoose/mongoose.c` | 27,331 lines |
+| `vendor/mongoose/mongoose.h` | ~5,000 lines |
+| `vendor/mongoose/CLAUDE.md` | vendor notes |
+| `shared/src/sh_httpserver.c` | 537 lines |
+| `shared/include/sh_httpserver.h` | 440 lines |
+
+`sh_httpserver.h` also carried a clean transport-agnostic API (`ShHttpServer`,
+`ShHttpRequest`, `ShHttpResponse`) that **no server ever adopted** — every one
+of them called `mg_*` directly. It goes with the rest.
+
+### Kept deliberately
+
+Comments in the ported servers that describe how the mongoose server *used to*
+behave are kept in past tense. They explain why several decisions look the way
+they do — the 400 for malformed `/tiles/` paths, the CORS-preflight ordering,
+the `Method not allowed` shape, and why Carta no longer needs N event loops.
+
+### Verification
+
+All six `main.c` files plus `sh_keelserver.c` compile clean under
+`-Wall -Wextra` with `vendor/mongoose/` absent, and every server has a gating
+CI suite (Surge 11, Ralph 14, FuelWise 20, Velo 26, Carta 19, Locus 19).
