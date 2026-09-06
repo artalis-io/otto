@@ -201,6 +201,9 @@ jobs:
           make carta-api
           ./carta/api/carta-tile-server --help > /dev/null
 
+      # Velo API is served by Keel (vendor/keel submodule), not mongoose.
+      # Build + --help only: velo-route-server needs an OSM graph to start and
+      # there is no graph fixture in the repo. See docs/roadmaps/velo.md.
       - name: Build Velo API
         run: |
           make velo-api
