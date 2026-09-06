@@ -2,7 +2,7 @@
  * Surge API Handler - Transport-agnostic request handling
  *
  * This module provides request handling logic that can be used by:
- * - Mongoose HTTP server (production)
+ * - Keel HTTP server (production)
  * - WASM exports (browser demo)
  * - Direct C API calls (testing)
  *
