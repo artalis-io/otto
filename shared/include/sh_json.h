@@ -244,7 +244,7 @@ ShJsonValue *sh_json_get_path(const ShJsonValue *v, const char *path);
  * Streaming JSON writer that outputs directly to a callback function.
  * No intermediate buffering - writes go straight to the destination.
  *
- * Usage with mongoose:
+ * Usage from an HTTP handler:
  *   static int mg_json_write(void *ctx, const char *data, size_t len) {
  *       mg_send((struct mg_connection *)ctx, data, len);
  *       return 0;
@@ -344,7 +344,7 @@ int sh_json_write_array_end(ShJsonWriter *w);
  *   }
  *   sh_json_buf_free(&jb);
  *
- * For mongoose specifically:
+ * For a Keel handler specifically:
  *   send_json(c, 200, jb.buf);  // Works with existing helpers
  *   sh_json_buf_free(&jb);
  * ---------------------------------------------------------------------------- */

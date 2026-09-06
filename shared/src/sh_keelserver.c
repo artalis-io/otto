@@ -1,9 +1,7 @@
 /*
  * sh_keelserver.c - Keel-backed HTTP helpers for OTTO API servers
  *
- * See sh_keelserver.h for the contract. Behaviour is intentionally identical
- * to the sh_mg_* helpers so servers can be ported one at a time without any
- * observable change to responses.
+ * See sh_keelserver.h for the contract.
  */
 
 #include "sh_keelserver.h"

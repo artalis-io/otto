@@ -251,7 +251,7 @@ make docker   # Build Docker image
 
 - **carta** - Tile generation library
 - **shared** - Geo utilities
-- **mongoose** - HTTP server (vendor)
+- **Keel** - HTTP server (vendor submodule, MIT)
 - **miniz** - Compression (vendor)
 
 ## Performance Notes
