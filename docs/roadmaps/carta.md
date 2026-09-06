@@ -858,17 +858,49 @@ that containment internally, and with Keel it is our job. Keel's own
 (route patterns have no wildcard), so it was not usable as a model; static
 serving lives in `mw_fallback` alongside the `/tiles/` prefix and the 404.
 
+### Async suspend must come from a route handler, not middleware
+
+Worth knowing before porting Locus. The first attempt served tiles from
+`mw_fallback` (Keel route patterns have no wildcard, so a `/tiles/` prefix
+looked like middleware's job). The server answered the first tile 200 and then
+died. ASan:
+
+```
+SEGV on unknown address 0x000000000000  (WRITE)
+  #1 hdr_append
+  #2 kl_http_response_header
+  #3 send_tile_cors      src/main.c:723
+  #4 render_reply        src/main.c:416
+  #5 render_done_fn      src/main.c:440
+  #6 thread_pool_on_pipe
+```
+
+`kl_async_suspend()` is only honoured after a *route handler*: `conn_process()`
+checks for `KL_HTTP_CONN_SUSPENDED` once the handler returns. A middleware
+short-circuit instead transitions straight to `SENDING`, so the connection was
+sent and recycled while the op was still suspended, and `done_fn` then wrote
+into a freed response.
+
+Keel route params express the prefix: `/tiles/:z/:x/:y` matches
+`/tiles/14/8529/5975.mvt`, and `parse_tile_uri()` still reads the extension off
+the full path. `mw_fallback` keeps only synchronous work — static files, the
+JSON 404, and a 400 for `/tiles/` paths with the wrong segment count (which
+mongoose's prefix check used to answer).
+
+**Rule of thumb: anything that suspends must be a route; middleware may only
+answer synchronously.**
+
 ### Verification
 
-Carta needs an OSM PBF, so CI was build + `--help` only. `carta/api/test_api.sh`
-now starts the server against Monaco and gates on: health, stats, TileJSON,
-MVT/PNG/ASCII tiles (including a real PNG signature check), ETag + 304,
-error handling (bad format, zoom out of range, malformed path, 404), CORS on
-both preflight and tile responses, and async dispatch under concurrent renders.
+`carta/api/test_api.sh` starts the server against Monaco and gates CI —
+**19/19**: health, stats, TileJSON, MVT/PNG/ASCII tiles (including a real PNG
+signature check), ETag + conditional 304, error handling (bad format, zoom out
+of range, malformed path, 404), CORS on both preflight and tile responses, and
+async dispatch under concurrent renders.
 
 Not verified locally: Carta needs `mmap`/`sys/mman.h`, which MinGW lacks, so
-unlike Velo this port could not be smoke-tested on Windows first. CI is its
-first run.
+unlike Velo this port could not be smoke-tested on Windows first. CI found both
+bugs instead.
 
 ### Remaining
 
