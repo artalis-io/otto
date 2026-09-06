@@ -92,7 +92,6 @@ static TileServerConfig s_config;
 static ShCorsConfig s_cors;
 
 /* Global state */
-static volatile sig_atomic_t s_signo = 0;
 static CTPBFContext *s_pbf_ctx = NULL;
 static CTAPIContext *s_api_ctx = NULL;  /* Transport-agnostic API handler */
 static CTLODConfig s_lod_config = {0};
