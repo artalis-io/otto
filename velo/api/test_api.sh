@@ -134,11 +134,15 @@ check "Preflight sets Allow-Origin" "$RESP" 'Access-Control-Allow-Origin'
 
 echo ""
 echo "=== Async dispatch (KlAsyncOp + KlThreadPool) ==="
+# NOTE: collect the curl PIDs and wait only on those. A bare `wait` would
+# also wait on the server started above with &, which never exits.
+BURST_PIDS=""
 for _ in 1 2 3 4 5; do
     curl -s -m 20 -o /dev/null "http://127.0.0.1:$PORT/api/v1/route?from=$FROM&to=$TO" &
+    BURST_PIDS="$BURST_PIDS $!"
 done
 CODE=$(curl -s -o /dev/null -w '%{http_code}' -m 10 "http://127.0.0.1:$PORT/api/v1/health")
-wait
+for pid in $BURST_PIDS; do wait "$pid" 2>/dev/null || true; done
 check_code "Health stays responsive during concurrent routes" "$CODE" "200"
 
 RESP=$(curl -s -m 5 "http://127.0.0.1:$PORT/api/v1/stats")
