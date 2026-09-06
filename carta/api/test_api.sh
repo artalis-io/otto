@@ -159,6 +159,14 @@ echo "  Tests Run: $((PASS + FAIL))"
 echo "  Passed: $PASS"
 if [ $FAIL -gt 0 ]; then
     echo "  Failed: $FAIL"
+    echo ""
+    if kill -0 $SERVER_PID 2>/dev/null; then
+        echo "--- server still running ---"
+    else
+        echo "--- SERVER IS NOT RUNNING (crashed or exited) ---"
+    fi
+    echo "--- server log ---"
+    tail -40 /tmp/carta_test_server.log
     exit 1
 fi
 echo "  All tests passed!"
