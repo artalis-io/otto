@@ -2058,42 +2058,36 @@ The mongoose handler leaked `work->request_path` on the queue-full (503) path �
 it freed `request_body` and the item but not the `strdup`'d path. There is now
 a single `solve_work_item_free()` that releases everything.
 
-### Open: Keel async suspend/resume
+### Resolved: async suspend/resume needs on_resume to declare the send
 
-The obvious follow-up is to replace the work queue with `KlAsyncOp` +
-`KlThreadPool` so the event loop stays free during a solve (the current
-`sh_completion_wait()` serializes requests — a limitation inherited from the
-mongoose server, not introduced here).
+The first attempt at `KlAsyncOp` + `KlThreadPool` hung: the suspended
+connection never resumed, so `POST /api/v1/solve` never answered.
 
-That was implemented first and reverted, because the suspended connection never
-resumed and clients hung. What we measured on v3.0.0-rc.3, using **Keel's own
-unmodified examples**, no OTTO code involved:
+The cause was ours. `kl_async_complete()` re-arms the fd and drives the state
+machine, but the connection stays `SUSPENDED` unless `on_resume` says what
+happens next. Keel's `examples/thread_pool` and `examples/async_thread_pool`
+both leave `on_resume` a no-op, and both hang on their async route for exactly
+this reason — that is what was copied here. The correct reference is
+`tests/smoke_iouring_async.c`:
 
-| Environment | `make -C vendor/keel test` | sync route | async route |
-|---|---|---|---|
-| Linux / epoll (ubuntu-latest) | **passes** | `200` in 0.28 ms | `000` — times out |
-| Windows / WSAPoll | — | `200` | hangs |
-| Windows / IOCP | — | `200` | no valid response |
-
-Reproduce (`examples/thread_pool` and `examples/async_thread_pool` behave the
-same):
-
-```bash
-make -C vendor/keel && make -C vendor/keel examples
-./vendor/keel/examples/thread_pool &
-curl -m 8 localhost:8080/        # 200, immediate
-curl -m 8 localhost:8080/query   # times out
+```c
+static void on_resume(KlAsyncOp *op, void *ud) {   /* declare the send */
+    op->conn->state = KL_HTTP_CONN_SENDING;
+}
 ```
 
-Note Keel's own test suite passes in the same job, so whatever this is, its
-unit tests do not cover the live server + thread pool + resume path.
-**Unresolved with upstream** — if it turns out to be a usage or build
-requirement on our side rather than a defect, switching over touches only
-`handle_via_queue()` and `main()`.
+That reaches into `src/protocols/http/http_conn_internal.h` (white-box).
+`kl_http_request_send_response()` is the public equivalent, so `SolveCtx`
+carries the `KlHttpRequest *` (it lives inside the connection and stays valid
+while suspended) and `on_resume` calls that instead of touching Keel
+internals.
 
-The same applies to Surge (Phase 1), which *did* land on `KlAsyncOp`; its CI
-only builds the API and never issues a request, so this would not have been
-caught there.
+Worth noting for anyone else starting from the examples: Keel's own e2e checks
+these endpoints with `check_contains_soft`, which *skips* rather than fails on
+an empty response ("async mechanism may not work in this environment"), and the
+hard async gates (`smoke-pollcomp-async`, `smoke-iouring-async`,
+`smoke-iocp-async`) all use the white-box smoke harness. So the examples'
+no-op `on_resume` does not fail anything upstream.
 
 ### Pre-existing issue found while verifying (NOT fixed here)
 
