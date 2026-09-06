@@ -246,23 +246,6 @@ jobs:
         timeout-minutes: 5
         run: bash carta/api/test_api.sh
 
-      # TEMPORARY: ASan build to pinpoint the post-render crash. Remove once fixed.
-      - name: ASan probe
-        if: failure()
-        timeout-minutes: 10
-        run: |
-          make -C carta/api clean
-          make -C carta/api debug
-          ./carta/api/carta-tile-server -p 8482 data/monaco-latest.osm.pbf > /tmp/asan.log 2>&1 &
-          SRV=$!
-          for _ in $(seq 1 60); do curl -s -m 2 -o /dev/null http://127.0.0.1:8482/api/v1/health && break; sleep 0.5; done
-          curl -s -m 30 -o /dev/null -w "mvt=%{http_code}" http://127.0.0.1:8482/tiles/14/8529/5975.mvt || true
-          curl -s -m 30 -o /dev/null -w "mvt2=%{http_code}" http://127.0.0.1:8482/tiles/14/8529/5975.mvt || true
-          sleep 2
-          kill $SRV 2>/dev/null || true
-          echo "--- ASan / server log ---"
-          tail -60 /tmp/asan.log
-
   # ==========================================================================
   # Build and test API servers
   # ==========================================================================
