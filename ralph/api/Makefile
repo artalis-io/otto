@@ -83,55 +83,7 @@ debug: clean all
 run: all
 	./$(TARGET)
 
-# Integration test (uses port 8085 to avoid conflicts)
-TEST_PORT = 8085
+# Integration test. test_api.sh starts the server itself, picks its own
+# port, and exits non-zero on failure -- so this target actually gates.
 test: all
-	@echo "Starting Ralph solver server for testing on port $(TEST_PORT)..."
-	@./$(TARGET) -p $(TEST_PORT) &
-	@SERVER_PID=$$!; \
-	sleep 2; \
-	echo ""; \
-	echo "=== Testing Ralph Solver API ==="; \
-	echo ""; \
-	echo "Testing health endpoint..."; \
-	HEALTH=$$(curl -s http://localhost:8085/api/v1/health); \
-	echo "$$HEALTH"; \
-	if echo "$$HEALTH" | grep -q '"status":"ok"'; then \
-		echo "  PASS: Health endpoint works"; \
-	else \
-		echo "  FAIL: Health endpoint"; \
-	fi; \
-	echo ""; \
-	echo "Testing formats endpoint..."; \
-	FORMATS=$$(curl -s http://localhost:8085/api/v1/formats); \
-	echo "$$FORMATS"; \
-	if echo "$$FORMATS" | grep -q '"lp"'; then \
-		echo "  PASS: Formats endpoint works"; \
-	else \
-		echo "  FAIL: Formats endpoint"; \
-	fi; \
-	echo ""; \
-	echo "Testing solve endpoint (simple LP)..."; \
-	SOLVE=$$(curl -s -X POST http://localhost:8085/api/v1/solve \
-		-H "Content-Type: application/json" \
-		-d '{"format":"lp","problem":"max: 5 x + 3 y\nsubject to\nwood: 2 x + 4 y <= 40\nlabor: 3 x + 2 y <= 24\nbounds\nx >= 0\ny >= 0\nend"}'); \
-	echo "$$SOLVE" | head -20; \
-	if echo "$$SOLVE" | grep -q '"status":"OPTIMAL"'; then \
-		echo "  PASS: Solve endpoint works"; \
-	else \
-		echo "  FAIL: Solve endpoint"; \
-	fi; \
-	echo ""; \
-	echo "Testing error handling (invalid LP)..."; \
-	ERROR=$$(curl -s -X POST http://localhost:8085/api/v1/solve \
-		-H "Content-Type: application/json" \
-		-d '{"format":"lp","problem":"invalid syntax"}'); \
-	echo "$$ERROR"; \
-	if echo "$$ERROR" | grep -q '"error"'; then \
-		echo "  PASS: Error handling works"; \
-	else \
-		echo "  FAIL: Error handling"; \
-	fi; \
-	echo ""; \
-	echo "=== Ralph API Tests Complete ==="; \
-	kill $$SERVER_PID 2>/dev/null || true
+	@cd ../.. && bash ralph/api/test_api.sh

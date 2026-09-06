@@ -2089,14 +2089,15 @@ hard async gates (`smoke-pollcomp-async`, `smoke-iouring-async`,
 `smoke-iocp-async`) all use the white-box smoke harness. So the examples'
 no-op `on_resume` does not fail anything upstream.
 
-### Pre-existing issue found while verifying (NOT fixed here)
+### Pre-existing issue found while verifying — now fixed
 
-`fuelwise-api --help` **exits 1**. `main()` treats any negative return from
-`sh_args_parse()` as an error, but `-2` means "help was requested"; Ralph gets
-this right with `if (arg_index == -2) { print_usage(...); return 0; }`. The
-`-h`/`--help` loop later in `main()` is unreachable as a result. Left alone
-because it is an exit-code behaviour change; it is why the CI job has no
-`--help` smoke check, unlike Surge and Ralph.
+`fuelwise-api --help` exited 1. `sh_args_parse()` returns **-2 for `--help`**
+and **-1 for a parse error**; `main()` treated any negative return as an error,
+so `--help` printed usage and exited 1, and the `-h`/`--help` loop below it was
+unreachable. Ralph gets this right with `if (arg_index == -2) { ...; return 0; }`.
+
+`main()` now distinguishes the two, and the CI job has its `--help` smoke check
+back alongside the other servers.
 
 ### Remaining
 
