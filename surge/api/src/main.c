@@ -649,7 +649,15 @@ int main(int argc, char *argv[]) {
     kl_http_server_use(&server, "OPTIONS", "/*", mw_preflight, NULL);
     kl_http_server_use(&server, "*", "/*", mw_not_found, &app);
 
-    SH_LOG_INFO("Server starting", "port", s_config.server.port);
+    /*
+     * sh_log reads every field value with va_arg(..., const char *), so the
+     * value must be a string -- passing the int port here dereferenced it as
+     * a pointer and crashed on startup.
+     */
+    char port_str[16];
+    snprintf(port_str, sizeof(port_str), "%d", s_config.server.port);
+    SH_LOG_INFO("Server starting", "port", port_str);
+
     printf("\nSurge VRP Solver Server\n");
     printf("Listening on http://0.0.0.0:%d\n\n", s_config.server.port);
     printf("Endpoints:\n");
