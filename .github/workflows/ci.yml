@@ -141,7 +141,7 @@ jobs:
           make -C vendor/keel clean
           make -C vendor/keel BACKEND=iouring
           rm -f surge/api/surge-solver surge/api/build/main.o
-          make -C surge/api
+          make -C surge/api LIBS="-L.. -lsurge -L../../arbor -larbor -L../../shared -lshared ../../vendor/keel/libkeel.a -lm -lpthread -luring"
           cd surge/api
           timeout 150 bash test_api.sh; echo "BACKEND_B_EXIT=$?"
 
