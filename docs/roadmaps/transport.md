@@ -112,7 +112,21 @@ the Carta SEGV; it is written down here so it is not rediscovered.
 
 ## Layer 3: Streaming escape hatch
 
-Not needed by any endpoint today. Designed now, built when a real consumer exists.
+No endpoint uses this yet. **Partially built** — the interface and the in-process
+transport are done; the Keel side is not:
+
+| piece | state |
+|---|---|
+| `ShApiResponse.stream_fn` / `_ctx` / `_free` | built (Phase 1) |
+| `ShApiStream`, `sh_api_stream_send()`, `sh_api_stream_closed()` | built |
+| `sh_transport_direct` collecting stream | built and tested |
+| `sh_keelasync` streaming via `kl_http_sse_*` | **not built** — declines with 501 |
+
+Building the interface half early cut both ways. It keeps `ShApiResponse` stable, so
+adding streaming later is not a struct change — but it also shipped a promise the Keel
+transport did not keep. Until the Keel side exists, `sh_keel_async_dispatch()` replies
+501 to a streaming response and calls `stream_free`, rather than sending the handler's
+own status with an error payload and leaking `stream_ctx`.
 
 The hatch lives **in the response, not in the vtable** — it is data, not a vtable method,
 so it cannot become the crack that lets Keel's model back in.

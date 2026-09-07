@@ -68,9 +68,32 @@ static int dup_opt(char **dst, const char *src)
     return 0;
 }
 
+/*
+ * Emit a response.
+ *
+ * A streaming response carries no body, so it must be recognised before the
+ * "no body" branch below -- which would otherwise send the handler's own
+ * status (200) with an error payload, and leak stream_ctx by never calling
+ * stream_free.
+ *
+ * This transport does not implement the streaming escape hatch yet (it needs
+ * kl_http_sse_*; see docs/roadmaps/transport.md, Layer 3). It therefore
+ * declines honestly with 501, and honours the guarantee sh_api.h makes: that
+ * stream_free is called even when a transport declines to stream.
+ */
 static void reply_from(const ShKeelAsync *cfg, KlHttpResponse *res,
-                       const ShApiResponse *r)
+                       ShApiResponse *r)
 {
+    if (r->stream_fn) {
+        if (r->stream_free) r->stream_free(r->stream_ctx);
+        r->stream_fn = NULL;
+        r->stream_ctx = NULL;
+        r->stream_free = NULL;
+        sh_kl_reply_error(res, 501, cfg->cors, NULL,
+                          "Streaming is not implemented by this transport");
+        return;
+    }
+
     if (r->body && r->body_len > 0) {
         sh_kl_reply_body(res, r->status_code,
                          r->content_type ? r->content_type : "application/json",
