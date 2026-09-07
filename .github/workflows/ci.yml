@@ -310,17 +310,17 @@ jobs:
   # ==========================================================================
   # Windows
   #
-  # OTTO targets native Windows, but nothing here has ever built on it -- the
-  # POSIX calls scattered through the core libraries were only ever exercised
-  # on Linux. sh_pal.h is the fix; this job is what stops it rotting.
+  # OTTO targets native Windows, but nothing here built on it until sh_pal.h.
+  # This job is what stops that rotting: a PAL only ever compiled on Linux is
+  # a PAL nobody notices breaking.
   #
-  # Narrow on purpose. It builds and runs the PAL and nothing else, because
-  # the rest of shared/ does not compile on Windows yet: sh_fs.c calls mkdir
-  # with two arguments, and sh_pdf2struc*.c call memmem, neither of which
-  # exists there. Widening this job is the measure of Phase 4 progress.
+  # Now covers the whole of shared/ -- 47 files, every test -- after seven
+  # blockers were routed through the PAL or replaced with portable code. It
+  # widens again as velo/carta/locus become buildable, which needs the file
+  # mapping half of Phase 4.
   # ==========================================================================
   windows:
-    name: Windows PAL
+    name: Windows Shared
     runs-on: windows-latest
 
     defaults:
@@ -342,6 +342,9 @@ jobs:
 
       - name: Build and run the PAL tests
         run: make -C shared test-pal
+
+      - name: Build and test all of shared
+        run: make -C shared test
 
   # ==========================================================================
   # Sanitizers

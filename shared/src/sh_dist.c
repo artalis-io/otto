@@ -8,6 +8,7 @@
 #include "sh_dist.h"
 #include <stdlib.h>
 #include <string.h>
+#include "sh_pal.h"
 #include <math.h>
 #include <time.h>
 #include <stdio.h>
@@ -182,11 +183,7 @@ void sh_rng_seed_time(SHRng *rng)
     if (!rng) return;
 
     uint64_t seed = (uint64_t)time(NULL);
-#ifdef _WIN32
-    seed ^= (uint64_t)GetCurrentProcessId() << 16;
-#else
-    seed ^= (uint64_t)getpid() << 16;
-#endif
+    seed ^= sh_pal_pid() << 16;
     /* Add some bits from clock */
     seed ^= (uint64_t)clock() << 32;
 

@@ -14,6 +14,7 @@
 #define WIN32_LEAN_AND_MEAN
 #define NOMINMAX
 #include <windows.h>
+#include <bcrypt.h>
 
 /* windows.h leaves these behind for 16-bit compatibility and they break any
  * code with a variable of the same name. Nothing below needs them. */
@@ -325,6 +326,36 @@ int sh_cpu_count(void)
     SYSTEM_INFO si;
     GetSystemInfo(&si);
     return si.dwNumberOfProcessors > 0 ? (int)si.dwNumberOfProcessors : 1;
+}
+
+
+/* ---------------------------------------------------------------- Process */
+
+uint64_t sh_pal_pid(void)
+{
+    return (uint64_t)GetCurrentProcessId();
+}
+
+/* ------------------------------------------------------------- Randomness */
+
+int sh_pal_random_bytes(void *buf, size_t len)
+{
+    if (!buf && len) return -1;
+    if (!len) return 0;
+
+    /* BCryptGenRandom with the system-preferred RNG: no handle to manage and
+     * no CryptoAPI provider lifetime to get wrong. */
+    return BCryptGenRandom(NULL, (PUCHAR)buf, (ULONG)len,
+                           BCRYPT_USE_SYSTEM_PREFERRED_RNG) == 0 ? 0 : -1;
+}
+
+/* ------------------------------------------------------------- Filesystem */
+
+int sh_pal_mkdir(const char *path)
+{
+    if (!path || !path[0]) return -1;
+    if (CreateDirectoryA(path, NULL)) return 0;
+    return GetLastError() == ERROR_ALREADY_EXISTS ? 0 : -1;
 }
 
 #else
