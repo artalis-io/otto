@@ -35,7 +35,8 @@
 #include "vl_api.h"
 #include "sh_polyline.h"
 #include "shared.h"   /* For sh_ratelimit, sh_workqueue, sh_cors, sh_capacity */
-#include "sh_keelserver.h"  /* Keel-backed sh_kl_* helpers */
+#include "sh_keelserver.h"
+#include "sh_keelasync.h"  /* Keel-backed sh_kl_* helpers */
 #include "sh_args.h"        /* For sh_parse_int, sh_parse_double */
 #include "sh_log.h"
 #include "sh_trace.h"
@@ -123,15 +124,10 @@ static ShRateLimiter *s_rate_limiter = NULL;
  * on the event loop thread (submit, done_fn, on_deadline and the stats handler
  * all run there), so plain integers are sufficient.
  */
-typedef struct {
-    uint64_t pushed;
-    uint64_t popped;    /* completed (done_fn ran) */
-    uint64_t dropped;   /* submit rejected: queue full */
-    uint64_t expired;   /* deadline exceeded */
-} VeloQueueStats;
+
 
 static KlThreadPool *s_pool = NULL;
-static VeloQueueStats s_qstats;
+static ShKeelAsyncStats s_qstats;
 
 /* CORS configuration (uses shared library) */
 static ShCorsConfig s_cors_config;
@@ -150,15 +146,15 @@ static ShAdaptiveTracker *s_adaptive_tracker = NULL;
  * ============================================================================ */
 
 typedef struct {
-    KlHttpServer *server;
-    KlThreadPool *pool;
+    ShKeelAsync async;   /* server, pool, cors, timeout, stats */
 } AppCtx;
 
+/*
+ * One route request. The async plumbing that used to surround this --
+ * KlAsyncOp, the connection, the detached flag -- now lives in
+ * sh_keel_async_dispatch(); see shared/src/sh_keelasync.c.
+ */
 typedef struct {
-    KlAsyncOp op;
-    AppCtx *app;
-    const KlHttpRequest *req;   /* lives inside the conn; valid while suspended */
-
     /* Request parameters */
     double from_lat, from_lon;
     double to_lat, to_lon;
@@ -172,9 +168,6 @@ typedef struct {
     char *response_json;        /* owned */
     int status_code;
     char error_msg[128];
-
-    int detached;
-    ShMetricsTimer timer;
 } RouteCtx;
 
 
@@ -721,147 +714,75 @@ static void route_render(RouteCtx *ctx) {
  * Async Plumbing
  * ============================================================================ */
 
-static void route_work_fn(void *user_data) {
-    route_render((RouteCtx *)user_data);
-}
-
-static void route_done_fn(void *user_data) {
-    RouteCtx *ctx = (RouteCtx *)user_data;
-
-    s_qstats.popped++;
-
-    if (ctx->detached) {
-        route_ctx_free(ctx);
-        return;
-    }
-
-    KlHttpResponse *res = kl_http_conn_response(ctx->op.conn);
-    if (ctx->status_code == 200 && ctx->response_json) {
-        send_json(res, 200, ctx->response_json);
-    } else if (ctx->status_code == 404) {
-        send_error(res, 404, ctx->error_msg[0] ? ctx->error_msg : "Routing failed");
-    } else {
-        send_error(res, 500, ctx->error_msg[0] ? ctx->error_msg
-                                               : "Failed to generate response");
-    }
-    record_metrics(ctx->timer, "route");
-
-    kl_async_complete(ctx->app->server, &ctx->op);
-    route_ctx_free(ctx);
-}
-
-/* Pool shutdown dropped the item before it started. */
-static void route_cancel_fn(void *user_data) {
-    route_ctx_free((RouteCtx *)user_data);
-}
-
 /*
- * Declare the send. kl_async_complete() re-arms the fd but leaves the
- * connection SUSPENDED unless on_resume says what happens next; without this
- * the response is never written and the client hangs. Keel's
- * examples/thread_pool and examples/async_thread_pool leave this a no-op and
- * hang for exactly that reason; tests/smoke_iouring_async.c is the correct
- * reference, and kl_http_request_send_response() is its public equivalent.
+ * The route handler, as a plain ShApiHandler.
+ *
+ * Parsing (JSON body for POST, query string for GET), bounds validation and
+ * response shaping all live here rather than in the transport -- that is the
+ * point of the shared interface. process_route_request() and route_render()
+ * are unchanged.
  */
-static void route_on_resume(KlAsyncOp *op, void *ud) {
-    (void)ud;
-    RouteCtx *ctx = (RouteCtx *)((char *)op - offsetof(RouteCtx, op));
-    kl_http_request_send_response(ctx->req);
-}
+static int velo_api_handler(void *unused, const ShApiRequest *req,
+                            ShApiResponse *resp) {
+    RouteCtx ctx;
+    int is_post;
 
-/* Connection died while suspended; the worker may still be running. */
-static void route_on_cancel(KlAsyncOp *op, void *ud) {
-    (void)ud;
-    ((RouteCtx *)((char *)op - offsetof(RouteCtx, op)))->detached = 1;
-}
-
-/* Deadline exceeded: reply 504 now, let done_fn free the context later. */
-static void route_on_deadline(KlAsyncOp *op, void *ud) {
-    (void)ud;
-    RouteCtx *ctx = (RouteCtx *)((char *)op - offsetof(RouteCtx, op));
-
-    if (ctx->detached) return;
-    ctx->detached = 1;
-    s_qstats.expired++;
-
-    send_error(kl_http_conn_response(op->conn), 504, "Request timeout");
-    record_metrics(ctx->timer, "route");
-
-    kl_async_complete(ctx->app->server, op);
-}
-
-/* ============================================================================
- * Route Handler
- * ============================================================================ */
-
-static void handle_route(KlHttpRequest *req, KlHttpResponse *res, void *ud) {
-    AppCtx *app = (AppCtx *)ud;
-    ShMetricsTimer timer = sh_metrics_timer_start();
+    (void)unused;
+    memset(&ctx, 0, sizeof(ctx));
+    ctx.profile = VL_PROFILE_CAR;
+    ctx.weight = VL_WEIGHT_DURATION;
+    ctx.include_geometry = 1;
+    ctx.status_code = 500;
 
     if (!s_graph) {
-        send_error(res, 503, "Graph not loaded");
-        return;
+        return sh_api_response_error(resp, 503, "Graph not loaded");
     }
 
-    /* Parse parameters */
-    double from_lat = 0, from_lon = 0, to_lat = 0, to_lon = 0;
-    VLProfile profile = VL_PROFILE_CAR;
-    VLWeightType weight = VL_WEIGHT_DURATION;
-    int include_geometry = 1;
-
-    int is_post = (req->method_len == 4 && memcmp(req->method, "POST", 4) == 0);
+    is_post = (req->method && strcmp(req->method, "POST") == 0);
 
     if (is_post) {
-        /* Parse JSON body */
-        KlHttpBufReader *br = (KlHttpBufReader *)req->body_reader;
-        if (!br || br->len == 0) {
-            send_error(res, 400, "Empty request body");
-            return;
+        SHArena *arena;
+        ShJsonValue *root = NULL;
+        const char *from_str, *to_str;
+        ShJsonValue *geom;
+
+        if (!req->body || req->body_len == 0) {
+            return sh_api_response_error(resp, 400, "Empty request body");
         }
 
         /* Arena-backed parse; released before we return. */
-        SHArena *arena = sh_arena_create(br->len * 4 + 4096);
+        arena = sh_arena_create(req->body_len * 4 + 4096);
         if (!arena) {
-            send_error(res, 500, "Out of memory");
-            return;
+            return sh_api_response_error(resp, 500, "Out of memory");
         }
-
-        ShJsonValue *root = NULL;
-        if (sh_json_parse(br->data, br->len, arena, &root) != SH_JSON_OK) {
+        if (sh_json_parse(req->body, req->body_len, arena, &root) != SH_JSON_OK) {
             sh_arena_free(arena);
-            send_error(res, 400, "Invalid JSON body");
-            return;
+            return sh_api_response_error(resp, 400, "Invalid JSON body");
         }
 
-        const char *from_str = sh_json_as_string(sh_json_get_path(root, "from"), NULL);
-        if (from_str && parse_coord(from_str, &from_lat, &from_lon) != 0) {
+        from_str = sh_json_as_string(sh_json_get_path(root, "from"), NULL);
+        if (from_str && parse_coord(from_str, &ctx.from_lat, &ctx.from_lon) != 0) {
             sh_arena_free(arena);
-            send_error(res, 400, "Invalid 'from' coordinate");
-            return;
+            return sh_api_response_error(resp, 400, "Invalid 'from' coordinate");
         }
 
-        const char *to_str = sh_json_as_string(sh_json_get_path(root, "to"), NULL);
-        if (to_str && parse_coord(to_str, &to_lat, &to_lon) != 0) {
+        to_str = sh_json_as_string(sh_json_get_path(root, "to"), NULL);
+        if (to_str && parse_coord(to_str, &ctx.to_lat, &ctx.to_lon) != 0) {
             sh_arena_free(arena);
-            send_error(res, 400, "Invalid 'to' coordinate");
-            return;
+            return sh_api_response_error(resp, 400, "Invalid 'to' coordinate");
         }
 
-        profile = parse_profile(sh_json_as_string(sh_json_get_path(root, "profile"), NULL));
-        weight = parse_mode(sh_json_as_string(sh_json_get_path(root, "mode"), NULL));
+        ctx.profile = parse_profile(
+            sh_json_as_string(sh_json_get_path(root, "profile"), NULL));
+        ctx.weight = parse_mode(
+            sh_json_as_string(sh_json_get_path(root, "mode"), NULL));
 
-        ShJsonValue *geom = sh_json_get_path(root, "geometry");
-        if (geom) include_geometry = sh_json_as_bool(geom, true) ? 1 : 0;
+        geom = sh_json_get_path(root, "geometry");
+        if (geom) ctx.include_geometry = sh_json_as_bool(geom, true) ? 1 : 0;
 
         sh_arena_free(arena);
     } else {
-        /* GET request - parse query string */
-        char query[1024];
-        size_t qlen = req->query_len < sizeof(query) - 1 ? req->query_len
-                                                         : sizeof(query) - 1;
-        if (req->query && qlen > 0) memcpy(query, req->query, qlen);
-        query[req->query && qlen > 0 ? qlen : 0] = '\0';
-
+        const char *query = req->query ? req->query : "";
         char from_val[128] = "", to_val[128] = "";
         char profile_val[32] = "", mode_val[32] = "", geom_val[16] = "";
 
@@ -872,104 +793,89 @@ static void handle_route(KlHttpRequest *req, KlHttpResponse *res, void *ud) {
         sh_query_get_str(query, "geometry", geom_val, sizeof(geom_val));
 
         if (from_val[0] == '\0') {
-            send_error(res, 400, "Missing 'from' parameter");
-            return;
+            return sh_api_response_error(resp, 400, "Missing 'from' parameter");
         }
         if (to_val[0] == '\0') {
-            send_error(res, 400, "Missing 'to' parameter");
-            return;
+            return sh_api_response_error(resp, 400, "Missing 'to' parameter");
         }
-        if (parse_coord(from_val, &from_lat, &from_lon) != 0) {
-            send_error(res, 400, "Invalid 'from' coordinate (format: lat,lon)");
-            return;
+        if (parse_coord(from_val, &ctx.from_lat, &ctx.from_lon) != 0) {
+            return sh_api_response_error(resp, 400,
+                                         "Invalid 'from' coordinate (format: lat,lon)");
         }
-        if (parse_coord(to_val, &to_lat, &to_lon) != 0) {
-            send_error(res, 400, "Invalid 'to' coordinate (format: lat,lon)");
-            return;
+        if (parse_coord(to_val, &ctx.to_lat, &ctx.to_lon) != 0) {
+            return sh_api_response_error(resp, 400,
+                                         "Invalid 'to' coordinate (format: lat,lon)");
         }
 
-        profile = parse_profile(profile_val);
-        weight = parse_mode(mode_val);
-        include_geometry = parse_bool(geom_val, 1);
+        ctx.profile = parse_profile(profile_val);
+        ctx.weight = parse_mode(mode_val);
+        ctx.include_geometry = parse_bool(geom_val, 1);
     }
 
     /* Validate coordinates are within graph bounds */
-    if (from_lat < s_graph->bbox_min.lat || from_lat > s_graph->bbox_max.lat ||
-        from_lon < s_graph->bbox_min.lon || from_lon > s_graph->bbox_max.lon) {
-        send_error(res, 400, "Origin coordinate outside graph bounds");
-        return;
+    if (ctx.from_lat < s_graph->bbox_min.lat || ctx.from_lat > s_graph->bbox_max.lat ||
+        ctx.from_lon < s_graph->bbox_min.lon || ctx.from_lon > s_graph->bbox_max.lon) {
+        return sh_api_response_error(resp, 400,
+                                     "Origin coordinate outside graph bounds");
     }
-    if (to_lat < s_graph->bbox_min.lat || to_lat > s_graph->bbox_max.lat ||
-        to_lon < s_graph->bbox_min.lon || to_lon > s_graph->bbox_max.lon) {
-        send_error(res, 400, "Destination coordinate outside graph bounds");
-        return;
-    }
-
-    RouteCtx *ctx = calloc(1, sizeof(*ctx));
-    if (!ctx) {
-        send_error(res, 500, "Out of memory");
-        return;
-    }
-    ctx->status = VL_ERROR_INVALID_ARGUMENT;
-    ctx->from_lat = from_lat;
-    ctx->from_lon = from_lon;
-    ctx->to_lat = to_lat;
-    ctx->to_lon = to_lon;
-    ctx->profile = profile;
-    ctx->weight = weight;
-    ctx->include_geometry = include_geometry;
-    ctx->timer = timer;
-
-    /* Work queue disabled: route inline on the event loop, as before. */
-    if (!s_pool) {
-        route_render(ctx);
-        if (ctx->status_code == 200 && ctx->response_json) {
-            send_json(res, 200, ctx->response_json);
-        } else if (ctx->status_code == 404) {
-            send_error(res, 404, ctx->error_msg[0] ? ctx->error_msg : "Routing failed");
-        } else {
-            send_error(res, 500, "Failed to generate response");
-        }
-        record_metrics(timer, "route");
-        route_ctx_free(ctx);
-        return;
+    if (ctx.to_lat < s_graph->bbox_min.lat || ctx.to_lat > s_graph->bbox_max.lat ||
+        ctx.to_lon < s_graph->bbox_min.lon || ctx.to_lon > s_graph->bbox_max.lon) {
+        return sh_api_response_error(resp, 400,
+                                     "Destination coordinate outside graph bounds");
     }
 
-    ctx->app = app;
-    ctx->req = req;
-    ctx->op.on_resume = route_on_resume;
-    ctx->op.on_cancel = route_on_cancel;
-    ctx->op.on_deadline = route_on_deadline;
-    if (s_config.work_queue_timeout > 0.0) {
-        ctx->op.deadline_ms = kl_monotonic_ms() +
-            (uint64_t)(s_config.work_queue_timeout * 1000.0);
+    route_render(&ctx);
+
+    if (ctx.status_code == 200 && ctx.response_json) {
+        memset(resp, 0, sizeof(*resp));
+        resp->status_code = 200;
+        resp->content_type = "application/json";
+        resp->body = (uint8_t *)ctx.response_json;   /* ownership moves */
+        resp->body_len = strlen(ctx.response_json);
+        return 0;
     }
 
-    if (kl_async_suspend(app->server, kl_http_request_conn(req), &ctx->op) < 0) {
-        route_ctx_free(ctx);
-        send_error(res, 500, "Failed to suspend request");
-        return;
+    free(ctx.response_json);
+    if (ctx.status_code == 404) {
+        return sh_api_response_error(resp, 404,
+                                     ctx.error_msg[0] ? ctx.error_msg
+                                                      : "Routing failed");
     }
+    return sh_api_response_error(resp, 500,
+                                 ctx.error_msg[0] ? ctx.error_msg
+                                                  : "Failed to generate response");
+}
 
-    KlWorkItem item = {
-        .work_fn   = route_work_fn,
-        .done_fn   = route_done_fn,
-        .cancel_fn = route_cancel_fn,
-        .user_data = ctx,
-    };
+/*
+ * Marshal the Keel request and hand it to the shared dispatcher. The context,
+ * the body copy, on_resume/on_cancel/on_deadline, the 503 on a full queue and
+ * the 504 on a deadline are sh_keel_async_dispatch()'s job now.
+ */
+static void handle_route(KlHttpRequest *req, KlHttpResponse *res, void *ud) {
+    AppCtx *app = (AppCtx *)ud;
+    ShMetricsTimer timer = sh_metrics_timer_start();
 
-    if (kl_thread_pool_submit(app->pool, &item) < 0) {
-        /* Queue full - backpressure, same 503 as the old work queue. */
-        s_qstats.dropped++;
-        ctx->detached = 1;
-        send_error(res, 503, "Server busy, try again later");
-        record_metrics(timer, "route");
-        kl_async_complete(app->server, &ctx->op);
-        route_ctx_free(ctx);
-        return;
-    }
+    char query[1024];
+    size_t qlen = req->query_len < sizeof(query) - 1 ? req->query_len
+                                                     : sizeof(query) - 1;
+    if (req->query && qlen > 0) memcpy(query, req->query, qlen);
+    query[req->query && qlen > 0 ? qlen : 0] = '\0';
 
-    s_qstats.pushed++;
+    int is_post = (req->method_len == 4 && memcmp(req->method, "POST", 4) == 0);
+    KlHttpBufReader *br = (KlHttpBufReader *)req->body_reader;
+
+    ShApiRequest api_req;
+    memset(&api_req, 0, sizeof(api_req));
+    api_req.method   = is_post ? "POST" : "GET";
+    api_req.path     = "/api/v1/route";
+    api_req.query    = query;
+    api_req.body     = (br && br->len > 0) ? br->data : NULL;
+    api_req.body_len = (br && br->len > 0) ? br->len : 0;
+
+    sh_keel_async_dispatch(&app->async, req, res, velo_api_handler, NULL,
+                           &api_req);
+
+    record_metrics(timer, "route");
 }
 
 /* ============================================================================
@@ -1332,7 +1238,13 @@ int main(int argc, char *argv[]) {
     printf("  geometry=true|false\n");
     printf("\nPress Ctrl+C to stop.\n\n");
 
-    AppCtx app = { .server = &server, .pool = s_pool };
+    AppCtx app;
+    memset(&app, 0, sizeof(app));
+    app.async.server    = &server;
+    app.async.pool      = s_pool;
+    app.async.cors      = &s_cors_config;
+    app.async.timeout_s = s_config.work_queue_timeout;
+    app.async.stats     = &s_qstats;
 
     /* Routes. POST /api/v1/route needs a body reader; GET does not. */
     kl_http_server_route(&server, "GET",  "/api/v1/health", handle_health,  NULL, NULL);
