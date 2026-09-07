@@ -16,11 +16,63 @@ on:
 
 jobs:
   # ==========================================================================
-  # Build and test C libraries
+  # Build and test C libraries -- one job per suite.
+  #
+  # This was a single sequential job, so it stopped at the first failing suite.
+  # FuelWise was red for months and everything ordered after it -- Velo, Carta,
+  # Locus -- simply never ran in that time; when the FuelWise bug was finally
+  # fixed there was no way to know whether anything behind it had rotted. With
+  # `fail-fast: false`, a red run now names every broken suite instead of just
+  # the first.
+  #
+  # The old job also ran the Ralph sub-suites twice: root `make test-ralph`
+  # already chains test-lap, test-netflow, test-netlib and test-detect, and the
+  # job then re-ran three of them as separate steps. They are split out here as
+  # their own suites and invoked directly, so each is reported once.
+  #
+  # Every suite's build target is self-sufficient: ralph, velo, carta and locus
+  # each have a rule that builds ../shared/libshared.a on demand, so no job
+  # depends on an earlier one having run.
   # ==========================================================================
   test-c:
-    name: Test C Libraries
+    name: Test ${{ matrix.suite.name }}
     runs-on: ubuntu-latest
+
+    strategy:
+      # One broken suite should not hide the state of the others.
+      fail-fast: false
+      matrix:
+        suite:
+          - name: Shared
+            build: make shared
+            test: make test-shared
+          - name: Ralph
+            build: make ralph
+            test: make -C ralph test
+          - name: Ralph LAP
+            build: make ralph
+            test: make -C ralph test-lap
+          - name: Ralph Netflow
+            build: make ralph
+            test: make -C ralph test-netflow
+          - name: Ralph Netlib
+            build: make ralph
+            test: make -C ralph test-netlib
+          - name: Ralph Detect
+            build: make ralph
+            test: make -C ralph test-detect
+          - name: FuelWise
+            build: make fuelwise
+            test: make test-fuelwise
+          - name: Velo
+            build: make velo
+            test: make test-velo
+          - name: Carta
+            build: make carta
+            test: make test-carta
+          - name: Locus
+            build: make locus
+            test: make test-locus
 
     steps:
       - name: Checkout code
@@ -33,44 +85,11 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y build-essential libomp-dev glpk-utils
 
-      - name: Build and test Shared
-        run: |
-          make shared
-          make test-shared
+      - name: Build ${{ matrix.suite.name }}
+        run: ${{ matrix.suite.build }}
 
-      - name: Build and test Ralph
-        run: |
-          make ralph
-          make test-ralph
-
-      - name: Test Ralph LAP
-        run: make -C ralph test-lap
-
-      - name: Test Ralph Netflow
-        run: make -C ralph test-netflow
-
-      - name: Test Ralph Detect
-        run: make -C ralph test-detect
-
-      - name: Build and test FuelWise
-        run: |
-          make fuelwise
-          make test-fuelwise
-
-      - name: Build and test Velo
-        run: |
-          make velo
-          make test-velo
-
-      - name: Build and test Carta
-        run: |
-          make carta
-          make test-carta
-
-      - name: Build and test Locus
-        run: |
-          make locus
-          make test-locus
+      - name: Test ${{ matrix.suite.name }}
+        run: ${{ matrix.suite.test }}
 
   # ==========================================================================
   # Arbor + Surge (Keel-backed API)
