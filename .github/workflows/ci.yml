@@ -49,6 +49,9 @@ jobs:
           - name: Ralph
             build: make ralph
             test: make -C ralph test
+          - name: Ralph Transport
+            build: make ralph
+            test: make -C ralph test-transport
           - name: Ralph LAP
             build: make ralph
             test: make -C ralph test-lap

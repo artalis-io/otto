@@ -24,7 +24,7 @@
 static RalphAPIContext *g_api_ctx = NULL;
 
 /* Static response for JS access (reused across calls) */
-static RalphAPIResponse g_response = {0};
+static ShApiResponse g_response = {0};
 
 /* ============================================================================
  * Initialization
@@ -50,7 +50,7 @@ int ralph_api_init(void) {
 WASM_EXPORT
 void ralph_wasm_api_free(void) {
     if (g_api_ctx) {
-        ralph_api_response_free(&g_response);
+        sh_api_response_free(&g_response);
         ralph_api_free(g_api_ctx);
         g_api_ctx = NULL;
     }
@@ -85,7 +85,7 @@ int ralph_wasm_api_ready(void) {
  * @return Pointer to static response, or NULL on error
  */
 WASM_EXPORT
-RalphAPIResponse *ralph_wasm_api_handle(const char *method,
+ShApiResponse *ralph_wasm_api_handle(const char *method,
                                          const char *path,
                                          const char *query,
                                          const char *body,
@@ -93,10 +93,10 @@ RalphAPIResponse *ralph_wasm_api_handle(const char *method,
     if (!g_api_ctx) return NULL;
 
     /* Free previous response body */
-    ralph_api_response_free(&g_response);
+    sh_api_response_free(&g_response);
 
     /* Build request */
-    RalphAPIRequest req = {
+    ShApiRequest req = {
         .method = method,
         .path = path,
         .query = query,
@@ -120,7 +120,7 @@ RalphAPIResponse *ralph_wasm_api_handle(const char *method,
  * Get HTTP status code from response.
  */
 WASM_EXPORT
-int ralph_wasm_response_status(const RalphAPIResponse *resp) {
+int ralph_wasm_response_status(const ShApiResponse *resp) {
     return resp ? resp->status_code : 500;
 }
 
@@ -128,7 +128,7 @@ int ralph_wasm_response_status(const RalphAPIResponse *resp) {
  * Get content type string from response.
  */
 WASM_EXPORT
-const char *ralph_wasm_response_content_type(const RalphAPIResponse *resp) {
+const char *ralph_wasm_response_content_type(const ShApiResponse *resp) {
     return resp ? resp->content_type : "text/plain";
 }
 
@@ -136,7 +136,7 @@ const char *ralph_wasm_response_content_type(const RalphAPIResponse *resp) {
  * Get response body pointer.
  */
 WASM_EXPORT
-const uint8_t *ralph_wasm_response_body(const RalphAPIResponse *resp) {
+const uint8_t *ralph_wasm_response_body(const ShApiResponse *resp) {
     return resp ? resp->body : NULL;
 }
 
@@ -144,7 +144,7 @@ const uint8_t *ralph_wasm_response_body(const RalphAPIResponse *resp) {
  * Get response body length.
  */
 WASM_EXPORT
-size_t ralph_wasm_response_body_len(const RalphAPIResponse *resp) {
+size_t ralph_wasm_response_body_len(const ShApiResponse *resp) {
     return resp ? resp->body_len : 0;
 }
 
