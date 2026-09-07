@@ -8,15 +8,13 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include "sh_pal.h"
 #include <time.h>
 #include <pthread.h>
 #include <ctype.h>
 
-#ifdef __APPLE__
-#include <sys/random.h>
-#else
-#include <sys/random.h>
-#endif
+/* Entropy comes from sh_pal_random_bytes(); no platform header here.
+ * The two arms of the old #ifdef included the same file anyway. */
 
 /* ============================================================================
  * Thread-Local Storage
@@ -45,19 +43,10 @@ static void create_trace_key(void) {
  * ============================================================================ */
 
 static void get_random_bytes(void *buf, size_t len) {
-#if defined(__APPLE__) || defined(__linux__)
-    /* Use getentropy on modern systems */
-    if (getentropy(buf, len) == 0) {
+    /* Entropy through the PAL: getentropy and /dev/urandom do not exist on
+     * Windows, where this is BCryptGenRandom. */
+    if (sh_pal_random_bytes(buf, len) == 0) {
         return;
-    }
-#endif
-
-    /* Fallback: use /dev/urandom */
-    FILE *fp = fopen("/dev/urandom", "rb");
-    if (fp) {
-        size_t n = fread(buf, 1, len, fp);
-        fclose(fp);
-        if (n == len) return;
     }
 
     /*

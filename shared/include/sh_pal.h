@@ -156,6 +156,40 @@ int sh_gmtime(int64_t unix_sec, struct tm *out);
 int sh_localtime(int64_t unix_sec, struct tm *out);
 
 /* ============================================================================
+ * Process
+ * ============================================================================ */
+
+/* This process's id. Used for seeding, not for process control. */
+uint64_t sh_pal_pid(void);
+
+/* ============================================================================
+ * Randomness
+ * ============================================================================ */
+
+/*
+ * Fill `buf` with cryptographically-usable random bytes.
+ *
+ * Returns 0 on success, -1 if the platform could not supply entropy -- which
+ * callers must treat as fatal rather than falling back to something weaker.
+ * getrandom/getentropy on POSIX (with a /dev/urandom fallback),
+ * BCryptGenRandom on Windows.
+ */
+int sh_pal_random_bytes(void *buf, size_t len);
+
+/* ============================================================================
+ * Filesystem
+ * ============================================================================ */
+
+/*
+ * Create a single directory.
+ *
+ * Returns 0 if it was created OR already exists, -1 otherwise. Folding
+ * "already exists" into success is deliberate: every caller wanted that, and
+ * it keeps errno/GetLastError handling out of them.
+ */
+int sh_pal_mkdir(const char *path);
+
+/* ============================================================================
  * CPU
  * ============================================================================ */
 

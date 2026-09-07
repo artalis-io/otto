@@ -10,6 +10,8 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+
+#include "sh_mem.h"
 #include <stdarg.h>
 #include <ctype.h>
 #include <math.h>
@@ -443,7 +445,7 @@ static PdfObj *pdf_parse_dict(ShPdf2strucCtx *ctx, PdfScanner *s)
 
         /* If /Length was 0 or missing, search for endstream */
         if (stream_len == 0 || stream_start + stream_len > s->size) {
-            const uint8_t *end = (const uint8_t *)memmem(
+            const uint8_t *end = (const uint8_t *)sh_memmem(
                 s->data + stream_start,
                 s->size - stream_start,
                 "endstream", 9);

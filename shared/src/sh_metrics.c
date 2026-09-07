@@ -11,12 +11,35 @@
 #include <stdarg.h>
 #include <pthread.h>
 #include <time.h>
-#include <unistd.h>
-#include <sys/socket.h>
-#include <netinet/in.h>
-#include <arpa/inet.h>
-#include <netdb.h>
 #include <errno.h>
+
+/*
+ * The StatsD sink is the one part of shared/ that opens a socket. Winsock
+ * provides socket/sendto/getaddrinfo/inet_pton with the same signatures, so
+ * the difference is three headers, a socket type, and the close call.
+ *
+ * This is deliberately here rather than in sh_pal.h: networking is Keel's
+ * domain, and adding a UDP surface to the PAL for one optional metrics sink
+ * would be the wrong place to put it.
+ */
+#ifdef _WIN32
+  #include <winsock2.h>
+  #include <ws2tcpip.h>
+  typedef SOCKET sh_socket_t;
+  #define SH_INVALID_SOCKET INVALID_SOCKET
+  #define sh_closesocket closesocket
+#else
+  #include <unistd.h>
+  #include <sys/socket.h>
+  #include <netinet/in.h>
+  #include <arpa/inet.h>
+  #include <netdb.h>
+  typedef int sh_socket_t;
+  #define SH_INVALID_SOCKET (-1)
+  #define sh_closesocket close
+#endif
+
+#include "sh_pal.h"
 
 /* ============================================================================
  * Configuration and State
@@ -39,7 +62,8 @@ static int s_num_metrics = 0;
 static int s_max_metrics = 1000;
 
 /* StatsD socket */
-static int s_statsd_socket = -1;
+/* SOCKET is a 64-bit UINT_PTR on Win64, so an int would truncate it. */
+static sh_socket_t s_statsd_socket = SH_INVALID_SOCKET;
 static struct sockaddr_in s_statsd_addr;
 
 /* Histogram bucket boundaries (exponential: 1, 2, 5, 10, 20, 50, ...) */
@@ -52,11 +76,27 @@ static const double HISTOGRAM_BUCKETS[] = {
  * StatsD Connection
  * ============================================================================ */
 
+#ifdef _WIN32
+static ShOnce s_winsock_once = SH_ONCE_INIT;
+
+static void winsock_start(void) {
+    WSADATA wsa;
+    /* Never torn down: WSAStartup is refcounted, so a library that also runs
+     * alongside Keel must not WSACleanup out from under it. Leaking one
+     * refcount for process lifetime is the conventional answer. */
+    (void)WSAStartup(MAKEWORD(2, 2), &wsa);
+}
+#endif
+
 static int connect_statsd(void) {
     if (!s_config.statsd_host) return -1;
 
+#ifdef _WIN32
+    sh_once(&s_winsock_once, winsock_start);
+#endif
+
     s_statsd_socket = socket(AF_INET, SOCK_DGRAM, 0);
-    if (s_statsd_socket < 0) return -1;
+    if (s_statsd_socket == SH_INVALID_SOCKET) return -1;
 
     memset(&s_statsd_addr, 0, sizeof(s_statsd_addr));
     s_statsd_addr.sin_family = AF_INET;
@@ -76,8 +116,8 @@ static int connect_statsd(void) {
     } else {
         /* Fallback: try parsing as IP address */
         if (inet_pton(AF_INET, s_config.statsd_host, &s_statsd_addr.sin_addr) != 1) {
-            close(s_statsd_socket);
-            s_statsd_socket = -1;
+            sh_closesocket(s_statsd_socket);
+            s_statsd_socket = SH_INVALID_SOCKET;
             return -1;
         }
     }
@@ -86,9 +126,9 @@ static int connect_statsd(void) {
 }
 
 static void send_statsd(const char *metric) {
-    if (s_statsd_socket < 0 || !metric) return;
+    if (s_statsd_socket == SH_INVALID_SOCKET || !metric) return;
 
-    sendto(s_statsd_socket, metric, strlen(metric), 0,
+    sendto(s_statsd_socket, metric, (int)strlen(metric), 0,
            (struct sockaddr *)&s_statsd_addr, sizeof(s_statsd_addr));
 }
 
@@ -139,9 +179,9 @@ void sh_metrics_shutdown(void) {
     pthread_mutex_lock(&s_mutex);
 
     /* Flush pending metrics */
-    if (s_statsd_socket >= 0) {
-        close(s_statsd_socket);
-        s_statsd_socket = -1;
+    if (s_statsd_socket != SH_INVALID_SOCKET) {
+        sh_closesocket(s_statsd_socket);
+        s_statsd_socket = SH_INVALID_SOCKET;
     }
 
     free(s_metrics);
@@ -244,7 +284,7 @@ void sh_metrics_counter_inc_tags(const char *name, int64_t value,
     }
 
     /* Send to StatsD */
-    if (s_statsd_socket >= 0) {
+    if (s_statsd_socket != SH_INVALID_SOCKET) {
         char statsd_msg[512];
         if (tag_str[0]) {
             snprintf(statsd_msg, sizeof(statsd_msg), "%s%s%s:%lld|c|#%s",
@@ -306,7 +346,7 @@ void sh_metrics_gauge_set_tags(const char *name, double value,
     }
 
     /* Send to StatsD */
-    if (s_statsd_socket >= 0) {
+    if (s_statsd_socket != SH_INVALID_SOCKET) {
         char statsd_msg[512];
         if (tag_str[0]) {
             snprintf(statsd_msg, sizeof(statsd_msg), "%s%s%s:%g|g|#%s",
@@ -386,7 +426,7 @@ void sh_metrics_histogram_observe_tags(const char *name, double value,
     }
 
     /* Send to StatsD as timing/histogram */
-    if (s_statsd_socket >= 0) {
+    if (s_statsd_socket != SH_INVALID_SOCKET) {
         char statsd_msg[512];
         if (tag_str[0]) {
             snprintf(statsd_msg, sizeof(statsd_msg), "%s%s%s:%g|h|#%s",

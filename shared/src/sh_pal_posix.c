@@ -13,6 +13,8 @@
 #include "sh_pal.h"
 
 #include <errno.h>
+#include <stdio.h>
+#include <sys/stat.h>
 #include <pthread.h>
 #include <string.h>
 #include <sys/time.h>
@@ -211,6 +213,57 @@ int sh_cpu_count(void)
     if (n > 0) return (int)n;
 #endif
     return 1;
+}
+
+
+/* ---------------------------------------------------------------- Process */
+
+uint64_t sh_pal_pid(void)
+{
+    return (uint64_t)getpid();
+}
+
+/* ------------------------------------------------------------- Randomness */
+
+int sh_pal_random_bytes(void *buf, size_t len)
+{
+    if (!buf && len) return -1;
+    if (!len) return 0;
+
+#if defined(__GLIBC__) && defined(_GNU_SOURCE)
+    {
+        /* getentropy is capped at 256 bytes per call. */
+        unsigned char *p = (unsigned char *)buf;
+        size_t left = len;
+        while (left > 0) {
+            size_t chunk = left > 256 ? 256 : left;
+            if (getentropy(p, chunk) != 0) break;
+            p += chunk;
+            left -= chunk;
+        }
+        if (left == 0) return 0;
+    }
+#endif
+
+    /* Fallback for platforms without getentropy, and for the case where it
+     * fails (an old kernel, or a sandbox that blocks the syscall). */
+    {
+        FILE *fp = fopen("/dev/urandom", "rb");
+        size_t got;
+        if (!fp) return -1;
+        got = fread(buf, 1, len, fp);
+        fclose(fp);
+        return got == len ? 0 : -1;
+    }
+}
+
+/* ------------------------------------------------------------- Filesystem */
+
+int sh_pal_mkdir(const char *path)
+{
+    if (!path || !path[0]) return -1;
+    if (mkdir(path, 0755) == 0) return 0;
+    return errno == EEXIST ? 0 : -1;
 }
 
 #else
