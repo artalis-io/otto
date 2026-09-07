@@ -206,8 +206,18 @@ int sh_pb_write_varint(uint8_t *buf, size_t capacity, uint64_t value)
 
 int sh_pb_write_svarint(uint8_t *buf, size_t capacity, int64_t value)
 {
-    /* Zigzag encode: (value << 1) ^ (value >> 63) */
-    uint64_t uval = (uint64_t)((value << 1) ^ (value >> 63));
+    /* Zigzag encode: conceptually (value << 1) ^ (value >> 63), but done in
+     * unsigned.
+     *
+     * Left-shifting a negative int64_t is undefined behaviour (C11 6.5.7p4),
+     * and the arithmetic right shift that supplies the sign mask is merely
+     * implementation-defined. Unsigned shifts wrap, which is exactly what
+     * zigzag wants, and the encoding is bit-for-bit identical.
+     *
+     * sh_pb_read_svarint() above already worked this way. */
+    uint64_t uv   = (uint64_t)value;
+    uint64_t sign = (value < 0) ? ~(uint64_t)0 : (uint64_t)0;
+    uint64_t uval = (uv << 1) ^ sign;
     return sh_pb_write_varint(buf, capacity, uval);
 }
 

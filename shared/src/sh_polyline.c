@@ -26,8 +26,16 @@ static size_t encode_value(int value, char *output, size_t capacity)
 {
     size_t written = 0;
 
-    /* Left-shift and invert if negative */
-    int encoded = value < 0 ? ~(value << 1) : (value << 1);
+    /* Left-shift and invert if negative.
+     *
+     * Done in unsigned. Left-shifting a negative int is undefined behaviour
+     * (C11 6.5.7p4), and `value << 1` can also overflow a signed int for a
+     * large coordinate delta, which is equally undefined. The bit pattern is
+     * identical, and `>>= 5` becomes a logical shift -- correct here, because
+     * the value is always non-negative after the inversion. */
+    uint32_t uv = (uint32_t)value;
+    uint32_t encoded = uv << 1;
+    if (value < 0) encoded = ~encoded;
 
     /* Break into 5-bit chunks */
     while (encoded >= 0x20) {

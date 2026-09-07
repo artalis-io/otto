@@ -308,6 +308,58 @@ jobs:
         run: bash locus/api/test_api.sh
 
   # ==========================================================================
+  # Sanitizers
+  #
+  # A c-audit of the Phase 1 transport code found two heap overflows and an
+  # out-of-bounds write in fresh memory-handling code. None were caught by the
+  # compiler: those files were already clean under -Wall -Wextra -Wpedantic
+  # -Wconversion -Wshadow -Wformat=2 -Wcast-align -Wnull-dereference, and still
+  # are. Warning flags do not find that class of defect; ASan does, mechanically.
+  #
+  # Deliberately ungated and deliberately narrow. It targets the shared code
+  # that async and streaming now run through, rather than every suite: Ralph's
+  # full suite under -O0 + ASan would cost far more CI time for far less signal.
+  # Widen it when a module's own memory handling starts changing.
+  # ==========================================================================
+  sanitizers:
+    name: Sanitize ${{ matrix.suite.name }}
+    runs-on: ubuntu-latest
+
+    strategy:
+      fail-fast: false
+      matrix:
+        suite:
+          - name: Shared
+            target: test-asan
+            dir: shared
+          - name: Ralph Transport
+            target: test-transport-asan
+            dir: ralph
+          - name: Arbor
+            target: test-asan
+            dir: arbor
+
+    env:
+      # UBSan only prints and keeps going by default, so a finding would not
+      # fail the job. halt_on_error makes it fatal, which is the point.
+      UBSAN_OPTIONS: print_stacktrace=1:halt_on_error=1
+      ASAN_OPTIONS: detect_leaks=1:abort_on_error=1
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential libomp-dev
+
+      - name: Sanitize ${{ matrix.suite.name }}
+        run: make -C ${{ matrix.suite.dir }} ${{ matrix.suite.target }}
+
+  # ==========================================================================
   # Build WebAssembly
   # ==========================================================================
   build-wasm:
