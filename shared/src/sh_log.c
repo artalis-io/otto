@@ -8,6 +8,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include "sh_pal.h"
 #include <time.h>
 #include <pthread.h>
 #include <unistd.h>
@@ -232,11 +233,17 @@ static void write_json_string(FILE *fp, const char *str) {
  * ============================================================================ */
 
 static void get_timestamp(char *buf, size_t len, int json_format) {
+    /* Wall clock through the PAL: gmtime_r does not exist on Windows, and
+     * clock_gettime(CLOCK_REALTIME) is patchy there too. */
+    uint64_t now_ms = sh_wall_ms();
     struct timespec ts;
-    clock_gettime(CLOCK_REALTIME, &ts);
-
     struct tm tm;
-    gmtime_r(&ts.tv_sec, &tm);
+
+    ts.tv_sec  = (time_t)(now_ms / 1000ull);
+    ts.tv_nsec = (long)((now_ms % 1000ull) * 1000000ull);
+
+    memset(&tm, 0, sizeof(tm));
+    sh_gmtime((int64_t)ts.tv_sec, &tm);
 
     if (json_format) {
         /* ISO 8601 format for JSON */

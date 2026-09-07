@@ -32,7 +32,9 @@ SHARED_SRC = ../../shared/src/sh_geo.c \
              ../../shared/src/sh_pqueue.c \
              ../../shared/src/sh_spatial_grid.c \
              ../../shared/src/sh_query.c \
-             ../../shared/src/sh_args.c
+             ../../shared/src/sh_args.c \
+             ../../shared/src/sh_pal_posix.c \
+                  ../../shared/src/sh_pal_windows.c
 
 # Source files - miniz
 MINIZ_SRC = ../../vendor/miniz/miniz.c ../../vendor/miniz/miniz_tdef.c ../../vendor/miniz/miniz_tinfl.c

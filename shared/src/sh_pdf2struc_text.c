@@ -12,6 +12,8 @@
 
 #include "sh_pdf2struc_internal.h"
 #include <string.h>
+
+#include "sh_mem.h"
 #include <stdlib.h>
 #include <math.h>
 #include <ctype.h>
@@ -216,9 +218,9 @@ static void parse_tounicode(ShPdf2strucCtx *ctx, PdfFont *font,
 
     while (p < end) {
         /* Find beginbfchar or beginbfrange */
-        const uint8_t *bfchar = (const uint8_t *)memmem(
+        const uint8_t *bfchar = (const uint8_t *)sh_memmem(
             p, (size_t)(end - p), "beginbfchar", 11);
-        const uint8_t *bfrange = (const uint8_t *)memmem(
+        const uint8_t *bfrange = (const uint8_t *)sh_memmem(
             p, (size_t)(end - p), "beginbfrange", 12);
 
         /* Pick whichever comes first */

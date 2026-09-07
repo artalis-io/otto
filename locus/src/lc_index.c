@@ -12,9 +12,9 @@
 #include "lc_query.h"
 #include <stdlib.h>
 #include <string.h>
+#include "sh_pal.h"
 #include <time.h>
 #include <math.h>
-#include <sys/mman.h>
 #include <unistd.h>
 
 /* Minimal mmap context for cleanup (first 3 fields same as LCMmapContextV3) */
@@ -65,14 +65,14 @@ void lc_index_free(LCIndex *index)
     if (index->mmap_idx) {
         LCMmapIndex *mmap_idx = index->mmap_idx;
 
-        /* Unmap and close (skip if memory-based: fd == -1) */
+        /* Release the mapping only if this index owns one; a memory-based
+         * index (WASM) points at a caller-owned buffer. */
+        if (mmap_idx->owns_map && mmap_idx->map_base) {
+            sh_unmap_ptr(mmap_idx->map_base, mmap_idx->map_size);
+        }
         if (mmap_idx->fd >= 0) {
-            if (mmap_idx->map_base && mmap_idx->map_base != MAP_FAILED) {
-                munmap(mmap_idx->map_base, mmap_idx->map_size);
-            }
             close(mmap_idx->fd);
         }
-        /* Note: when fd == -1, this is a memory-based index (WASM) - don't free the buffer */
         free(mmap_idx);
 
         /* v4 has no allocated entity store, trie, ngrams, or grid */
@@ -94,8 +94,8 @@ void lc_index_free(LCIndex *index)
         }
 
         /* Unmap and close */
-        if (ctx->map_base && ctx->map_base != MAP_FAILED) {
-            munmap(ctx->map_base, ctx->map_size);
+        if (ctx->map_base) {
+            sh_unmap_ptr(ctx->map_base, ctx->map_size);
         }
         if (ctx->fd >= 0) {
             close(ctx->fd);

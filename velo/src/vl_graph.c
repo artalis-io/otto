@@ -9,6 +9,7 @@
  */
 
 #include "vl_types.h"
+#include "sh_pal.h"
 #include <stdlib.h>
 #include <string.h>
 #include <stdio.h>
@@ -1197,34 +1198,26 @@ VLGraph *vl_graph_load_memory(const uint8_t *data, size_t size)
     return graph;
 }
 
-#ifndef _WIN32
 VLGraph *vl_graph_mmap(const char *filename)
 {
-    int fd = open(filename, O_RDONLY);
-    if (fd < 0) return NULL;
+    /* Mapping goes through the PAL, so this builds on Windows too -- it used
+     * to be compiled out there entirely, leaving velo unable to memory-map a
+     * graph at all. See docs/roadmaps/transport.md, Layer 4. */
+    ShFileMap map;
+    if (sh_map_file_readonly(filename, &map) != 0) return NULL;
 
-    struct stat st;
-    if (fstat(fd, &st) < 0) {
-        close(fd);
-        return NULL;
-    }
-
-    size_t len = (size_t)st.st_size;
+    void *data = map.data;
+    size_t len = map.size;
 
     /* Validate file is large enough to contain the header */
     if (len < sizeof(VLBinaryHeader)) {
-        close(fd);
+        sh_unmap_file(&map);
         return NULL;
     }
 
-    void *data = mmap(NULL, len, PROT_READ, MAP_PRIVATE, fd, 0);
-    close(fd);
-
-    if (data == MAP_FAILED) return NULL;
-
     VLBinaryHeader *header = data;
     if (header->magic != VL_BINARY_MAGIC) {
-        munmap(data, len);
+        sh_unmap_file(&map);
         return NULL;
     }
 
@@ -1237,31 +1230,31 @@ VLGraph *vl_graph_mmap(const char *filename)
     /* Check for integer overflow in size calculations */
     if (header->num_nodes > SIZE_MAX / sizeof(VLNode) ||
         header->num_edges > SIZE_MAX / sizeof(VLEdge)) {
-        munmap(data, len);
+        sh_unmap_file(&map);
         return NULL;
     }
 
     /* Check that file is large enough for header + nodes + edges */
     size_t required_size = sizeof(VLBinaryHeader);
     if (nodes_size > SIZE_MAX - required_size) {
-        munmap(data, len);
+        sh_unmap_file(&map);
         return NULL;
     }
     required_size += nodes_size;
     if (edges_size > SIZE_MAX - required_size) {
-        munmap(data, len);
+        sh_unmap_file(&map);
         return NULL;
     }
     required_size += edges_size;
 
     if (len < required_size) {
-        munmap(data, len);
+        sh_unmap_file(&map);
         return NULL;
     }
 
     VLGraph *graph = calloc(1, sizeof(VLGraph));
     if (!graph) {
-        munmap(data, len);
+        sh_unmap_file(&map);
         return NULL;
     }
 
@@ -1283,7 +1276,6 @@ VLGraph *vl_graph_mmap(const char *filename)
 
     return graph;
 }
-#endif
 
 /* ============================================================================
  * Nearest Node Lookup (fallback linear scan)

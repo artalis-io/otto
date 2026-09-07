@@ -12,6 +12,9 @@ CFLAGS = -Wall -Wextra -O3 -std=c11 -D_GNU_SOURCE \
          -fstack-protector-strong -D_FORTIFY_SOURCE=2 -fPIE -fno-common
 ifeq ($(UNAME_S),Linux)
     LDFLAGS = -lm -lpthread -pie -Wl,-z,relro,-z,now
+else ifneq (,$(findstring MINGW,$(UNAME_S)))
+    # bcrypt: sh_pal_random_bytes. ws2_32: the StatsD sink in sh_metrics.
+    LDFLAGS = -lm -lpthread -lbcrypt -lws2_32
 else
     LDFLAGS = -lm -lpthread
 endif
@@ -29,6 +32,7 @@ DEBUG_LDFLAGS = -fsanitize=address,undefined
 
 # Source files (core library - no external dependencies beyond miniz)
 SRCS = src/sh_pal_posix.c \
+       src/sh_mem.c \
        src/sh_pal_windows.c \
        src/sh_api.c \
        src/sh_transport_direct.c \
