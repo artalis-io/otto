@@ -24,7 +24,7 @@
  * Thread-safety: WASM is single-threaded, so this is safe.
  * Do NOT use this pattern in multi-threaded contexts.
  */
-static FWAPIResponse g_response = {0};
+static ShApiResponse g_response = {0};
 
 /* ============================================================================
  * Initialization
@@ -47,7 +47,7 @@ int fuelwise_api_init(void) {
  */
 WASM_EXPORT
 void fuelwise_api_free(void) {
-    fw_api_response_free(&g_response);
+    sh_api_response_free(&g_response);
     memset(&g_response, 0, sizeof(g_response));
 }
 
@@ -81,14 +81,14 @@ int fuelwise_api_ready(void) {
  * @return Pointer to static response, or NULL on error
  */
 WASM_EXPORT
-FWAPIResponse *fuelwise_api_handle(const char *path, const char *query,
+ShApiResponse *fuelwise_api_handle(const char *path, const char *query,
                                    const char *body, size_t body_len) {
     /* Free previous response body */
-    fw_api_response_free(&g_response);
+    sh_api_response_free(&g_response);
     memset(&g_response, 0, sizeof(g_response));
 
     /* Build request */
-    FWAPIRequest req = {
+    ShApiRequest req = {
         .path = path,
         .query = query,
         .body = body,
@@ -112,7 +112,7 @@ FWAPIResponse *fuelwise_api_handle(const char *path, const char *query,
  * Get HTTP status code from response.
  */
 WASM_EXPORT
-int fuelwise_response_status(const FWAPIResponse *resp) {
+int fuelwise_response_status(const ShApiResponse *resp) {
     return resp ? resp->status_code : 500;
 }
 
@@ -120,7 +120,7 @@ int fuelwise_response_status(const FWAPIResponse *resp) {
  * Get content type string from response.
  */
 WASM_EXPORT
-const char *fuelwise_response_content_type(const FWAPIResponse *resp) {
+const char *fuelwise_response_content_type(const ShApiResponse *resp) {
     return resp ? resp->content_type : "text/plain";
 }
 
@@ -128,7 +128,7 @@ const char *fuelwise_response_content_type(const FWAPIResponse *resp) {
  * Get response body pointer.
  */
 WASM_EXPORT
-const char *fuelwise_response_body(const FWAPIResponse *resp) {
+const char *fuelwise_response_body(const ShApiResponse *resp) {
     return resp ? resp->body : NULL;
 }
 
@@ -136,7 +136,7 @@ const char *fuelwise_response_body(const FWAPIResponse *resp) {
  * Get response body length.
  */
 WASM_EXPORT
-size_t fuelwise_response_body_len(const FWAPIResponse *resp) {
+size_t fuelwise_response_body_len(const ShApiResponse *resp) {
     return resp ? resp->body_len : 0;
 }
 
