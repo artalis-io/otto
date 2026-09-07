@@ -1,6 +1,6 @@
 # Transport Interface + Platform Abstraction Layer
 
-**Status:** Phases 1-3 done. Phase 4 (`sh_pal.h`) not started.
+**Status:** Phases 1-4 done. CI invariant half-built -- see below.
 **Scope:** `shared/` transport interface, per-module API types, `sh_pal.h`
 
 ## Motivation
@@ -210,6 +210,7 @@ a `_Static_assert` on size and alignment in the `.c` file.
 | 2 | `sh_transport_keel` with async ownership; migrate fuelwise, surge, locus, velo, carta | fuelwise is the simplest async server; carta last, it has two suspend sites |
 | 3 | streaming escape hatch | build when a real consumer exists |
 | 4 | `sh_pal.h`: threading + clock, then file mapping | biggest win and lowest risk first |
+| 5 | extract Velo, Carta and Locus handlers into their libraries | the CI invariant cannot cover them until the handler leaves the Keel TU |
 
 **Phase 4 requires a Windows CI job.** CI paths nobody exercises decay silently —
 `build-wasm` sat behind a red `test-c` for months without running. A PAL with no Windows
@@ -220,3 +221,30 @@ job is the same trap with more surface.
 A test that links every module's handler against `sh_transport_direct` **with no Keel
 headers on the include path**. If that stops compiling, the abstraction has leaked, and
 it will be caught immediately rather than at the next transport migration.
+
+### Status: 3 of 6
+
+| module | handler lives in | invariant test |
+|---|---|---|
+| Ralph | `ralph/src/ralph_api.c` | `make -C ralph test-transport` |
+| FuelWise | `fuelwise/src/fw_api.c` | `make -C fuelwise test-transport` |
+| Surge | `surge/src/sg_api.c` | `make -C surge test-transport` |
+| Velo | **`velo/api/src/main.c`** | none possible yet |
+| Carta | **`carta/api/src/main.c`** | none possible yet |
+| Locus | **`locus/api/src/main.c`** | none possible yet |
+
+The gap is not a missing test. Velo, Carta and Locus have no library-side
+`ShApiHandler` to link against at all: their `src/*_api.c` is a context and
+lifecycle layer with zero `ShApi` references, and the handler itself lives in
+`api/src/main.c` next to 25-44 Keel references. Phase 2 gave all six the shared
+request/response *types*, but only Ralph, FuelWise and Surge ended up with a
+handler the direct transport can call.
+
+So for those three the invariant is not merely unenforced -- it is currently
+unenforceable, and "no Keel on the include path" is trivially false for the only
+translation unit that has a handler.
+
+Closing it means extracting the handler out of `api/src/main.c` into the library,
+as `ralph_api.c` already does, leaving `main.c` as the thin Keel wrapper the
+manifesto describes. That is a real refactor of three servers (1276, 1811 and 1096
+line files), not a test-writing exercise, and it is the natural Phase 5.
