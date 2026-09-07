@@ -48,7 +48,7 @@ TEST(health_endpoint) {
     RalphAPIContext *ctx = ralph_api_create();
     ASSERT(ctx != NULL);
 
-    RalphAPIRequest req = {
+    ShApiRequest req = {
         .method = "GET",
         .path = "/api/v1/health",
         .query = NULL,
@@ -56,13 +56,13 @@ TEST(health_endpoint) {
         .body_len = 0
     };
 
-    RalphAPIResponse resp;
+    ShApiResponse resp;
     int result = ralph_api_handle(ctx, &req, &resp);
     ASSERT_EQ(result, 0);
     ASSERT_EQ(resp.status_code, 200);
     ASSERT(strstr((char*)resp.body, "\"status\":\"ok\"") != NULL);
 
-    ralph_api_response_free(&resp);
+    sh_api_response_free(&resp);
     ralph_api_free(ctx);
 }
 
@@ -71,7 +71,7 @@ TEST(formats_endpoint) {
     RalphAPIContext *ctx = ralph_api_create();
     ASSERT(ctx != NULL);
 
-    RalphAPIRequest req = {
+    ShApiRequest req = {
         .method = "GET",
         .path = "/api/v1/formats",
         .query = NULL,
@@ -79,14 +79,14 @@ TEST(formats_endpoint) {
         .body_len = 0
     };
 
-    RalphAPIResponse resp;
+    ShApiResponse resp;
     int result = ralph_api_handle(ctx, &req, &resp);
     ASSERT_EQ(result, 0);
     ASSERT_EQ(resp.status_code, 200);
     ASSERT(strstr((char*)resp.body, "\"lp\"") != NULL);
     ASSERT(strstr((char*)resp.body, "\"mps\"") != NULL);
 
-    ralph_api_response_free(&resp);
+    sh_api_response_free(&resp);
     ralph_api_free(ctx);
 }
 
@@ -109,7 +109,7 @@ TEST(solve_simple_lp) {
         "\"timeout_ms\":5000"
         "}";
 
-    RalphAPIRequest req = {
+    ShApiRequest req = {
         .method = "POST",
         .path = "/api/v1/solve",
         .query = NULL,
@@ -117,7 +117,7 @@ TEST(solve_simple_lp) {
         .body_len = strlen(json_body)
     };
 
-    RalphAPIResponse resp;
+    ShApiResponse resp;
     int result = ralph_api_handle(ctx, &req, &resp);
     ASSERT_EQ(result, 0);
     ASSERT_EQ(resp.status_code, 200);
@@ -134,7 +134,7 @@ TEST(solve_simple_lp) {
     sscanf(obj_str, "\"objective\":%lf", &obj);
     ASSERT(obj > 39.9 && obj < 40.1);
 
-    ralph_api_response_free(&resp);
+    sh_api_response_free(&resp);
     ralph_api_free(ctx);
 }
 
@@ -143,7 +143,7 @@ TEST(not_found) {
     RalphAPIContext *ctx = ralph_api_create();
     ASSERT(ctx != NULL);
 
-    RalphAPIRequest req = {
+    ShApiRequest req = {
         .method = "GET",
         .path = "/api/v1/unknown",
         .query = NULL,
@@ -151,12 +151,12 @@ TEST(not_found) {
         .body_len = 0
     };
 
-    RalphAPIResponse resp;
+    ShApiResponse resp;
     int result = ralph_api_handle(ctx, &req, &resp);
     ASSERT_EQ(result, 0);
     ASSERT_EQ(resp.status_code, 404);
 
-    ralph_api_response_free(&resp);
+    sh_api_response_free(&resp);
     ralph_api_free(ctx);
 }
 
@@ -165,7 +165,7 @@ TEST(missing_body) {
     RalphAPIContext *ctx = ralph_api_create();
     ASSERT(ctx != NULL);
 
-    RalphAPIRequest req = {
+    ShApiRequest req = {
         .method = "POST",
         .path = "/api/v1/solve",
         .query = NULL,
@@ -173,12 +173,12 @@ TEST(missing_body) {
         .body_len = 0
     };
 
-    RalphAPIResponse resp;
+    ShApiResponse resp;
     int result = ralph_api_handle(ctx, &req, &resp);
     ASSERT_EQ(result, 0);
     ASSERT_EQ(resp.status_code, 400);
 
-    ralph_api_response_free(&resp);
+    sh_api_response_free(&resp);
     ralph_api_free(ctx);
 }
 
@@ -193,7 +193,7 @@ TEST(parse_error) {
         "\"problem\":\"this is not valid LP syntax\""
         "}";
 
-    RalphAPIRequest req = {
+    ShApiRequest req = {
         .method = "POST",
         .path = "/api/v1/solve",
         .query = NULL,
@@ -201,13 +201,13 @@ TEST(parse_error) {
         .body_len = strlen(json_body)
     };
 
-    RalphAPIResponse resp;
+    ShApiResponse resp;
     int result = ralph_api_handle(ctx, &req, &resp);
     ASSERT_EQ(result, 0);
     ASSERT_EQ(resp.status_code, 400);
     ASSERT(strstr((char*)resp.body, "error") != NULL);
 
-    ralph_api_response_free(&resp);
+    sh_api_response_free(&resp);
     ralph_api_free(ctx);
 }
 
@@ -216,7 +216,7 @@ TEST(wasm_helpers) {
     RalphAPIContext *ctx = ralph_api_create();
     ASSERT(ctx != NULL);
 
-    RalphAPIRequest req = {
+    ShApiRequest req = {
         .method = "GET",
         .path = "/api/v1/health",
         .query = NULL,
@@ -224,7 +224,7 @@ TEST(wasm_helpers) {
         .body_len = 0
     };
 
-    RalphAPIResponse resp;
+    ShApiResponse resp;
     ralph_api_handle(ctx, &req, &resp);
 
     ASSERT_EQ(ralph_api_response_status(&resp), 200);
@@ -232,7 +232,7 @@ TEST(wasm_helpers) {
     ASSERT(ralph_api_response_body(&resp) != NULL);
     ASSERT(ralph_api_response_body_len(&resp) > 0);
 
-    ralph_api_response_free(&resp);
+    sh_api_response_free(&resp);
     ralph_api_free(ctx);
 }
 
@@ -259,7 +259,7 @@ TEST(raw_lp_sol_output) {
         "y >= 0\n"
         "end";
 
-    RalphAPIRequest req = {
+    ShApiRequest req = {
         .method = "POST",
         .path = "/api/v1/solve",
         .query = "format=lp",  /* Key: format in query string */
@@ -267,7 +267,7 @@ TEST(raw_lp_sol_output) {
         .body_len = strlen(lp_body)
     };
 
-    RalphAPIResponse resp;
+    ShApiResponse resp;
     int result = ralph_api_handle(ctx, &req, &resp);
     ASSERT_EQ(result, 0);
     ASSERT_EQ(resp.status_code, 200);
@@ -281,7 +281,7 @@ TEST(raw_lp_sol_output) {
     /* Content type should be text/plain for SOL output */
     ASSERT(strcmp(resp.content_type, "text/plain") == 0);
 
-    ralph_api_response_free(&resp);
+    sh_api_response_free(&resp);
     ralph_api_free(ctx);
 }
 
@@ -305,7 +305,7 @@ TEST(json_format_backward_compat) {
         "}";
 
     /* Explicitly specify format=json in query */
-    RalphAPIRequest req = {
+    ShApiRequest req = {
         .method = "POST",
         .path = "/api/v1/solve",
         .query = "format=json",
@@ -313,7 +313,7 @@ TEST(json_format_backward_compat) {
         .body_len = strlen(json_body)
     };
 
-    RalphAPIResponse resp;
+    ShApiResponse resp;
     int result = ralph_api_handle(ctx, &req, &resp);
     ASSERT_EQ(result, 0);
     ASSERT_EQ(resp.status_code, 200);
@@ -322,7 +322,7 @@ TEST(json_format_backward_compat) {
     ASSERT(strstr((char*)resp.body, "\"status\":\"optimal\"") != NULL);
     ASSERT(strcmp(resp.content_type, "application/json") == 0);
 
-    ralph_api_response_free(&resp);
+    sh_api_response_free(&resp);
     ralph_api_free(ctx);
 }
 
@@ -333,7 +333,7 @@ TEST(invalid_format_param) {
 
     const char *body = "max: x\nsubject to\nc1: x <= 10\nend";
 
-    RalphAPIRequest req = {
+    ShApiRequest req = {
         .method = "POST",
         .path = "/api/v1/solve",
         .query = "format=invalid",
@@ -341,13 +341,13 @@ TEST(invalid_format_param) {
         .body_len = strlen(body)
     };
 
-    RalphAPIResponse resp;
+    ShApiResponse resp;
     int result = ralph_api_handle(ctx, &req, &resp);
     ASSERT_EQ(result, 0);
     ASSERT_EQ(resp.status_code, 400);
     ASSERT(strstr((char*)resp.body, "Invalid format") != NULL);
 
-    ralph_api_response_free(&resp);
+    sh_api_response_free(&resp);
     ralph_api_free(ctx);
 }
 
@@ -363,7 +363,7 @@ TEST(timeout_query_param) {
         "c1: 1 x <= 10\n"
         "end";
 
-    RalphAPIRequest req = {
+    ShApiRequest req = {
         .method = "POST",
         .path = "/api/v1/solve",
         .query = "format=lp&timeout_ms=1000",
@@ -371,13 +371,13 @@ TEST(timeout_query_param) {
         .body_len = strlen(lp_body)
     };
 
-    RalphAPIResponse resp;
+    ShApiResponse resp;
     int result = ralph_api_handle(ctx, &req, &resp);
     ASSERT_EQ(result, 0);
     ASSERT_EQ(resp.status_code, 200);
     ASSERT(strstr((char*)resp.body, "solution status: OPTIMAL") != NULL);
 
-    ralph_api_response_free(&resp);
+    sh_api_response_free(&resp);
     ralph_api_free(ctx);
 }
 

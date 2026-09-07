@@ -112,7 +112,7 @@ static void json_append_escaped(JsonBuilder *jb, const char *s) {
  * Response Helpers
  * ============================================================================ */
 
-static void set_response(RalphAPIResponse *resp, int status,
+static void set_response(ShApiResponse *resp, int status,
                          const char *content_type,
                          const char *body) {
     resp->status_code = status;
@@ -124,7 +124,7 @@ static void set_response(RalphAPIResponse *resp, int status,
     }
 }
 
-static void set_error_response(RalphAPIResponse *resp, int status,
+static void set_error_response(ShApiResponse *resp, int status,
                                const char *error_msg) {
     char buf[512];
     snprintf(buf, sizeof(buf), "{\"error\":\"%s\"}", error_msg);
@@ -153,7 +153,7 @@ static const char *status_to_json(RalphLPStatus status) {
  * Endpoint Handlers
  * ============================================================================ */
 
-static int handle_health(RalphAPIContext *ctx, RalphAPIResponse *resp) {
+static int handle_health(RalphAPIContext *ctx, ShApiResponse *resp) {
     (void)ctx;
     char buf[256];
     snprintf(buf, sizeof(buf),
@@ -163,7 +163,7 @@ static int handle_health(RalphAPIContext *ctx, RalphAPIResponse *resp) {
     return 0;
 }
 
-static int handle_formats(RalphAPIContext *ctx, RalphAPIResponse *resp) {
+static int handle_formats(RalphAPIContext *ctx, ShApiResponse *resp) {
     (void)ctx;
     const char *json =
         "{"
@@ -230,8 +230,8 @@ static void build_json_response(RalphLPModel *model, int is_mip, RalphLPStatus s
     json_append(jb, "}");
 }
 
-static int handle_solve(RalphAPIContext *ctx, const RalphAPIRequest *req,
-                        RalphAPIResponse *resp) {
+static int handle_solve(RalphAPIContext *ctx, const ShApiRequest *req,
+                        ShApiResponse *resp) {
     (void)ctx;
 
     if (!req->body || req->body_len == 0) {
@@ -455,9 +455,10 @@ static int handle_solve(RalphAPIContext *ctx, const RalphAPIRequest *req,
  * Main Request Handler
  * ============================================================================ */
 
-int ralph_api_handle(RalphAPIContext *ctx,
-                     const RalphAPIRequest *req,
-                     RalphAPIResponse *resp) {
+int ralph_api_handle(void *ctx_,
+                     const ShApiRequest *req,
+                     ShApiResponse *resp) {
+    RalphAPIContext *ctx = (RalphAPIContext *)ctx_;
     if (!ctx || !req || !resp) return -1;
 
     memset(resp, 0, sizeof(*resp));
@@ -491,31 +492,26 @@ int ralph_api_handle(RalphAPIContext *ctx,
     return 0;
 }
 
-void ralph_api_response_free(RalphAPIResponse *resp) {
-    if (resp && resp->body) {
-        free(resp->body);
-        resp->body = NULL;
-        resp->body_len = 0;
-    }
-}
+/* Response bodies are freed by sh_api_response_free() in shared/src/sh_api.c.
+ * Ralph used to carry its own identical copy. */
 
 /* ============================================================================
  * WASM Helper Functions
  * ============================================================================ */
 
-int ralph_api_response_status(const RalphAPIResponse *resp) {
+int ralph_api_response_status(const ShApiResponse *resp) {
     return resp ? resp->status_code : 0;
 }
 
-const char *ralph_api_response_content_type(const RalphAPIResponse *resp) {
+const char *ralph_api_response_content_type(const ShApiResponse *resp) {
     return resp ? resp->content_type : "";
 }
 
-const uint8_t *ralph_api_response_body(const RalphAPIResponse *resp) {
+const uint8_t *ralph_api_response_body(const ShApiResponse *resp) {
     return resp ? resp->body : NULL;
 }
 
-size_t ralph_api_response_body_len(const RalphAPIResponse *resp) {
+size_t ralph_api_response_body_len(const ShApiResponse *resp) {
     return resp ? resp->body_len : 0;
 }
 

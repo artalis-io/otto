@@ -17,6 +17,7 @@
 #include <stddef.h>
 #include <stdint.h>
 #include "ralph_lp.h"
+#include "sh_api.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -169,31 +170,10 @@ int ralph_api_ready(RalphAPIContext *ctx);
  * ============================================================================ */
 
 /*
- * API request structure.
- *
- * The path should be the URI path (e.g., "/api/v1/solve").
- * The body is the raw request body (for POST requests).
+ * Request and response are the shared, transport-agnostic types from
+ * <sh_api.h>. Ralph used to define its own identical pair; so did the
+ * other five modules. See docs/roadmaps/transport.md.
  */
-typedef struct {
-    const char *method;     /* HTTP method: "GET" or "POST" */
-    const char *path;       /* URI path (required) */
-    const char *query;      /* Query string without '?' (optional, NULL ok) */
-    const char *body;       /* Request body for POST (optional, NULL ok) */
-    size_t body_len;        /* Body length in bytes */
-} RalphAPIRequest;
-
-/*
- * API response structure.
- *
- * The body is heap-allocated and must be freed by the caller using
- * ralph_api_response_free() or free().
- */
-typedef struct {
-    int status_code;        /* HTTP status code (200, 400, 404, 408, 413, 500) */
-    const char *content_type; /* MIME type (static string, do not free) */
-    uint8_t *body;          /* Response body (caller must free) */
-    size_t body_len;        /* Response body length in bytes */
-} RalphAPIResponse;
 
 /*
  * Handle an API request.
@@ -208,16 +188,11 @@ typedef struct {
  *
  * Returns 0 on success (response filled in), -1 on internal error.
  */
-int ralph_api_handle(RalphAPIContext *ctx,
-                     const RalphAPIRequest *req,
-                     RalphAPIResponse *resp);
+int ralph_api_handle(void *ctx,
+                     const ShApiRequest *req,
+                     ShApiResponse *resp);
 
-/*
- * Free response body.
- *
- * Safe to call with NULL response or NULL body.
- */
-void ralph_api_response_free(RalphAPIResponse *resp);
+/* Response bodies are freed with sh_api_response_free() from <sh_api.h>. */
 
 /* ============================================================================
  * WASM Helper Functions
@@ -228,22 +203,22 @@ void ralph_api_response_free(RalphAPIResponse *resp);
 /*
  * Get response status code.
  */
-int ralph_api_response_status(const RalphAPIResponse *resp);
+int ralph_api_response_status(const ShApiResponse *resp);
 
 /*
  * Get response content type (static string, do not free).
  */
-const char *ralph_api_response_content_type(const RalphAPIResponse *resp);
+const char *ralph_api_response_content_type(const ShApiResponse *resp);
 
 /*
  * Get response body pointer.
  */
-const uint8_t *ralph_api_response_body(const RalphAPIResponse *resp);
+const uint8_t *ralph_api_response_body(const ShApiResponse *resp);
 
 /*
  * Get response body length.
  */
-size_t ralph_api_response_body_len(const RalphAPIResponse *resp);
+size_t ralph_api_response_body_len(const ShApiResponse *resp);
 
 /* ============================================================================
  * LP/MPS Parsing from String
