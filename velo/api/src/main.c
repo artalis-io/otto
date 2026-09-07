@@ -135,16 +135,6 @@ static ShCorsConfig s_cors_config;
 /* Adaptive capacity tracker (uses shared library) */
 static ShAdaptiveTracker *s_adaptive_tracker = NULL;
 
-/* ============================================================================
- * Route Request Context
- *
- * OWNERSHIP / LIFETIME (same rules as Surge and FuelWise):
- * freed in exactly one place -- done_fn (the item ran) or cancel_fn (dropped
- * at pool shutdown before starting). on_cancel and on_deadline never free,
- * because work_fn may still be running on a worker; they only set `detached`,
- * which is read and written solely on the event loop thread.
- * ============================================================================ */
-
 typedef struct {
     ShKeelAsync async;   /* server, pool, cors, timeout, stats */
 } AppCtx;

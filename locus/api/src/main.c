@@ -107,12 +107,6 @@ typedef struct {
 } AppCtx;
 
 /*
- * OWNERSHIP / LIFETIME (same rules as Surge, FuelWise, Velo and Carta):
- * freed in exactly one place -- done_fn (the item ran) or cancel_fn (dropped
- * at pool shutdown before starting). on_cancel and on_deadline never free,
- * because work_fn may still be running on a worker; they only set `detached`.
- */
-/*
  * One geocode request. The async plumbing that used to surround this --
  * KlAsyncOp, the connection, the detached flag -- now lives in
  * sh_keel_async_dispatch(); see shared/src/sh_keelasync.c.
