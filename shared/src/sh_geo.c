@@ -241,7 +241,7 @@ void sh_mercator_to_latlon(double x, double y, double *lat, double *lon)
 
 void sh_latlon_to_tile(double lat, double lon, int zoom, int *tile_x, int *tile_y)
 {
-    double n = (double)(1 << zoom);
+    double n = (double)sh_tiles_per_axis(zoom);
 
     /* Clamp latitude */
     if (lat > WEB_MERCATOR_MAX_LAT) lat = WEB_MERCATOR_MAX_LAT;
@@ -253,7 +253,7 @@ void sh_latlon_to_tile(double lat, double lon, int zoom, int *tile_x, int *tile_
     *tile_y = (int)floor((1.0 - log(tan(lat_rad) + 1.0 / cos(lat_rad)) / M_PI) / 2.0 * n);
 
     /* Clamp to valid range */
-    int max_tile = (1 << zoom) - 1;
+    int max_tile = sh_tile_max_index(zoom);
     if (*tile_x < 0) *tile_x = 0;
     if (*tile_x > max_tile) *tile_x = max_tile;
     if (*tile_y < 0) *tile_y = 0;
@@ -262,7 +262,7 @@ void sh_latlon_to_tile(double lat, double lon, int zoom, int *tile_x, int *tile_
 
 SHBBox sh_tile_bounds(int zoom, int tile_x, int tile_y)
 {
-    double n = (double)(1 << zoom);
+    double n = (double)sh_tiles_per_axis(zoom);
     SHBBox bbox;
 
     /* Longitude bounds */
