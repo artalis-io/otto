@@ -105,7 +105,7 @@ PDF2STRUC_OBJS = $(PDF2STRUC_SRCS:.c=.o)
 PDF2STRUC_LIB = libsh_pdf2struc.a
 TEST_PDF2STRUC_BIN = test_pdf2struc
 
-.PHONY: all clean test test-font test-json test-xml test-csv test-geojson test-fs test-sha256 test-eov test-pdf2struc font-compare lib debug generate-font-data
+.PHONY: all clean test test-asan test-font test-json test-xml test-csv test-geojson test-fs test-sha256 test-eov test-pdf2struc font-compare lib debug generate-font-data
 
 # Default target
 all: lib $(TEST_BIN)
@@ -224,6 +224,16 @@ generate-font-data:
 	python3 fonts/generate_font_data.py fonts/ui-font.json fonts/ui-font.png src/sh_font_data.c
 
 # Debug build (with sanitizers)
+# Run the suite under AddressSanitizer + UBSan.
+#
+# Same flags as `debug`, but it runs the tests instead of only building them.
+# A c-audit of the Phase 1 transport code found two heap overflows and an
+# out-of-bounds write that ten warning flags had missed; sanitizers catch that
+# class mechanically. See docs/roadmaps/transport.md.
+test-asan: CFLAGS = $(DEBUG_CFLAGS)
+test-asan: LDFLAGS += $(DEBUG_LDFLAGS)
+test-asan: clean test
+
 debug: CFLAGS = $(DEBUG_CFLAGS)
 debug: LDFLAGS += $(DEBUG_LDFLAGS)
 debug: clean all
