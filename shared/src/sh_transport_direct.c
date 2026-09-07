@@ -13,6 +13,13 @@
 #include <stdlib.h>
 #include <string.h>
 
+/*
+ * A producer that keeps answering MORE without finishing would spin here
+ * forever. Cap it: any real producer reaches DONE in far fewer rounds, and
+ * a runaway one is a bug worth surfacing as a failed stream.
+ */
+#define SH_DIRECT_STREAM_MAX_SPINS 100000UL
+
 /* ============================================================================
  * Collecting stream
  *
@@ -119,23 +126,36 @@ int sh_transport_direct_call(ShApiHandler handler, void *ctx,
 
     if (!resp->stream_fn) return 0;   /* unary: nothing more to do */
 
-    /* Streaming: run the producer to completion and fold the result into the
-     * unary fields, so every caller sees the same shape. */
+    /* Streaming: drive the producer to completion and fold the result into the
+     * unary fields, so every caller sees the same shape.
+     *
+     * The producer must not block (see sh_api.h), so calling it repeatedly in
+     * a tight loop is exactly what it expects. The spin cap guards against a
+     * producer that answers MORE forever without finishing: here that would
+     * hang the caller, and on the Keel transport it would hang the event loop,
+     * so it is treated as a producer error rather than trusted. */
     {
         DirectStream ds;
-        int srv;
+        ShApiStreamStatus srv = SH_API_STREAM_MORE;
+        unsigned long spins = 0;
 
         memset(&ds, 0, sizeof(ds));
         ds.base.vt = &direct_stream_vt;
 
-        srv = resp->stream_fn(resp->stream_ctx, &ds.base);
+        while (srv == SH_API_STREAM_MORE && !ds.failed) {
+            if (++spins > SH_DIRECT_STREAM_MAX_SPINS) {
+                ds.failed = 1;
+                break;
+            }
+            srv = resp->stream_fn(resp->stream_ctx, &ds.base);
+        }
 
         if (resp->stream_free) resp->stream_free(resp->stream_ctx);
         resp->stream_fn = NULL;
         resp->stream_ctx = NULL;
         resp->stream_free = NULL;
 
-        if (srv != 0 || ds.failed) {
+        if (srv != SH_API_STREAM_DONE || ds.failed) {
             free(ds.buf);
             free(resp->body);
             resp->body = NULL;

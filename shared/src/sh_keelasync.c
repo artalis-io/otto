@@ -12,8 +12,10 @@
  */
 #include "sh_keelasync.h"
 #include "sh_keelserver.h"
+#include "sh_transport_internal.h"
 
 #include <keel/async.h>
+#include <keel/http_sse.h>
 #include <keel/clock.h>
 
 #include <stdlib.h>
@@ -68,6 +70,84 @@ static int dup_opt(char **dst, const char *src)
     return 0;
 }
 
+/* ------------------------------------------------------------------------
+ * Streaming (Server-Sent Events)
+ *
+ * Keel's stream writes go straight to the connection fd, or into a drain
+ * buffer the event loop flushes, with no locking in that path. So the
+ * producer runs HERE, on the event loop thread, and must not block -- which
+ * is exactly what ShApiStreamFn documents.
+ * ------------------------------------------------------------------------ */
+
+typedef struct {
+    ShApiStream base;      /* must stay first */
+    KlHttpSse   sse;
+    int         failed;    /* sticky: a write failed or the peer went away */
+} KeelStream;
+
+static int keel_stream_send(ShApiStream *s, const char *event,
+                            const void *data, size_t len)
+{
+    KeelStream *ks = (KeelStream *)s;
+
+    if (!ks || ks->failed) return -1;
+    if (kl_http_sse_event(&ks->sse, event, (const char *)data, len, NULL) < 0) {
+        ks->failed = 1;
+        return -1;
+    }
+    return 0;
+}
+
+static int keel_stream_closed(const ShApiStream *s)
+{
+    const KeelStream *ks = (const KeelStream *)s;
+    return ks ? ks->failed : 1;
+}
+
+static const ShApiStreamVTable keel_stream_vt = {
+    keel_stream_send,
+    keel_stream_closed
+};
+
+/*
+ * Drive a streaming response to completion.
+ *
+ * The producer is non-blocking by contract, so it is called in a loop until it
+ * answers DONE or ERROR. Backpressure is Keel's KlDrain: writes that would
+ * block are buffered (bounded, 1 MiB) and flushed by the loop, and a producer
+ * that outruns that bound gets a write error and stops.
+ *
+ * The spin cap catches a producer that answers MORE forever. Without it such a
+ * producer would wedge the event loop and take every other connection with it.
+ */
+#define SH_KEEL_STREAM_MAX_SPINS 100000UL
+
+static void stream_response(KlHttpResponse *res, ShApiResponse *r)
+{
+    KeelStream ks;
+    ShApiStreamStatus srv = SH_API_STREAM_MORE;
+    unsigned long spins = 0;
+
+    memset(&ks, 0, sizeof(ks));
+    ks.base.vt = &keel_stream_vt;
+
+    if (kl_http_sse_begin(res, &ks.sse) < 0) {
+        if (r->stream_free) r->stream_free(r->stream_ctx);
+        return;
+    }
+
+    while (srv == SH_API_STREAM_MORE && !ks.failed) {
+        if (++spins > SH_KEEL_STREAM_MAX_SPINS) break;
+        srv = r->stream_fn(r->stream_ctx, &ks.base);
+    }
+
+    /* End the stream even after an error: the client has already had a 200 and
+     * some events, so the only honest close is a terminated chunked body. */
+    (void)kl_http_sse_end(&ks.sse);
+
+    if (r->stream_free) r->stream_free(r->stream_ctx);
+}
+
 /*
  * Emit a response.
  *
@@ -75,22 +155,15 @@ static int dup_opt(char **dst, const char *src)
  * "no body" branch below -- which would otherwise send the handler's own
  * status (200) with an error payload, and leak stream_ctx by never calling
  * stream_free.
- *
- * This transport does not implement the streaming escape hatch yet (it needs
- * kl_http_sse_*; see docs/roadmaps/transport.md, Layer 3). It therefore
- * declines honestly with 501, and honours the guarantee sh_api.h makes: that
- * stream_free is called even when a transport declines to stream.
  */
 static void reply_from(const ShKeelAsync *cfg, KlHttpResponse *res,
                        ShApiResponse *r)
 {
     if (r->stream_fn) {
-        if (r->stream_free) r->stream_free(r->stream_ctx);
+        stream_response(res, r);
         r->stream_fn = NULL;
         r->stream_ctx = NULL;
         r->stream_free = NULL;
-        sh_kl_reply_error(res, 501, cfg->cors, NULL,
-                          "Streaming is not implemented by this transport");
         return;
     }
 
