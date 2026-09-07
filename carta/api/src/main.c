@@ -115,12 +115,6 @@ static ShAdaptiveTracker *s_adaptive_tracker = NULL;
 /* ============================================================================
  * Render Request Context
  *
- * OWNERSHIP / LIFETIME (same rules as Surge, FuelWise and Velo): freed in
- * exactly one place -- done_fn (the item ran) or cancel_fn (dropped at pool
- * shutdown before starting). on_cancel and on_deadline never free, because
- * work_fn may still be running on a worker; they only set `detached`, which
- * is read and written solely on the event loop thread.
- *
  * CONCURRENCY NOTE
  *   The mongoose server ran N event-loop threads, each with its own mg_mgr
  *   listening via SO_REUSEPORT, because every one of them blocked in
