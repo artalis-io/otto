@@ -52,6 +52,12 @@ jobs:
           - name: Ralph Transport
             build: make ralph
             test: make -C ralph test-transport
+          - name: FuelWise Transport
+            build: make fuelwise
+            test: make -C fuelwise test-transport
+          - name: Surge Transport
+            build: make surge
+            test: make -C surge test-transport
           - name: Ralph LAP
             build: make ralph
             test: make -C ralph test-lap
@@ -362,6 +368,15 @@ jobs:
 
       - name: Build and test Ralph
         run: make -C ralph test
+
+      # fuelwise and surge were missing here, and that is exactly why #63 shipped
+      # a fuelwise link that had never been tried on Windows. Surge's own LDFLAGS
+      # had the same hole, found the moment this step existed.
+      - name: Build and test FuelWise
+        run: make -C fuelwise test-transport
+
+      - name: Build and test Surge
+        run: make -C surge test-transport
 
       # Servers only build here -- their suites drive a live HTTP server with
       # curl, which is a bigger CI surface than this job needs today. Building
