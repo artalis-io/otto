@@ -149,11 +149,14 @@ class VeloDemo {
      * @returns {Promise<Object>} - Route object with distance, duration, geometry
      */
     async route(from, to, options = {}) {
+        // The documented API takes from=lat,lon and to=lat,lon -- see the
+        // @query annotations on vl_api_handle(). This wrapper used to send
+        // from_lat/from_lon/to_lat/to_lon, which only the WASM module's own
+        // copy of the endpoint understood; the HTTP server never accepted
+        // them. The form still has four numeric inputs; they are joined here.
         const params = new URLSearchParams({
-            from_lat: from.lat.toString(),
-            from_lon: from.lon.toString(),
-            to_lat: to.lat.toString(),
-            to_lon: to.lon.toString()
+            from: from.lat + ',' + from.lon,
+            to: to.lat + ',' + to.lon
         });
 
         if (options.profile) params.set('profile', options.profile);

@@ -10,6 +10,7 @@
 #include "sh_json.h"
 #include "sh_arena.h"
 #include "sh_geo.h"
+#include "sh_api.h"
 #include "vl_types.h"
 #include <stdlib.h>
 #include <string.h>
@@ -107,13 +108,6 @@ VLLandmarks *vl_api_get_landmarks(VLAPIContext *ctx) {
     return ctx ? ctx->landmarks : NULL;
 }
 
-void vl_api_response_free(VLAPIResponse *resp) {
-    if (!resp) return;
-    free(resp->body);
-    resp->body = NULL;
-    resp->body_len = 0;
-}
-
 /* ============================================================================
  * Query String Parsing Utilities
  * ============================================================================ */
@@ -198,7 +192,8 @@ static int parse_bool(const char *str, int default_val) {
  * Route Parameter Parsing
  * ============================================================================ */
 
-int vl_api_parse_route_params(const char *query, const char *body,
+int vl_api_parse_route_params(const char *query,
+                              const char *body, size_t body_len,
                               const char *method,
                               VLAPIRouteParams *params,
                               char *error_msg, size_t error_msg_len) {
@@ -207,13 +202,23 @@ int vl_api_parse_route_params(const char *query, const char *body,
     memset(params, 0, sizeof(*params));
     params->profile = VL_PROFILE_CAR;
     params->weight = VL_WEIGHT_DURATION;
-    params->include_geometry = 0;
+    /* Geometry on unless asked otherwise: that is what the HTTP server has
+     * always returned, and a route with no shape is not much of a route. */
+    params->include_geometry = 1;
 
     int is_post = method && strcmp(method, "POST") == 0;
 
-    if (is_post && body) {
-        /* Parse JSON body using sh_json */
-        size_t body_len = strlen(body);
+    if (is_post) {
+        /* A POST with no body is a malformed request, not a request to fall
+         * back to the query string. */
+        if (!body || body_len == 0) {
+            if (error_msg) snprintf(error_msg, error_msg_len, "Empty request body");
+            return -1;
+        }
+
+        /* Parse JSON body using sh_json. body_len is passed in rather than
+         * measured with strlen(): a transport hands us a length, and the
+         * bytes behind it are not guaranteed to be NUL-terminated. */
         size_t arena_size = body_len * 8;
         if (arena_size < 4096) arena_size = 4096;
         SHArena *arena = sh_arena_create(arena_size);
@@ -271,8 +276,8 @@ int vl_api_parse_route_params(const char *query, const char *body,
 
         /* Optional: geometry (boolean) */
         ShJsonValue *geom_val = sh_json_get(root, "geometry");
-        if (geom_val && sh_json_type(geom_val) == SH_JSON_BOOL) {
-            params->include_geometry = sh_json_as_bool(geom_val, 0) ? 1 : 0;
+        if (geom_val) {
+            params->include_geometry = sh_json_as_bool(geom_val, true) ? 1 : 0;
         }
 
         sh_arena_free(arena);
@@ -307,7 +312,7 @@ int vl_api_parse_route_params(const char *query, const char *body,
         }
 
         if (get_query_param(query, "geometry", value, sizeof(value)) == 0) {
-            params->include_geometry = parse_bool(value, 0);
+            params->include_geometry = parse_bool(value, 1);
         }
     }
 
@@ -554,10 +559,24 @@ char *vl_api_route(VLAPIContext *ctx,
  * Main Handler
  * ============================================================================ */
 
-int vl_api_handle(VLAPIContext *ctx,
-                  const VLAPIRequest *req,
-                  VLAPIResponse *resp) {
-    if (!ctx || !req || !resp) return -1;
+/* vl_api_route() answers with a JSON error object and a status; the handler
+ * wants a bare message for the shared error shape. The distinction between a
+ * coordinate outside the graph and one with no road near it is already in the
+ * body vl_api_route built, so this only has to be true, not specific. */
+static const char *route_status_message(int status) {
+    switch (status) {
+        case 400: return "Invalid route request";
+        case 404: return "No route found";
+        default:  return "Routing failed";
+    }
+}
+
+int vl_api_handle(void *ctx_void,
+                  const ShApiRequest *req,
+                  ShApiResponse *resp) {
+    VLAPIContext *ctx = (VLAPIContext *)ctx_void;
+
+    if (!ctx || !req || !resp || !req->path) return -1;
 
     memset(resp, 0, sizeof(*resp));
     resp->content_type = "application/json";
@@ -565,51 +584,63 @@ int vl_api_handle(VLAPIContext *ctx,
     /* Health check */
     if (strcmp(req->path, "/api/v1/health") == 0) {
         char *body = vl_api_health(ctx, &resp->body_len);
+        if (!body) return sh_api_response_error(resp, 500, "Internal error");
         resp->body = (uint8_t *)body;
-        resp->status_code = body ? 200 : 500;
+        resp->status_code = 200;
         return 0;
     }
 
     /* Stats */
     if (strcmp(req->path, "/api/v1/stats") == 0) {
+        char *body;
         if (!ctx->graph) {
-            resp->status_code = 503;
-            resp->body = (uint8_t *)make_error_response("Graph not loaded", &resp->body_len);
-            return 0;
+            return sh_api_response_error(resp, 503, "Graph not loaded");
         }
-        char *body = vl_api_stats(ctx, &resp->body_len);
+        body = vl_api_stats(ctx, &resp->body_len);
+        if (!body) return sh_api_response_error(resp, 500, "Internal error");
         resp->body = (uint8_t *)body;
-        resp->status_code = body ? 200 : 500;
+        resp->status_code = 200;
         return 0;
     }
 
     /* Route */
     if (strcmp(req->path, "/api/v1/route") == 0) {
-        if (!ctx->graph) {
-            resp->status_code = 503;
-            resp->body = (uint8_t *)make_error_response("Graph not loaded", &resp->body_len);
-            return 0;
-        }
-
         VLAPIRouteParams params;
         char error_msg[256] = {0};
+        int status = 500;
+        char *body;
 
-        if (vl_api_parse_route_params(req->query, req->body, req->method,
-                                       &params, error_msg, sizeof(error_msg)) != 0) {
-            resp->status_code = 400;
-            resp->body = (uint8_t *)make_error_response(error_msg, &resp->body_len);
-            return 0;
+        if (!ctx->graph) {
+            return sh_api_response_error(resp, 503, "Graph not loaded");
         }
 
-        int status;
-        char *body = vl_api_route(ctx, &params, &status, &resp->body_len);
+        if (vl_api_parse_route_params(req->query, req->body, req->body_len,
+                                      req->method, &params,
+                                      error_msg, sizeof(error_msg)) != 0) {
+            return sh_api_response_error(resp, 400,
+                                         error_msg[0] ? error_msg
+                                                      : "Invalid request");
+        }
+
+        /* vl_api_route() reports its own status: 400 for a coordinate outside
+         * the graph or with no road near it, 404 for no route, 200 otherwise.
+         * On anything but 200 the body it returns is already an error object,
+         * so it is discarded in favour of the shared error shape. */
+        body = vl_api_route(ctx, &params, &status, &resp->body_len);
+        if (!body) {
+            return sh_api_response_error(resp, status ? status : 500,
+                                         "Routing failed");
+        }
+        if (status != 200) {
+            free(body);
+            return sh_api_response_error(resp, status, route_status_message(status));
+        }
+
         resp->body = (uint8_t *)body;
-        resp->status_code = status;
+        resp->status_code = 200;
         return 0;
     }
 
     /* 404 Not Found */
-    resp->status_code = 404;
-    resp->body = (uint8_t *)make_error_response("Not found", &resp->body_len);
-    return 0;
+    return sh_api_response_error(resp, 404, "Not found");
 }

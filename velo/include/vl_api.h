@@ -17,6 +17,7 @@
 #include <stddef.h>
 #include <stdint.h>
 #include "velo.h"
+#include "sh_api.h"  /* ShApiRequest/ShApiResponse/ShApiHandler */
 
 #ifdef __cplusplus
 extern "C" {
@@ -207,57 +208,33 @@ VLLandmarks *vl_api_get_landmarks(VLAPIContext *ctx);
  * ============================================================================ */
 
 /*
- * API request structure.
- *
- * The path should be the URI path (e.g., "/api/v1/route").
- * The query string is optional and should NOT include the leading '?'.
- * The body is optional and used for POST requests.
- */
-typedef struct {
-    const char *path;       /* URI path (required) */
-    const char *query;      /* Query string without '?' (optional, NULL ok) */
-    const char *body;       /* Request body for POST (optional, NULL ok) */
-    size_t body_len;        /* Body length */
-    const char *method;     /* HTTP method: "GET" or "POST" */
-} VLAPIRequest;
-
-/*
- * API response structure.
- *
- * The body is heap-allocated and must be freed by the caller using
- * vl_api_response_free() or free().
- */
-typedef struct {
-    int status_code;        /* HTTP status code (200, 400, 404, 500, etc.) */
-    const char *content_type; /* MIME type (static string, do not free) */
-    uint8_t *body;          /* Response body (caller must free) */
-    size_t body_len;        /* Response body length in bytes */
-} VLAPIResponse;
-
-/*
  * Handle an API request.
  *
- * Routes the request based on path and generates the appropriate response.
- * The response body is heap-allocated - caller must free with
- * vl_api_response_free().
+ * This is a plain ShApiHandler: the request and response are the shared types
+ * from sh_api.h, so any transport can drive it -- Keel, the WASM bridge, a
+ * direct call in a test. Velo used to declare its own VLAPIRequest and
+ * VLAPIResponse here, and there were three implementations of these three
+ * endpoints: this one, another in api/src/main.c, and a third in
+ * wasm/src/vl_wasm_api.c that returned geometry as a raw coordinate array
+ * where the other two return an encoded polyline. Now there is one.
+ *
+ * `ctx` is a VLAPIContext*, passed as void* so the signature matches
+ * ShApiHandler exactly and the compiler checks that for us.
  *
  * Supported paths:
- *   /api/v1/route   - Calculate route (GET or POST)
+ *   /api/v1/route   - Calculate route (GET with ?from=&to=, or POST JSON)
  *   /api/v1/health  - Health check
  *   /api/v1/stats   - Graph statistics
  *
- * Returns 0 on success (response filled in), -1 on internal error.
- */
-int vl_api_handle(VLAPIContext *ctx,
-                  const VLAPIRequest *req,
-                  VLAPIResponse *resp);
-
-/*
- * Free response body.
+ * Returns 0 when the response has been filled in -- including error
+ * responses, since a 404 is a successful handling -- and non-zero only on an
+ * internal failure that leaves the response unusable.
  *
- * Safe to call with NULL response or NULL body.
+ * Free the response with sh_api_response_free().
  */
-void vl_api_response_free(VLAPIResponse *resp);
+int vl_api_handle(void *ctx,
+                  const ShApiRequest *req,
+                  ShApiResponse *resp);
 
 /* ============================================================================
  * Route Request Parameters
@@ -279,7 +256,8 @@ typedef struct {
  *
  * Returns 0 on success, -1 on error (error_msg filled in).
  */
-int vl_api_parse_route_params(const char *query, const char *body,
+int vl_api_parse_route_params(const char *query,
+                              const char *body, size_t body_len,
                               const char *method,
                               VLAPIRouteParams *params,
                               char *error_msg, size_t error_msg_len);

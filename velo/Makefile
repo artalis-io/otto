@@ -105,6 +105,7 @@ LIB = libvelo.a
 
 # Test binary
 TEST_BIN = test_velo
+TEST_TRANSPORT_BIN = test_transport_direct
 TEST_OSRM = test_osrm_comparison
 
 # Benchmark binaries
@@ -115,7 +116,7 @@ ROUTE_BENCH = velo-route-bench
 # WASM output
 WASM_OUT = velo.js
 
-.PHONY: all clean test bench lib debug wasm route-bench omp-mode
+.PHONY: all clean test test-transport bench lib debug wasm route-bench omp-mode
 
 # Default target
 all: lib $(TEST_BIN)
@@ -145,9 +146,18 @@ $(SHARED_DIR)/libshared.a:
 $(TEST_BIN): tests/test_velo.c $(LIB) $(SHARED_DIR)/libshared.a
 	$(CC) $(CFLAGS) $(INCLUDES) $< -L. -lvelo -L$(SHARED_DIR) -lshared $(LDFLAGS) -o $@
 
+# Transport invariant: vl_api_handle driven by sh_transport_direct with no
+# transport library on the include path. See docs/roadmaps/transport.md.
+$(TEST_TRANSPORT_BIN): tests/test_transport_direct.c $(LIB) $(SHARED_DIR)/libshared.a
+	$(CC) $(CFLAGS) $(INCLUDES) $< -L. -lvelo -L$(SHARED_DIR) -lshared $(LDFLAGS) -o $@
+
+test-transport: $(TEST_TRANSPORT_BIN)
+	./$(TEST_TRANSPORT_BIN)
+
 # Run tests
-test: $(TEST_BIN)
+test: $(TEST_BIN) $(TEST_TRANSPORT_BIN)
 	./$(TEST_BIN)
+	./$(TEST_TRANSPORT_BIN)
 
 # OSRM comparison test
 $(TEST_OSRM): tests/test_osrm_comparison.c $(LIB) $(SHARED_DIR)/libshared.a
@@ -186,7 +196,7 @@ wasm:
 # Clean
 clean:
 	rm -f $(CORE_OBJS) $(LIB) $(OMP_STAMP)
-	rm -f $(TEST_BIN) $(TEST_OSRM) $(BENCH_ROUTING) $(BENCH_PBF) $(ROUTE_BENCH)
+	rm -f $(TEST_BIN) $(TEST_TRANSPORT_BIN) $(TEST_OSRM) $(BENCH_ROUTING) $(BENCH_PBF) $(ROUTE_BENCH)
 	rm -f $(WASM_OUT) velo.wasm
 
 # Dependencies

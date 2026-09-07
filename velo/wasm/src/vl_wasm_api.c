@@ -4,8 +4,27 @@
  * Provides REST-compatible API endpoints via WASM, demonstrating
  * architecture parity between server and browser deployments.
  *
- * The Monaco routing graph is embedded at compile time for a self-contained demo.
- * All API endpoints work identically to the Keel server.
+ * The Monaco routing graph is embedded at compile time for a self-contained
+ * demo. All API endpoints work identically to the Keel server -- and now they
+ * really do, because both call the same function.
+ *
+ * This file used to carry its own copy of the three endpoints, and it did not
+ * merely differ from the server in style. It spoke a different API:
+ *
+ *   - it read from_lat, from_lon, to_lat and to_lon as four query parameters,
+ *     where the documented API (and the server) takes from=lat,lon and
+ *     to=lat,lon -- so the demo was not exercising the product it documents
+ *   - it returned "geometry" as a raw [[lat,lon],...] array, where the server
+ *     returns a Google Polyline encoded string, which is what
+ *     site/api-config.json tells the reader to expect
+ *   - it answered 422 for "no route", where the server answers 404
+ *   - it emitted no "meta" object at all
+ *   - it defaulted geometry off, where the server defaults it on
+ *
+ * All of that is gone. What remains is a bridge: marshal what JS gives us into
+ * an ShApiRequest, call vl_api_handle(), hold the ShApiResponse for the
+ * accessors below. The exported names and their shapes are unchanged;
+ * site/js/velo-api-demo.js now sends the documented from=/to= parameters.
  */
 
 #include <stdlib.h>
@@ -13,6 +32,8 @@
 #include <stdio.h>
 #include <math.h>
 #include "velo.h"
+#include "vl_api.h"
+#include "sh_api.h"
 #include "monaco_vlg.h"
 
 #ifdef __EMSCRIPTEN__
@@ -22,14 +43,20 @@
 #define WASM_EXPORT
 #endif
 
-/* Global graph (initialized once) */
+/*
+ * Global State
+ *
+ * THREAD SAFETY: these statics are acceptable because WASM runs
+ * single-threaded in the browser. The graph is initialized once and read-only
+ * thereafter; the response is written per-request with no concurrent access
+ * possible in the JS event loop model.
+ */
 static VLGraph *g_graph = NULL;
+static VLAPIContext *g_api_ctx = NULL;
 
-/* Response buffer for JSON */
-static char g_response_buf[65536];
-static size_t g_response_len = 0;
-static int g_response_status = 200;
-static const char *g_response_content_type = "application/json";
+/* The response from the most recent call, held so the accessors below can
+ * read it. Freed at the top of the next call and on teardown. */
+static ShApiResponse g_response = {0};
 
 /* ============================================================================
  * Initialization
@@ -43,10 +70,24 @@ static const char *g_response_content_type = "application/json";
  */
 WASM_EXPORT
 int velo_api_init(void) {
-    if (g_graph) return 0;  /* Already initialized */
+    if (g_api_ctx) return 0;  /* Already initialized */
 
     g_graph = vl_load_binary_memory(monaco_vlg_data, monaco_vlg_data_len);
-    return g_graph ? 0 : -1;
+    if (!g_graph) return -1;
+
+    VLAPIConfig cfg;
+    vl_api_config_init(&cfg);
+
+    /* No landmarks in the demo build: the embedded graph ships without them,
+     * and vl_api_route() falls back to plain bidirectional A* when they are
+     * absent. */
+    g_api_ctx = vl_api_create(g_graph, NULL, &cfg);
+    if (!g_api_ctx) {
+        vl_graph_free(g_graph);
+        g_graph = NULL;
+        return -1;
+    }
+    return 0;
 }
 
 /**
@@ -54,6 +95,11 @@ int velo_api_init(void) {
  */
 WASM_EXPORT
 void velo_api_free(void) {
+    sh_api_response_free(&g_response);
+    if (g_api_ctx) {
+        vl_api_free(g_api_ctx);
+        g_api_ctx = NULL;
+    }
     if (g_graph) {
         vl_graph_free(g_graph);
         g_graph = NULL;
@@ -66,263 +112,48 @@ void velo_api_free(void) {
  */
 WASM_EXPORT
 int velo_api_ready(void) {
-    return g_graph != NULL;
+    return g_api_ctx != NULL;
 }
 
 /* ============================================================================
  * Request Handling
  * ============================================================================ */
 
-/* Parse query parameter value */
-static const char *get_query_param(const char *query, const char *name, char *buf, size_t buf_size) {
-    if (!query || !name) return NULL;
-
-    size_t name_len = strlen(name);
-    const char *p = query;
-
-    while (*p) {
-        if (strncmp(p, name, name_len) == 0 && p[name_len] == '=') {
-            const char *value = p + name_len + 1;
-            const char *end = strchr(value, '&');
-            size_t len = end ? (size_t)(end - value) : strlen(value);
-            if (len >= buf_size) len = buf_size - 1;
-            memcpy(buf, value, len);
-            buf[len] = '\0';
-            return buf;
-        }
-        p = strchr(p, '&');
-        if (!p) break;
-        p++;
-    }
-    return NULL;
-}
-
-/* Safe coordinate parsing with validation */
-static int safe_parse_coord(const char *str, double *out, double min_val, double max_val) {
-    if (!str || !*str) return -1;
-
-    char *end;
-    double val = strtod(str, &end);
-
-    /* No digits consumed */
-    if (end == str) return -1;
-
-    /* Reject inf/nan */
-    if (!isfinite(val)) return -1;
-
-    /* Range check */
-    if (val < min_val || val > max_val) return -1;
-
-    *out = val;
-    return 0;
-}
-
-/* Handle GET /api/v1/route */
-static void handle_route(const char *query) {
-    char buf[64];
-    double from_lat, from_lon, to_lat, to_lon;
-
-    /* Parse coordinates with validation */
-    const char *from_lat_str = get_query_param(query, "from_lat", buf, sizeof(buf));
-    if (!from_lat_str || safe_parse_coord(from_lat_str, &from_lat, -90.0, 90.0) != 0) {
-        g_response_status = 400;
-        g_response_len = snprintf(g_response_buf, sizeof(g_response_buf),
-            "{\"error\": \"Missing or invalid from_lat parameter\"}");
-        return;
-    }
-
-    const char *from_lon_str = get_query_param(query, "from_lon", buf, sizeof(buf));
-    if (!from_lon_str || safe_parse_coord(from_lon_str, &from_lon, -180.0, 180.0) != 0) {
-        g_response_status = 400;
-        g_response_len = snprintf(g_response_buf, sizeof(g_response_buf),
-            "{\"error\": \"Missing or invalid from_lon parameter\"}");
-        return;
-    }
-
-    const char *to_lat_str = get_query_param(query, "to_lat", buf, sizeof(buf));
-    if (!to_lat_str || safe_parse_coord(to_lat_str, &to_lat, -90.0, 90.0) != 0) {
-        g_response_status = 400;
-        g_response_len = snprintf(g_response_buf, sizeof(g_response_buf),
-            "{\"error\": \"Missing or invalid to_lat parameter\"}");
-        return;
-    }
-
-    const char *to_lon_str = get_query_param(query, "to_lon", buf, sizeof(buf));
-    if (!to_lon_str || safe_parse_coord(to_lon_str, &to_lon, -180.0, 180.0) != 0) {
-        g_response_status = 400;
-        g_response_len = snprintf(g_response_buf, sizeof(g_response_buf),
-            "{\"error\": \"Missing or invalid to_lon parameter\"}");
-        return;
-    }
-
-    /* Parse optional parameters */
-    VLRouteOptions opts;
-    vl_default_options(&opts);
-    opts.include_geometry = 0;  /* Default: no geometry */
-
-    const char *profile_str = get_query_param(query, "profile", buf, sizeof(buf));
-    if (profile_str) {
-        if (strcmp(profile_str, "truck") == 0) opts.profile = VL_PROFILE_TRUCK;
-        else if (strcmp(profile_str, "bike") == 0) opts.profile = VL_PROFILE_BIKE;
-        else if (strcmp(profile_str, "foot") == 0) opts.profile = VL_PROFILE_FOOT;
-    }
-
-    const char *mode_str = get_query_param(query, "mode", buf, sizeof(buf));
-    if (mode_str && strcmp(mode_str, "shortest") == 0) {
-        opts.weight = VL_WEIGHT_DISTANCE;
-    }
-
-    const char *geom_str = get_query_param(query, "geometry", buf, sizeof(buf));
-    if (geom_str && strcmp(geom_str, "true") == 0) {
-        opts.include_geometry = 1;
-    }
-
-    /* Calculate route */
-    VLCoord from = {from_lat, from_lon};
-    VLCoord to = {to_lat, to_lon};
-    VLRoute route;
-    memset(&route, 0, sizeof(route));
-
-    VLStatus status = vl_route_coords(g_graph, from, to, &opts, &route);
-
-    if (status != VL_OK) {
-        g_response_status = 422;
-        g_response_len = snprintf(g_response_buf, sizeof(g_response_buf),
-            "{\"error\": \"No route found\", \"status\": %d}", status);
-        return;
-    }
-
-    /* Build JSON response */
-    int offset;
-    if (opts.include_geometry) {
-        offset = snprintf(g_response_buf, sizeof(g_response_buf),
-            "{\n"
-            "  \"status\": \"ok\",\n"
-            "  \"route\": {\n"
-            "    \"distance\": %.1f,\n"
-            "    \"duration\": %.1f,\n"
-            "    \"profile\": \"%s\",\n"
-            "    \"mode\": \"%s\",\n"
-            "    \"from\": [%.6f, %.6f],\n"
-            "    \"to\": [%.6f, %.6f],\n"
-            "    \"geometry\": [",
-            route.distance_m,
-            route.duration_s,
-            opts.profile == VL_PROFILE_TRUCK ? "truck" :
-            opts.profile == VL_PROFILE_BIKE ? "bike" :
-            opts.profile == VL_PROFILE_FOOT ? "foot" : "car",
-            opts.weight == VL_WEIGHT_DISTANCE ? "shortest" : "fastest",
-            from_lat, from_lon,
-            to_lat, to_lon);
-
-        /* Add geometry coordinates */
-        for (uint32_t i = 0; i < route.num_coords && offset < (int)sizeof(g_response_buf) - 100; i++) {
-            if (i > 0) {
-                offset += snprintf(g_response_buf + offset, sizeof(g_response_buf) - offset, ",");
-            }
-            offset += snprintf(g_response_buf + offset, sizeof(g_response_buf) - offset,
-                "[%.6f,%.6f]", route.coords[i].lat, route.coords[i].lon);
-        }
-
-        offset += snprintf(g_response_buf + offset, sizeof(g_response_buf) - offset,
-            "]\n  }\n}");
-    } else {
-        offset = snprintf(g_response_buf, sizeof(g_response_buf),
-            "{\n"
-            "  \"status\": \"ok\",\n"
-            "  \"route\": {\n"
-            "    \"distance\": %.1f,\n"
-            "    \"duration\": %.1f,\n"
-            "    \"profile\": \"%s\",\n"
-            "    \"mode\": \"%s\",\n"
-            "    \"from\": [%.6f, %.6f],\n"
-            "    \"to\": [%.6f, %.6f]\n"
-            "  }\n"
-            "}",
-            route.distance_m,
-            route.duration_s,
-            opts.profile == VL_PROFILE_TRUCK ? "truck" :
-            opts.profile == VL_PROFILE_BIKE ? "bike" :
-            opts.profile == VL_PROFILE_FOOT ? "foot" : "car",
-            opts.weight == VL_WEIGHT_DISTANCE ? "shortest" : "fastest",
-            from_lat, from_lon,
-            to_lat, to_lon);
-    }
-
-    g_response_len = offset;
-    g_response_status = 200;
-
-    vl_free_route(&route);
-}
-
-/* Handle GET /api/v1/health */
-static void handle_health(void) {
-    g_response_status = 200;
-    g_response_len = snprintf(g_response_buf, sizeof(g_response_buf),
-        "{\n"
-        "  \"status\": \"healthy\",\n"
-        "  \"service\": \"velo-wasm-demo\",\n"
-        "  \"version\": \"%d.%d.%d\"\n"
-        "}",
-        VL_VERSION_MAJOR, VL_VERSION_MINOR, VL_VERSION_PATCH);
-}
-
-/* Handle GET /api/v1/stats */
-static void handle_stats(void) {
-    g_response_status = 200;
-    g_response_len = snprintf(g_response_buf, sizeof(g_response_buf),
-        "{\n"
-        "  \"graph_source\": \"monaco.vlg (embedded)\",\n"
-        "  \"num_nodes\": %u,\n"
-        "  \"num_edges\": %u,\n"
-        "  \"bbox\": {\n"
-        "    \"min_lat\": %.4f,\n"
-        "    \"min_lon\": %.4f,\n"
-        "    \"max_lat\": %.4f,\n"
-        "    \"max_lon\": %.4f\n"
-        "  }\n"
-        "}",
-        g_graph->num_nodes,
-        g_graph->num_edges,
-        g_graph->bbox_min.lat, g_graph->bbox_min.lon,
-        g_graph->bbox_max.lat, g_graph->bbox_max.lon);
-}
-
 /**
  * Handle an API request (REST-compatible interface).
  *
- * Routes to the appropriate handler based on path:
- *   /api/v1/route   - Calculate route
+ * Routing, parameter parsing and JSON building all live in vl_api_handle();
+ * this function only marshals and holds the result.
+ *
+ * Supported paths:
+ *   /api/v1/route   - Calculate route (?from=lat,lon&to=lat,lon)
  *   /api/v1/health  - Health check
  *   /api/v1/stats   - Statistics
  *
  * @param path  Request path (e.g., "/api/v1/route")
  * @param query Query string without '?' (optional, can be NULL)
- * @return 0 on success
+ * @return 0 on success, -1 if the API is not initialized or handling failed
  */
 WASM_EXPORT
 int velo_api_handle(const char *path, const char *query) {
-    if (!g_graph) {
-        g_response_status = 500;
-        g_response_len = snprintf(g_response_buf, sizeof(g_response_buf),
-            "{\"error\": \"API not initialized\"}");
+    sh_api_response_free(&g_response);
+
+    if (!g_api_ctx) {
+        sh_api_response_error(&g_response, 500, "API not initialized");
         return -1;
     }
 
-    g_response_content_type = "application/json";
+    ShApiRequest req;
+    memset(&req, 0, sizeof(req));
+    req.method = "GET";
+    req.path = path;
+    req.query = query;
+    req.host = "wasm.demo";
 
-    if (strcmp(path, "/api/v1/route") == 0) {
-        handle_route(query);
-    } else if (strcmp(path, "/api/v1/health") == 0) {
-        handle_health();
-    } else if (strcmp(path, "/api/v1/stats") == 0) {
-        handle_stats();
-    } else {
-        g_response_status = 404;
-        g_response_len = snprintf(g_response_buf, sizeof(g_response_buf),
-            "{\"error\": \"Not found\"}");
+    if (vl_api_handle(g_api_ctx, &req, &g_response) != 0) {
+        sh_api_response_error(&g_response, 500, "Internal error");
+        return -1;
     }
-
     return 0;
 }
 
@@ -332,22 +163,25 @@ int velo_api_handle(const char *path, const char *query) {
 
 WASM_EXPORT
 int velo_response_status(void) {
-    return g_response_status;
+    return g_response.status_code;
 }
 
 WASM_EXPORT
 const char *velo_response_content_type(void) {
-    return g_response_content_type;
+    return g_response.content_type ? g_response.content_type
+                                   : "application/json";
 }
 
 WASM_EXPORT
 const char *velo_response_body(void) {
-    return g_response_buf;
+    /* Never NULL: the JS wrapper takes this pointer before it looks at the
+     * length, and a null pointer there indexes the heap view at 0. */
+    return g_response.body ? (const char *)g_response.body : "";
 }
 
 WASM_EXPORT
 size_t velo_response_body_len(void) {
-    return g_response_len;
+    return g_response.body_len;
 }
 
 /* ============================================================================
