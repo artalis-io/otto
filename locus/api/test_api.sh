@@ -83,7 +83,26 @@ echo "=== Autocomplete ==="
 # with a "results" key -- that is the shape the mongoose server returned too.
 RESP=$(curl -s -m 20 "http://127.0.0.1:$PORT/api/v1/autocomplete?q=Mon&limit=5")
 check "Autocomplete returns a JSON array" "$RESP" '^\['
-check "Autocomplete matches Monaco" "$RESP" 'Monaco'
+
+# Assert autocomplete against a name the index actually holds rather than
+# against a hardcoded one. data/monaco-latest.osm.pbf is re-downloaded from
+# Geofabrik on every run, so its contents drift: "Mon" with limit=5 used to
+# surface "Monaco" and later did not, which failed this suite for a reason
+# that had nothing to do with the server. Take the first name search returns,
+# feed its 4-character prefix back to autocomplete, and require that name
+# back -- that tests the trie's prefix behaviour and holds for any extract.
+NAME=$(curl -s -m 20 "http://127.0.0.1:$PORT/api/v1/search?q=Monaco&limit=5" \
+       | grep -oE '"name"[[:space:]]*:[[:space:]]*"[^"]*"' \
+       | sed 's/.*"\(.*\)"$/\1/' | grep -v '^$' | head -1)
+if [ -n "$NAME" ]; then
+    PREFIX=$(printf '%s' "$NAME" | cut -c1-4)
+    RESP=$(curl -s -m 20 --get --data-urlencode "q=$PREFIX" --data-urlencode "limit=25" \
+           "http://127.0.0.1:$PORT/api/v1/autocomplete")
+    check "Autocomplete on a known name's prefix returns that name" \
+          "$RESP" "$(printf '%s' "$NAME" | sed 's/[][\.*^$/]/\\&/g')"
+else
+    fail "Search returned a usable name to drive the autocomplete check"
+fi
 
 echo ""
 echo "=== Reverse ==="

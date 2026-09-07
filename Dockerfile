@@ -1,6 +1,9 @@
 # DEPRECATED - Use per-service Dockerfiles instead
 #
 # This file is kept for backwards compatibility but will be removed in a future release.
+# Nothing builds it: CI, docker-compose and docker/README.md all use
+# docker/Dockerfile.fuelwise. It has no named build stages, so `--target` does
+# not work against it.
 #
 # Per-service Dockerfiles (recommended):
 #   docker build -f docker/Dockerfile.carta -t otto-carta .

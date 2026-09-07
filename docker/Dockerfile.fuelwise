@@ -34,8 +34,10 @@ COPY Makefile .
 
 RUN make shared && make ralph && make fuelwise && make fuelwise-api
 
-# Run tests
-RUN make test-ralph && make test-fuelwise
+# Tests are not run here. The suites run as dedicated CI jobs (test-c,
+# test-fuelwise-api) so a test failure is reported as a test failure rather
+# than as a broken image build. `make test-fuelwise` also needs `glpsol`,
+# which this builder stage deliberately does not install.
 
 # Verify the binary works
 RUN ./fuelwise/api/fuelwise-api --help || true
