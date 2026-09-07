@@ -27,7 +27,9 @@ SHARED_CORE_SRC = ../../shared/src/sh_geo.c \
                   ../../shared/src/sh_arena.c \
                   ../../shared/src/sh_pool.c \
                   ../../shared/src/sh_hashmap.c \
-                  ../../shared/src/sh_heap.c
+                  ../../shared/src/sh_heap.c \
+                  ../../shared/src/sh_pal_posix.c \
+                  ../../shared/src/sh_pal_windows.c
 
 # All source files
 ALL_SRC = $(WASM_SRC) $(VELO_SRC) $(SHARED_CORE_SRC) $(MINIZ_SRC)
