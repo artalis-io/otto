@@ -59,6 +59,16 @@ DEBUG_LDFLAGS = -fsanitize=address,undefined
 
 # Non-OpenMP build for compatibility
 # Use: make NOMP=1 all
+#
+# NOMP changes the compile flags but not the output filenames, so a tree built
+# one way silently satisfies a make invoked the other way: `make lib` followed
+# by `make NOMP=1 lib` reports "Nothing to be done" and hands back an OpenMP
+# archive. Whatever links it next fails on undefined GOMP_* symbols. The stamp
+# below records which mode the objects were built in and forces a rebuild when
+# it flips. See the omp-mode target near `lib`.
+OMP_MODE := $(if $(NOMP),nomp,omp)
+OMP_STAMP = .omp-mode
+
 ifdef NOMP
 CFLAGS = -Wall -Wextra -O3 -std=c11 -D_GNU_SOURCE $(SIMD_FLAGS)
 LDFLAGS = -lm
@@ -105,13 +115,20 @@ ROUTE_BENCH = velo-route-bench
 # WASM output
 WASM_OUT = velo.js
 
-.PHONY: all clean test bench lib debug wasm route-bench
+.PHONY: all clean test bench lib debug wasm route-bench omp-mode
 
 # Default target
 all: lib $(TEST_BIN)
 
 # Build library
-lib: $(LIB)
+lib: omp-mode $(LIB)
+
+# Drop objects built in the other OpenMP mode before anything depends on them.
+omp-mode:
+	@if [ ! -f $(OMP_STAMP) ] || [ "`cat $(OMP_STAMP)`" != "$(OMP_MODE)" ]; then \
+		rm -f $(CORE_OBJS) $(LIB); \
+		echo $(OMP_MODE) > $(OMP_STAMP); \
+	fi
 
 $(LIB): $(ALL_OBJS) $(SHARED_DIR)/libshared.a
 	ar rcs $@ $(ALL_OBJS)
@@ -168,7 +185,7 @@ wasm:
 
 # Clean
 clean:
-	rm -f $(CORE_OBJS) $(LIB)
+	rm -f $(CORE_OBJS) $(LIB) $(OMP_STAMP)
 	rm -f $(TEST_BIN) $(TEST_OSRM) $(BENCH_ROUTING) $(BENCH_PBF) $(ROUTE_BENCH)
 	rm -f $(WASM_OUT) velo.wasm
 

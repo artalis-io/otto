@@ -153,3 +153,6 @@ fuelwise/bench/fw_probe.c
 fuelwise/bench/fuelwise-bench-gate
 nexus/schemas/gls-hu-automata-pdf-v2.json
 nexus/schemas/gls-hu-pudo-pdf-v2.json
+
+# velo OpenMP build-mode stamp (see velo/Makefile)
+.omp-mode

@@ -314,9 +314,13 @@ jobs:
   # This job is what stops that rotting: a PAL only ever compiled on Linux is
   # a PAL nobody notices breaking.
   #
-  # Now covers shared/, velo/, carta/ and locus/ -- every core library that
-  # has a test suite. Ralph and the API servers are what is left: Ralph needs
-  # its own sweep, and the servers need Keel built on Windows too.
+  # Covers every core library: shared/, velo/, carta/, locus/ and ralph/.
+  # The API servers are what remain; they additionally need Keel built here.
+  #
+  # Two Ralph suites skip rather than run: lp_external_oop_run() spawns a
+  # child process with fork/execvp over a non-blocking pipe, and the Windows
+  # equivalent (CreateProcess + PeekNamedPipe) is a feature port rather than a
+  # portability fix. They report SKIP so the gap stays visible.
   # ==========================================================================
   windows:
     name: Windows Core
@@ -329,6 +333,8 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
+        with:
+          submodules: recursive
 
       - name: Set up MSYS2 + UCRT64 toolchain
         uses: msys2/setup-msys2@v2
@@ -353,6 +359,22 @@ jobs:
 
       - name: Build and test Locus
         run: make -C locus test
+
+      - name: Build and test Ralph
+        run: make -C ralph test
+
+      # Servers only build here -- their suites drive a live HTTP server with
+      # curl, which is a bigger CI surface than this job needs today. Building
+      # them proves Keel and the Keel-side shared helpers compile and link on
+      # Windows, which is what was actually unknown.
+      - name: Build the API servers
+        run: |
+          make -C ralph/api
+          make -C fuelwise/api
+          make -C surge/api
+          make -C velo/api
+          make -C carta/api
+          make -C locus/api
 
   # ==========================================================================
   # Sanitizers

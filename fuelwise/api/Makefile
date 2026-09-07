@@ -10,6 +10,14 @@ else
     RELRO_FLAGS =
 endif
 
+# Windows: Keel talks to winsock, and libshared reaches bcrypt through
+# sh_pal_random_bytes. iphlpapi comes with Keel's adapter enumeration.
+ifneq (,$(findstring MINGW,$(UNAME_S)))
+    PLATFORM_LIBS = -lws2_32 -lbcrypt -liphlpapi
+else
+    PLATFORM_LIBS =
+endif
+
 # Production build (with hardening)
 CFLAGS = -Wall -Wextra -O2 -g \
          -fstack-protector-strong -D_FORTIFY_SOURCE=2 -fPIE -fno-common
@@ -63,7 +71,7 @@ $(BUILD_DIR):
 
 # Build the API server
 $(TARGET): $(OBJS) $(KEELSERVER_OBJ) $(FUELWISE_LIB) $(RALPH_LIB) $(SHARED_LIB) $(KEEL_LIB)
-	$(CC) $(CFLAGS) $(INCLUDES) -o $@ $(OBJS) $(KEELSERVER_OBJ) $(FUELWISE_LIB) $(RALPH_LIB) $(SHARED_LIB) $(KEEL_LIB) -lm -lpthread $(OPENMP_LDFLAGS)
+	$(CC) $(CFLAGS) $(INCLUDES) -o $@ $(OBJS) $(KEELSERVER_OBJ) $(FUELWISE_LIB) $(RALPH_LIB) $(SHARED_LIB) $(KEEL_LIB) -lm -lpthread $(OPENMP_LDFLAGS) $(PLATFORM_LIBS)
 
 # Build vendored Keel. Core only (no mbedTLS/nghttp2 integrations), so
 # this needs no external libraries.

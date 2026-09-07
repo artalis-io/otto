@@ -10,6 +10,14 @@ else
     RELRO_FLAGS =
 endif
 
+# Windows: Keel talks to winsock, and libshared reaches bcrypt through
+# sh_pal_random_bytes. iphlpapi comes with Keel's adapter enumeration.
+ifneq (,$(findstring MINGW,$(UNAME_S)))
+    PLATFORM_LIBS = -lws2_32 -lbcrypt -liphlpapi
+else
+    PLATFORM_LIBS =
+endif
+
 # Production build (with hardening)
 CFLAGS = -Wall -Wextra -O2 -std=c11 -D_POSIX_C_SOURCE=200809L \
          -fstack-protector-strong -D_FORTIFY_SOURCE=2 -fPIE -fno-common
@@ -27,7 +35,7 @@ INCLUDES = -I../include -I../../shared/include -I$(KEEL_DIR)/include -I../../ven
 SHARED_DIR = ../../shared
 
 # Library paths (no OpenMP - build velo with NOMP=1 for compatibility)
-LDFLAGS = -L.. -lvelo -L$(SHARED_DIR) -lshared -lm -lpthread
+LDFLAGS = -L.. -lvelo -L$(SHARED_DIR) -lshared -lm -lpthread $(PLATFORM_LIBS)
 
 # Source files (polyline.c moved to shared library)
 SRCS = src/main.c

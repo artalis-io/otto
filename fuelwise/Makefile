@@ -28,6 +28,12 @@ else
     LDFLAGS = -lm
 endif
 
+# libshared now reaches the platform through sh_pal: bcrypt supplies
+# sh_pal_random_bytes, ws2_32 the StatsD sink in sh_metrics.
+ifneq (,$(findstring MINGW,$(UNAME_S)))
+    LDFLAGS += -lbcrypt -lws2_32
+endif
+
 # Shared library (required by Ralph)
 SHARED_DIR = ../shared
 SHARED_LIB = $(SHARED_DIR)/libshared.a
