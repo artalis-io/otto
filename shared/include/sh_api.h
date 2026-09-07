@@ -48,17 +48,52 @@ typedef struct {
  */
 typedef struct ShApiStream ShApiStream;
 
+/* What a producer wants to happen next. */
+typedef enum {
+    SH_API_STREAM_DONE  =  0,   /* finished; transport closes the stream */
+    SH_API_STREAM_MORE  =  1,   /* more to send; transport calls again */
+    SH_API_STREAM_ERROR = -1    /* give up; transport aborts the stream */
+} ShApiStreamStatus;
+
+/*
+ * Emit the next slice of a streaming response.
+ *
+ * ============================ MUST NOT BLOCK =============================
+ *
+ * This runs on the transport's EVENT LOOP THREAD, which is also serving every
+ * other connection. A producer that blocks -- on I/O, on a lock, on a
+ * condition variable, or on a long computation -- stalls the entire server.
+ *
+ * There is no worker-thread variant, and this is not an oversight. Keel's
+ * streaming writes go straight to the connection fd, or into a drain buffer
+ * that the event loop flushes, with no locking anywhere in that path
+ * (kl_stream_write in keel/src/protocols/http/http_response.c). Emitting from
+ * a pool worker would race the loop on the connection. An earlier draft of
+ * this interface did specify a blocking worker-side producer; it could not be
+ * implemented against any real transport. See docs/roadmaps/transport.md.
+ *
+ * So: do the expensive work somewhere else and leave a result for this
+ * function to pick up. A long solve should publish progress into a shared
+ * value that the producer reads and forwards; it must not compute here.
+ *
+ * =========================================================================
+ *
+ * Emit zero or more events with sh_api_stream_send(), then return MORE to be
+ * called again, DONE when finished, or ERROR to abort. Returning MORE without
+ * having sent anything is a valid way to say "nothing yet, ask me later".
+ */
+typedef ShApiStreamStatus (*ShApiStreamFn)(void *stream_ctx, ShApiStream *out);
+
 /*
  * An outbound response.
  *
  * Unary (the common case): set status_code, content_type and body/body_len.
  * Ownership of `body` passes to the transport, which frees it.
  *
- * Streaming (the escape hatch): set stream_fn instead. The transport then
- * ignores body/body_len, emits the status line and content_type, and calls
- * stream_fn on a worker thread with a live handle. The handler owns the
- * response until stream_fn returns. stream_free, if set, is always called
- * afterwards -- including when the transport declines to stream at all.
+ * Streaming: set stream_fn instead. The transport then ignores body/body_len,
+ * emits the status line and content_type, and drives stream_fn until it
+ * returns DONE or ERROR. stream_free, if set, is always called afterwards --
+ * including when the transport declines to stream at all.
  */
 typedef struct {
     int         status_code;    /* HTTP-style status: 200, 400, 404, 500, ... */
@@ -66,10 +101,10 @@ typedef struct {
     uint8_t    *body;           /* heap-allocated; transport takes ownership */
     size_t      body_len;
 
-    /* Streaming escape hatch. NULL for a unary response. */
-    int  (*stream_fn)(void *stream_ctx, ShApiStream *out);
-    void  *stream_ctx;
-    void (*stream_free)(void *stream_ctx);
+    /* Streaming. NULL for a unary response. stream_fn MUST NOT BLOCK. */
+    ShApiStreamFn stream_fn;
+    void         *stream_ctx;
+    void        (*stream_free)(void *stream_ctx);
 } ShApiResponse;
 
 /*
