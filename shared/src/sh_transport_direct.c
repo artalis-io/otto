@@ -31,9 +31,17 @@ typedef struct {
 
 static int direct_stream_reserve(DirectStream *ds, size_t extra)
 {
-    size_t need = ds->len + extra + 1;   /* +1 for the trailing NUL */
+    size_t need;
     size_t cap;
     uint8_t *p;
+
+    /* `extra` derives from a length the handler supplied. Left unchecked,
+     * ds->len + extra + 1 wraps, `need` comes out small, and this function
+     * reports success without growing the buffer -- after which the caller's
+     * memcpy writes past the end. Check before adding, not after. */
+    if (extra > (size_t)-1 - ds->len - 1) return -1;
+
+    need = ds->len + extra + 1;          /* +1 for the trailing NUL */
 
     if (need <= ds->cap) return 0;
 
@@ -64,6 +72,7 @@ static int direct_stream_send(ShApiStream *s, const char *event,
      * here they are part of what the caller is checking. */
     if (event && *event) {
         elen = strlen(event);
+        if (elen > (size_t)-1 - 8) { ds->failed = 1; return -1; }
         if (direct_stream_reserve(ds, elen + 8) != 0) { ds->failed = 1; return -1; }
         memcpy(ds->buf + ds->len, "event: ", 7); ds->len += 7;
         memcpy(ds->buf + ds->len, event, elen);  ds->len += elen;

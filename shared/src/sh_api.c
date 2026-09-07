@@ -31,6 +31,16 @@ int sh_api_response_set(ShApiResponse *resp, int status,
         return 0;
     }
 
+    /* Reject a length that would wrap the +1 below. body_len is a size_t
+     * parameter on a public function, so it is not this function's business
+     * to assume the caller computed it sensibly. */
+    if (body_len == (size_t)-1) {
+        resp->status_code = 500;
+        resp->content_type = "application/json";
+        resp->body_len = 0;
+        return -1;
+    }
+
     /* +1 so the body is always NUL-terminated. Callers that treat it as a
      * C string (every JSON path does) then need no special casing, and the
      * extra byte is not counted in body_len. */
@@ -69,7 +79,13 @@ int sh_api_response_error(ShApiResponse *resp, int status, const char *msg)
         case '\t': esc[o++] = '\\'; esc[o++] = 't';  break;
         default:
             if (*p < 0x20) {
-                o += (size_t)snprintf(esc + o, sizeof(esc) - o, "\\u%04x", *p);
+                /* snprintf returns int and is negative on failure; casting
+                 * that to size_t would make `o` enormous and turn the
+                 * terminator write below into an out-of-bounds store. */
+                int w = snprintf(esc + o, sizeof(esc) - o, "\\u%04x", *p);
+                if (w < 0) break;
+                o += (size_t)w;
+                if (o >= sizeof(esc)) { o = sizeof(esc) - 1; break; }
             } else {
                 esc[o++] = (char)*p;
             }
