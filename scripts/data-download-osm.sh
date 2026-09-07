@@ -16,6 +16,12 @@
 set -e
 
 GEOFABRIK_BASE="https://download.geofabrik.de"
+
+# Fallback, used only when Geofabrik is unreachable. OSM France mirrors part of
+# the same region tree under /extracts -- monaco is there, hungary is not -- so
+# a 404 here means "no mirror for this region", not a broken download.
+MIRROR_BASE="https://download.openstreetmap.fr/extracts"
+
 DATA_DIR="${DATA_DIR:-./data}"
 
 # Common region mappings (short name -> full path)
@@ -148,6 +154,31 @@ list_regions() {
     echo "For more regions, visit: https://download.geofabrik.de/"
 }
 
+# Fetch $1 into $2, failing on HTTP errors rather than saving the error body.
+#
+# This used to be a bare `curl -L -o`, which exits 0 on a 4xx/5xx and writes the
+# response body to the output path. During a Geofabrik outage that put a 3 KB
+# Squid error page into data/monaco-latest.osm.pbf, and because the Makefile
+# target has no prerequisites, make then considered the file up to date forever.
+# Every downstream tool reported a corrupt PBF instead of a failed download.
+fetch() {
+    if command -v curl > /dev/null 2>&1; then
+        curl -fL --retry 3 --retry-delay 2 --progress-bar -o "$2" "$1"
+    elif command -v wget > /dev/null 2>&1; then
+        wget --tries=3 --show-progress -O "$2" "$1"
+    else
+        echo "Error: curl or wget required" >&2
+        return 1
+    fi
+}
+
+# An OSM PBF opens with a BlobHeader whose type string is "OSMHeader", within
+# the first few dozen bytes. Cheap way to tell a real extract from an HTML
+# error page that arrived with a 200.
+is_pbf() {
+    [ -s "$1" ] && head -c 64 "$1" | grep -qa "OSMHeader"
+}
+
 download_region() {
     local region="$1"
 
@@ -161,7 +192,9 @@ download_region() {
     # Extract filename from region path
     local filename=$(basename "$region")-latest.osm.pbf
     local url="${GEOFABRIK_BASE}/${region}-latest.osm.pbf"
+    local mirror_url="${MIRROR_BASE}/${region}-latest.osm.pbf"
     local output="${DATA_DIR}/${filename}"
+    local tmp="${output}.part"
 
     echo "Region: $region"
     echo "URL: $url"
@@ -171,16 +204,35 @@ download_region() {
     # Create data directory
     mkdir -p "$DATA_DIR"
 
-    # Download with progress
-    echo "Downloading..."
-    if command -v curl &> /dev/null; then
-        curl -L --progress-bar -o "$output" "$url"
-    elif command -v wget &> /dev/null; then
-        wget --show-progress -O "$output" "$url"
-    else
-        echo "Error: curl or wget required"
-        exit 1
+    # Download to a temporary path and only move it into place once it looks
+    # like a real PBF, so a failed download can never leave a file that make
+    # will treat as a finished one.
+    rm -f "$tmp"
+    trap 'rm -f "$tmp"' RETURN
+
+    local source_used=""
+    for candidate in "$url" "$mirror_url"; do
+        echo "Downloading from $candidate"
+        if fetch "$candidate" "$tmp" && is_pbf "$tmp"; then
+            source_used="$candidate"
+            break
+        fi
+        echo "  no usable PBF from this source, trying the next one" >&2
+        rm -f "$tmp"
+    done
+
+    if [ -z "$source_used" ]; then
+        echo "" >&2
+        echo "Error: could not download a valid PBF for '$region'." >&2
+        echo "  tried: $url" >&2
+        echo "         $mirror_url" >&2
+        echo "" >&2
+        echo "Geofabrik may be down; the mirror only carries some regions." >&2
+        return 1
     fi
+
+    mv "$tmp" "$output"
+    [ "$source_used" = "$url" ] || echo "(fell back to $MIRROR_BASE)"
 
     # Show file info
     local size=$(ls -lh "$output" | awk '{print $5}')
