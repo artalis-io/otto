@@ -189,6 +189,38 @@ void sh_latlon_to_mercator(double lat, double lon, double *x, double *y);
 void sh_mercator_to_latlon(double x, double y, double *lat, double *lon);
 
 /*
+ * Highest zoom this codebase computes tile grids for.
+ *
+ * The limit is arithmetic, not cartographic: `1 << 31` overflows a signed int
+ * and `1 << 32` shifts wider than the type -- both undefined behaviour. z30
+ * already gives 2^30 tiles per axis, far past any real tileset, so clamping
+ * here costs nothing.
+ */
+#define SH_TILE_MAX_ZOOM 30
+
+/*
+ * Tiles per axis at `zoom`: 2^zoom, with `zoom` clamped to
+ * [0, SH_TILE_MAX_ZOOM].
+ *
+ * Use this rather than writing `1 << zoom` directly. Every site that did so
+ * was one unvalidated zoom away from undefined behaviour: only the HTTP
+ * servers bound z before calling, so the WASM entry points and any direct
+ * library caller reached the shift unchecked.
+ */
+static inline uint32_t sh_tiles_per_axis(int zoom)
+{
+    if (zoom < 0) zoom = 0;
+    if (zoom > SH_TILE_MAX_ZOOM) zoom = SH_TILE_MAX_ZOOM;
+    return (uint32_t)1u << zoom;
+}
+
+/* Largest valid tile index on either axis at `zoom`: 2^zoom - 1. */
+static inline int sh_tile_max_index(int zoom)
+{
+    return (int)sh_tiles_per_axis(zoom) - 1;
+}
+
+/*
  * Convert lat/lon to tile coordinates at given zoom level.
  */
 void sh_latlon_to_tile(double lat, double lon, int zoom, int *tile_x, int *tile_y);

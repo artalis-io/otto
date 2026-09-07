@@ -29,14 +29,14 @@ void ct_latlon_to_tile(double lat, double lon, int zoom,
     if (lat > 85.051128779806) lat = 85.051128779806;
     if (lat < -85.051128779806) lat = -85.051128779806;
 
-    double n = (double)(1 << zoom);
+    double n = (double)sh_tiles_per_axis(zoom);
     double lat_rad = lat * CT_PI / 180.0;
 
     *tile_x = (int)((lon + 180.0) / 360.0 * n);
     *tile_y = (int)((1.0 - log(tan(lat_rad) + 1.0 / cos(lat_rad)) / CT_PI) / 2.0 * n);
 
     /* Clamp to valid range */
-    int max_tile = (1 << zoom) - 1;
+    int max_tile = sh_tile_max_index(zoom);
     if (*tile_x < 0) *tile_x = 0;
     if (*tile_x > max_tile) *tile_x = max_tile;
     if (*tile_y < 0) *tile_y = 0;
@@ -50,7 +50,7 @@ void ct_latlon_to_tile_pixel(double lat, double lon, CTTileCoord tile,
     if (lat > 85.051128779806) lat = 85.051128779806;
     if (lat < -85.051128779806) lat = -85.051128779806;
 
-    double n = (double)(1 << tile.z);
+    double n = (double)sh_tiles_per_axis(tile.z);
     double lat_rad = lat * CT_PI / 180.0;
 
     /* Global pixel position */
@@ -150,7 +150,7 @@ static void ct_tile_transform_init(CTTileTransform *tf, CTTileCoord tile, int ex
     /* Ensure lookup table is ready */
     mercator_lut_init();
 
-    double n = (double)(1 << tile.z);
+    double n = (double)sh_tiles_per_axis(tile.z);
 
     /* Longitude is linear: px = (lon + 180) / 360 * n * extent - tile.x * extent */
     tf->lon_scale = n * extent / 360.0;
@@ -200,7 +200,7 @@ void ct_batch_transform_points(CTTileCoord tile, int extent,
 
 CTBBox ct_tile_bounds(CTTileCoord tile)
 {
-    double n = (double)(1 << tile.z);
+    double n = (double)sh_tiles_per_axis(tile.z);
 
     double min_lon = tile.x / n * 360.0 - 180.0;
     double max_lon = (tile.x + 1) / n * 360.0 - 180.0;
@@ -219,7 +219,7 @@ CTBBox ct_tile_bounds(CTTileCoord tile)
 
 void ct_tile_to_latlon(CTTileCoord tile, double *lat, double *lon)
 {
-    double n = (double)(1 << tile.z);
+    double n = (double)sh_tiles_per_axis(tile.z);
 
     *lon = (tile.x + 0.5) / n * 360.0 - 180.0;
 
@@ -302,7 +302,7 @@ int ct_tile_is_valid(CTTileCoord tile)
 {
     if (tile.z < 0 || tile.z > CT_MAX_ZOOM) return 0;
 
-    int max_coord = 1 << tile.z;
+    int max_coord = (int)sh_tiles_per_axis(tile.z);
     if (tile.x < 0 || tile.x >= max_coord) return 0;
     if (tile.y < 0 || tile.y >= max_coord) return 0;
 
