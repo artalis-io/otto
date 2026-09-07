@@ -28,7 +28,9 @@ DEBUG_CFLAGS = -Wall -Wextra -g -O0 -std=c11 -D_GNU_SOURCE -DDEBUG \
 DEBUG_LDFLAGS = -fsanitize=address,undefined
 
 # Source files (core library - no external dependencies beyond miniz)
-SRCS = src/sh_geo.c \
+SRCS = src/sh_api.c \
+       src/sh_transport_direct.c \
+       src/sh_geo.c \
        src/sh_polyline.c \
        src/sh_protobuf.c \
        src/sh_inflate.c \

@@ -5,7 +5,7 @@
  * Designed for WASM demos and lightweight deployments.
  *
  * Served by Keel (MIT). The transport layer stays thin: every request is
- * marshalled into a RalphAPIRequest and handed to ralph_api_handle(), which
+ * marshalled into a ShApiRequest and handed to ralph_api_handle(), which
  * owns all routing and status decisions -- including 404 for unknown paths.
  *
  * Port: 8084 (default)
@@ -62,7 +62,7 @@ static void slice_to_buf(const char *src, size_t src_len, char *buf,
  * ============================================================================ */
 
 /*
- * Marshal a Keel request into a RalphAPIRequest and write back whatever
+ * Marshal a Keel request into a ShApiRequest and write back whatever
  * ralph_api_handle() decides. Used by every route and by the catch-all
  * middleware, so unknown paths and wrong methods get Ralph's own 404 body
  * rather than a transport-invented one.
@@ -88,7 +88,7 @@ static void dispatch(KlHttpRequest *req, KlHttpResponse *res) {
         body_len = br->len;
     }
 
-    RalphAPIRequest api_req = {
+    ShApiRequest api_req = {
         .method = method,
         .path = path,
         .query = query[0] ? query : NULL,
@@ -96,7 +96,7 @@ static void dispatch(KlHttpRequest *req, KlHttpResponse *res) {
         .body_len = body_len
     };
 
-    RalphAPIResponse resp;
+    ShApiResponse resp;
     if (ralph_api_handle(s_ctx, &api_req, &resp) != 0) {
         /* Handler error - shouldn't happen */
         static const char err[] = "{\"error\":\"Internal server error\"}";
@@ -115,7 +115,7 @@ static void dispatch(KlHttpRequest *req, KlHttpResponse *res) {
     /* Copy: resp.body is freed below, and Keel's body setters borrow. */
     kl_http_response_body_copy(res, (const char *)resp.body, resp.body_len);
 
-    ralph_api_response_free(&resp);
+    sh_api_response_free(&resp);
 }
 
 /* ============================================================================

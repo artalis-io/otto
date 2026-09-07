@@ -147,6 +147,11 @@ MPS_PARSER_TEST_EXEC = test_mps_parser_netlib
 API_TEST_SOURCES = $(TEST_DIR)/test_api.c
 API_TEST_EXEC = test_api
 
+# Transport abstraction leak detector -- builds with no transport library on
+# the include path. See docs/roadmaps/transport.md.
+TRANSPORT_TEST_SOURCES = $(TEST_DIR)/test_transport_direct.c
+TRANSPORT_TEST_EXEC = test_transport_direct
+
 # Benders tests
 BENDERS_TEST_SOURCES = $(TEST_DIR)/test_benders.c
 BENDERS_TEST_EXEC = test_benders
@@ -536,6 +541,14 @@ $(API_TEST_EXEC): $(API_TEST_SOURCES) $(LIB_NAME) $(SHARED_LIB)
 # Run API tests
 test-api: $(API_TEST_EXEC)
 	./$(API_TEST_EXEC)
+
+# Build transport tests
+$(TRANSPORT_TEST_EXEC): $(TRANSPORT_TEST_SOURCES) $(LIB_NAME) $(SHARED_LIB)
+	$(CC) $(CFLAGS) $(INCLUDES) $< -L. -lralph -L../shared -lshared $(LDFLAGS) -o $@
+
+# Run transport tests
+test-transport: $(TRANSPORT_TEST_EXEC)
+	./$(TRANSPORT_TEST_EXEC)
 
 # Build Benders tests
 $(BENDERS_TEST_EXEC): $(BENDERS_TEST_SOURCES) $(LIB_NAME) $(SHARED_LIB)
