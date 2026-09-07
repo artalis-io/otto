@@ -13,17 +13,45 @@
 
 ## Cut Generation Bugs
 
-### c-MIR Back-Substitution Sign Errors (cuts.c:cmir_build_cut)
-- **Severity**: High — produces trivially infeasible cuts on pure binary/integer problems
-- **Trigger**: Binary knapsack or all-integer MIP problems where c-MIR generates cuts
-- **Root cause**: `cmir_build_cut()` had two sign errors in the back-substitution logic that converts from the complemented/bound-substituted space back to original variables. The complementation constant and upper-bound substitution constant were added instead of subtracted. Additionally, there may be a remaining issue producing cuts with impossibly negative RHS values on all-integer problems (partially fixed).
-- **Partial fix applied**: Two sign errors corrected in back-substitution. Safety check added to reject trivially infeasible cuts (where minimum possible LHS exceeds RHS given variable bounds).
-- **Impact**: Without the safety check, the MIP solver reports `RALPH_STATUS_INFEASIBLE` on valid problems. With the safety check, invalid cuts are silently rejected and the solver finds the correct optimal.
-- **Reproducer**: 10-variable binary knapsack with 3 constraints and `max_cut_rounds=5` (see `test_cmir_binary_knapsack_regression` in test_main.c).
-- **Remaining work**: Find root cause of why c-MIR produces negative RHS with all-positive coefficients on pure binary problems. The safety check masks this but doesn't fix it.
+### c-MIR Cuts From Purely Continuous Rows (cuts.c:cmir_build_cut) — FIXED
+
+- **Severity**: High — generated invalid cuts that removed the true integer optimum
+- **Status**: Fixed. `cmir_row_has_integer_support()` now gates cut construction.
+- **Trigger**: Any model where a c-MIR candidate row has no integer variable in
+  its support, including after aggregation.
+- **Root cause**: The MIR derivation strengthens `sum a_j x_j <= b` into
+  `... <= floor(b)`. That rounding is justified only by the integrality of at
+  least one variable in the row. `cmir_build_cut()` applied it unconditionally,
+  so on a purely continuous row it tightened the right-hand side by
+  `f_0 ∈ (0,1)` with nothing to justify it — an inequality that removes
+  feasible points rather than fractional ones.
+- **Evidence**: On `fw_bench_config_milp_100()` seed 125 with
+  `RALPH_ENABLE_MIR_ROOT_CUTS=1`, all 10 generated cuts came from rows with
+  zero integer variables, and 8 of the 10 excluded the true optimum. Ralph
+  reported 1595.124441 as OPTIMAL against a true optimum of 1585.247322 —
+  feasible, validating, and wrong, so nothing downstream flagged it.
+- **Fix**: Rows with no integer support are skipped before the `(C, delta)`
+  separation search, counted in `root_mir_rows_no_integer`, and rejected again
+  inside `cmir_build_cut()` (the function that performs the rounding).
+- **Side effect**: The invalid cuts were also driving a branch-and-bound
+  explosion. The seed=125 MIR-on solve went from roughly five minutes to
+  0.1 seconds.
+- **Regression test**: `test_raw_milp100_seed125_shifted_presolve_mir_optin()`
+  in `fuelwise/bench/test_validator.c`, gating in CI via `test-c`.
+- **Earlier work on this entry**: two back-substitution sign errors (the
+  complementation and upper-bound constants were added rather than subtracted)
+  were corrected previously, along with a safety check rejecting cuts whose
+  minimum possible LHS exceeds their RHS. Both are still in place. The check is
+  a cheap sanity net, not the fix — it never caught this family, because a
+  cut over continuous variables with finite bounds looks perfectly satisfiable.
+- **Still open**: `generate_mir_cuts()` also carries a narrower heuristic that
+  drops all-positive cuts with exactly one integer term when a shifted pivot
+  was used. It is unrelated to the bug above and no test currently requires it;
+  it should be re-examined on its own terms.
+- **Note**: c-MIR remains opt-in behind `RALPH_ENABLE_MIR_ROOT_CUTS`.
 
 ### No Recovery When LP Becomes Infeasible After Cuts (mip.c:1146-1154)
-- **Severity**: Medium — compounds the above bug
+- **Severity**: Medium — compounded the c-MIR bug above; still worth fixing on its own
 - **Root cause**: When the LP becomes infeasible after adding cuts, `mip.c` blindly sets `solver->status = solver->lp_solver->status` (INFEASIBLE) and returns immediately, without checking `solver->has_incumbent`. If the diving heuristic already found a valid integer solution, the solver should report OPTIMAL.
 - **Fix**: Check for existing incumbent before propagating LP infeasibility. Optionally attempt recovery by removing the last batch of cuts.
 

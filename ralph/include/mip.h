@@ -298,6 +298,7 @@ typedef struct {
     int root_mir_rows_scanned;       /* MIR root rows inspected */
     int root_mir_rows_candidate;     /* MIR candidate rows after filtering */
     int root_mir_rows_ranked;        /* MIR rows kept after prefilter ranking */
+    int root_mir_rows_no_integer;    /* MIR rows dropped: no integer variable */
     int root_cover_rows_scanned;     /* Cover-cut root constraints inspected */
     int root_cover_knapsack_rows;    /* Cover-cut rows recognized as knapsack */
     int root_mir_cuts_generated;    /* Root MIR cuts generated */
