@@ -58,7 +58,7 @@ For commercial licensing inquiries: licensing@artalis.io
 
 The `vendor/` directory contains third-party code under their respective licenses:
 - miniz: Public domain / MIT
-- mongoose: GPLv2 (with commercial license available)
+- Keel: MIT (git submodule, https://github.com/artalis-io/keel)
 - Clay: zlib license
 
 See individual LICENSE files in `vendor/` subdirectories.

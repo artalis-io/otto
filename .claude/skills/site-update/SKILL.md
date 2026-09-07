@@ -93,7 +93,7 @@ ALL modules must be listed - both implemented and planned.
 - Network layer (Atlas, Quota) - marked planned
 - Domain layer (FuelWise, Velo, Carta, Locus)
 - Core layer (Ralph, Shared)
-- Vendor layer (miniz, mongoose, Clay)
+- Vendor layer (miniz, Keel, Clay)
 
 ### 3. Persona Sections (Critical)
 
