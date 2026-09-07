@@ -43,6 +43,7 @@ SHARED_SRC = ../../shared/src/sh_arena.c \
              ../../shared/src/sh_geojson.c \
              ../../shared/src/sh_inflate.c \
              ../../shared/src/sh_fs.c \
+             ../../shared/src/sh_pal_posix.c ../../shared/src/sh_pal_windows.c ../../shared/src/sh_mem.c \
              ../../shared/src/sh_eov.c \
              ../../shared/src/sh_hash_sha256.c \
              ../../shared/src/sh_hashmap.c \

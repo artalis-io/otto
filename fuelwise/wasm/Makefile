@@ -19,7 +19,8 @@ RALPH_SRC = $(wildcard ../../ralph/src/*.c) $(wildcard ../../ralph/src/optim/*.c
 # Shared sources needed by Ralph and FuelWise
 SHARED_SRC = ../../shared/src/sh_geo.c ../../shared/src/sh_arena.c \
              ../../shared/src/sh_polyline.c ../../shared/src/sh_json.c \
-             ../../shared/src/sh_log.c ../../shared/src/sh_perf.c
+             ../../shared/src/sh_log.c ../../shared/src/sh_perf.c \
+             ../../shared/src/sh_pal_posix.c ../../shared/src/sh_pal_windows.c
 WASM_SRC = src/fuelwise_wasm.c
 
 # All source files
