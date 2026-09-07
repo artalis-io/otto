@@ -78,6 +78,11 @@ RALPH_LIB = $(RALPH_DIR)/libralph.a
 TEST_SOURCES = $(TEST_DIR)/test_fuelwise.c
 TEST_EXEC = test_fuelwise
 
+# Transport abstraction leak detector -- builds with no transport library on
+# the include path. See docs/roadmaps/transport.md.
+TRANSPORT_TEST_SOURCES = $(TEST_DIR)/test_transport_direct.c
+TRANSPORT_TEST_EXEC = test_transport_direct
+
 # Default target
 all: shared ralph lib $(TEST_EXEC)
 
@@ -109,7 +114,17 @@ debug: LDFLAGS += $(DEBUG_LDFLAGS)
 debug: clean all
 
 # Run tests
-test: test-regression
+test: test-transport test-regression
+
+# Build transport tests
+$(TRANSPORT_TEST_EXEC): $(TRANSPORT_TEST_SOURCES) $(LIB_NAME) $(SHARED_LIB)
+	$(CC) $(CFLAGS) $(INCLUDES) $< -L. -lfuelwise -L$(RALPH_DIR) -lralph -L$(SHARED_DIR) -lshared $(LDFLAGS) -o $@
+
+# Run transport tests
+# shared/ralph are phony, and $(SHARED_LIB)/$(RALPH_LIB) have no rule here --
+# same reason `all` lists them first.
+test-transport: shared ralph $(TRANSPORT_TEST_EXEC)
+	./$(TRANSPORT_TEST_EXEC)
 
 test-regression: $(TEST_EXEC)
 	./$(TEST_EXEC)
@@ -138,7 +153,7 @@ uninstall:
 	rm -rf /usr/local/include/fuelwise
 	rm -f /usr/local/lib/$(LIB_NAME)
 
-.PHONY: all lib clean clean-all debug test test-regression wasm install uninstall ralph shared help
+.PHONY: all lib clean clean-all debug test test-regression test-transport wasm install uninstall ralph shared help
 
 # Build WASM (delegates to wasm/ subdirectory)
 wasm:
