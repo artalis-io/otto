@@ -1,6 +1,6 @@
 # Transport Interface + Platform Abstraction Layer
 
-**Status:** Phases 1-4 done. Phase 5 done for Carta and Locus; Velo in review (#67).
+**Status:** Phases 1-5 done. All six modules hold their handler in their library.
 **Scope:** `shared/` transport interface, per-module API types, `sh_pal.h`
 
 ## Motivation
@@ -222,116 +222,92 @@ A test that links every module's handler against `sh_transport_direct` **with no
 headers on the include path**. If that stops compiling, the abstraction has leaked, and
 it will be caught immediately rather than at the next transport migration.
 
-### Status: 5 of 6
+### Status: 6 of 6
 
 | module | handler lives in | invariant test |
 |---|---|---|
 | Ralph | `ralph/src/ralph_api.c` | `make -C ralph test-transport` |
 | FuelWise | `fuelwise/src/fw_api.c` | `make -C fuelwise test-transport` |
 | Surge | `surge/src/sg_api.c` | `make -C surge test-transport` |
+| Velo | `velo/src/vl_api.c` | `make -C velo test-transport` |
 | Carta | `carta/src/ct_api.c` | `make -C carta test-transport` |
 | Locus | `locus/src/lc_api.c` | `make -C locus test-transport` |
-| Velo | **`velo/api/src/main.c`** | none possible yet (PR #67) |
 
-Velo still has no library-side `ShApiHandler` to link against: `velo/src/vl_api.c`
-is a context and lifecycle layer with zero `ShApi` references, and the handler
-itself lives in `api/src/main.c` next to 25 Keel references. Phase 2 gave all
-six the shared request/response *types*, but only Ralph, FuelWise and Surge
-ended up with a handler the direct transport could call.
+Every module's handler is now a plain `ShApiHandler` in its library, and every
+module has a test that links it against `sh_transport_direct` with no Keel
+headers on the include path. `make -C <module> test` runs it, so both the Linux
+and Windows jobs pick all six up with no workflow change.
 
-Closing it means extracting the handler out of `api/src/main.c` into the
-library, as `ralph_api.c` already does, leaving `main.c` as the thin Keel
-wrapper the manifesto describes.
+Every module's WASM bridge calls that same handler too -- Ralph, FuelWise and
+Surge already did; Carta, Locus and Velo now do. There is one implementation of
+each API, and the demo really is the product.
 
-### Phase 5 progress
+### Phase 5: what the extraction actually found
 
-**Locus: done.** `lc_api_handle()` is now a plain `ShApiHandler` in
-`locus/src/lc_api.c`, and `api/src/main.c` went from 1096 lines to 760.
+The phase was written up as "a real refactor of three servers, not a
+test-writing exercise". That was right, but for the wrong reason. The work was
+not moving a handler across a file boundary. It was that **each of the three
+modules had shipped two or three implementations of its own public API**, and
+they had drifted.
 
-Locus did not have two implementations of its five endpoints. It had **three**,
-and nothing in the repo called the library one:
+**Velo.** Three copies of three endpoints, and the WASM one did not merely
+differ in style -- it spoke a different API than the one Velo documents:
 
-| | server (`api/src/main.c`) | library (`src/lc_api.c`) | WASM (`wasm/src/lc_wasm_api.c`) |
+| | server | library | WASM |
 |---|---|---|---|
-| JSON built by | `ShJsonWriter`, grows | 64 KB `malloc`, **overflows** | 64 KB static, truncates |
-| `total` | `total_matches` | `total_matches` | `num_results` (the page size) |
-| `osm_id` / `osm_type` | yes | yes | **absent** |
-| `took_ms` | yes | yes | **absent** |
-| name escaping | writer escapes | `json_escape` | **none** -- bare `%s` |
-| `display_name` | `lc_format_address()` | `lc_format_address()` | hand-concatenated |
-| non-mmap index | handled | handled | **derefs `mmap_idx->header`** |
-| `?q=` decoding | none | none | its own `url_decode` |
-| bad `lat` | `atof` -> `0.0` | `sh_parse_double` -> NaN | `atof` -> `0.0` |
+| route parameters | `from=lat,lon` | `from=lat,lon` | `from_lat`, `from_lon`, `to_lat`, `to_lon` |
+| `geometry` | encoded polyline | encoded polyline | raw `[[lat,lon],...]` array |
+| no route | 404 | 404 | **422** |
+| `meta` object | yes | yes | **absent** |
+| geometry default | on | **off** | **off** |
+| POST missing `from` | **silently (0,0)** | 400 | n/a |
 
-The library's overflow was real, not theoretical. `lc_api_search()` accumulated
-`snprintf`'s would-have-written return value into an unclamped `offset`, so
-`json + offset` walked past the 64 KB allocation and `64 * 1024 - offset` went
-negative into a `size_t` parameter. A hundred results with long names is enough:
-under `-D_FORTIFY_SOURCE=2` the process aborts with "buffer overflow detected".
-It was unreachable in production only because nothing called it --
-`locus/tests/test_locus.c::api_search_large_result_set` now pins it, and the
-same input produces a correct 66 KB response.
+`site/api-config.json` describes "Google Polyline encoded geometry", and
+`vl_api_handle`'s own `@query` annotations document `from`/`to` -- so the
+browser demo was contradicting the docs generated from the same header. The JS
+wrapper is the only client that ever sent the four-parameter form, and it now
+sends `from=`/`to=` like everyone else; the demo form keeps its four numeric
+inputs and joins them.
 
-`atof("north")` is `0.0`, which passes a `-90..90` range check, so the server
-would have answered a reverse-geocode for the Gulf of Guinea rather than
-rejecting the request. The library's `sh_parse_double` yields NaN instead, and
-the handler rejects NaN *before* consulting the index, so a malformed
-coordinate is a 400 whether or not data is loaded.
+The server's POST path also validated `from` only *if it was present*
+(`if (from_str && parse_coord(...))`), so a body with no `from` routed from
+(0, 0) rather than answering 400. The library was already strict; that is the
+version that survived.
 
-The single implementation is the safe one: the streaming `ShJsonWriter` the
-server already used, moved into the library. `api/src/main.c` keeps only the
-adaptive-capacity feedback that retunes *this server's* rate limiter, wrapped
-around the handler as `locus_metered_handler()`. `wasm/src/lc_wasm_api.c` is now
-a bridge -- marshal, call, hold the response -- with its exported names and
-shapes unchanged, so `site/js/locus-api-demo.js` needed no edit.
+**Locus.** Also three copies, and the library's carried a heap overflow:
+`lc_api_search()` accumulated `snprintf`'s would-have-written return into an
+unclamped `offset` against a fixed 64 KB allocation. Reachable with a hundred
+long-named results; aborts under `-D_FORTIFY_SOURCE=2`. Unreachable in
+production only because nothing called the function. Its `atof()`-based
+coordinate parsing also turned `lat=north` into `0.0`, which passes a
+`-90..90` range check.
 
-`/api/v1/stats` deliberately stays split. The server's version reports rate
-limiter, work queue and adaptive-capacity counters that only a server has; the
-library's reports index size and bounds. That is the same division as Carta's
-response cache, not a second implementation of one thing.
+**Carta.** Two copies rather than three -- its WASM demo already called the
+library -- but the same shape of drift: the server's ASCII endpoint parsed
+`charset` and then discarded it (`(void)ascii_opts`), so the browser honoured
+`charset=braille` and the HTTP server silently served `extended`.
 
-One shared addition was needed to collapse the three without regressing:
-`sh_query_get_str_decoded()`. The WASM copy percent-decoded `?q=`; the server
-and library did not, so `?q=Monte%20Carlo` searched for the literal string
-`Monte%20Carlo`. Decoding in the shared handler is what makes all three agree,
-and it fixes the HTTP API rather than removing the behaviour from the demo.
+### What stayed in the servers
 
-**Carta: done.** `ct_api_handle()` is now a plain `ShApiHandler` in
-`carta/src/ct_api.c`, and `carta/api/src/main.c` lost 238 lines to it.
+Not everything in `api/src/main.c` was duplication. Each server kept the parts
+that are genuinely a server's job, wrapped around the library handler:
 
-What that deleted was not plumbing, it was a *second implementation*. The server
-had its own routing, its own render dispatch (`process_png_render`,
-`process_mvt_render`, `process_ascii_render`, `RenderCtx`) and its own error
-bodies, while the WASM demo went through `ct_api_handle`. Same product surface,
-two code paths, and they had already drifted: the server's ASCII endpoint parsed
-`charset` and then discarded it (`(void)ascii_opts`, with a comment admitting the
-options were parsed a second time inside the library), and capped `width` at 256
-where the library's documented range is 20-400. The browser demo supported a
-charset the HTTP server silently ignored. That is exactly the split "the demo IS
-the product" exists to rule out.
+| module | wrapper | keeps |
+|---|---|---|
+| Carta | `carta_cached_handler()` | PNG/MVT response cache, adaptive capacity |
+| Locus | `locus_metered_handler()` | adaptive capacity |
+| Velo | `velo_metered_handler()` | adaptive capacity |
 
-`main.c` keeps the two things that really are the server's job and not the
-library's, wrapped around the handler as `carta_cached_handler()`:
+The adaptive-capacity feedback retunes *that server's* rate limiter; a WASM
+build has no rate limiter to retune. Locus and Velo also keep a server-side
+`/api/v1/stats` that reports rate limiter, work queue and adaptive counters,
+which is a different thing from the library's index/graph statistics rather
+than a second implementation of it.
 
-- the PNG/MVT response cache, which is per-process state a WASM build has no use for
-- the adaptive-capacity feedback that retunes *this server's* rate limiter
+### One shared addition
 
-Both were previously interleaved with the render code they now merely wrap.
-
-`CTAPIRequest` and `CTAPIResponse` are gone; `ct_api_handle()` takes
-`ShApiRequest`/`ShApiResponse` and its `ctx` is `void*` so the signature matches
-`ShApiHandler` exactly and the compiler checks it. `carta/wasm/src/ct_wasm_api.c`
-follows the same types, so the browser demo and the HTTP server now run the same
-function.
-
-Two things surfaced on the way and are fixed here rather than left as traps:
-
-- error bodies are now `{"error":"..."}` via `sh_api_response_error()`, matching
-  Ralph, FuelWise and Surge, where Carta used to return bare text
-- `ct_api.h` could not be included on its own -- it named `ct_types.h` as the
-  home of `CTLODConfig`, which lives in `ct_lod.h`. Nothing caught it because
-  every existing includer pulled in `carta.h` first.
-
-**Velo: in review as #67.** `api/src/main.c` is 1276 lines with 25 Keel
-references, and `wasm/src/vl_wasm_api.c` does not call `vl_api_*` either -- the
-same three-way split Locus had.
+`sh_query_get_str_decoded()` percent-decodes a query value (`%XX` and `+`),
+passing a malformed `%` through as a literal rather than truncating. Only the
+Locus WASM copy decoded `?q=`, so `?q=Monte%20Carlo` searched the HTTP API for
+the literal string. Decoding in the shared handler is what let the three
+collapse without the demo losing behaviour.
