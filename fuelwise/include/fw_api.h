@@ -14,6 +14,7 @@
 #define FUELWISE_FW_API_H
 
 #include <stddef.h>
+#include "sh_api.h"
 #include <stdint.h>
 #include "fuelwise.h"
 
@@ -31,26 +32,11 @@ extern "C" {
  */
 typedef struct FWAPIContext FWAPIContext;
 
-/**
- * API request structure.
+/*
+ * Request and response are the shared, transport-agnostic types from
+ * <sh_api.h>. FuelWise used to define its own identical pair; so did the
+ * other modules. See docs/roadmaps/transport.md.
  */
-typedef struct {
-    const char *path;       /* Request path (e.g., "/api/v1/solve") */
-    const char *query;      /* Query string (for GET requests) */
-    const char *body;       /* Request body (for POST requests) */
-    size_t body_len;        /* Body length */
-    const char *host;       /* Optional: host for URL generation */
-} FWAPIRequest;
-
-/**
- * API response structure.
- */
-typedef struct {
-    int status_code;        /* HTTP status code */
-    const char *content_type; /* Content type (e.g., "application/json") */
-    char *body;             /* Response body (caller frees via fw_api_response_free) */
-    size_t body_len;        /* Body length */
-} FWAPIResponse;
 
 /* ============================================================================
  * Lifecycle Functions
@@ -75,7 +61,7 @@ void fw_api_free(FWAPIContext *ctx);
  *
  * @param resp Response to free (can be NULL)
  */
-void fw_api_response_free(FWAPIResponse *resp);
+void sh_api_response_free(ShApiResponse *resp);
 
 /* ============================================================================
  * Core Handler
@@ -93,12 +79,12 @@ void fw_api_response_free(FWAPIResponse *resp);
  *
  * @param ctx  API context (can be NULL for stateless operations)
  * @param req  Request to handle
- * @param resp Response (caller must call fw_api_response_free)
+ * @param resp Response (caller must call sh_api_response_free)
  * @return 0 on success, -1 on error
  */
-int fw_api_handle(FWAPIContext *ctx,
-                  const FWAPIRequest *req,
-                  FWAPIResponse *resp);
+int fw_api_handle(void *ctx,
+                  const ShApiRequest *req,
+                  ShApiResponse *resp);
 
 /* ============================================================================
  * API Endpoint Annotations

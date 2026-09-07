@@ -33,6 +33,7 @@
 #include "fw_api.h"  /* Transport-agnostic API handler */
 #include "shared.h"  /* For sh_ratelimit, sh_args */
 #include "sh_keelserver.h"
+#include "sh_keelasync.h"
 #include "sh_log.h"
 #include "sh_trace.h"
 #include "sh_metrics.h"
@@ -61,62 +62,16 @@ static ShCorsConfig s_cors;
  *
  * KlThreadPool replaces ShWorkQueue + ShWorkerPool + ShCompletion. It exposes
  * no statistics of its own, but /api/v1/stats publishes work-queue counters
- * that test_api.sh asserts on, so they are tracked here.
- *
- * Every counter is read and written only on the event loop thread (submit,
- * done_fn, on_deadline and the stats handler all run there), so plain
- * integers are sufficient.
+ * that test_api.sh asserts on, so sh_keel_async_dispatch() maintains them in
+ * the ShKeelAsyncStats below.
  * ============================================================================ */
-
-typedef struct {
-    uint64_t pushed;
-    uint64_t popped;    /* completed (done_fn ran) */
-    uint64_t dropped;   /* submit rejected: queue full */
-    uint64_t expired;   /* deadline exceeded */
-} FWQueueStats;
 
 static KlThreadPool *s_pool = NULL;
-static FWQueueStats s_qstats;
+static ShKeelAsyncStats s_qstats;
 
 typedef struct {
-    KlHttpServer *server;
-    KlThreadPool *pool;
+    ShKeelAsync async;   /* server, pool, cors, timeout, stats */
 } AppCtx;
-
-/* ============================================================================
- * Solve Work Item
- *
- * OWNERSHIP / LIFETIME (identical to Surge's, see surge/api/src/main.c):
- * the context is freed in exactly one place -- done_fn (item ran) or
- * cancel_fn (dropped at pool shutdown before starting). on_cancel and
- * on_deadline never free, because work_fn may still be running on a worker;
- * they only set `detached`.
- * ============================================================================ */
-
-typedef struct {
-    KlAsyncOp op;
-    AppCtx *app;
-    const KlHttpRequest *req;   /* lives inside the conn; valid while suspended */
-
-    const char *path;        /* static string, not owned */
-    char *body;              /* owned copy */
-    size_t body_len;
-
-    char *response_data;     /* owned, from fw_api_handle */
-    size_t response_size;
-    int status_code;
-
-    int detached;
-    const char *endpoint;    /* metrics label, static string */
-    ShMetricsTimer timer;
-} SolveCtx;
-
-static void solve_ctx_free(SolveCtx *ctx) {
-    if (!ctx) return;
-    free(ctx->response_data);
-    free(ctx->body);
-    free(ctx);
-}
 
 /* ============================================================================
  * Response Helpers
@@ -145,89 +100,6 @@ static void record_metrics(ShMetricsTimer timer, const char *endpoint) {
  * Solve Pipeline
  * ============================================================================ */
 
-/* Worker thread: run the optimization. Touches only this context. */
-static void solve_work_fn(void *user_data) {
-    SolveCtx *ctx = (SolveCtx *)user_data;
-
-    FWAPIRequest req = {
-        .path = ctx->path,
-        .query = NULL,
-        .body = ctx->body,
-        .body_len = ctx->body_len,
-        .host = NULL
-    };
-
-    FWAPIResponse resp;
-    fw_api_handle(NULL, &req, &resp);
-
-    ctx->response_data = resp.body;
-    ctx->response_size = resp.body_len;
-    ctx->status_code = resp.status_code;
-}
-
-/* Event loop thread: write the response and resume the connection. */
-static void solve_done_fn(void *user_data) {
-    SolveCtx *ctx = (SolveCtx *)user_data;
-
-    s_qstats.popped++;
-
-    if (ctx->detached) {
-        solve_ctx_free(ctx);
-        return;
-    }
-
-    KlHttpResponse *res = kl_http_conn_response(ctx->op.conn);
-    if (ctx->response_data) {
-        send_json_status(res, ctx->status_code, ctx->response_data);
-    } else {
-        send_error(res, 500, "Processing failed");
-    }
-    record_metrics(ctx->timer, ctx->endpoint);
-
-    kl_async_complete(ctx->app->server, &ctx->op);
-    solve_ctx_free(ctx);
-}
-
-/* Pool shutdown dropped the item before it started; no worker will touch it. */
-static void solve_cancel_fn(void *user_data) {
-    solve_ctx_free((SolveCtx *)user_data);
-}
-
-/*
- * Declare the send. kl_async_complete() re-arms the fd but leaves the
- * connection SUSPENDED unless on_resume says what happens next; without this
- * the response is never written and the client hangs. Keel's
- * examples/thread_pool and examples/async_thread_pool leave this a no-op and
- * hang for exactly that reason; tests/smoke_iouring_async.c is the correct
- * reference, and kl_http_request_send_response() is its public equivalent.
- */
-static void solve_on_resume(KlAsyncOp *op, void *ud) {
-    (void)ud;
-    SolveCtx *ctx = (SolveCtx *)((char *)op - offsetof(SolveCtx, op));
-    kl_http_request_send_response(ctx->req);
-}
-
-/* Connection died while suspended. The worker may still be running. */
-static void solve_on_cancel(KlAsyncOp *op, void *ud) {
-    (void)ud;
-    ((SolveCtx *)((char *)op - offsetof(SolveCtx, op)))->detached = 1;
-}
-
-/* Deadline exceeded: reply 504 now, let done_fn free the context later. */
-static void solve_on_deadline(KlAsyncOp *op, void *ud) {
-    (void)ud;
-    SolveCtx *ctx = (SolveCtx *)((char *)op - offsetof(SolveCtx, op));
-
-    if (ctx->detached) return;
-    ctx->detached = 1;
-    s_qstats.expired++;
-
-    send_error(kl_http_conn_response(op->conn), 504, "Gateway timeout");
-    record_metrics(ctx->timer, ctx->endpoint);
-
-    kl_async_complete(ctx->app->server, op);
-}
-
 /*
  * Route a CPU-intensive endpoint through the solve pool, or run it inline
  * when the queue is disabled (--queue-off), matching the old behaviour.
@@ -238,85 +110,21 @@ static void handle_via_queue(KlHttpRequest *req, KlHttpResponse *res, void *ud,
     ShMetricsTimer timer = sh_metrics_timer_start();
 
     KlHttpBufReader *br = (KlHttpBufReader *)req->body_reader;
-    const char *body = (br && br->len > 0) ? br->data : NULL;
-    size_t body_len = (br && br->len > 0) ? br->len : 0;
 
-    /* Work queue disabled - process synchronously. */
-    if (!s_pool) {
-        FWAPIRequest api_req = {
-            .path = path, .query = NULL,
-            .body = body, .body_len = body_len, .host = NULL
-        };
-        FWAPIResponse resp;
-        fw_api_handle(NULL, &api_req, &resp);
+    ShApiRequest api_req;
+    memset(&api_req, 0, sizeof(api_req));
+    api_req.method   = "POST";
+    api_req.path     = path;
+    api_req.body     = (br && br->len > 0) ? br->data : NULL;
+    api_req.body_len = (br && br->len > 0) ? br->len : 0;
 
-        if (resp.body) {
-            send_json_status(res, resp.status_code, resp.body);
-            fw_api_response_free(&resp);
-        } else {
-            send_error(res, 500, "Processing failed");
-        }
-        record_metrics(timer, endpoint);
-        return;
-    }
+    /* Everything the suspend/pool/resume protocol used to do by hand here --
+     * the context, the body copy, on_resume/on_cancel/on_deadline, the 503 on
+     * a full queue and the 504 on a deadline -- is sh_keel_async_dispatch's
+     * job now. See shared/src/sh_keelasync.c. */
+    sh_keel_async_dispatch(&app->async, req, res, fw_api_handle, NULL, &api_req);
 
-    SolveCtx *ctx = calloc(1, sizeof(*ctx));
-    if (!ctx) {
-        send_error(res, 500, "Memory allocation failed");
-        return;
-    }
-
-    /* Copy the body: it belongs to the connection, the worker outlives it. */
-    ctx->body = malloc(body_len + 1);
-    if (!ctx->body) {
-        free(ctx);
-        send_error(res, 500, "Memory allocation failed");
-        return;
-    }
-    if (body_len > 0) memcpy(ctx->body, body, body_len);
-    ctx->body[body_len] = '\0';
-    ctx->body_len = body_len;
-
-    ctx->app = app;
-    ctx->req = req;
-    ctx->path = path;
-    ctx->endpoint = endpoint;
-    ctx->timer = timer;
-    ctx->status_code = 500;
-
-    ctx->op.on_resume = solve_on_resume;
-    ctx->op.on_cancel = solve_on_cancel;
-    ctx->op.on_deadline = solve_on_deadline;
-    if (s_config.work_queue_timeout > 0.0) {
-        ctx->op.deadline_ms = kl_monotonic_ms() +
-            (uint64_t)(s_config.work_queue_timeout * 1000.0);
-    }
-
-    if (kl_async_suspend(app->server, kl_http_request_conn(req), &ctx->op) < 0) {
-        solve_ctx_free(ctx);
-        send_error(res, 500, "Failed to suspend request");
-        return;
-    }
-
-    KlWorkItem item = {
-        .work_fn   = solve_work_fn,
-        .done_fn   = solve_done_fn,
-        .cancel_fn = solve_cancel_fn,
-        .user_data = ctx,
-    };
-
-    if (kl_thread_pool_submit(app->pool, &item) < 0) {
-        /* Queue full - backpressure, same 503 as the old work queue. */
-        s_qstats.dropped++;
-        ctx->detached = 1;
-        send_error(res, 503, "Service unavailable - queue full");
-        record_metrics(timer, endpoint);
-        kl_async_complete(app->server, &ctx->op);
-        solve_ctx_free(ctx);
-        return;
-    }
-
-    s_qstats.pushed++;
+    record_metrics(timer, endpoint);
 }
 
 /* ============================================================================
@@ -486,7 +294,7 @@ static int mw_not_found(KlHttpRequest *req, KlHttpResponse *res, void *ud) {
     KlHttpParam params[KL_HTTP_ROUTER_MAX_PARAMS];
     int num_params = 0;
 
-    int rc = kl_http_router_match(&app->server->router,
+    int rc = kl_http_router_match(&app->async.server->router,
                                   req->method, req->method_len,
                                   req->path, req->path_len,
                                   &matched, params, &num_params);
@@ -628,7 +436,13 @@ int main(int argc, char *argv[]) {
         }
     }
 
-    AppCtx app = { .server = &server, .pool = s_pool };
+    AppCtx app;
+    memset(&app, 0, sizeof(app));
+    app.async.server    = &server;
+    app.async.pool      = s_pool;
+    app.async.cors      = &s_cors;
+    app.async.timeout_s = s_config.work_queue_timeout;
+    app.async.stats     = &s_qstats;
 
     /*
      * Routes are method-specific, so a wrong method (e.g. GET /api/v1/solve)

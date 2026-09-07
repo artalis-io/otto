@@ -740,15 +740,12 @@ void fw_api_free(FWAPIContext *ctx) {
     free(ctx);
 }
 
-void fw_api_response_free(FWAPIResponse *resp) {
-    if (resp) {
-        free(resp->body);
-        resp->body = NULL;
-        resp->body_len = 0;
-    }
-}
+/* Response bodies are freed by sh_api_response_free() in shared/src/sh_api.c.
+ * FuelWise used to carry its own identical copy. */
 
-int fw_api_handle(FWAPIContext *ctx, const FWAPIRequest *req, FWAPIResponse *resp) {
+int fw_api_handle(void *ctx_, const ShApiRequest *req, ShApiResponse *resp) {
+    FWAPIContext *ctx = (FWAPIContext *)ctx_;
+    (void)ctx;
     (void)ctx;  /* Currently stateless */
 
     if (!req || !resp) {
@@ -756,14 +753,14 @@ int fw_api_handle(FWAPIContext *ctx, const FWAPIRequest *req, FWAPIResponse *res
     }
 
     /* Initialize response */
-    memset(resp, 0, sizeof(FWAPIResponse));
+    memset(resp, 0, sizeof(ShApiResponse));
     resp->content_type = "application/json";
 
     /* Check for NULL path */
     if (!req->path) {
         resp->status_code = 400;
-        resp->body = strdup("{\"error\": \"Missing request path\"}\n");
-        resp->body_len = resp->body ? strlen(resp->body) : 0;
+        resp->body = (uint8_t *)strdup("{\"error\": \"Missing request path\"}\n");
+        resp->body_len = resp->body ? strlen((char *)resp->body) : 0;
         return 0;
     }
 
@@ -807,7 +804,7 @@ int fw_api_handle(FWAPIContext *ctx, const FWAPIRequest *req, FWAPIResponse *res
     }
 
     resp->status_code = status_code;
-    resp->body = response_body;
+    resp->body = (uint8_t *)response_body;
     resp->body_len = response_body ? strlen(response_body) : 0;
 
     return 0;
