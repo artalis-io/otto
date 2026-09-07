@@ -333,6 +333,8 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
+        with:
+          submodules: recursive
 
       - name: Set up MSYS2 + UCRT64 toolchain
         uses: msys2/setup-msys2@v2
