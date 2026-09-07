@@ -5,6 +5,7 @@
 #include "sh_worker_pool.h"
 #include "sh_completion.h"
 #include "sh_dist.h"
+#include "sh_pal.h"
 
 #include <unistd.h>
 
@@ -647,7 +648,7 @@ SGStatus sg_solve_parallel(SGContext *ctx, uint32_t num_threads) {
 
     /* Auto-detect thread count */
     if (num_threads == 0) {
-        long n = sysconf(_SC_NPROCESSORS_ONLN);
+        long n = (long)sh_cpu_count();   /* PAL: sysconf has no Windows equivalent */
         num_threads = (n > 0 && n <= 64) ? (uint32_t)n : 4;
     }
 
@@ -815,7 +816,7 @@ SGStatus sg_solve_population(SGContext *ctx, const SGPopulationConfig *cfg) {
     xover_frac = cfg ? cfg->crossover_fraction : 0.0;
     if (xover_frac <= 0.0 || xover_frac > 1.0) xover_frac = 0.5;
     if (num_threads == 0) {
-        long n = sysconf(_SC_NPROCESSORS_ONLN);
+        long n = (long)sh_cpu_count();   /* PAL: sysconf has no Windows equivalent */
         num_threads = (n > 0 && n <= 64) ? (uint32_t)n : 4;
     }
     if (pop_size == 0) pop_size = SG_POP_DEFAULT_POOL_SIZE;

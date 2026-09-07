@@ -10,6 +10,14 @@ else
     RELRO_FLAGS =
 endif
 
+# Windows: Keel talks to winsock, and libshared reaches bcrypt through
+# sh_pal_random_bytes. iphlpapi comes with Keel's adapter enumeration.
+ifneq (,$(findstring MINGW,$(UNAME_S)))
+    PLATFORM_LIBS = -lws2_32 -lbcrypt -liphlpapi
+else
+    PLATFORM_LIBS =
+endif
+
 # Production build (with hardening)
 CFLAGS = -Wall -Wextra -O2 -std=c11 -D_GNU_SOURCE \
          -fstack-protector-strong -D_FORTIFY_SOURCE=2 -fPIE -fno-common
@@ -41,7 +49,7 @@ LIBS = -L$(SURGE_DIR) -lsurge \
        -L$(ARBOR_DIR) -larbor \
        -L$(SHARED_DIR) -lshared \
        $(KEEL_LIB) \
-       -lm -lpthread
+       -lm -lpthread $(PLATFORM_LIBS)
 
 # Keel static library (vendored git submodule, MIT)
 KEEL_LIB = $(KEEL_DIR)/libkeel.a

@@ -361,6 +361,19 @@ jobs:
       - name: Build and test Ralph
         run: make -C ralph test
 
+      # Servers only build here -- their suites drive a live HTTP server with
+      # curl, which is a bigger CI surface than this job needs today. Building
+      # them proves Keel and the Keel-side shared helpers compile and link on
+      # Windows, which is what was actually unknown.
+      - name: Build the API servers
+        run: |
+          make -C ralph/api
+          make -C fuelwise/api
+          make -C surge/api
+          make -C velo/api
+          make -C carta/api
+          make -C locus/api
+
   # ==========================================================================
   # Sanitizers
   #
