@@ -9,6 +9,8 @@
 #include <errno.h>
 #include <string.h>
 
+#include "sh_pal.h"
+
 #define SH_FS_MAX_PATH 4096
 
 int sh_mkdirs(const char *path)
@@ -33,9 +35,9 @@ int sh_mkdirs(const char *path)
     for (char *p = tmp + 1; *p; p++) {
         if (*p == '/') {
             *p = '\0';
-            if (mkdir(tmp, 0755) != 0 && errno != EEXIST) return -1;
+            if (sh_pal_mkdir(tmp) != 0) return -1;
             *p = '/';
         }
     }
-    return (mkdir(tmp, 0755) == 0 || errno == EEXIST) ? 0 : -1;
+    return sh_pal_mkdir(tmp);
 }

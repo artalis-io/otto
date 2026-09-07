@@ -124,7 +124,17 @@ struct LCMmapIndex {
     /* Memory mapping */
     void *map_base;
     size_t map_size;
-    int fd;
+    /*
+     * 1 when map_base is a file mapping this index must release, 0 when it
+     * points at a caller-owned buffer (the WASM path).
+     *
+     * This used to be inferred from `fd >= 0`, which worked only because a
+     * file-backed index also held a descriptor. sh_map_file_readonly() closes
+     * the descriptor once the mapping exists, so ownership needs saying
+     * outright.
+     */
+    int owns_map;
+    int fd;   /* legacy descriptor; -1 when there is none to close */
 
     /* Direct pointers into mmap */
     const LCBinaryHeaderV4 *header;

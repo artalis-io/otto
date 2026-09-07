@@ -13,6 +13,10 @@
 #include "sh_pal.h"
 
 #include <errno.h>
+#include <stdio.h>
+#include <fcntl.h>
+#include <sys/mman.h>
+#include <sys/stat.h>
 #include <pthread.h>
 #include <string.h>
 #include <sys/time.h>
@@ -211,6 +215,116 @@ int sh_cpu_count(void)
     if (n > 0) return (int)n;
 #endif
     return 1;
+}
+
+
+/* ---------------------------------------------------------------- Process */
+
+uint64_t sh_pal_pid(void)
+{
+    return (uint64_t)getpid();
+}
+
+/* ------------------------------------------------------------- Randomness */
+
+int sh_pal_random_bytes(void *buf, size_t len)
+{
+    if (!buf && len) return -1;
+    if (!len) return 0;
+
+#if defined(__GLIBC__) && defined(_GNU_SOURCE)
+    {
+        /* getentropy is capped at 256 bytes per call. */
+        unsigned char *p = (unsigned char *)buf;
+        size_t left = len;
+        while (left > 0) {
+            size_t chunk = left > 256 ? 256 : left;
+            if (getentropy(p, chunk) != 0) break;
+            p += chunk;
+            left -= chunk;
+        }
+        if (left == 0) return 0;
+    }
+#endif
+
+    /* Fallback for platforms without getentropy, and for the case where it
+     * fails (an old kernel, or a sandbox that blocks the syscall). */
+    {
+        FILE *fp = fopen("/dev/urandom", "rb");
+        size_t got;
+        if (!fp) return -1;
+        got = fread(buf, 1, len, fp);
+        fclose(fp);
+        return got == len ? 0 : -1;
+    }
+}
+
+/* ------------------------------------------------------------- Filesystem */
+
+int sh_pal_mkdir(const char *path)
+{
+    if (!path || !path[0]) return -1;
+    if (mkdir(path, 0755) == 0) return 0;
+    return errno == EEXIST ? 0 : -1;
+}
+
+
+/* --------------------------------------------------------- File mapping */
+
+int sh_map_file_readonly(const char *path, ShFileMap *out)
+{
+    int fd;
+    struct stat st;
+    void *data;
+
+    if (!out) return -1;
+    out->data = NULL;
+    out->size = 0;
+    if (!path || !path[0]) return -1;
+
+    fd = open(path, O_RDONLY);
+    if (fd < 0) return -1;
+
+    if (fstat(fd, &st) != 0 || st.st_size <= 0) {
+        close(fd);
+        return -1;
+    }
+
+    data = mmap(NULL, (size_t)st.st_size, PROT_READ, MAP_PRIVATE, fd, 0);
+    /* The mapping keeps its own reference to the file, so the descriptor is
+     * not needed once mmap has returned. */
+    close(fd);
+    if (data == MAP_FAILED) return -1;
+
+    out->data = data;
+    out->size = (size_t)st.st_size;
+    return 0;
+}
+
+void sh_unmap_file(ShFileMap *map)
+{
+    if (!map || !map->data) return;
+    (void)munmap(map->data, map->size);
+    map->data = NULL;
+    map->size = 0;
+}
+
+void sh_map_advise_sequential(const ShFileMap *map)
+{
+    if (!map || !map->data) return;
+#if defined(MADV_SEQUENTIAL)
+    (void)madvise(map->data, map->size, MADV_SEQUENTIAL);
+#endif
+}
+
+
+void sh_unmap_ptr(void *data, size_t size)
+{
+    ShFileMap m;
+    if (!data) return;
+    m.data = data;
+    m.size = size;
+    sh_unmap_file(&m);
 }
 
 #else

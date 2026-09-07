@@ -14,6 +14,7 @@
 #define WIN32_LEAN_AND_MEAN
 #define NOMINMAX
 #include <windows.h>
+#include <bcrypt.h>
 
 /* windows.h leaves these behind for 16-bit compatibility and they break any
  * code with a variable of the same name. Nothing below needs them. */
@@ -325,6 +326,106 @@ int sh_cpu_count(void)
     SYSTEM_INFO si;
     GetSystemInfo(&si);
     return si.dwNumberOfProcessors > 0 ? (int)si.dwNumberOfProcessors : 1;
+}
+
+
+/* ---------------------------------------------------------------- Process */
+
+uint64_t sh_pal_pid(void)
+{
+    return (uint64_t)GetCurrentProcessId();
+}
+
+/* ------------------------------------------------------------- Randomness */
+
+int sh_pal_random_bytes(void *buf, size_t len)
+{
+    if (!buf && len) return -1;
+    if (!len) return 0;
+
+    /* BCryptGenRandom with the system-preferred RNG: no handle to manage and
+     * no CryptoAPI provider lifetime to get wrong. */
+    return BCryptGenRandom(NULL, (PUCHAR)buf, (ULONG)len,
+                           BCRYPT_USE_SYSTEM_PREFERRED_RNG) == 0 ? 0 : -1;
+}
+
+/* ------------------------------------------------------------- Filesystem */
+
+int sh_pal_mkdir(const char *path)
+{
+    if (!path || !path[0]) return -1;
+    if (CreateDirectoryA(path, NULL)) return 0;
+    return GetLastError() == ERROR_ALREADY_EXISTS ? 0 : -1;
+}
+
+
+/* --------------------------------------------------------- File mapping */
+
+int sh_map_file_readonly(const char *path, ShFileMap *out)
+{
+    HANDLE fh, mh;
+    LARGE_INTEGER size;
+    void *data;
+
+    if (!out) return -1;
+    out->data = NULL;
+    out->size = 0;
+    if (!path || !path[0]) return -1;
+
+    fh = CreateFileA(path, GENERIC_READ, FILE_SHARE_READ, NULL,
+                     OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
+    if (fh == INVALID_HANDLE_VALUE) return -1;
+
+    if (!GetFileSizeEx(fh, &size) || size.QuadPart <= 0) {
+        CloseHandle(fh);
+        return -1;
+    }
+
+    mh = CreateFileMappingA(fh, NULL, PAGE_READONLY, 0, 0, NULL);
+    if (!mh) {
+        CloseHandle(fh);
+        return -1;
+    }
+
+    data = MapViewOfFile(mh, FILE_MAP_READ, 0, 0, 0);
+
+    /* The view holds its own references, so both handles can go now and the
+     * mapping stays valid until UnmapViewOfFile. That is what lets ShFileMap
+     * carry only a pointer and a length. */
+    CloseHandle(mh);
+    CloseHandle(fh);
+
+    if (!data) return -1;
+
+    out->data = data;
+    out->size = (size_t)size.QuadPart;
+    return 0;
+}
+
+void sh_unmap_file(ShFileMap *map)
+{
+    if (!map || !map->data) return;
+    (void)UnmapViewOfFile(map->data);
+    map->data = NULL;
+    map->size = 0;
+}
+
+void sh_map_advise_sequential(const ShFileMap *map)
+{
+    /* No-op. PrefetchVirtualMemory has a different shape and needs a
+     * WIN32_MEMORY_RANGE_ENTRY plus a Win8+ check, which is not worth it for
+     * an advisory hint. */
+    (void)map;
+}
+
+
+void sh_unmap_ptr(void *data, size_t size)
+{
+    ShFileMap m;
+    if (!data) return;
+    m.data = data;
+    m.size = size;
+    sh_unmap_file(&m);
 }
 
 #else
