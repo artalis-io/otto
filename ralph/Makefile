@@ -15,6 +15,12 @@ ifeq ($(UNAME_S),Darwin)
     OMP_PREFIX := $(shell brew --prefix libomp 2>/dev/null || echo "/opt/homebrew/opt/libomp")
     CFLAGS += -Xclang -fopenmp -I$(OMP_PREFIX)/include
     OMP_LDFLAGS = -L$(OMP_PREFIX)/lib -lomp
+else ifneq (,$(findstring MINGW,$(UNAME_S)))
+    # Windows: gcc OpenMP, but -z relro/now are ELF-only and MinGW ld
+    # rejects them outright. bcrypt and ws2_32 come from libshared's
+    # use of sh_pal.
+    CFLAGS += -fopenmp
+    OMP_LDFLAGS = -fopenmp -lbcrypt -lws2_32
 else
     # Linux: use gcc's native OpenMP with RELRO
     CFLAGS += -fopenmp
