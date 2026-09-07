@@ -31,6 +31,7 @@
 /* Shared library includes */
 #include "shared.h"
 #include "sh_keelserver.h"
+#include "sh_keelasync.h"
 #include "sh_log.h"
 #include "sh_trace.h"
 #include "sh_metrics.h"
@@ -87,16 +88,9 @@ static ShRateLimiter *s_rate_limiter = NULL;
  * KlThreadPool exposes no statistics, but /api/v1/stats publishes work-queue
  * counters, so they are tracked here.
  */
-typedef struct {
-    uint64_t pushed;
-    uint64_t popped;
-    uint64_t dropped;
-    uint64_t expired;
-} LocusQueueStats;
-
 /* Geocode thread pool */
 static KlThreadPool *s_pool = NULL;
-static LocusQueueStats s_qstats;
+static ShKeelAsyncStats s_qstats;
 
 /* Adaptive capacity tracker (uses shared library) */
 static ShAdaptiveTracker *s_adaptive_tracker = NULL;
@@ -109,36 +103,25 @@ typedef enum {
 } GeoWorkType;
 
 typedef struct {
-    KlHttpServer *server;
-    KlThreadPool *pool;
+    ShKeelAsync async;   /* server, pool, cors, timeout, stats */
 } AppCtx;
 
 /*
- * OWNERSHIP / LIFETIME (same rules as Surge, FuelWise, Velo and Carta):
- * freed in exactly one place -- done_fn (the item ran) or cancel_fn (dropped
- * at pool shutdown before starting). on_cancel and on_deadline never free,
- * because work_fn may still be running on a worker; they only set `detached`.
+ * One geocode request. The async plumbing that used to surround this --
+ * KlAsyncOp, the connection, the detached flag -- now lives in
+ * sh_keel_async_dispatch(); see shared/src/sh_keelasync.c.
  */
 typedef struct {
-    KlAsyncOp op;
-    AppCtx *app;
-    const KlHttpRequest *req;   /* lives inside the conn; valid while suspended */
-
-    /* Request info */
     GeoWorkType type;
     char query[256];
     int limit;
     SHCoord coord;  /* For reverse geocoding */
 
-    /* Response buffer (set by worker) */
+    /* Response buffer (set by the worker) */
     char *response_json;
     size_t response_len;
     int status_code;
     char error_msg[128];
-
-    int detached;
-    const char *endpoint;   /* metrics label, static string */
-    ShMetricsTimer timer;
 } GeoCtx;
 
 /* JSON building is handled by sh_json.h (ShJsonWriter + ShJsonBuf) */
@@ -225,28 +208,10 @@ static void send_error_cors(KlHttpResponse *res, const KlHttpRequest *req,
  * ============================================================================ */
 
 /* Initialize a geocode work item */
-static void geo_ctx_free(GeoCtx *ctx) {
-    if (!ctx) return;
-    free(ctx->response_json);
-    free(ctx);
-}
-
 static void record_metrics(ShMetricsTimer timer, const char *endpoint) {
     sh_metrics_counter_inc("http_requests_total", 1,
                            "status:200", endpoint, NULL);
     sh_metrics_timer_observe(timer, "http_request_duration_ms", endpoint, NULL);
-}
-
-/* Allocate a geocode context with the common fields filled in. */
-static GeoCtx *geo_ctx_new(GeoWorkType type, const char *endpoint,
-                           ShMetricsTimer timer) {
-    GeoCtx *ctx = calloc(1, sizeof(*ctx));
-    if (!ctx) return NULL;
-    ctx->type = type;
-    ctx->status_code = 500;
-    ctx->endpoint = endpoint;
-    ctx->timer = timer;
-    return ctx;
 }
 
 static void process_search(GeoCtx *item) {
@@ -486,162 +451,118 @@ static void process_reverse(GeoCtx *item) {
 
 /* Geocode worker callback function (called by ShWorkerPool) */
 /* Worker thread: run the geocode. Touches only this context. */
-static void geo_work_fn(void *user_data) {
-    GeoCtx *item = (GeoCtx *)user_data;
+/*
+ * The geocode handler, as a plain ShApiHandler.
+ *
+ * Routing and query parsing live here rather than in the transport, which is
+ * the whole point of the shared interface: this function is callable from
+ * Keel, from the in-process transport, or directly, and knows about none of
+ * them. The three process_* functions above are unchanged.
+ */
+static int locus_api_handler(void *unused, const ShApiRequest *req,
+                             ShApiResponse *resp) {
+    GeoCtx item;
+    (void)unused;
 
-    struct timeval t0, t1;
-    gettimeofday(&t0, NULL);
+    memset(&item, 0, sizeof(item));
+    item.status_code = 500;
 
-    switch (item->type) {
-        case GEO_TYPE_SEARCH:       process_search(item); break;
-        case GEO_TYPE_AUTOCOMPLETE: process_autocomplete(item); break;
-        case GEO_TYPE_REVERSE:      process_reverse(item); break;
+    if (!g_index) {
+        return sh_api_response_error(resp, 503, "Index not loaded");
+    }
+    if (!req->path) {
+        return sh_api_response_error(resp, 400, "Missing path");
     }
 
-    gettimeofday(&t1, NULL);
-    double ms = (t1.tv_sec - t0.tv_sec) * 1000.0 +
-                (t1.tv_usec - t0.tv_usec) / 1000.0;
+    /* Route. */
+    if (strcmp(req->path, "/api/v1/search") == 0) {
+        item.type = GEO_TYPE_SEARCH;
+    } else if (strcmp(req->path, "/api/v1/autocomplete") == 0) {
+        item.type = GEO_TYPE_AUTOCOMPLETE;
+    } else if (strcmp(req->path, "/api/v1/reverse") == 0) {
+        item.type = GEO_TYPE_REVERSE;
+    } else {
+        return sh_api_response_error(resp, 404, "Not found");
+    }
 
-    if (s_adaptive_tracker) {
-        sh_adaptive_record(s_adaptive_tracker, ms);
+    /* Parse. */
+    {
+        const char *q = req->query ? req->query : "";
+        char limit_str[16] = "10";
 
-        ShCapacityParams new_params;
-        if (sh_adaptive_update(s_adaptive_tracker, &new_params)) {
-            if (s_rate_limiter) {
-                sh_ratelimit_update_rate(s_rate_limiter,
-                                         new_params.rate_limit_rps,
-                                         new_params.rate_limit_burst);
+        if (item.type == GEO_TYPE_REVERSE) {
+            char lat_str[32] = "", lon_str[32] = "";
+            sh_query_get_str(q, "lat", lat_str, sizeof(lat_str));
+            sh_query_get_str(q, "lon", lon_str, sizeof(lon_str));
+            if (lat_str[0] == '\0' || lon_str[0] == '\0') {
+                return sh_api_response_error(resp, 400,
+                                             "Missing 'lat' or 'lon' parameter");
+            }
+            item.coord.lat = atof(lat_str);
+            item.coord.lon = atof(lon_str);
+            if (item.coord.lat < -90.0 || item.coord.lat > 90.0 ||
+                item.coord.lon < -180.0 || item.coord.lon > 180.0) {
+                return sh_api_response_error(resp, 400, "Invalid coordinates");
+            }
+        } else {
+            sh_query_get_str(q, "q", item.query, sizeof(item.query));
+            if (item.query[0] == '\0') {
+                return sh_api_response_error(resp, 400, "Missing 'q' parameter");
+            }
+        }
+
+        sh_query_get_str(q, "limit", limit_str, sizeof(limit_str));
+        item.limit = sh_parse_int(limit_str, 10, 1, 100);
+    }
+
+    /* Work. */
+    {
+        struct timeval t0, t1;
+        gettimeofday(&t0, NULL);
+
+        switch (item.type) {
+            case GEO_TYPE_SEARCH:       process_search(&item); break;
+            case GEO_TYPE_AUTOCOMPLETE: process_autocomplete(&item); break;
+            case GEO_TYPE_REVERSE:      process_reverse(&item); break;
+        }
+
+        gettimeofday(&t1, NULL);
+        {
+            double ms = (t1.tv_sec - t0.tv_sec) * 1000.0 +
+                        (t1.tv_usec - t0.tv_usec) / 1000.0;
+            if (s_adaptive_tracker) {
+                ShCapacityParams np;
+                sh_adaptive_record(s_adaptive_tracker, ms);
+                if (sh_adaptive_update(s_adaptive_tracker, &np) && s_rate_limiter) {
+                    sh_ratelimit_update_rate(s_rate_limiter,
+                                             np.rate_limit_rps,
+                                             np.rate_limit_burst);
+                }
             }
         }
     }
-}
 
-/* Write whatever the worker produced. Shared by done_fn and the inline path. */
-static void geo_reply(KlHttpResponse *res, const KlHttpRequest *req, GeoCtx *ctx) {
-    if (ctx->status_code == 200) {
-        if (ctx->response_json && ctx->response_len > 0) {
-            send_json_cors(res, req, 200, ctx->response_json);
-        } else {
-            send_json_cors(res, req, 200, "{}");
-        }
+    /* Reply. */
+    if (item.status_code != 200) {
+        free(item.response_json);
+        return sh_api_response_error(resp, item.status_code,
+                                     item.error_msg[0] ? item.error_msg
+                                                       : "Geocode failed");
+    }
+
+    memset(resp, 0, sizeof(*resp));
+    resp->status_code = 200;
+    resp->content_type = "application/json";
+    if (item.response_json && item.response_len > 0) {
+        resp->body = (uint8_t *)item.response_json;   /* ownership moves */
+        resp->body_len = item.response_len;
     } else {
-        send_error_cors(res, req, ctx->status_code,
-                        ctx->error_msg[0] ? ctx->error_msg : "Geocode failed");
+        free(item.response_json);
+        return sh_api_response_set(resp, 200, "application/json", "{}", 2);
     }
+    return 0;
 }
 
-/* Event loop thread: write the response and resume the connection. */
-static void geo_done_fn(void *user_data) {
-    GeoCtx *ctx = (GeoCtx *)user_data;
-
-    s_qstats.popped++;
-
-    if (ctx->detached) {
-        geo_ctx_free(ctx);
-        return;
-    }
-
-    geo_reply(kl_http_conn_response(ctx->op.conn), ctx->req, ctx);
-    record_metrics(ctx->timer, ctx->endpoint);
-
-    kl_async_complete(ctx->app->server, &ctx->op);
-    geo_ctx_free(ctx);
-}
-
-/* Pool shutdown dropped the item before it started. */
-static void geo_cancel_fn(void *user_data) {
-    geo_ctx_free((GeoCtx *)user_data);
-}
-
-/*
- * Declare the send. kl_async_complete() re-arms the fd but leaves the
- * connection SUSPENDED unless on_resume says what happens next; without this
- * the response is never written and the client hangs. Keel's
- * examples/thread_pool and examples/async_thread_pool leave this a no-op and
- * hang for exactly that reason; tests/smoke_iouring_async.c is the correct
- * reference, and kl_http_request_send_response() is its public equivalent.
- */
-static void geo_on_resume(KlAsyncOp *op, void *ud) {
-    (void)ud;
-    GeoCtx *ctx = (GeoCtx *)((char *)op - offsetof(GeoCtx, op));
-    kl_http_request_send_response(ctx->req);
-}
-
-/* Connection died while suspended; the worker may still be running. */
-static void geo_on_cancel(KlAsyncOp *op, void *ud) {
-    (void)ud;
-    ((GeoCtx *)((char *)op - offsetof(GeoCtx, op)))->detached = 1;
-}
-
-/* Deadline exceeded: reply 504 now, let done_fn free the context later. */
-static void geo_on_deadline(KlAsyncOp *op, void *ud) {
-    (void)ud;
-    GeoCtx *ctx = (GeoCtx *)((char *)op - offsetof(GeoCtx, op));
-
-    if (ctx->detached) return;
-    ctx->detached = 1;
-    s_qstats.expired++;
-
-    send_error_cors(kl_http_conn_response(op->conn), ctx->req, 504,
-                    "Request timeout");
-    record_metrics(ctx->timer, ctx->endpoint);
-
-    kl_async_complete(ctx->app->server, op);
-}
-
-/* Submit geocode work via work queue and send response */
-/*
- * Dispatch a geocode. Takes ownership of ctx in every path.
- * Runs inline when the queue is disabled, matching the old behaviour.
- */
-static void submit_geocode_work(KlHttpRequest *req, KlHttpResponse *res,
-                                void *ud, GeoCtx *ctx) {
-    AppCtx *app = (AppCtx *)ud;
-
-    if (!s_pool) {
-        geo_work_fn(ctx);
-        geo_reply(res, req, ctx);
-        record_metrics(ctx->timer, ctx->endpoint);
-        geo_ctx_free(ctx);
-        return;
-    }
-
-    ctx->app = app;
-    ctx->req = req;
-    ctx->op.on_resume = geo_on_resume;
-    ctx->op.on_cancel = geo_on_cancel;
-    ctx->op.on_deadline = geo_on_deadline;
-    if (s_config.server.work_queue_timeout > 0.0) {
-        ctx->op.deadline_ms = kl_monotonic_ms() +
-            (uint64_t)(s_config.server.work_queue_timeout * 1000.0);
-    }
-
-    if (kl_async_suspend(app->server, kl_http_request_conn(req), &ctx->op) < 0) {
-        geo_ctx_free(ctx);
-        send_error_cors(res, req, 500, "Failed to suspend request");
-        return;
-    }
-
-    KlWorkItem item = {
-        .work_fn   = geo_work_fn,
-        .done_fn   = geo_done_fn,
-        .cancel_fn = geo_cancel_fn,
-        .user_data = ctx,
-    };
-
-    if (kl_thread_pool_submit(app->pool, &item) < 0) {
-        /* Queue full - backpressure, same 503 as the old work queue. */
-        s_qstats.dropped++;
-        ctx->detached = 1;
-        send_error_cors(res, req, 503, "Server busy, try again later");
-        record_metrics(ctx->timer, ctx->endpoint);
-        kl_async_complete(app->server, &ctx->op);
-        geo_ctx_free(ctx);
-        return;
-    }
-
-    s_qstats.pushed++;
-}
 
 /* ============================================================================
  * Request Handlers
@@ -767,13 +688,16 @@ static void handle_stats(KlHttpRequest *req, KlHttpResponse *res, void *ud) {
     free(json);
 }
 
-static void handle_search(KlHttpRequest *req, KlHttpResponse *res, void *ud) {
+/*
+ * The three geocode endpoints. Each one now does the same three things:
+ * marshal a ShApiRequest, hand it to the shared dispatcher, record metrics.
+ * Validation, parsing and routing all moved into locus_api_handler(), and the
+ * suspend/pool/resume protocol into sh_keel_async_dispatch().
+ */
+static void handle_geocode(KlHttpRequest *req, KlHttpResponse *res, void *ud,
+                           const char *path, const char *endpoint) {
+    AppCtx *app = (AppCtx *)ud;
     ShMetricsTimer timer = sh_metrics_timer_start();
-
-    if (!g_index) {
-        send_error_cors(res, req, 503, "Index not loaded");
-        return;
-    }
 
     char query_buf[512];
     size_t qlen = req->query_len < sizeof(query_buf) - 1 ? req->query_len
@@ -781,105 +705,29 @@ static void handle_search(KlHttpRequest *req, KlHttpResponse *res, void *ud) {
     if (req->query && qlen > 0) memcpy(query_buf, req->query, qlen);
     query_buf[req->query && qlen > 0 ? qlen : 0] = '\0';
 
-    char query[256] = "";
-    char limit_str[16] = "10";
-    sh_query_get_str(query_buf, "q", query, sizeof(query));
-    sh_query_get_str(query_buf, "limit", limit_str, sizeof(limit_str));
+    ShApiRequest api_req;
+    memset(&api_req, 0, sizeof(api_req));
+    api_req.method = "GET";
+    api_req.path   = path;
+    api_req.query  = query_buf;
 
-    if (query[0] == '\0') {
-        send_error_cors(res, req, 400, "Missing 'q' parameter");
-        return;
-    }
+    sh_keel_async_dispatch(&app->async, req, res, locus_api_handler, NULL,
+                           &api_req);
 
-    GeoCtx *ctx = geo_ctx_new(GEO_TYPE_SEARCH, "endpoint:search", timer);
-    if (!ctx) {
-        send_error_cors(res, req, 500, "Out of memory");
-        return;
-    }
-    snprintf(ctx->query, sizeof(ctx->query), "%s", query);
-    ctx->limit = sh_parse_int(limit_str, 10, 1, 100);
-
-    submit_geocode_work(req, res, ud, ctx);
+    record_metrics(timer, endpoint);
     sh_trace_clear();
+}
+
+static void handle_search(KlHttpRequest *req, KlHttpResponse *res, void *ud) {
+    handle_geocode(req, res, ud, "/api/v1/search", "endpoint:search");
 }
 
 static void handle_autocomplete(KlHttpRequest *req, KlHttpResponse *res, void *ud) {
-    ShMetricsTimer timer = sh_metrics_timer_start();
-
-    if (!g_index) {
-        send_error_cors(res, req, 503, "Index not loaded");
-        return;
-    }
-
-    char query_buf[512];
-    size_t qlen = req->query_len < sizeof(query_buf) - 1 ? req->query_len
-                                                         : sizeof(query_buf) - 1;
-    if (req->query && qlen > 0) memcpy(query_buf, req->query, qlen);
-    query_buf[req->query && qlen > 0 ? qlen : 0] = '\0';
-
-    char query[256] = "";
-    char limit_str[16] = "10";
-    sh_query_get_str(query_buf, "q", query, sizeof(query));
-    sh_query_get_str(query_buf, "limit", limit_str, sizeof(limit_str));
-
-    if (query[0] == '\0') {
-        send_error_cors(res, req, 400, "Missing 'q' parameter");
-        return;
-    }
-
-    GeoCtx *ctx = geo_ctx_new(GEO_TYPE_AUTOCOMPLETE, "endpoint:autocomplete", timer);
-    if (!ctx) {
-        send_error_cors(res, req, 500, "Out of memory");
-        return;
-    }
-    snprintf(ctx->query, sizeof(ctx->query), "%s", query);
-    ctx->limit = sh_parse_int(limit_str, 10, 1, 100);
-
-    submit_geocode_work(req, res, ud, ctx);
-    sh_trace_clear();
+    handle_geocode(req, res, ud, "/api/v1/autocomplete", "endpoint:autocomplete");
 }
 
 static void handle_reverse(KlHttpRequest *req, KlHttpResponse *res, void *ud) {
-    ShMetricsTimer timer = sh_metrics_timer_start();
-
-    if (!g_index) {
-        send_error_cors(res, req, 503, "Index not loaded");
-        return;
-    }
-
-    char query_buf[512];
-    size_t qlen = req->query_len < sizeof(query_buf) - 1 ? req->query_len
-                                                         : sizeof(query_buf) - 1;
-    if (req->query && qlen > 0) memcpy(query_buf, req->query, qlen);
-    query_buf[req->query && qlen > 0 ? qlen : 0] = '\0';
-
-    char lat_str[32] = "";
-    char lon_str[32] = "";
-    sh_query_get_str(query_buf, "lat", lat_str, sizeof(lat_str));
-    sh_query_get_str(query_buf, "lon", lon_str, sizeof(lon_str));
-
-    if (lat_str[0] == '\0' || lon_str[0] == '\0') {
-        send_error_cors(res, req, 400, "Missing 'lat' or 'lon' parameter");
-        return;
-    }
-
-    double lat_val = sh_parse_double(lat_str, NAN, -90.0, 90.0);
-    double lon_val = sh_parse_double(lon_str, NAN, -180.0, 180.0);
-    if (isnan(lat_val) || isnan(lon_val)) {
-        send_error_cors(res, req, 400, "Invalid coordinates");
-        return;
-    }
-
-    GeoCtx *ctx = geo_ctx_new(GEO_TYPE_REVERSE, "endpoint:reverse", timer);
-    if (!ctx) {
-        send_error_cors(res, req, 500, "Out of memory");
-        return;
-    }
-    ctx->coord.lat = lat_val;
-    ctx->coord.lon = lon_val;
-
-    submit_geocode_work(req, res, ud, ctx);
-    sh_trace_clear();
+    handle_geocode(req, res, ud, "/api/v1/reverse", "endpoint:reverse");
 }
 
 /* Handle /metrics endpoint for Prometheus */
@@ -933,7 +781,7 @@ static int mw_not_found(KlHttpRequest *req, KlHttpResponse *res, void *ud) {
     KlHttpParam params[KL_HTTP_ROUTER_MAX_PARAMS];
     int num_params = 0;
 
-    int rc = kl_http_router_match(&app->server->router,
+    int rc = kl_http_router_match(&app->async.server->router,
                                   req->method, req->method_len,
                                   req->path, req->path_len,
                                   &matched, params, &num_params);
@@ -1181,7 +1029,13 @@ int main(int argc, char *argv[]) {
         }
     }
 
-    AppCtx app = { .server = &server, .pool = s_pool };
+    AppCtx app;
+    memset(&app, 0, sizeof(app));
+    app.async.server    = &server;
+    app.async.pool      = s_pool;
+    app.async.cors      = &s_cors;
+    app.async.timeout_s = s_config.server.work_queue_timeout;
+    app.async.stats     = &s_qstats;
 
     /* Routes. Every handler that suspends must be a route, not middleware. */
     kl_http_server_route(&server, "GET", "/api/v1/health",       handle_health,       NULL, NULL);

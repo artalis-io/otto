@@ -155,14 +155,14 @@ int surge_api_solve(const char *body, size_t body_len) {
 WASM_EXPORT
 int surge_api_handle(const char *path, const char *query,
                      const char *body, size_t body_len) {
-    SGAPIRequest req = {
+    ShApiRequest req = {
         .path = path,
         .query = query,
         .body = body,
         .body_len = body_len,
         .host = NULL
     };
-    SGAPIResponse resp = {0};
+    ShApiResponse resp = {0};
 
     int rc = sg_api_handle(g_ctx, &req, &resp);
 
@@ -175,7 +175,7 @@ int surge_api_handle(const char *path, const char *query,
         g_response_content_type = resp.content_type;
     } else {
         set_error(resp.status_code ? resp.status_code : 500, "Internal error");
-        sg_api_response_free(&resp);
+        sh_api_response_free(&resp);
     }
 
     return 0;

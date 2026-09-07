@@ -65,6 +65,17 @@ const char *sh_kl_trace_header_getter(const char *name, void *ctx);
 void sh_kl_apply_cors(KlHttpResponse *res, const struct ShCorsConfig *cors,
                       const char *origin);
 
+/*
+ * Reply with an arbitrary content type and a binary-safe body.
+ *
+ * The general form: Carta returns PNG and MVT, so a JSON-only helper cannot
+ * carry every response. The body is copied; caller keeps ownership.
+ */
+void sh_kl_reply_body(KlHttpResponse *res, int status,
+                      const char *content_type,
+                      const struct ShCorsConfig *cors, const char *origin,
+                      const char *body, size_t body_len);
+
 /* Reply with application/json. The body is copied; caller keeps ownership. */
 void sh_kl_reply_json(KlHttpResponse *res, int status,
                       const struct ShCorsConfig *cors, const char *origin,

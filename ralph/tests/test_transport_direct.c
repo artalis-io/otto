@@ -37,26 +37,69 @@ static ShApiHandler g_handler = ralph_api_handle;
 
 static int g_stream_freed = 0;
 
-static int produce_ok(void *stream_ctx, ShApiStream *out)
+static ShApiStreamStatus produce_ok(void *stream_ctx, ShApiStream *out)
 {
     (void)stream_ctx;
-    if (sh_api_stream_closed(out)) return -1;
-    if (sh_api_stream_send(out, NULL, "alpha", 5) != 0) return -1;
-    if (sh_api_stream_send(out, "progress", "beta", 4) != 0) return -1;
-    return 0;
+    if (sh_api_stream_closed(out)) return SH_API_STREAM_ERROR;
+    if (sh_api_stream_send(out, NULL, "alpha", 5) != 0) return SH_API_STREAM_ERROR;
+    if (sh_api_stream_send(out, "progress", "beta", 4) != 0) return SH_API_STREAM_ERROR;
+    return SH_API_STREAM_DONE;
 }
 
-static int produce_fail(void *stream_ctx, ShApiStream *out)
+static ShApiStreamStatus produce_fail(void *stream_ctx, ShApiStream *out)
 {
     (void)stream_ctx;
     (void)sh_api_stream_send(out, NULL, "partial", 7);
-    return -1;   /* producer gives up part-way through */
+    return SH_API_STREAM_ERROR;   /* producer gives up part-way through */
+}
+
+/* Answers MORE for a few rounds before finishing -- the multi-round path the
+ * transport must drive rather than calling once. */
+static int g_rounds = 0;
+
+static ShApiStreamStatus produce_rounds(void *stream_ctx, ShApiStream *out)
+{
+    (void)stream_ctx;
+    if (g_rounds >= 3) return SH_API_STREAM_DONE;
+    g_rounds++;
+    if (sh_api_stream_send(out, NULL, "x", 1) != 0) return SH_API_STREAM_ERROR;
+    return SH_API_STREAM_MORE;
+}
+
+/* Never finishes. The transport must cap this rather than spin forever; on the
+ * Keel transport an uncapped loop would wedge the whole event loop. */
+static ShApiStreamStatus produce_runaway(void *stream_ctx, ShApiStream *out)
+{
+    (void)stream_ctx; (void)out;
+    return SH_API_STREAM_MORE;
 }
 
 static void stream_freed(void *stream_ctx)
 {
     (void)stream_ctx;
     g_stream_freed++;
+}
+
+static int rounds_handler(void *ctx, const ShApiRequest *req,
+                          ShApiResponse *resp)
+{
+    (void)ctx; (void)req;
+    memset(resp, 0, sizeof(*resp));
+    resp->status_code = 200;
+    resp->content_type = "text/event-stream";
+    resp->stream_fn = produce_rounds;
+    return 0;
+}
+
+static int runaway_handler(void *ctx, const ShApiRequest *req,
+                           ShApiResponse *resp)
+{
+    (void)ctx; (void)req;
+    memset(resp, 0, sizeof(*resp));
+    resp->status_code = 200;
+    resp->content_type = "text/event-stream";
+    resp->stream_fn = produce_runaway;
+    return 0;
 }
 
 static int streaming_handler(void *ctx, const ShApiRequest *req,
@@ -91,6 +134,15 @@ static int stream_case(ShApiResponse *resp)
     req.path = "/stream";
     g_stream_freed = 0;
     return sh_transport_direct_call(streaming_handler, NULL, &req, resp);
+}
+
+static int simple_stream_case(ShApiHandler h, ShApiResponse *resp)
+{
+    ShApiRequest req;
+    memset(&req, 0, sizeof(req));
+    req.method = "GET";
+    req.path = "/stream";
+    return sh_transport_direct_call(h, NULL, &req, resp);
 }
 
 static int stream_fail_case(ShApiResponse *resp)
@@ -192,6 +244,22 @@ int main(void)
     check(resp.body == NULL && resp.body_len == 0,
           "Failing stream leaves no partial body");
     check(g_stream_freed == 1, "stream_free still called on the failure path");
+    sh_api_response_free(&resp);
+
+    /* MORE: the transport must call the producer repeatedly, not once. */
+    memset(&resp, 0, sizeof(resp));
+    g_rounds = 0;
+    check(simple_stream_case(rounds_handler, &resp) == 0,
+          "Multi-round producer runs to completion");
+    check(g_rounds == 3, "Producer called once per MORE, then DONE");
+    check(resp.body_len == 3, "One chunk collected per round");
+    sh_api_response_free(&resp);
+
+    /* A producer that never finishes must be capped, not spun on forever. */
+    memset(&resp, 0, sizeof(resp));
+    check(simple_stream_case(runaway_handler, &resp) != 0,
+          "Runaway MORE producer is capped and reported as an error");
+    check(resp.body == NULL, "Runaway producer leaves no partial body");
     sh_api_response_free(&resp);
 
     /* Escaping: a message with quotes/newlines must stay valid JSON. */

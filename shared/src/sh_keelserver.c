@@ -121,6 +121,25 @@ void sh_kl_apply_cors(KlHttpResponse *res, const struct ShCorsConfig *cors,
     sh_kl_append_header_block(res, cors_hdrs);
 }
 
+void sh_kl_reply_body(KlHttpResponse *res, int status,
+                      const char *content_type,
+                      const struct ShCorsConfig *cors, const char *origin,
+                      const char *body, size_t body_len)
+{
+    if (!res) return;
+
+    kl_http_response_status(res, status);
+    kl_http_response_header(res, "Content-Type",
+                            content_type ? content_type : "application/json");
+    sh_kl_apply_cors(res, cors, origin);
+
+    /* Copy: Keel's response_json/_error borrow, and callers free their
+     * buffers. Same reason every other sh_kl_reply_* copies. */
+    if (body && body_len > 0) {
+        kl_http_response_body_copy(res, body, body_len);
+    }
+}
+
 void sh_kl_reply_json(KlHttpResponse *res, int status,
                       const struct ShCorsConfig *cors, const char *origin,
                       const char *json)

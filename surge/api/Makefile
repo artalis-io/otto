@@ -47,7 +47,7 @@ LIBS = -L$(SURGE_DIR) -lsurge \
 KEEL_LIB = $(KEEL_DIR)/libkeel.a
 
 # Shared Keel HTTP helpers (need Keel headers, so not in libshared)
-KEELSERVER_OBJ = $(BUILD_DIR)/sh_keelserver.o
+KEELSERVER_OBJ = $(BUILD_DIR)/sh_keelserver.o $(BUILD_DIR)/sh_keelasync.o
 
 # Source files
 SRCS = $(SRC_DIR)/main.c
@@ -81,7 +81,7 @@ $(BUILD_DIR)/%.o: $(SRC_DIR)/%.c | $(BUILD_DIR)
 	$(CC) $(CFLAGS) $(INCLUDES) -c $< -o $@
 
 # Compile shared Keel HTTP helpers (require Keel includes)
-$(KEELSERVER_OBJ): $(SHARED_DIR)/src/sh_keelserver.c | $(BUILD_DIR)
+$(BUILD_DIR)/%.o: $(SHARED_DIR)/src/%.c | $(BUILD_DIR)
 	$(CC) $(CFLAGS) $(INCLUDES) -c $< -o $@
 
 # Build server
