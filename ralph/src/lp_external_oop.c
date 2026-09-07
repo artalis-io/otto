@@ -6,7 +6,15 @@
 #include <string.h>
 #include <time.h>
 #include <unistd.h>
-#include <sys/wait.h>
+#ifdef _WIN32
+  #define WIN32_LEAN_AND_MEAN
+  #include <windows.h>
+  #undef near
+  #undef far
+  #include <io.h>
+#else
+  #include <sys/wait.h>
+#endif
 
 #include "lp_external_oop.h"
 
@@ -34,12 +42,16 @@ static void oop_result_init(LPExternalOOPRunResult *result) {
     result->exit_code = -1;
 }
 
+#ifndef _WIN32
+/* Used only by the POSIX runner below; Windows anonymous pipes have no
+ * O_NONBLOCK equivalent, which is part of why that port is its own job. */
 static int oop_pipe_set_nonblock(int fd) {
     int flags = fcntl(fd, F_GETFL, 0);
     if (flags < 0) return -1;
     if (fcntl(fd, F_SETFL, flags | O_NONBLOCK) != 0) return -1;
     return 0;
 }
+#endif
 
 static int oop_emit_line(const LPExternalOOPRunRequest *req, const char *line) {
     if (!req || !req->on_line) return 0;
@@ -86,6 +98,23 @@ static void oop_flush_line(const LPExternalOOPRunRequest *req,
 int lp_external_oop_make_tempfile(const char *prefix,
                                   char *path,
                                   size_t path_size) {
+#ifdef _WIN32
+    char dir[MAX_PATH];
+    char name[MAX_PATH];
+
+    if (!prefix || !path || path_size < 32) return -1;
+
+    /* There is no /tmp on Windows. GetTempFileName also creates the file, so
+     * the result matches mkstemp's: the path exists and is ours. */
+    if (GetTempPathA((DWORD)sizeof(dir), dir) == 0) return -1;
+    if (GetTempFileNameA(dir, prefix, 0, name) == 0) return -1;
+    if (strlen(name) >= path_size) {
+        (void)DeleteFileA(name);
+        return -1;
+    }
+    snprintf(path, path_size, "%s", name);
+    return 0;
+#else
     int fd = -1;
 
     if (!prefix || !path || path_size < 32) return -1;
@@ -94,6 +123,7 @@ int lp_external_oop_make_tempfile(const char *prefix,
     if (fd < 0) return -1;
     close(fd);
     return 0;
+#endif
 }
 
 void lp_external_oop_cleanup_file(const char *path) {
@@ -101,6 +131,32 @@ void lp_external_oop_cleanup_file(const char *path) {
     (void)unlink(path);
 }
 
+/*
+ * Run a child process and stream its merged stdout/stderr, with a wall-clock
+ * timeout and a cancellation hook.
+ *
+ * NOT IMPLEMENTED ON WINDOWS.
+ *
+ * The POSIX version below is fork + execvp over a non-blocking pipe. The
+ * Windows equivalent is CreateProcess with an inherited pipe and
+ * PeekNamedPipe for the non-blocking reads, which is a feature port rather
+ * than a portability fix -- enough new code, with enough subtlety around
+ * partial lines and EOF detection, to deserve its own change and its own
+ * run of test_lp_external_oop_runner.
+ *
+ * Until then this reports failure rather than pretending to run anything.
+ * Only the external out-of-process solver adapters reach it
+ * (lp_external_glpk_oop.c); every in-process solver path is unaffected.
+ */
+#ifdef _WIN32
+int lp_external_oop_run(const LPExternalOOPRunRequest *req,
+                        LPExternalOOPRunResult *result) {
+    if (!req || !result) return -1;
+    oop_result_init(result);
+    result->exit_code = -1;
+    return -1;
+}
+#else
 int lp_external_oop_run(const LPExternalOOPRunRequest *req,
                         LPExternalOOPRunResult *result) {
     int pipefd[2] = {-1, -1};
@@ -248,3 +304,5 @@ int lp_external_oop_run(const LPExternalOOPRunRequest *req,
 
     return 0;
 }
+
+#endif /* _WIN32 */

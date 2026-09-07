@@ -314,9 +314,13 @@ jobs:
   # This job is what stops that rotting: a PAL only ever compiled on Linux is
   # a PAL nobody notices breaking.
   #
-  # Now covers shared/, velo/, carta/ and locus/ -- every core library that
-  # has a test suite. Ralph and the API servers are what is left: Ralph needs
-  # its own sweep, and the servers need Keel built on Windows too.
+  # Covers every core library: shared/, velo/, carta/, locus/ and ralph/.
+  # The API servers are what remain; they additionally need Keel built here.
+  #
+  # Two Ralph suites skip rather than run: lp_external_oop_run() spawns a
+  # child process with fork/execvp over a non-blocking pipe, and the Windows
+  # equivalent (CreateProcess + PeekNamedPipe) is a feature port rather than a
+  # portability fix. They report SKIP so the gap stays visible.
   # ==========================================================================
   windows:
     name: Windows Core
@@ -353,6 +357,9 @@ jobs:
 
       - name: Build and test Locus
         run: make -C locus test
+
+      - name: Build and test Ralph
+        run: make -C ralph test
 
   # ==========================================================================
   # Sanitizers
