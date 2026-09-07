@@ -62,6 +62,7 @@ LIB = liblocus.a
 
 # Test binary
 TEST_BIN = test_locus
+TEST_TRANSPORT_BIN = test_transport_direct
 
 # Benchmark binary
 BENCH_BIN = bench_locus
@@ -69,7 +70,7 @@ BENCH_BIN = bench_locus
 # WASM output
 WASM_OUT = locus.js
 
-.PHONY: all clean test bench lib debug wasm
+.PHONY: all clean test test-transport bench lib debug wasm
 
 # Default target
 all: lib $(TEST_BIN)
@@ -92,9 +93,18 @@ $(SHARED_DIR)/libshared.a:
 $(TEST_BIN): tests/test_locus.c $(LIB) $(SHARED_DIR)/libshared.a
 	$(CC) $(CFLAGS) $(INCLUDES) $< -L. -llocus -L$(SHARED_DIR) -lshared $(LDFLAGS) -o $@
 
+# Transport invariant: lc_api_handle driven by sh_transport_direct with no
+# transport library on the include path. See docs/roadmaps/transport.md.
+$(TEST_TRANSPORT_BIN): tests/test_transport_direct.c $(LIB) $(SHARED_DIR)/libshared.a
+	$(CC) $(CFLAGS) $(INCLUDES) $< -L. -llocus -L$(SHARED_DIR) -lshared $(LDFLAGS) -o $@
+
+test-transport: $(TEST_TRANSPORT_BIN)
+	./$(TEST_TRANSPORT_BIN)
+
 # Run tests
-test: $(TEST_BIN)
+test: $(TEST_BIN) $(TEST_TRANSPORT_BIN)
 	./$(TEST_BIN)
+	./$(TEST_TRANSPORT_BIN)
 
 # Benchmarks
 $(BENCH_BIN): benchmarks/bench_locus.c $(LIB) $(SHARED_DIR)/libshared.a
@@ -115,7 +125,7 @@ wasm:
 # Clean
 clean:
 	rm -f $(CORE_OBJS) $(LIB)
-	rm -f $(TEST_BIN) $(BENCH_BIN)
+	rm -f $(TEST_BIN) $(TEST_TRANSPORT_BIN) $(BENCH_BIN)
 	rm -f $(WASM_OUT) locus.wasm
 
 # Dependencies

@@ -17,6 +17,7 @@
 #include <stddef.h>
 #include <stdint.h>
 #include "locus.h"
+#include "sh_api.h"  /* ShApiRequest/ShApiResponse/ShApiHandler */
 
 #ifdef __cplusplus
 extern "C" {
@@ -229,56 +230,40 @@ LCIndex *lc_api_get_index(LCAPIContext *ctx);
  * ============================================================================ */
 
 /*
- * API request structure.
- *
- * The path should be the URI path (e.g., "/api/v1/search").
- * The query string is optional and should NOT include the leading '?'.
- */
-typedef struct {
-    const char *path;       /* URI path (required) */
-    const char *query;      /* Query string without '?' (optional, NULL ok) */
-    const char *host;       /* Host header (optional, for URL generation) */
-} LCAPIRequest;
-
-/*
- * API response structure.
- *
- * The body is heap-allocated and must be freed by the caller using
- * lc_api_response_free() or free().
- */
-typedef struct {
-    int status_code;        /* HTTP status code (200, 400, 404, 500, etc.) */
-    const char *content_type; /* MIME type (static string, do not free) */
-    uint8_t *body;          /* Response body (caller must free) */
-    size_t body_len;        /* Response body length in bytes */
-} LCAPIResponse;
-
-/*
  * Handle an API request.
  *
- * Routes the request based on path and generates the appropriate response.
- * The response body is heap-allocated - caller must free with
- * lc_api_response_free().
+ * This is a plain ShApiHandler: the request and response are the shared types
+ * from sh_api.h, so any transport can drive it -- Keel, the WASM bridge, a
+ * direct call in a test. Locus used to declare its own LCAPIRequest and
+ * LCAPIResponse here, and there were three implementations of these five
+ * endpoints: this one, another in api/src/main.c, and a third in
+ * wasm/src/lc_wasm_api.c. They disagreed about what "total" counts, about
+ * whether osm_id is reported at all, and about whether a name gets escaped
+ * on the way into JSON. Now there is one.
+ *
+ * `ctx` is an LCAPIContext*, passed as void* so the signature matches
+ * ShApiHandler exactly and the compiler checks that for us. A NULL ctx is
+ * accepted: /api/v1/health answers without an index, and every other route
+ * reports 503.
  *
  * Supported paths:
- *   /api/v1/search       - Forward geocoding
- *   /api/v1/autocomplete - Autocomplete suggestions
- *   /api/v1/reverse      - Reverse geocoding
+ *   /api/v1/search       - Forward geocoding (?q=, ?limit=)
+ *   /api/v1/autocomplete - Autocomplete suggestions (?q=, ?limit=)
+ *   /api/v1/reverse      - Reverse geocoding (?lat=, ?lon=)
  *   /api/v1/health       - Health check
  *   /api/v1/stats        - Index statistics
  *
- * Returns 0 on success (response filled in), -1 on internal error.
- */
-int lc_api_handle(LCAPIContext *ctx,
-                  const LCAPIRequest *req,
-                  LCAPIResponse *resp);
-
-/*
- * Free response body.
+ * `q` is percent-decoded, so ?q=Monte%20Carlo searches for "Monte Carlo".
  *
- * Safe to call with NULL response or NULL body.
+ * Returns 0 when the response has been filled in -- including error
+ * responses, since a 404 is a successful handling -- and non-zero only on an
+ * internal failure that leaves the response unusable.
+ *
+ * Free the response with sh_api_response_free().
  */
-void lc_api_response_free(LCAPIResponse *resp);
+int lc_api_handle(void *ctx,
+                  const ShApiRequest *req,
+                  ShApiResponse *resp);
 
 /* ============================================================================
  * Individual Handlers (for advanced use)

@@ -17,6 +17,7 @@
 #include "locus.h"
 #include "lc_serialize.h"
 #include "lc_mmap.h"
+#include "lc_api.h"
 #include <keel/keel.h>
 #include <stddef.h>
 #include <stdio.h>
@@ -80,6 +81,7 @@ static ShCorsConfig s_cors;
  * ============================================================================ */
 
 static LCIndex *g_index = NULL;
+static LCAPIContext *g_api_ctx = NULL;
 
 /* Rate limiter instance (uses shared library) */
 static ShRateLimiter *s_rate_limiter = NULL;
@@ -95,34 +97,9 @@ static ShKeelAsyncStats s_qstats;
 /* Adaptive capacity tracker (uses shared library) */
 static ShAdaptiveTracker *s_adaptive_tracker = NULL;
 
-/* Geocode work item - passed through the work queue */
-typedef enum {
-    GEO_TYPE_SEARCH,
-    GEO_TYPE_AUTOCOMPLETE,
-    GEO_TYPE_REVERSE
-} GeoWorkType;
-
 typedef struct {
     ShKeelAsync async;   /* server, pool, cors, timeout, stats */
 } AppCtx;
-
-/*
- * One geocode request. The async plumbing that used to surround this --
- * KlAsyncOp, the connection, the detached flag -- now lives in
- * sh_keel_async_dispatch(); see shared/src/sh_keelasync.c.
- */
-typedef struct {
-    GeoWorkType type;
-    char query[256];
-    int limit;
-    SHCoord coord;  /* For reverse geocoding */
-
-    /* Response buffer (set by the worker) */
-    char *response_json;
-    size_t response_len;
-    int status_code;
-    char error_msg[128];
-} GeoCtx;
 
 /* JSON building is handled by sh_json.h (ShJsonWriter + ShJsonBuf) */
 
@@ -214,353 +191,40 @@ static void record_metrics(ShMetricsTimer timer, const char *endpoint) {
     sh_metrics_timer_observe(timer, "http_request_duration_ms", endpoint, NULL);
 }
 
-static void process_search(GeoCtx *item) {
-    if (!g_index) {
-        item->status_code = 503;
-        snprintf(item->error_msg, sizeof(item->error_msg), "Index not loaded");
-        return;
-    }
-
-    /* Perform search */
-    LCSearchOptions opts;
-    lc_search_options_default(&opts);
-    opts.limit = item->limit;
-    if (opts.limit <= 0) opts.limit = 10;
-    if (opts.limit > 100) opts.limit = 100;
-
-    LCSearchResult result;
-    struct timeval start, end;
-    gettimeofday(&start, NULL);
-    LCStatus status = lc_search(g_index, item->query, &opts, &result);
-    gettimeofday(&end, NULL);
-    double took_ms = (end.tv_sec - start.tv_sec) * 1000.0 +
-                     (end.tv_usec - start.tv_usec) / 1000.0;
-
-    if (status != LC_OK) {
-        item->status_code = 500;
-        snprintf(item->error_msg, sizeof(item->error_msg),
-                 "Search failed: %s", lc_status_string(status));
-        return;
-    }
-
-    /* Build JSON response using streaming writer */
-    ShJsonBuf jb;
-    sh_json_buf_init(&jb);
-
-    ShJsonWriter jw;
-    sh_json_writer_init(&jw, sh_json_buf_write, &jb);
-
-    sh_json_write_object_start(&jw);
-    sh_json_write_key(&jw, "query");
-    sh_json_write_string(&jw, item->query);
-    sh_json_write_key(&jw, "total");
-    sh_json_write_int(&jw, (int64_t)result.total_matches);
-    sh_json_write_key(&jw, "took_ms");
-    sh_json_write_double(&jw, took_ms);
-    sh_json_write_key(&jw, "results");
-    sh_json_write_array_start(&jw);
-
-    for (size_t i = 0; i < result.num_results; i++) {
-        uint32_t eid = result.matches[i].entity_id;
-        const char *name = NULL;
-        const char *osm_type = "node";
-        uint64_t osm_id = 0;
-        const char *fclass_str = "unknown";
-        double lat = 0, lon = 0;
-
-        if (g_index->mmap_idx) {
-            /* v4 mmap path */
-            name = lc_mmap_entity_name(g_index->mmap_idx, eid);
-
-            LCEntityType type = lc_mmap_entity_type(g_index->mmap_idx, eid);
-            if (type == LC_ENTITY_WAY) osm_type = "way";
-            else if (type == LC_ENTITY_RELATION) osm_type = "relation";
-
-            osm_id = lc_mmap_entity_osm_id(g_index->mmap_idx, eid);
-            fclass_str = lc_class_string(lc_mmap_entity_fclass(g_index->mmap_idx, eid));
-            SHCoord c = lc_mmap_entity_centroid(g_index->mmap_idx, eid);
-            lat = c.lat;
-            lon = c.lon;
-        } else {
-            /* Entity store path */
-            const LCEntity *e = lc_search_get_entity(g_index, &result.matches[i]);
-            if (!e) continue;
-
-            name = e->name;
-            if (e->type == LC_ENTITY_WAY) osm_type = "way";
-            else if (e->type == LC_ENTITY_RELATION) osm_type = "relation";
-
-            osm_id = e->osm_id;
-            fclass_str = lc_class_string(e->fclass);
-            lat = e->centroid.lat;
-            lon = e->centroid.lon;
-        }
-
-        sh_json_write_object_start(&jw);
-        sh_json_write_key(&jw, "osm_id");
-        sh_json_write_int(&jw, (int64_t)osm_id);
-        sh_json_write_key(&jw, "osm_type");
-        sh_json_write_string(&jw, osm_type);
-        sh_json_write_key(&jw, "name");
-        sh_json_write_string(&jw, name ? name : "");
-        sh_json_write_key(&jw, "class");
-        sh_json_write_string(&jw, fclass_str);
-        sh_json_write_key(&jw, "lat");
-        sh_json_write_double(&jw, lat);
-        sh_json_write_key(&jw, "lon");
-        sh_json_write_double(&jw, lon);
-        sh_json_write_key(&jw, "score");
-        sh_json_write_double(&jw, result.matches[i].score);
-        sh_json_write_object_end(&jw);
-    }
-
-    sh_json_write_array_end(&jw);
-    sh_json_write_object_end(&jw);
-
-    lc_search_result_free(&result);
-
-    if (jw.error) {
-        sh_json_buf_free(&jb);
-        item->status_code = 500;
-        snprintf(item->error_msg, sizeof(item->error_msg), "JSON write error");
-        return;
-    }
-
-    item->response_len = jb.len;
-    item->response_json = sh_json_buf_take(&jb);
-    item->status_code = 200;
-}
-
-/* Process an autocomplete request */
-static void process_autocomplete(GeoCtx *item) {
-    if (!g_index) {
-        item->status_code = 503;
-        snprintf(item->error_msg, sizeof(item->error_msg), "Index not loaded");
-        return;
-    }
-
-    int limit = item->limit;
-    if (limit <= 0) limit = 10;
-    if (limit > 20) limit = 20;
-
-    LCSearchResult result;
-    lc_autocomplete(g_index, item->query, limit, &result);
-
-    /* Build simple suggestions array using streaming writer */
-    ShJsonBuf jb;
-    sh_json_buf_init(&jb);
-
-    ShJsonWriter jw;
-    sh_json_writer_init(&jw, sh_json_buf_write, &jb);
-
-    sh_json_write_array_start(&jw);
-
-    for (size_t i = 0; i < result.num_results; i++) {
-        const char *name = NULL;
-
-        if (g_index->mmap_idx) {
-            name = lc_mmap_entity_name(g_index->mmap_idx, result.matches[i].entity_id);
-        } else {
-            const LCEntity *e = lc_search_get_entity(g_index, &result.matches[i]);
-            if (e) name = e->name;
-        }
-
-        if (!name) continue;
-
-        sh_json_write_string(&jw, name);
-    }
-
-    sh_json_write_array_end(&jw);
-
-    lc_search_result_free(&result);
-
-    if (jw.error) {
-        sh_json_buf_free(&jb);
-        item->status_code = 500;
-        snprintf(item->error_msg, sizeof(item->error_msg), "JSON write error");
-        return;
-    }
-
-    item->response_len = jb.len;
-    item->response_json = sh_json_buf_take(&jb);
-    item->status_code = 200;
-}
-
-/* Process a reverse geocode request */
-static void process_reverse(GeoCtx *item) {
-    if (!g_index) {
-        item->status_code = 503;
-        snprintf(item->error_msg, sizeof(item->error_msg), "Index not loaded");
-        return;
-    }
-
-    LCReverseResult result;
-    LCStatus status = lc_reverse(g_index, item->coord, NULL, &result);
-
-    if (status != LC_OK) {
-        item->status_code = 500;
-        snprintf(item->error_msg, sizeof(item->error_msg), "Reverse geocoding failed");
-        return;
-    }
-
-    char address[512] = "";
-    lc_format_address(&result, address, sizeof(address));
-
-    /* Build JSON response using streaming writer */
-    ShJsonBuf jb;
-    sh_json_buf_init(&jb);
-
-    ShJsonWriter jw;
-    sh_json_writer_init(&jw, sh_json_buf_write, &jb);
-
-    sh_json_write_object_start(&jw);
-    sh_json_write_key(&jw, "lat");
-    sh_json_write_double(&jw, item->coord.lat);
-    sh_json_write_key(&jw, "lon");
-    sh_json_write_double(&jw, item->coord.lon);
-    sh_json_write_key(&jw, "display_name");
-    sh_json_write_string(&jw, address);
-    sh_json_write_key(&jw, "distance_m");
-    sh_json_write_double(&jw, result.distance_m);
-
-    if (result.place && result.place->name) {
-        sh_json_write_key(&jw, "place");
-        sh_json_write_string(&jw, result.place->name);
-    }
-
-    if (result.street && result.street->name) {
-        sh_json_write_key(&jw, "street");
-        sh_json_write_string(&jw, result.street->name);
-    }
-
-    sh_json_write_object_end(&jw);
-
-    lc_reverse_result_free(&result);
-
-    if (jw.error) {
-        sh_json_buf_free(&jb);
-        item->status_code = 500;
-        snprintf(item->error_msg, sizeof(item->error_msg), "JSON write error");
-        return;
-    }
-
-    item->response_len = jb.len;
-    item->response_json = sh_json_buf_take(&jb);
-    item->status_code = 200;
-}
-
-/* Geocode worker callback function (called by ShWorkerPool) */
-/* Worker thread: run the geocode. Touches only this context. */
 /*
- * The geocode handler, as a plain ShApiHandler.
+ * The geocode handler is lc_api_handle() in liblocus. This wrapper adds the
+ * one thing that is genuinely the server's job and not the library's: the
+ * adaptive-capacity feedback that retunes this server's rate limiter.
  *
- * Routing and query parsing live here rather than in the transport, which is
- * the whole point of the shared interface: this function is callable from
- * Keel, from the in-process transport, or directly, and knows about none of
- * them. The three process_* functions above are unchanged.
+ * What used to be here was a second implementation of lc_api_handle -- its
+ * own routing, its own query parsing, its own JSON building (GeoCtx,
+ * process_search, process_autocomplete, process_reverse). A third lived in
+ * wasm/src/lc_wasm_api.c. Three copies of five endpoints, and they disagreed:
+ * see docs/roadmaps/transport.md for the table.
  */
-static int locus_api_handler(void *unused, const ShApiRequest *req,
-                             ShApiResponse *resp) {
-    GeoCtx item;
-    (void)unused;
+static int locus_metered_handler(void *ctx, const ShApiRequest *req,
+                                 ShApiResponse *resp)
+{
+    struct timeval t0, t1;
+    int rc;
 
-    memset(&item, 0, sizeof(item));
-    item.status_code = 500;
+    gettimeofday(&t0, NULL);
+    rc = lc_api_handle(ctx, req, resp);
+    gettimeofday(&t1, NULL);
 
-    if (!g_index) {
-        return sh_api_response_error(resp, 503, "Index not loaded");
-    }
-    if (!req->path) {
-        return sh_api_response_error(resp, 400, "Missing path");
-    }
-
-    /* Route. */
-    if (strcmp(req->path, "/api/v1/search") == 0) {
-        item.type = GEO_TYPE_SEARCH;
-    } else if (strcmp(req->path, "/api/v1/autocomplete") == 0) {
-        item.type = GEO_TYPE_AUTOCOMPLETE;
-    } else if (strcmp(req->path, "/api/v1/reverse") == 0) {
-        item.type = GEO_TYPE_REVERSE;
-    } else {
-        return sh_api_response_error(resp, 404, "Not found");
-    }
-
-    /* Parse. */
-    {
-        const char *q = req->query ? req->query : "";
-        char limit_str[16] = "10";
-
-        if (item.type == GEO_TYPE_REVERSE) {
-            char lat_str[32] = "", lon_str[32] = "";
-            sh_query_get_str(q, "lat", lat_str, sizeof(lat_str));
-            sh_query_get_str(q, "lon", lon_str, sizeof(lon_str));
-            if (lat_str[0] == '\0' || lon_str[0] == '\0') {
-                return sh_api_response_error(resp, 400,
-                                             "Missing 'lat' or 'lon' parameter");
-            }
-            item.coord.lat = atof(lat_str);
-            item.coord.lon = atof(lon_str);
-            if (item.coord.lat < -90.0 || item.coord.lat > 90.0 ||
-                item.coord.lon < -180.0 || item.coord.lon > 180.0) {
-                return sh_api_response_error(resp, 400, "Invalid coordinates");
-            }
-        } else {
-            sh_query_get_str(q, "q", item.query, sizeof(item.query));
-            if (item.query[0] == '\0') {
-                return sh_api_response_error(resp, 400, "Missing 'q' parameter");
-            }
-        }
-
-        sh_query_get_str(q, "limit", limit_str, sizeof(limit_str));
-        item.limit = sh_parse_int(limit_str, 10, 1, 100);
-    }
-
-    /* Work. */
-    {
-        struct timeval t0, t1;
-        gettimeofday(&t0, NULL);
-
-        switch (item.type) {
-            case GEO_TYPE_SEARCH:       process_search(&item); break;
-            case GEO_TYPE_AUTOCOMPLETE: process_autocomplete(&item); break;
-            case GEO_TYPE_REVERSE:      process_reverse(&item); break;
-        }
-
-        gettimeofday(&t1, NULL);
-        {
-            double ms = (t1.tv_sec - t0.tv_sec) * 1000.0 +
-                        (t1.tv_usec - t0.tv_usec) / 1000.0;
-            if (s_adaptive_tracker) {
-                ShCapacityParams np;
-                sh_adaptive_record(s_adaptive_tracker, ms);
-                if (sh_adaptive_update(s_adaptive_tracker, &np) && s_rate_limiter) {
-                    sh_ratelimit_update_rate(s_rate_limiter,
-                                             np.rate_limit_rps,
-                                             np.rate_limit_burst);
-                }
-            }
+    if (s_adaptive_tracker) {
+        ShCapacityParams np;
+        double ms = (t1.tv_sec - t0.tv_sec) * 1000.0 +
+                    (t1.tv_usec - t0.tv_usec) / 1000.0;
+        sh_adaptive_record(s_adaptive_tracker, ms);
+        if (sh_adaptive_update(s_adaptive_tracker, &np) && s_rate_limiter) {
+            sh_ratelimit_update_rate(s_rate_limiter,
+                                     np.rate_limit_rps,
+                                     np.rate_limit_burst);
         }
     }
 
-    /* Reply. */
-    if (item.status_code != 200) {
-        free(item.response_json);
-        return sh_api_response_error(resp, item.status_code,
-                                     item.error_msg[0] ? item.error_msg
-                                                       : "Geocode failed");
-    }
-
-    memset(resp, 0, sizeof(*resp));
-    resp->status_code = 200;
-    resp->content_type = "application/json";
-    if (item.response_json && item.response_len > 0) {
-        resp->body = (uint8_t *)item.response_json;   /* ownership moves */
-        resp->body_len = item.response_len;
-    } else {
-        free(item.response_json);
-        return sh_api_response_set(resp, 200, "application/json", "{}", 2);
-    }
-    return 0;
+    return rc;
 }
 
 
@@ -711,8 +375,8 @@ static void handle_geocode(KlHttpRequest *req, KlHttpResponse *res, void *ud,
     api_req.path   = path;
     api_req.query  = query_buf;
 
-    sh_keel_async_dispatch(&app->async, req, res, locus_api_handler, NULL,
-                           &api_req);
+    sh_keel_async_dispatch(&app->async, req, res, locus_metered_handler,
+                           g_api_ctx, &api_req);
 
     record_metrics(timer, endpoint);
     sh_trace_clear();
@@ -937,6 +601,21 @@ int main(int argc, char *argv[]) {
             (double)lc_index_memory_usage(g_index) / (1024.0 * 1024.0),
             load_time);
 
+    /* The handler runs against this, on pool workers. It is created before
+     * the listener opens and freed after the loop stops, so its lifetime
+     * strictly contains every request. */
+    {
+        LCAPIConfig api_cfg;
+        lc_api_config_init(&api_cfg);
+        api_cfg.name = "locus-geocoder";
+        g_api_ctx = lc_api_create(g_index, &api_cfg);
+        if (!g_api_ctx) {
+            fprintf(stderr, "Error: Failed to create API context\n");
+            lc_index_free(g_index);
+            return 1;
+        }
+    }
+
     /* Initialize rate limiter (uses shared library) */
     if (s_config.server.rate_limit_enabled) {
         s_rate_limiter = sh_ratelimit_create(s_config.server.rate_limit_rps,
@@ -1009,6 +688,7 @@ int main(int argc, char *argv[]) {
                 s_config.server.host, s_config.server.port);
         sh_ratelimit_free(s_rate_limiter);
         sh_adaptive_free(s_adaptive_tracker);
+        lc_api_free(g_api_ctx);
         lc_index_free(g_index);
         return 1;
     }
@@ -1086,6 +766,7 @@ int main(int argc, char *argv[]) {
     /* Cleanup */
     sh_ratelimit_free(s_rate_limiter);
     sh_adaptive_free(s_adaptive_tracker);
+    lc_api_free(g_api_ctx);
     lc_index_free(g_index);
 
     SH_LOG_INFO("Server shutdown complete");

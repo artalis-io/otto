@@ -50,6 +50,26 @@ size_t sh_query_get_str(const char *query, const char *key,
                         char *buf, size_t buf_size);
 
 /*
+ * Get string parameter from query string, percent-decoded.
+ *
+ * As sh_query_get_str(), but "%XX" becomes the byte it names and '+' becomes
+ * a space, which is what a browser sends for a text field. A '%' that is not
+ * followed by two hex digits is passed through as a literal '%', so malformed
+ * input degrades rather than truncating the value.
+ *
+ * Use this for free text a user typed -- a geocoder query, a place name.
+ * Numeric parameters have nothing to decode and should use the plain form.
+ *
+ * @param query    Query string
+ * @param key      Parameter name to find
+ * @param buf      Buffer to store the decoded value
+ * @param buf_size Size of buffer
+ * @return Number of bytes written (excluding null), or 0 if not found
+ */
+size_t sh_query_get_str_decoded(const char *query, const char *key,
+                                char *buf, size_t buf_size);
+
+/*
  * Check if parameter exists in query string.
  *
  * @param query Query string
