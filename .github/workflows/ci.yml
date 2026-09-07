@@ -72,6 +72,39 @@ jobs:
           make locus
           make test-locus
 
+  # TEMPORARY: what is actually broken in test-c? It is a sequential job that
+  # stops at the first failure, so everything after FuelWise has never run.
+  testc-survey:
+    name: test-c survey (temporary)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential libomp-dev glpk-utils
+      - name: Survey each suite independently
+        run: |
+          rc=0
+          run_one() {
+            echo "::group::$1"
+            if timeout 900 make "$1" > "/tmp/$1.log" 2>&1; then
+              echo "RESULT $1: PASS"
+            else
+              echo "RESULT $1: FAIL"
+              grep -E "FAIL|Tests passed|Error [0-9]" "/tmp/$1.log" | tail -8
+            fi
+            echo "::endgroup::"
+          }
+          make shared > /tmp/build.log 2>&1 || true
+          for t in test-shared test-arbor test-ralph test-fuelwise test-velo test-carta test-locus test-surge; do
+            run_one "$t"
+          done
+          echo "=== SUMMARY ==="
+          grep -h "^RESULT" /dev/null 2>/dev/null || true
+
   # ==========================================================================
   # Arbor + Surge (Keel-backed API)
   #
