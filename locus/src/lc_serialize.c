@@ -52,9 +52,9 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include "sh_pal.h"
 #include <fcntl.h>
 #include <unistd.h>
-#include <sys/mman.h>
 #include <sys/stat.h>
 #include <math.h>
 
@@ -870,7 +870,9 @@ static size_t mmap_grid_query_point(const MmapGrid *mg, SHCoord coord,
 typedef struct {
     void *map_base;
     size_t map_size;
-    int fd;
+    int fd;   /* kept: LCMmapContextBase in lc_index.c casts onto this
+               * layout. Always -1 now -- sh_map_file_readonly() closes
+               * the descriptor when it maps. */
     MmapTrie trie;
     MmapGrid grid;
 } LCMmapContextV3;
@@ -879,7 +881,7 @@ typedef struct {
  * Load Index via mmap (v4 - zero-copy)
  * ============================================================================ */
 
-static LCIndex *lc_index_mmap_v4(const char *path, void *map, size_t file_size, int fd)
+static LCIndex *lc_index_mmap_v4(const char *path, void *map, size_t file_size)
 {
     (void)path;  /* Reserved for future use (error messages) */
     const LCBinaryHeaderV4 *header = (const LCBinaryHeaderV4 *)map;
@@ -888,14 +890,14 @@ static LCIndex *lc_index_mmap_v4(const char *path, void *map, size_t file_size, 
     /* Allocate mmap index */
     LCMmapIndex *mmap_idx = calloc(1, sizeof(LCMmapIndex));
     if (!mmap_idx) {
-        munmap(map, file_size);
-        close(fd);
+        sh_unmap_ptr(map, file_size);
         return NULL;
     }
 
     mmap_idx->map_base = map;
     mmap_idx->map_size = file_size;
-    mmap_idx->fd = fd;
+    mmap_idx->owns_map = 1;
+    mmap_idx->fd = -1;   /* sh_map_file_readonly closed it */
     mmap_idx->header = header;
 
     /* Set up direct pointers into mmap'd memory */
@@ -915,8 +917,7 @@ static LCIndex *lc_index_mmap_v4(const char *path, void *map, size_t file_size, 
     LCIndex *index = calloc(1, sizeof(LCIndex));
     if (!index) {
         free(mmap_idx);
-        munmap(map, file_size);
-        close(fd);
+        sh_unmap_ptr(map, file_size);
         return NULL;
     }
 
@@ -962,7 +963,8 @@ LCIndex *lc_index_load_memory(const uint8_t *data, size_t len)
 
     mmap_idx->map_base = (void *)data;  /* Point to embedded data */
     mmap_idx->map_size = len;
-    mmap_idx->fd = -1;  /* -1 indicates memory-based, don't munmap/close */
+    mmap_idx->owns_map = 0;   /* caller owns the buffer */
+    mmap_idx->fd = -1;
     mmap_idx->header = header;
 
     /* Set up direct pointers into memory */
@@ -1005,7 +1007,7 @@ LCIndex *lc_index_load_memory(const uint8_t *data, size_t len)
  * Load Index via mmap (v3 - with entity store repopulation)
  * ============================================================================ */
 
-static LCIndex *lc_index_mmap_v3(const char *path, void *map, size_t file_size, int fd)
+static LCIndex *lc_index_mmap_v3(const char *path, void *map, size_t file_size)
 {
     (void)path;  /* Reserved for future use (error messages) */
     const LCBinaryHeaderV3 *header = (const LCBinaryHeaderV3 *)map;
@@ -1079,7 +1081,7 @@ static LCIndex *lc_index_mmap_v3(const char *path, void *map, size_t file_size, 
 
     ctx->map_base = map;
     ctx->map_size = file_size;
-    ctx->fd = fd;
+    ctx->fd = -1;   /* sh_map_file_readonly closed it */
 
     /* Setup mmap'd trie */
     ctx->trie.nodes = trie_nodes;
@@ -1152,8 +1154,7 @@ error_store:
     free(store->entities);
     free(store);
 error:
-    munmap(map, file_size);
-    close(fd);
+    sh_unmap_ptr(map, file_size);
     return NULL;
 }
 
@@ -1165,29 +1166,22 @@ LCIndex *lc_index_mmap(const char *path)
 {
     if (!path) return NULL;
 
-    int fd = open(path, O_RDONLY);
-    if (fd < 0) return NULL;
+    /* One PAL call replaces open/fstat/mmap: the descriptor handling was
+     * only ever there to reach mmap, and the mapping keeps its own
+     * reference to the file. */
+    ShFileMap fm;
+    if (sh_map_file_readonly(path, &fm) != 0) return NULL;
 
-    struct stat st;
-    if (fstat(fd, &st) < 0) {
-        close(fd);
-        return NULL;
-    }
+    void *map = fm.data;
+    size_t file_size = fm.size;
 
-    size_t file_size = (size_t)st.st_size;
-    void *map = mmap(NULL, file_size, PROT_READ, MAP_PRIVATE, fd, 0);
-    if (map == MAP_FAILED) {
-        close(fd);
-        return NULL;
-    }
+    sh_map_advise_sequential(&fm);
 
-    madvise(map, file_size, MADV_SEQUENTIAL);
 
     /* Check magic and version */
     const uint32_t *magic_ptr = (const uint32_t *)map;
     if (*magic_ptr != LC_BINARY_MAGIC) {
-        munmap(map, file_size);
-        close(fd);
+        sh_unmap_ptr(map, file_size);
         return NULL;
     }
 
@@ -1195,13 +1189,12 @@ LCIndex *lc_index_mmap(const char *path)
 
     /* Handle by version */
     if (version >= LC_BINARY_VERSION_V4) {
-        return lc_index_mmap_v4(path, map, file_size, fd);
+        return lc_index_mmap_v4(path, map, file_size);
     } else if (version >= LC_BINARY_VERSION_V3) {
-        return lc_index_mmap_v3(path, map, file_size, fd);
+        return lc_index_mmap_v3(path, map, file_size);
     } else {
         /* v1/v2 - fall back to old loader */
-        munmap(map, file_size);
-        close(fd);
+        sh_unmap_ptr(map, file_size);
         return lc_index_load(path);
     }
 }

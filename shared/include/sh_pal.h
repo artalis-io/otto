@@ -190,6 +190,53 @@ int sh_pal_random_bytes(void *buf, size_t len);
 int sh_pal_mkdir(const char *path);
 
 /* ============================================================================
+ * Read-only file mapping
+ * ============================================================================ */
+
+/*
+ * A mapped file.
+ *
+ * Only the base pointer and length are needed to unmap on either platform:
+ * POSIX takes both, and a Windows view stays valid after its file and mapping
+ * handles are closed, so nothing else has to be kept alive.
+ */
+typedef struct {
+    void  *data;   /* mapped bytes; NULL when nothing is mapped */
+    size_t size;   /* bytes mapped */
+} ShFileMap;
+
+/*
+ * Map an entire file read-only.
+ *
+ * Returns 0 on success with `out` filled in, -1 on failure with `out` zeroed.
+ * Mapping an empty file fails: a zero-length mapping is an error on Windows
+ * and useless everywhere, so callers get one consistent answer.
+ */
+int sh_map_file_readonly(const char *path, ShFileMap *out);
+
+/* Release a mapping. Safe on NULL and on an already-released map. */
+void sh_unmap_file(ShFileMap *map);
+
+/*
+ * Release a mapping given its base pointer and length.
+ *
+ * For callers that store those two fields inside their own struct rather
+ * than an ShFileMap -- which is most of them, and not worth restructuring
+ * their public types over. Safe on NULL.
+ */
+void sh_unmap_ptr(void *data, size_t size);
+
+/*
+ * Hint that access will be sequential.
+ *
+ * Advisory and best-effort: madvise(MADV_SEQUENTIAL) on POSIX, and nothing at
+ * all on Windows, whose prefetch API has a different shape and is not worth
+ * the complexity for a hint. Never fails, because no caller should branch on
+ * whether a hint was taken.
+ */
+void sh_map_advise_sequential(const ShFileMap *map);
+
+/* ============================================================================
  * CPU
  * ============================================================================ */
 

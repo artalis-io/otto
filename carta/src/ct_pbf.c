@@ -18,11 +18,11 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include "sh_pal.h"
 #include <stdint.h>
 #include <math.h>
 
 #ifndef _WIN32
-#include <sys/mman.h>
 #include <sys/stat.h>
 #include <fcntl.h>
 #include <unistd.h>
@@ -847,7 +847,7 @@ void ct_pbf_context_free(CTPBFContext *ctx)
         }
 
         /* Unmap the file */
-        munmap(ctx->mmap_base, ctx->mmap_size);
+        sh_unmap_ptr(ctx->mmap_base, ctx->mmap_size);
         ctx->mmap_base = NULL;
     } else {
         /* Normal context - free everything */
@@ -1952,22 +1952,14 @@ CTStatus ct_pbf_parse_file(CTPBFContext *ctx, const char *filename)
     free(data);
     return status;
 #else
-    int fd = open(filename, O_RDONLY);
-    if (fd < 0) return CT_ERROR_FILE_NOT_FOUND;
+    /* One PAL call replaces open/fstat/mmap: the descriptor handling was
+     * only ever there to reach mmap, and the mapping keeps its own
+     * reference to the file. */
+    ShFileMap fm;
+    if (sh_map_file_readonly(filename, &fm) != 0) return CT_ERROR_FILE_READ;
 
-    struct stat st;
-    if (fstat(fd, &st) < 0) {
-        close(fd);
-        return CT_ERROR_FILE_READ;
-    }
-
-    void *map = mmap(NULL, st.st_size, PROT_READ, MAP_PRIVATE, fd, 0);
-    close(fd);
-
-    if (map == MAP_FAILED) return CT_ERROR_FILE_READ;
-
-    CTStatus status = ct_pbf_parse_memory(ctx, map, st.st_size);
-    munmap(map, st.st_size);
+    CTStatus status = ct_pbf_parse_memory(ctx, fm.data, fm.size);
+    sh_unmap_file(&fm);
     return status;
 #endif
 }
