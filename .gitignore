@@ -9,6 +9,11 @@
 test_ralph
 test_fuelwise
 test_shared
+test_pal
+
+# Windows builds the same binaries with an .exe suffix, so every rule
+# above would otherwise miss them. Nothing tracked ends in .exe.
+*.exe
 test_velo
 test_carta
 test_font
