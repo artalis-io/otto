@@ -310,7 +310,13 @@ jobs:
   build-wasm:
     name: Build WASM
     runs-on: ubuntu-latest
-    needs: test-c
+    # Deliberately ungated. This is a build, not a test: it takes a fresh
+    # checkout, installs its own toolchain and runs `make wasm`, sharing no
+    # artifacts with test-c. Gating it behind the suites meant an unrelated
+    # test failure hid whether the WASM build itself still worked -- the same
+    # reason build-docker stopped depending on test-c. Now that test-c is a
+    # matrix, a `needs:` could not name individual suites anyway; it would
+    # block on all ten.
 
     steps:
       - name: Checkout code
