@@ -308,6 +308,42 @@ jobs:
         run: bash locus/api/test_api.sh
 
   # ==========================================================================
+  # Windows
+  #
+  # OTTO targets native Windows, but nothing here has ever built on it -- the
+  # POSIX calls scattered through the core libraries were only ever exercised
+  # on Linux. sh_pal.h is the fix; this job is what stops it rotting.
+  #
+  # Narrow on purpose. It builds and runs the PAL and nothing else, because
+  # the rest of shared/ does not compile on Windows yet: sh_fs.c calls mkdir
+  # with two arguments, and sh_pdf2struc*.c call memmem, neither of which
+  # exists there. Widening this job is the measure of Phase 4 progress.
+  # ==========================================================================
+  windows:
+    name: Windows PAL
+    runs-on: windows-latest
+
+    defaults:
+      run:
+        shell: msys2 {0}
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up MSYS2 + UCRT64 toolchain
+        uses: msys2/setup-msys2@v2
+        with:
+          msystem: UCRT64
+          update: false
+          install: >-
+            make
+            mingw-w64-ucrt-x86_64-gcc
+
+      - name: Build and run the PAL tests
+        run: make -C shared test-pal
+
+  # ==========================================================================
   # Sanitizers
   #
   # A c-audit of the Phase 1 transport code found two heap overflows and an
