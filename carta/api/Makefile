@@ -10,6 +10,14 @@ else
     RELRO_FLAGS =
 endif
 
+# Windows: Keel talks to winsock, and libshared reaches bcrypt through
+# sh_pal_random_bytes. iphlpapi comes with Keel's adapter enumeration.
+ifneq (,$(findstring MINGW,$(UNAME_S)))
+    PLATFORM_LIBS = -lws2_32 -lbcrypt -liphlpapi
+else
+    PLATFORM_LIBS =
+endif
+
 # Production build (with hardening)
 CFLAGS = -Wall -Wextra -O2 -std=c11 -D_POSIX_C_SOURCE=200809L \
          -fstack-protector-strong -D_FORTIFY_SOURCE=2 -fPIE -fno-common
@@ -41,7 +49,7 @@ INCLUDES = -I$(SRC_DIR) \
 # Libraries
 LIBS = -L$(CARTA_DIR) -lcarta \
        -L$(SHARED_DIR) -lshared \
-       -lm -lpthread
+       -lm -lpthread $(PLATFORM_LIBS)
 
 # miniz objects
 VENDOR_OBJS = $(VENDOR_DIR)/miniz/miniz.o \

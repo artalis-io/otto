@@ -233,10 +233,24 @@ static void test_runner_cancel_callback_and_line_cancel(void) {
 int main(void) {
     printf("=== LP External OOP Runner Tests ===\n");
 
+    /* The tempfile helpers are portable and run everywhere. */
     test_tempfile_helpers();
+
+#ifdef _WIN32
+    /*
+     * SKIPPED, not passed: lp_external_oop_run() has no Windows
+     * implementation yet. The POSIX version is fork + execvp over a
+     * non-blocking pipe; the Windows equivalent needs CreateProcess and
+     * PeekNamedPipe, which is a feature port rather than a portability
+     * fix. Running these here would report nine failures for a feature
+     * that is deliberately absent, so say so instead.
+     */
+    printf("  SKIP: runner tests -- unimplemented on Windows\n");
+#else
     test_runner_exit_and_line_capture();
     test_runner_timeout();
     test_runner_cancel_callback_and_line_cancel();
+#endif
 
     printf("Passed %d/%d tests\n", tests_passed, tests_run);
     return (tests_run == tests_passed) ? 0 : 1;

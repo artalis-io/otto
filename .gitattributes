@@ -1,0 +1,20 @@
+# Line endings
+#
+# Makefiles must never reach the working tree with CRLF. make does not strip a
+# carriage return, so a CRLF Makefile hands the linker "-lpthread\r" -- a
+# library that does not exist. The error reads "cannot find -lpthread", because
+# a CR is invisible in a terminal, and re-running the printed command by hand
+# appears to succeed, because copying it through a shell drops the CR. That is
+# a genuinely expensive hour, and it has already cost one.
+#
+# eol=lf pins the WORKING TREE, not just the blob, so core.autocrlf=true on a
+# Windows checkout cannot reintroduce it. Shell scripts are here for the same
+# reason: a CR after the shebang makes the interpreter unfindable.
+Makefile        text eol=lf
+*.mk            text eol=lf
+*.sh            text eol=lf
+
+# C sources are LF everywhere for diff hygiene rather than correctness -- a
+# CRLF .c file compiles fine, but it rewrites the whole file in every diff.
+*.c             text eol=lf
+*.h             text eol=lf
