@@ -35,7 +35,7 @@ INCLUDES = -I../include -I../../shared/include -I$(KEEL_DIR)/include -I../../ven
 SHARED_DIR = ../../shared
 
 # Library paths (no OpenMP - build velo with NOMP=1 for compatibility)
-LDFLAGS = -L.. -lvelo -L$(SHARED_DIR) -lshared -lm -lpthread $(PLATFORM_LIBS)
+LDFLAGS = -L.. -lvelo -L$(SHARED_DIR) -lshared -lm -lpthread $(PLATFORM_LIBS)
 
 # Source files (polyline.c moved to shared library)
 SRCS = src/main.c

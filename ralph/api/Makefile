@@ -42,7 +42,7 @@ else
 endif
 
 # Library paths (link shared library for arena allocator)
-LDFLAGS = -L.. -lralph -L$(SHARED_DIR) -lshared $(OPENMP_LDFLAGS) -lm -lpthread $(PLATFORM_LIBS)
+LDFLAGS = -L.. -lralph -L$(SHARED_DIR) -lshared $(OPENMP_LDFLAGS) -lm -lpthread $(PLATFORM_LIBS)
 
 # Source files
 SRCS = src/main.c
