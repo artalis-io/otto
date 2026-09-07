@@ -14,6 +14,8 @@
 
 #include <errno.h>
 #include <stdio.h>
+#include <fcntl.h>
+#include <sys/mman.h>
 #include <sys/stat.h>
 #include <pthread.h>
 #include <string.h>
@@ -264,6 +266,65 @@ int sh_pal_mkdir(const char *path)
     if (!path || !path[0]) return -1;
     if (mkdir(path, 0755) == 0) return 0;
     return errno == EEXIST ? 0 : -1;
+}
+
+
+/* --------------------------------------------------------- File mapping */
+
+int sh_map_file_readonly(const char *path, ShFileMap *out)
+{
+    int fd;
+    struct stat st;
+    void *data;
+
+    if (!out) return -1;
+    out->data = NULL;
+    out->size = 0;
+    if (!path || !path[0]) return -1;
+
+    fd = open(path, O_RDONLY);
+    if (fd < 0) return -1;
+
+    if (fstat(fd, &st) != 0 || st.st_size <= 0) {
+        close(fd);
+        return -1;
+    }
+
+    data = mmap(NULL, (size_t)st.st_size, PROT_READ, MAP_PRIVATE, fd, 0);
+    /* The mapping keeps its own reference to the file, so the descriptor is
+     * not needed once mmap has returned. */
+    close(fd);
+    if (data == MAP_FAILED) return -1;
+
+    out->data = data;
+    out->size = (size_t)st.st_size;
+    return 0;
+}
+
+void sh_unmap_file(ShFileMap *map)
+{
+    if (!map || !map->data) return;
+    (void)munmap(map->data, map->size);
+    map->data = NULL;
+    map->size = 0;
+}
+
+void sh_map_advise_sequential(const ShFileMap *map)
+{
+    if (!map || !map->data) return;
+#if defined(MADV_SEQUENTIAL)
+    (void)madvise(map->data, map->size, MADV_SEQUENTIAL);
+#endif
+}
+
+
+void sh_unmap_ptr(void *data, size_t size)
+{
+    ShFileMap m;
+    if (!data) return;
+    m.data = data;
+    m.size = size;
+    sh_unmap_file(&m);
 }
 
 #else

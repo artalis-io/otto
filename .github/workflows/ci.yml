@@ -314,13 +314,12 @@ jobs:
   # This job is what stops that rotting: a PAL only ever compiled on Linux is
   # a PAL nobody notices breaking.
   #
-  # Now covers the whole of shared/ -- 47 files, every test -- after seven
-  # blockers were routed through the PAL or replaced with portable code. It
-  # widens again as velo/carta/locus become buildable, which needs the file
-  # mapping half of Phase 4.
+  # Now covers shared/, velo/, carta/ and locus/ -- every core library that
+  # has a test suite. Ralph and the API servers are what is left: Ralph needs
+  # its own sweep, and the servers need Keel built on Windows too.
   # ==========================================================================
   windows:
-    name: Windows Shared
+    name: Windows Core
     runs-on: windows-latest
 
     defaults:
@@ -345,6 +344,15 @@ jobs:
 
       - name: Build and test all of shared
         run: make -C shared test
+
+      - name: Build and test Velo
+        run: make -C velo test
+
+      - name: Build and test Carta
+        run: make -C carta test
+
+      - name: Build and test Locus
+        run: make -C locus test
 
   # ==========================================================================
   # Sanitizers

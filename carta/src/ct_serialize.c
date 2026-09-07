@@ -66,9 +66,9 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include "sh_pal.h"
 #include <fcntl.h>
 #include <unistd.h>
-#include <sys/mman.h>
 #include <sys/stat.h>
 
 #define NULL_OFFSET 0xFFFFFFFF
@@ -624,26 +624,19 @@ CTStatus ct_index_save(const CTPBFContext *ctx, const char *path) {
 CTPBFContext *ct_index_mmap(const char *path) {
     if (!path) return NULL;
 
-    int fd = open(path, O_RDONLY);
-    if (fd < 0) return NULL;
+    /* One PAL call replaces open/fstat/mmap: the descriptor handling was
+     * only ever there to reach mmap, and the mapping keeps its own
+     * reference to the file. */
+    ShFileMap fm;
+    if (sh_map_file_readonly(path, &fm) != 0) return NULL;
 
-    struct stat st;
-    if (fstat(fd, &st) < 0) {
-        close(fd);
-        return NULL;
-    }
-
-    size_t file_size = (size_t)st.st_size;
-
-    void *map = mmap(NULL, file_size, PROT_READ, MAP_PRIVATE, fd, 0);
-    close(fd);
-
-    if (map == MAP_FAILED) return NULL;
+    void *map = fm.data;
+    size_t file_size = fm.size;
 
     /* Validate header */
     const CTBinaryHeader *header = (const CTBinaryHeader *)map;
     if (header->magic != CT_BINARY_MAGIC) {
-        munmap(map, file_size);
+        sh_unmap_ptr(map, file_size);
         return NULL;
     }
 
@@ -651,7 +644,7 @@ CTPBFContext *ct_index_mmap(const char *path) {
     if (header->version != CT_BINARY_VERSION && header->version != 4 && header->version != 3) {
         fprintf(stderr, "Error: Unsupported index version %u (expected %d, 4, or 3)\n",
                 header->version, CT_BINARY_VERSION);
-        munmap(map, file_size);
+        sh_unmap_ptr(map, file_size);
         return NULL;
     }
 
@@ -661,11 +654,11 @@ CTPBFContext *ct_index_mmap(const char *path) {
 
 #define VALIDATE_SECTION(off, count, elem_size) do { \
     if ((count) > 0) { \
-        if ((size_t)(count) > SIZE_MAX / (elem_size)) { munmap(map, file_size); return NULL; } \
+        if ((size_t)(count) > SIZE_MAX / (elem_size)) { sh_unmap_ptr(map, file_size); return NULL; } \
         size_t section_end = (off) + (size_t)(count) * (elem_size); \
         if (section_end < (off) || section_end > file_size) { \
             fprintf(stderr, "Error: Index file truncated\n"); \
-            munmap(map, file_size); return NULL; \
+            sh_unmap_ptr(map, file_size); return NULL; \
         } \
     } \
 } while(0)
@@ -694,7 +687,7 @@ CTPBFContext *ct_index_mmap(const char *path) {
     /* Create context */
     CTPBFContext *ctx = calloc(1, sizeof(CTPBFContext));
     if (!ctx) {
-        munmap(map, file_size);
+        sh_unmap_ptr(map, file_size);
         return NULL;
     }
 
@@ -724,7 +717,7 @@ CTPBFContext *ct_index_mmap(const char *path) {
     ctx->ways = header->num_ways > 0 ? calloc(header->num_ways, sizeof(CTOSMWay)) : NULL;
     if (!ctx->ways && header->num_ways > 0) {
         free(ctx);
-        munmap(map, file_size);
+        sh_unmap_ptr(map, file_size);
         return NULL;
     }
 
@@ -733,7 +726,7 @@ CTPBFContext *ct_index_mmap(const char *path) {
     if (!all_coords && header->total_coords > 0) {
         free(ctx->ways);
         free(ctx);
-        munmap(map, file_size);
+        sh_unmap_ptr(map, file_size);
         return NULL;
     }
     size_t coord_idx = 0;
@@ -805,7 +798,7 @@ CTPBFContext *ct_index_mmap(const char *path) {
             free(all_coords);
             free(ctx->rtree);
             free(ctx);
-            munmap(map, file_size);
+            sh_unmap_ptr(map, file_size);
             return NULL;
         }
 
