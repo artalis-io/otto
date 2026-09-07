@@ -80,6 +80,7 @@ LIB = libcarta.a
 # Test binaries
 TEST_BIN = test_carta
 TEST_METATILE_BIN = test_metatile
+TEST_TRANSPORT_BIN = test_transport_direct
 
 # CLI tool
 CLI_BIN = carta_cli
@@ -93,7 +94,7 @@ BENCH_BIN = bench_carta
 # WASM output
 WASM_OUT = carta.js
 
-.PHONY: all clean test bench lib debug wasm cli compare fuzz
+.PHONY: all clean test test-transport bench lib debug wasm cli compare fuzz
 
 # Default target
 all: lib $(TEST_BIN)
@@ -132,10 +133,19 @@ compare: $(COMPARE_BIN)
 $(TEST_METATILE_BIN): tests/test_metatile.c $(LIB) $(SHARED_DIR)/libshared.a
 	$(CC) $(CFLAGS) $(INCLUDES) $< -L. -lcarta -L$(SHARED_DIR) -lshared $(LDFLAGS) -o $@
 
+# Transport invariant: ct_api_handle driven by sh_transport_direct with no
+# transport library on the include path. See docs/roadmaps/transport.md.
+$(TEST_TRANSPORT_BIN): tests/test_transport_direct.c $(LIB) $(SHARED_DIR)/libshared.a
+	$(CC) $(CFLAGS) $(INCLUDES) $< -L. -lcarta -L$(SHARED_DIR) -lshared $(LDFLAGS) -o $@
+
+test-transport: $(TEST_TRANSPORT_BIN)
+	./$(TEST_TRANSPORT_BIN)
+
 # Run tests
-test: $(TEST_BIN) $(TEST_METATILE_BIN)
+test: $(TEST_BIN) $(TEST_METATILE_BIN) $(TEST_TRANSPORT_BIN)
 	./$(TEST_BIN)
 	./$(TEST_METATILE_BIN)
+	./$(TEST_TRANSPORT_BIN)
 
 # Benchmarks
 $(BENCH_BIN): benchmarks/bench_carta.c $(LIB) $(SHARED_DIR)/libshared.a
@@ -181,7 +191,7 @@ $(FUZZ_BIN): $(FUZZ_SRCS) fuzz-lib
 # Clean
 clean:
 	rm -f $(CORE_OBJS) $(LIB) libcarta_fuzz.a
-	rm -f $(TEST_BIN) $(TEST_METATILE_BIN) $(CLI_BIN) $(COMPARE_BIN) $(BENCH_BIN) $(FUZZ_BIN)
+	rm -f $(TEST_BIN) $(TEST_METATILE_BIN) $(TEST_TRANSPORT_BIN) $(CLI_BIN) $(COMPARE_BIN) $(BENCH_BIN) $(FUZZ_BIN)
 	rm -f $(WASM_OUT) carta.wasm
 
 # Dependencies
