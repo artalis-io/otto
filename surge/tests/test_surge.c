@@ -8088,8 +8088,8 @@ static void test_json_api_full_features(void) {
 static void test_json_api_handle_routing(void) {
     SGAPIContext *api_ctx = sg_api_create();
     assert(api_ctx != NULL);
-    SGAPIRequest req;
-    SGAPIResponse resp;
+    ShApiRequest req;
+    ShApiResponse resp;
 
     /* Health endpoint */
     memset(&req, 0, sizeof(req));
@@ -8097,26 +8097,26 @@ static void test_json_api_handle_routing(void) {
     assert(sg_api_handle(api_ctx, &req, &resp) == 0);
     assert(resp.status_code == 200);
     assert(strstr(resp.body, "healthy") != NULL);
-    sg_api_response_free(&resp);
+    sh_api_response_free(&resp);
 
     /* Version endpoint */
     req.path = "/api/v1/version";
     assert(sg_api_handle(api_ctx, &req, &resp) == 0);
     assert(resp.status_code == 200);
-    sg_api_response_free(&resp);
+    sh_api_response_free(&resp);
 
     /* Stats endpoint */
     req.path = "/api/v1/stats";
     assert(sg_api_handle(api_ctx, &req, &resp) == 0);
     assert(resp.status_code == 200);
     assert(strstr(resp.body, "surge") != NULL);
-    sg_api_response_free(&resp);
+    sh_api_response_free(&resp);
 
     /* 404 */
     req.path = "/api/v1/nonexistent";
     assert(sg_api_handle(api_ctx, &req, &resp) == 0);
     assert(resp.status_code == 404);
-    sg_api_response_free(&resp);
+    sh_api_response_free(&resp);
 
     sg_api_free(api_ctx);
 }

@@ -1,6 +1,6 @@
 # Transport Interface + Platform Abstraction Layer
 
-**Status:** Phase 1 in progress
+**Status:** Phases 1-3 done. Phase 4 (`sh_pal.h`) not started.
 **Scope:** `shared/` transport interface, per-module API types, `sh_pal.h`
 
 ## Motivation
@@ -52,10 +52,11 @@ typedef struct {
     uint8_t    *body;           /* heap; ownership passes to the transport */
     size_t      body_len;
 
-    /* Streaming escape hatch -- see "Layer 3". NULL for a unary response. */
-    int  (*stream_fn)(void *stream_ctx, ShApiStream *out);
-    void  *stream_ctx;
-    void (*stream_free)(void *stream_ctx);
+    /* Streaming -- see "Layer 3". NULL for a unary response.
+     * stream_fn MUST NOT BLOCK: it runs on the event loop thread. */
+    ShApiStreamFn stream_fn;
+    void         *stream_ctx;
+    void        (*stream_free)(void *stream_ctx);
 } ShApiResponse;
 
 typedef int (*ShApiHandler)(void *ctx, const ShApiRequest*, ShApiResponse*);
@@ -112,33 +113,63 @@ the Carta SEGV; it is written down here so it is not rediscovered.
 
 ## Layer 3: Streaming escape hatch
 
-Not needed by any endpoint today. Designed now, built when a real consumer exists.
-
-The hatch lives **in the response, not in the vtable** — it is data, not a vtable method,
-so it cannot become the crack that lets Keel's model back in.
+**Built.** The hatch lives **in the response, not in the vtable** -- it is data,
+not a vtable method, so it cannot become the crack that lets Keel's model back in.
 
 ```c
+typedef enum {
+    SH_API_STREAM_DONE  =  0,   /* finished; transport closes the stream */
+    SH_API_STREAM_MORE  =  1,   /* more to send; transport calls again */
+    SH_API_STREAM_ERROR = -1    /* give up; transport aborts */
+} ShApiStreamStatus;
+
+typedef ShApiStreamStatus (*ShApiStreamFn)(void *stream_ctx, ShApiStream *out);
+
 int sh_api_stream_send  (ShApiStream*, const char *event,
                          const void *data, size_t len);
-int sh_api_stream_closed(const ShApiStream*);   /* peer went away */
+int sh_api_stream_closed(const ShApiStream*);
 ```
 
-When `stream_fn != NULL` the transport ignores `body`/`body_len`, emits the status line
-and `content_type`, then calls `stream_fn` on a worker thread with a live handle. The
-handler owns the response until `stream_fn` returns; `stream_free` is always called
-afterwards.
+### The producer must not block
 
-`stream_fn` runs on a pool thread and **may block**. That is what push requires: SSE
-events fire when they occur, not when a puller asks. A pull-based producer callback
-would be simpler but cannot express progress events, and progress reporting on long
-solves is the realistic first consumer (solves of 10+ minutes are observed today).
+`stream_fn` runs on the transport's **event loop thread** and must not block.
+The transport drives it in a loop until it answers `DONE` or `ERROR`; a spin cap
+catches a producer that answers `MORE` forever, which would otherwise wedge the
+loop and every other connection with it.
 
-- `sh_transport_keel` implements this on `kl_http_sse_begin` / `_event` / `_end`.
-- `sh_transport_direct` implements it by collecting into a buffer, so streaming handlers
-  are testable without sockets.
+This corrects an earlier version of this design, which specified a producer
+running on a pool worker that *may block*. **That could not be implemented.**
+Keel's `kl_stream_write()` writes straight to `res->conn_fd`, or into a drain
+buffer the event loop flushes, with no locking anywhere in that path
+(`keel/src/protocols/http/http_response.c`). Emitting from a worker would race
+the loop on the connection -- the same defect class as the Carta SEGV. Keel also
+exposes no post-to-loop or wakeup API; the thread pool's worker-to-loop pipe is
+private, and `kl_async_complete()` is one-shot per work item.
 
-**Out of scope: websockets.** Full duplex needs a read side and a different lifetime.
-Stretching this shape to cover it would be the mistake this design exists to avoid.
+The consequence for callers: do the expensive work elsewhere and leave a result
+for the producer to pick up. A long solve publishes progress into a shared value
+that the producer reads and forwards; it must not compute inside `stream_fn`.
+
+The earlier design was written from the producer's nature (SSE is push, so a
+pull model felt wrong) without checking the transport's threading constraints.
+It shipped as a public struct field in Phase 1 with only the in-process
+transport behind it, which is why nothing caught it: `sh_transport_direct`
+writes into a buffer with no connection and no loop, so its tests passed and
+proved nothing.
+
+### Implementations
+
+| transport | how |
+|---|---|
+| `sh_keelasync` | `kl_http_sse_begin` / `_event` / `_end`; backpressure via `KlDrain` (bounded, 1 MiB, flushed by the loop) |
+| `sh_transport_direct` | collects events into a buffer, so streaming handlers are testable without sockets |
+
+`stream_free`, if set, is always called afterwards -- including when a transport
+declines to stream at all.
+
+**Out of scope: websockets.** Full duplex needs a read side and a different
+lifetime. Stretching this shape to cover it would be the mistake this design
+exists to avoid.
 
 ## Layer 4: `sh_pal.h`
 

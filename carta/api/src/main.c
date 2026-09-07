@@ -36,7 +36,8 @@
 #include "ct_api.h"
 #include "ct_cache.h"
 #include "shared.h"   /* For sh_ratelimit, sh_workqueue */
-#include "sh_keelserver.h"  /* Keel-backed sh_kl_* helpers */
+#include "sh_keelserver.h"
+#include "sh_keelasync.h"  /* Keel-backed sh_kl_* helpers */
 #include "sh_completion.h"  /* For ShCompletion */
 #include "sh_worker_pool.h" /* For ShWorkerPool */
 #include "sh_log.h"         /* For structured logging */
@@ -114,12 +115,6 @@ static ShAdaptiveTracker *s_adaptive_tracker = NULL;
 /* ============================================================================
  * Render Request Context
  *
- * OWNERSHIP / LIFETIME (same rules as Surge, FuelWise and Velo): freed in
- * exactly one place -- done_fn (the item ran) or cancel_fn (dropped at pool
- * shutdown before starting). on_cancel and on_deadline never free, because
- * work_fn may still be running on a worker; they only set `detached`, which
- * is read and written solely on the event loop thread.
- *
  * CONCURRENCY NOTE
  *   The mongoose server ran N event-loop threads, each with its own mg_mgr
  *   listening via SO_REUSEPORT, because every one of them blocked in
@@ -136,15 +131,15 @@ typedef enum {
 } RenderType;
 
 typedef struct {
-    KlHttpServer *server;
-    KlThreadPool *pool;
+    ShKeelAsync async;   /* server, pool, cors, timeout, stats */
 } AppCtx;
 
+/*
+ * One tile render. The async plumbing that used to surround this -- KlAsyncOp,
+ * the connection, the detached flag -- now lives in sh_keel_async_dispatch();
+ * see shared/src/sh_keelasync.c.
+ */
 typedef struct {
-    KlAsyncOp op;
-    AppCtx *app;
-    const KlHttpRequest *req;   /* lives inside the conn; valid while suspended */
-
     /* Request info */
     RenderType type;
     int z, x, y;
@@ -158,10 +153,6 @@ typedef struct {
     int status_code;        /* HTTP status code */
     char content_type[64];
     char error_msg[128];
-
-    int detached;
-    const char *endpoint;   /* metrics label, static string */
-    ShMetricsTimer timer;
 } RenderCtx;
 
 /*
@@ -169,15 +160,8 @@ typedef struct {
  * counters, so they are tracked here. Every counter is read and written only
  * on the event loop thread.
  */
-typedef struct {
-    uint64_t pushed;
-    uint64_t popped;
-    uint64_t dropped;
-    uint64_t expired;
-} CartaQueueStats;
-
 static KlThreadPool *s_pool = NULL;
-static CartaQueueStats s_qstats;
+static ShKeelAsyncStats s_qstats;
 static int s_num_workers = 0;
 static char s_listen_url[SH_URL_MAX] = "";
 
@@ -369,10 +353,12 @@ static void process_ascii_render(RenderCtx *item)
 
 /* Render worker callback function (called by ShWorkerPool) */
 /* Worker thread: render the tile. Touches only this context. */
-static void render_work_fn(void *user_data)
+/*
+ * Run one render and record its cost. Shared by the ShApiHandler below and by
+ * nothing else -- the pool no longer calls this directly.
+ */
+static void render_run(RenderCtx *item)
 {
-    RenderCtx *item = (RenderCtx *)user_data;
-
     /* Measure render time for adaptive capacity */
     struct timeval render_start, render_end;
     gettimeofday(&render_start, NULL);
@@ -407,86 +393,86 @@ static void render_work_fn(void *user_data)
     }
 }
 
-/* Write whatever the worker produced. Shared by done_fn and the inline path. */
-static void render_reply(KlHttpResponse *res, const KlHttpRequest *req,
-                         RenderCtx *item)
-{
-    if (item->status_code == 200) {
-        if (item->response_data && item->response_size > 0) {
-            send_tile_cors(res, req, item->content_type, item->response_data,
-                           item->response_size);
-        } else {
-            /* Empty tile: still a valid response */
-            send_tile_cors(res, req, item->content_type, NULL, 0);
-        }
-    } else {
-        send_error_cors(res, req, item->status_code,
-                        item->error_msg[0] ? item->error_msg : "Render failed");
-    }
-}
-
-/* Event loop thread: write the response and resume the connection. */
-static void render_done_fn(void *user_data)
-{
-    RenderCtx *ctx = (RenderCtx *)user_data;
-
-    s_qstats.popped++;
-
-    if (ctx->detached) {
-        render_ctx_free(ctx);
-        return;
-    }
-
-    render_reply(kl_http_conn_response(ctx->op.conn), ctx->req, ctx);
-    record_metrics(ctx->timer, ctx->endpoint);
-
-    kl_async_complete(ctx->app->server, &ctx->op);
-    render_ctx_free(ctx);
-}
-
-/* Pool shutdown dropped the item before it started. */
-static void render_cancel_fn(void *user_data)
-{
-    render_ctx_free((RenderCtx *)user_data);
-}
+/* Defined below, next to the routing they belong to. */
+static int parse_tile_uri(const char *uri, size_t uri_len,
+                          int *z, int *x, int *y, char *ext);
+static int get_query_int(const char *query, const char *name,
+                         int default_val, int min_val, int max_val);
 
 /*
- * Declare the send. kl_async_complete() re-arms the fd but leaves the
- * connection SUSPENDED unless on_resume says what happens next; without this
- * the response is never written and the client hangs. Keel's
- * examples/thread_pool and examples/async_thread_pool leave this a no-op and
- * hang for exactly that reason; tests/smoke_iouring_async.c is the correct
- * reference, and kl_http_request_send_response() is its public equivalent.
+ * The tile handler, as a plain ShApiHandler.
+ *
+ * Routing (which extension, therefore which renderer) and the ASCII options
+ * are parsed here rather than in the transport. The three process_* renderers
+ * are unchanged. Binary responses (PNG, MVT) travel in ShApiResponse::body
+ * with an explicit content_type, which is what sh_kl_reply_body() exists for.
  */
-static void render_on_resume(KlAsyncOp *op, void *ud)
+static int carta_api_handler(void *unused, const ShApiRequest *req,
+                             ShApiResponse *resp)
 {
-    (void)ud;
-    RenderCtx *ctx = (RenderCtx *)((char *)op - offsetof(RenderCtx, op));
-    kl_http_request_send_response(ctx->req);
-}
+    RenderCtx item;
+    int z, x, y;
+    char ext[8];
 
-/* Connection died while suspended; the worker may still be running. */
-static void render_on_cancel(KlAsyncOp *op, void *ud)
-{
-    (void)ud;
-    ((RenderCtx *)((char *)op - offsetof(RenderCtx, op)))->detached = 1;
-}
+    (void)unused;
+    memset(&item, 0, sizeof(item));
+    item.status_code = 500;
 
-/* Deadline exceeded: reply 504 now, let done_fn free the context later. */
-static void render_on_deadline(KlAsyncOp *op, void *ud)
-{
-    (void)ud;
-    RenderCtx *ctx = (RenderCtx *)((char *)op - offsetof(RenderCtx, op));
+    if (!req->path ||
+        parse_tile_uri(req->path, strlen(req->path), &z, &x, &y, ext) != 0) {
+        return sh_api_response_error(resp, 400, "Invalid tile URL format");
+    }
 
-    if (ctx->detached) return;
-    ctx->detached = 1;
-    s_qstats.expired++;
+    item.z = z;
+    item.x = x;
+    item.y = y;
 
-    send_error_cors(kl_http_conn_response(op->conn), ctx->req, 504,
-                    "Request timeout");
-    record_metrics(ctx->timer, ctx->endpoint);
+    if (strcmp(ext, "mvt") == 0 || strcmp(ext, "pbf") == 0) {
+        item.type = RENDER_TYPE_MVT;
+    } else if (strcmp(ext, "png") == 0) {
+        item.type = RENDER_TYPE_PNG;
+    } else if (strcmp(ext, "txt") == 0 || strcmp(ext, "ascii") == 0) {
+        const char *q = req->query ? req->query : "";
+        item.type = RENDER_TYPE_ASCII;
+        ct_ascii_default_options(&item.ascii_opts);
+        item.ascii_opts.width  = get_query_int(q, "width", 80, 1, 256);
+        item.ascii_opts.height = get_query_int(q, "height", 0, 0, 256);
+        item.ascii_opts.invert = get_query_int(q, "invert", 0, 0, 1);
+        item.ascii_opts.color  = get_query_int(q, "color", 0, 0, 1);
+        /* Clamps that used to sit in handle_ascii_tile; they belong with the
+         * parsing, not with the transport. */
+        if (item.ascii_opts.width < 20)  item.ascii_opts.width = 20;
+        if (item.ascii_opts.width > 400) item.ascii_opts.width = 400;
+        if (item.ascii_opts.height > 200) item.ascii_opts.height = 200;
+    } else {
+        return sh_api_response_error(resp, 400,
+            "Unknown tile format. Use .mvt, .png, .txt, or .ascii");
+    }
 
-    kl_async_complete(ctx->app->server, op);
+    render_run(&item);
+
+    if (item.status_code != 200) {
+        free(item.response_data);
+        return sh_api_response_error(resp, item.status_code,
+                                     item.error_msg[0] ? item.error_msg
+                                                       : "Render failed");
+    }
+
+    memset(resp, 0, sizeof(*resp));
+    resp->status_code = 200;
+    /* content_type is a fixed-size field on RenderCtx, so it cannot simply be
+     * borrowed once `item` goes out of scope. The renderers only ever set one
+     * of a small set of static strings, so map back to those. */
+    if (item.type == RENDER_TYPE_MVT) {
+        resp->content_type = "application/vnd.mapbox-vector-tile";
+    } else if (item.type == RENDER_TYPE_PNG) {
+        resp->content_type = "image/png";
+    } else {
+        resp->content_type = "text/plain; charset=utf-8";
+    }
+    resp->body = item.response_data;      /* ownership moves */
+    resp->body_len = item.response_size;
+    return 0;
 }
 
 /* ============================================================================
@@ -958,70 +944,38 @@ static void handle_tilejson(KlHttpRequest *req, KlHttpResponse *res, void *ud) {
  * Dispatch a render. Takes ownership of ctx in every path.
  * Renders inline when the queue is disabled, matching the old behaviour.
  */
+/*
+ * Marshal the tile request and hand it to the shared dispatcher. The context,
+ * on_resume/on_cancel/on_deadline, the 503 on a full queue and the 504 on a
+ * deadline are sh_keel_async_dispatch()'s job now; see
+ * shared/src/sh_keelasync.c.
+ */
 static void submit_render_work(KlHttpRequest *req, KlHttpResponse *res,
-                               void *ud, RenderCtx *ctx)
+                               void *ud, int z, int x, int y, const char *ext,
+                               ShMetricsTimer timer, const char *endpoint)
 {
     AppCtx *app = (AppCtx *)ud;
+    char path[128];
+    char query[512];
+    size_t qlen;
 
-    if (!s_pool) {
-        render_work_fn(ctx);
-        render_reply(res, req, ctx);
-        record_metrics(ctx->timer, ctx->endpoint);
-        render_ctx_free(ctx);
-        return;
-    }
+    snprintf(path, sizeof(path), "/tiles/%d/%d/%d.%s", z, x, y, ext);
 
-    ctx->app = app;
-    ctx->req = req;
-    ctx->op.on_resume = render_on_resume;
-    ctx->op.on_cancel = render_on_cancel;
-    ctx->op.on_deadline = render_on_deadline;
-    if (s_config.server.work_queue_timeout > 0.0) {
-        ctx->op.deadline_ms = kl_monotonic_ms() +
-            (uint64_t)(s_config.server.work_queue_timeout * 1000.0);
-    }
+    qlen = req->query_len < sizeof(query) - 1 ? req->query_len
+                                              : sizeof(query) - 1;
+    if (req->query && qlen > 0) memcpy(query, req->query, qlen);
+    query[req->query && qlen > 0 ? qlen : 0] = '\0';
 
-    if (kl_async_suspend(app->server, kl_http_request_conn(req), &ctx->op) < 0) {
-        render_ctx_free(ctx);
-        send_error_cors(res, req, 500, "Failed to suspend request");
-        return;
-    }
+    ShApiRequest api_req;
+    memset(&api_req, 0, sizeof(api_req));
+    api_req.method = "GET";
+    api_req.path   = path;
+    api_req.query  = query;
 
-    KlWorkItem item = {
-        .work_fn   = render_work_fn,
-        .done_fn   = render_done_fn,
-        .cancel_fn = render_cancel_fn,
-        .user_data = ctx,
-    };
+    sh_keel_async_dispatch(&app->async, req, res, carta_api_handler, NULL,
+                           &api_req);
 
-    if (kl_thread_pool_submit(app->pool, &item) < 0) {
-        /* Queue full - backpressure, same 503 as the old work queue. */
-        s_qstats.dropped++;
-        ctx->detached = 1;
-        send_error_cors(res, req, 503, "Server busy, try again later");
-        record_metrics(ctx->timer, ctx->endpoint);
-        kl_async_complete(app->server, &ctx->op);
-        render_ctx_free(ctx);
-        return;
-    }
-
-    s_qstats.pushed++;
-}
-
-/* Allocate a render context with the common fields filled in. */
-static RenderCtx *render_ctx_new(RenderType type, int z, int x, int y,
-                                 const char *endpoint, ShMetricsTimer timer)
-{
-    RenderCtx *ctx = calloc(1, sizeof(*ctx));
-    if (!ctx) return NULL;
-    ctx->type = type;
-    ctx->z = z;
-    ctx->x = x;
-    ctx->y = y;
-    ctx->status_code = 500;
-    ctx->endpoint = endpoint;
-    ctx->timer = timer;
-    return ctx;
+    record_metrics(timer, endpoint);
 }
 
 /* GET /tiles/{z}/{x}/{y}.mvt */
@@ -1063,12 +1017,7 @@ static void handle_mvt_tile(KlHttpRequest *req, KlHttpResponse *res, void *ud,
         pthread_mutex_unlock(&s_cache_mutex);
     }
 
-    RenderCtx *ctx = render_ctx_new(RENDER_TYPE_MVT, z, x, y, "endpoint:mvt", timer);
-    if (!ctx) {
-        send_error_cors(res, req, 500, "Memory allocation failed");
-        return;
-    }
-    submit_render_work(req, res, ud, ctx);
+    submit_render_work(req, res, ud, z, x, y, "mvt", timer, "endpoint:mvt");
 }
 
 /* Parse query string for a parameter with bounds, returns default if not found/invalid.
@@ -1132,13 +1081,8 @@ static void handle_ascii_tile(KlHttpRequest *req, KlHttpResponse *res, void *ud,
     if (ascii_opts.width > 400) ascii_opts.width = 400;
     if (ascii_opts.height > 200) ascii_opts.height = 200;
 
-    RenderCtx *ctx = render_ctx_new(RENDER_TYPE_ASCII, z, x, y, "endpoint:ascii", timer);
-    if (!ctx) {
-        send_error_cors(res, req, 500, "Memory allocation failed");
-        return;
-    }
-    ctx->ascii_opts = ascii_opts;
-    submit_render_work(req, res, ud, ctx);
+    (void)ascii_opts;   /* parsed again, with the clamps, in carta_api_handler */
+    submit_render_work(req, res, ud, z, x, y, "txt", timer, "endpoint:ascii");
 }
 
 /* GET /tiles/{z}/{x}/{y}.png */
@@ -1179,12 +1123,7 @@ static void handle_png_tile(KlHttpRequest *req, KlHttpResponse *res, void *ud,
         pthread_mutex_unlock(&s_cache_mutex);
     }
 
-    RenderCtx *ctx = render_ctx_new(RENDER_TYPE_PNG, z, x, y, "endpoint:png", timer);
-    if (!ctx) {
-        send_error_cors(res, req, 500, "Memory allocation failed");
-        return;
-    }
-    submit_render_work(req, res, ud, ctx);
+    submit_render_work(req, res, ud, z, x, y, "png", timer, "endpoint:png");
 }
 
 /* Parse tile coordinates from URI like /tiles/14/9058/5729.png */
@@ -1364,7 +1303,7 @@ static int mw_fallback(KlHttpRequest *req, KlHttpResponse *res, void *ud) {
     KlHttpParam params[KL_HTTP_ROUTER_MAX_PARAMS];
     int num_params = 0;
 
-    int rc = kl_http_router_match(&app->server->router,
+    int rc = kl_http_router_match(&app->async.server->router,
                                   req->method, req->method_len,
                                   req->path, req->path_len,
                                   &matched, params, &num_params);
@@ -1781,7 +1720,13 @@ int main(int argc, char *argv[]) {
         }
     }
 
-    AppCtx app = { .server = &server, .pool = s_pool };
+    AppCtx app;
+    memset(&app, 0, sizeof(app));
+    app.async.server    = &server;
+    app.async.pool      = s_pool;
+    app.async.cors      = &s_cors;
+    app.async.timeout_s = s_config.server.work_queue_timeout;
+    app.async.stats     = &s_qstats;
 
     /* Routes. Static files stay in mw_fallback: Keel route patterns have no
        wildcard, so a catch-all is not expressible. */

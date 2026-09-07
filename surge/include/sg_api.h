@@ -15,6 +15,7 @@
 #define SURGE_SG_API_H
 
 #include <stddef.h>
+#include "sh_api.h"
 #include <stdint.h>
 
 #include "sg_types.h"
@@ -170,20 +171,11 @@ void sg_api_free(SGAPIContext *ctx);
  * Request/Response
  * ============================================================================ */
 
-typedef struct {
-    const char *path;       /* URI path (required) */
-    const char *query;      /* Query string without '?' (optional, NULL ok) */
-    const char *body;       /* Request body (optional, NULL ok for GET) */
-    size_t body_len;        /* Body length in bytes */
-    const char *host;       /* Optional: host for URL generation */
-} SGAPIRequest;
-
-typedef struct {
-    int status_code;        /* HTTP status code (200, 400, 404, 500, etc.) */
-    const char *content_type; /* MIME type (static string, do not free) */
-    char *body;             /* Response body (caller must free) */
-    size_t body_len;        /* Response body length in bytes */
-} SGAPIResponse;
+/*
+ * Request and response are the shared, transport-agnostic types from
+ * <sh_api.h>. Surge used to define its own identical pair; so did the other
+ * modules. See docs/roadmaps/transport.md.
+ */
 
 /* ============================================================================
  * Handler
@@ -194,7 +186,7 @@ typedef struct {
  *
  * Routes the request based on path and generates the appropriate response.
  * The response body is heap-allocated - caller must free with
- * sg_api_response_free().
+ * sh_api_response_free().
  *
  * Supported paths:
  *   POST /api/v1/solve    - Solve VRP problem
@@ -203,14 +195,9 @@ typedef struct {
  *
  * Returns 0 on success (response filled in), -1 on internal error.
  */
-int sg_api_handle(SGAPIContext *ctx, const SGAPIRequest *req, SGAPIResponse *resp);
+int sg_api_handle(void *ctx, const ShApiRequest *req, ShApiResponse *resp);
 
-/*
- * Free response body.
- *
- * Safe to call with NULL response or NULL body.
- */
-void sg_api_response_free(SGAPIResponse *resp);
+/* Response bodies are freed with sh_api_response_free() from <sh_api.h>. */
 
 /* ============================================================================
  * Individual Handlers (for advanced use / WASM)
