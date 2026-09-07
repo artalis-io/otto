@@ -2203,7 +2203,9 @@ static char *sg_api_stats(size_t *out_len) {
  * Router
  * ============================================================================ */
 
-int sg_api_handle(SGAPIContext *ctx, const SGAPIRequest *req, SGAPIResponse *resp) {
+int sg_api_handle(void *ctx_, const ShApiRequest *req, ShApiResponse *resp) {
+    SGAPIContext *ctx = (SGAPIContext *)ctx_;
+    (void)ctx;
     (void)ctx;
 
     if (!req || !resp || !req->path) {
@@ -2215,29 +2217,26 @@ int sg_api_handle(SGAPIContext *ctx, const SGAPIRequest *req, SGAPIResponse *res
 
     if (strcmp(req->path, "/api/v1/solve") == 0) {
         int code = 200;
-        resp->body = sg_api_solve(req->body, req->body_len, &code, &resp->body_len);
+        resp->body = (uint8_t *)sg_api_solve(req->body, req->body_len,
+                                             &code, &resp->body_len);
         resp->status_code = code;
     } else if (strcmp(req->path, "/api/v1/health") == 0) {
-        resp->body = sg_api_health(&resp->body_len);
+        resp->body = (uint8_t *)sg_api_health(&resp->body_len);
         resp->status_code = resp->body ? 200 : 500;
     } else if (strcmp(req->path, "/api/v1/version") == 0) {
-        resp->body = sg_api_version(&resp->body_len);
+        resp->body = (uint8_t *)sg_api_version(&resp->body_len);
         resp->status_code = resp->body ? 200 : 500;
     } else if (strcmp(req->path, "/api/v1/stats") == 0) {
-        resp->body = sg_api_stats(&resp->body_len);
+        resp->body = (uint8_t *)sg_api_stats(&resp->body_len);
         resp->status_code = resp->body ? 200 : 500;
     } else {
-        resp->body = make_error_json(404, "not found", &resp->body_len);
+        resp->body = (uint8_t *)make_error_json(404, "not found",
+                                                &resp->body_len);
         resp->status_code = 404;
     }
 
     return resp->body ? 0 : -1;
 }
 
-void sg_api_response_free(SGAPIResponse *resp) {
-    if (resp && resp->body) {
-        free(resp->body);
-        resp->body = NULL;
-        resp->body_len = 0;
-    }
-}
+/* Response bodies are freed by sh_api_response_free() in shared/src/sh_api.c.
+ * Surge used to carry its own identical copy. */
