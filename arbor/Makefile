@@ -38,7 +38,7 @@ LIB = libarbor.a
 TEST_BIN = test_arbor
 TEST_OP_BIN = test_ar_operators
 
-.PHONY: all clean test lib debug
+.PHONY: all clean test test-asan lib debug
 
 all: lib $(TEST_BIN) $(TEST_OP_BIN)
 
@@ -62,6 +62,12 @@ $(TEST_OP_BIN): tests/test_ar_operators.c $(LIB) ../shared/libshared.a
 test: $(TEST_BIN) $(TEST_OP_BIN)
 	./$(TEST_BIN)
 	./$(TEST_OP_BIN)
+
+# Run the suite under AddressSanitizer + UBSan. Same flags as `debug`, but it
+# runs the tests instead of only building them.
+test-asan: CFLAGS = $(DEBUG_CFLAGS)
+test-asan: LDFLAGS = -lm $(DEBUG_LDFLAGS)
+test-asan: clean test
 
 debug: CFLAGS = $(DEBUG_CFLAGS)
 debug: LDFLAGS = -lm $(DEBUG_LDFLAGS)
