@@ -3180,7 +3180,11 @@ TEST(hashmap_i64u32_basic)
 
 TEST(hashmap_null_safety)
 {
-    ASSERT(sh_hashmap_i64_create(0) != NULL);  /* Creates with default capacity */
+    /* Zero capacity means "use the default", not "fail". Keep the pointer:
+     * asserting on the return value and discarding it leaks the map. */
+    SHHashmapI64 *defaulted = sh_hashmap_i64_create(0);
+    ASSERT(defaulted != NULL);
+    sh_hashmap_i64_free(defaulted);
 
     sh_hashmap_i64_free(NULL);  /* Should not crash */
 
