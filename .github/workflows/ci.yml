@@ -338,6 +338,8 @@ jobs:
     if: startsWith(github.ref, 'refs/tags/v') || github.event.inputs.build_docker == 'true'
 
     strategy:
+      # One broken image should not hide the state of the others.
+      fail-fast: false
       matrix:
         service:
           - name: fuelwise
