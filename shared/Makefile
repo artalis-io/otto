@@ -28,7 +28,9 @@ DEBUG_CFLAGS = -Wall -Wextra -g -O0 -std=c11 -D_GNU_SOURCE -DDEBUG \
 DEBUG_LDFLAGS = -fsanitize=address,undefined
 
 # Source files (core library - no external dependencies beyond miniz)
-SRCS = src/sh_api.c \
+SRCS = src/sh_pal_posix.c \
+       src/sh_pal_windows.c \
+       src/sh_api.c \
        src/sh_transport_direct.c \
        src/sh_geo.c \
        src/sh_polyline.c \
@@ -105,7 +107,7 @@ PDF2STRUC_OBJS = $(PDF2STRUC_SRCS:.c=.o)
 PDF2STRUC_LIB = libsh_pdf2struc.a
 TEST_PDF2STRUC_BIN = test_pdf2struc
 
-.PHONY: all clean test test-asan test-font test-json test-xml test-csv test-geojson test-fs test-sha256 test-eov test-pdf2struc font-compare lib debug generate-font-data
+.PHONY: all clean test test-asan test-pal test-font test-json test-xml test-csv test-geojson test-fs test-sha256 test-eov test-pdf2struc font-compare lib debug generate-font-data
 
 # Default target
 all: lib $(TEST_BIN)
@@ -230,6 +232,21 @@ generate-font-data:
 # A c-audit of the Phase 1 transport code found two heap overflows and an
 # out-of-bounds write that ten warning flags had missed; sanitizers catch that
 # class mechanically. See docs/roadmaps/transport.md.
+# Platform abstraction layer only.
+#
+# Deliberately standalone: it links just sh_pal_*.c and its test, so the
+# Windows CI job can run it today. The rest of shared/ does not build on
+# Windows yet -- sh_fs.c calls mkdir with two arguments and sh_pdf2struc*.c
+# call memmem -- and waiting for that would leave the PAL unverified on the
+# platform it exists for.
+TEST_PAL_BIN = test_pal
+
+$(TEST_PAL_BIN): tests/test_pal.c src/sh_pal_posix.c src/sh_pal_windows.c
+	$(CC) $(CFLAGS) $(INCLUDES) $^ $(LDFLAGS) -o $@
+
+test-pal: $(TEST_PAL_BIN)
+	./$(TEST_PAL_BIN)
+
 test-asan: CFLAGS = $(DEBUG_CFLAGS)
 test-asan: LDFLAGS += $(DEBUG_LDFLAGS)
 test-asan: clean test
