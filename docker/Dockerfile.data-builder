@@ -47,7 +47,10 @@ COPY vendor/ vendor/
 COPY Makefile .
 
 # Build all API servers (they include index-building capability)
-RUN make shared && make ralph && make velo && make carta && make locus
+# Note: velo is intentionally not pre-built here. velo-api builds libvelo with
+# NOMP=1 (see velo/api/Makefile); a plain `make velo` yields the OpenMP variant
+# and the api link then fails on GOMP_*.
+RUN make shared && make ralph && make carta && make locus
 RUN make velo-api && make carta-api && make locus-api
 
 # =============================================================================

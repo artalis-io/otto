@@ -34,7 +34,7 @@ COPY Makefile .
 RUN make shared && make ralph && make ralph-api
 
 # Verify the binary works
-RUN ./ralph/api/ralph-solver --help || true
+RUN ./ralph/api/ralph-solver-server --help || true
 
 # =============================================================================
 # Runtime stage (distroless)
@@ -48,7 +48,7 @@ LABEL org.opencontainers.image.documentation="https://github.com/ottofleet/otto/
 
 WORKDIR /app
 
-COPY --from=builder --chown=nonroot:nonroot /build/ralph/api/ralph-solver /app/ralph-solver
+COPY --from=builder --chown=nonroot:nonroot /build/ralph/api/ralph-solver-server /app/ralph-solver
 
 EXPOSE 8084
 

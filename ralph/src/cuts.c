@@ -1391,6 +1391,29 @@ static double cmir_separate(CMIRWork *work, double *best_delta)
 }
 
 /*
+ * Does the (bound-substituted) row carry any integer variable?
+ *
+ * The MIR derivation strengthens `sum a_j x_j <= b` into `... <= floor(b)`.
+ * That rounding step is justified by the integrality of at least one variable
+ * in the row -- it is the whole reason a MIR inequality is valid. On a row
+ * whose support is entirely continuous there is nothing to round against, and
+ * `floor(b)` simply tightens the right-hand side by f_0 in (0,1) for no
+ * reason, producing an inequality that cuts off genuinely feasible points.
+ */
+static int cmir_row_has_integer_support(const CMIRWork *work)
+{
+    if (!work->is_int) return 0;
+
+    for (int j = 0; j < work->num_orig; j++) {
+        if (work->is_int[j] && fabs(work->a_sub[j]) > RALPH_ZERO_TOL) {
+            return 1;
+        }
+    }
+
+    return 0;
+}
+
+/*
  * Build the final cut from the c-MIR formula with winning (C, delta).
  *
  * Applies the c-MIR transformation, computes MIR coefficients, then
@@ -1401,15 +1424,18 @@ static Cut* cmir_build_cut(const CMIRWork *work, double delta, SimplexTableau *t
 {
     int num_orig = work->num_orig;
 
+    /* No integer variable in the row means the floor() below is unjustified;
+     * see cmir_row_has_integer_support(). Checked again here because this is
+     * the function that performs the rounding. */
+    if (!cmir_row_has_integer_support(work)) return NULL;
+
     /* Compute floor(b_d) for the RHS */
     double b_d = work->b_sub;
     for (int j = 0; j < num_orig; j++) {
         if (work->in_C[j] && work->is_int[j] && fabs(work->a_sub[j]) > RALPH_ZERO_TOL) {
-            double eff_ub;
-            if (work->sub_type[j] == 0)
-                eff_ub = work->ub[j] - work->lb[j];
-            else
-                eff_ub = work->ub[j] - work->lb[j];
+            /* Both substitutions map x_j onto [0, ub-lb]: the lower-bound one
+             * as x_j - lb, the upper-bound one as ub - x_j. Same width. */
+            double eff_ub = work->ub[j] - work->lb[j];
             if (eff_ub >= 0.5 && eff_ub <= 1e8)
                 b_d -= work->a_sub[j] * eff_ub;
         }
@@ -1435,10 +1461,8 @@ static Cut* cmir_build_cut(const CMIRWork *work, double delta, SimplexTableau *t
         double eff_ub = 0.0;
         int complemented = 0;
         if (work->in_C[j] && work->is_int[j]) {
-            if (work->sub_type[j] == 0)
-                eff_ub = work->ub[j] - work->lb[j];
-            else
-                eff_ub = work->ub[j] - work->lb[j];
+            /* Same width for either substitution; see the b_d loop above. */
+            eff_ub = work->ub[j] - work->lb[j];
             if (eff_ub >= 0.5 && eff_ub <= 1e8) {
                 a_d = -a_d;
                 complemented = 1;
@@ -1725,6 +1749,15 @@ int generate_mir_cuts(MIPSolver *solver, CutPool *pool)
 
             /* Bound substitution */
             cmir_bound_substitute(&work);
+
+            /* A row with no integer variable cannot yield a valid MIR cut, so
+             * do not pay for the (C, delta) search over it. Aggregating
+             * further may still pull an integer variable in, hence `continue`
+             * rather than `break`. */
+            if (!cmir_row_has_integer_support(&work)) {
+                solver->root_mir_rows_no_integer++;
+                continue;
+            }
 
             /* Search for best (C, delta) */
             double best_delta = 1.0;

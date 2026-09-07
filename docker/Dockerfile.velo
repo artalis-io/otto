@@ -30,7 +30,9 @@ COPY shared/ shared/
 COPY vendor/ vendor/
 COPY Makefile .
 
-RUN make shared && make velo && make velo-api
+# velo-api builds libvelo itself with NOMP=1 (see velo/api/Makefile); a plain
+# `make velo` here yields the OpenMP variant and the api link then fails on GOMP_*.
+RUN make shared && make velo-api
 
 # Verify the binary works
 RUN ./velo/api/velo-route-server --help || true
