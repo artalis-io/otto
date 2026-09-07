@@ -154,7 +154,7 @@ uint8_t *ct_api_generate_png(CTAPIContext *ctx,
 
     /* Validate coordinates */
     if (z < ctx->min_zoom || z > ctx->max_zoom || z > 30) return NULL;
-    int max_coord = 1 << z;
+    int max_coord = (int)sh_tiles_per_axis(z);
     if (x < 0 || x >= max_coord || y < 0 || y >= max_coord) return NULL;
 
     /* Create render context */
@@ -205,7 +205,7 @@ uint8_t *ct_api_generate_mvt(CTAPIContext *ctx,
 
     /* Validate coordinates */
     if (z < ctx->min_zoom || z > ctx->max_zoom || z > 30) return NULL;
-    int max_coord = 1 << z;
+    int max_coord = (int)sh_tiles_per_axis(z);
     if (x < 0 || x >= max_coord || y < 0 || y >= max_coord) return NULL;
 
     /* Generate MVT */
@@ -358,7 +358,7 @@ char *ct_api_generate_ascii(CTAPIContext *ctx,
 
     /* Validate coordinates */
     if (z < ctx->min_zoom || z > ctx->max_zoom || z > 30) return NULL;
-    int max_coord = 1 << z;
+    int max_coord = (int)sh_tiles_per_axis(z);
     if (x < 0 || x >= max_coord || y < 0 || y >= max_coord) return NULL;
 
     /* Parse ASCII options from query string */
@@ -549,7 +549,7 @@ int ct_api_handle(CTAPIContext *ctx,
         }
 
         /* Validate coordinates */
-        int max_coord = 1 << z;
+        int max_coord = (int)sh_tiles_per_axis(z);
         if (x < 0 || x >= max_coord || y < 0 || y >= max_coord) {
             resp->status_code = 400;
             resp->body = (uint8_t *)strdup("Tile coordinates out of range");

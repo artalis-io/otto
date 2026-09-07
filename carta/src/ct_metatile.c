@@ -392,7 +392,7 @@ static inline void geo_to_metatile_pixel(CTMetatileCoord mt, int tile_size,
                                           double lat, double lon,
                                           int *px, int *py)
 {
-    double n = (double)(1 << mt.z);
+    double n = (double)sh_tiles_per_axis(mt.z);
     *px = (int)((lon + 180.0) / 360.0 * n * tile_size - (double)mt.mx * tile_size);
     double lat_rad = lat * M_PI / 180.0;
     double merc_y = log(tan(lat_rad) + 1.0 / cos(lat_rad));
@@ -518,7 +518,7 @@ CTMetatileLabelResult *ct_metatile_compute_labels(
         CTTileCoord tl = { mt.z, mt.mx, mt.my };
         CTTileCoord br = { mt.z, mt.mx + CT_METATILE_SIZE - 1,
                            mt.my + CT_METATILE_SIZE - 1 };
-        int max_coord = 1 << mt.z;
+        int max_coord = (int)sh_tiles_per_axis(mt.z);
         if (br.x >= max_coord) br.x = max_coord - 1;
         if (br.y >= max_coord) br.y = max_coord - 1;
         CTBBox tl_bbox = ct_tile_bounds(tl);
@@ -586,7 +586,7 @@ CTMetatileLabelResult *ct_metatile_compute_labels(
         /* Compute metatile bbox with overlap buffer */
         CTTileCoord tl = { mt.z, mt.mx, mt.my };
         CTTileCoord br = { mt.z, mt.mx + 1, mt.my + 1 };
-        int max_coord = 1 << mt.z;
+        int max_coord = (int)sh_tiles_per_axis(mt.z);
         if (br.x >= max_coord) br.x = max_coord - 1;
         if (br.y >= max_coord) br.y = max_coord - 1;
         CTBBox tl_bbox = ct_tile_bounds(tl);
@@ -690,7 +690,7 @@ CTMetatileLabelResult *ct_metatile_compute_labels(
             CTTileCoord tl = { mt.z, mt.mx, mt.my };
             CTTileCoord br = { mt.z, mt.mx + CT_METATILE_SIZE - 1,
                                mt.my + CT_METATILE_SIZE - 1 };
-            int max_coord = 1 << mt.z;
+            int max_coord = (int)sh_tiles_per_axis(mt.z);
             if (br.x >= max_coord) br.x = max_coord - 1;
             if (br.y >= max_coord) br.y = max_coord - 1;
             CTBBox tl_bbox = ct_tile_bounds(tl);
@@ -718,7 +718,7 @@ CTMetatileLabelResult *ct_metatile_compute_labels(
                   mt_compare_roads);
 
             /* Precompute Mercator transform for metatile space */
-            double merc_n = (double)(1 << mt.z);
+            double merc_n = (double)sh_tiles_per_axis(mt.z);
             double merc_lon_scale = merc_n * tile_size / 360.0;
             double merc_lon_offset = 180.0 * merc_lon_scale - (double)mt.mx * tile_size;
             double merc_lat_scale = -merc_n * tile_size / (2.0 * M_PI);
