@@ -30,6 +30,78 @@ static void check(int cond, const char *what)
  * ever stops matching the shared signature this line fails to compile. */
 static ShApiHandler g_handler = ralph_api_handle;
 
+/* ----------------------------------------------------------------------
+ * A synthetic streaming handler. Ralph has no streaming endpoint yet, so
+ * the DirectStream path needs its own producer to be exercised at all.
+ * ---------------------------------------------------------------------- */
+
+static int g_stream_freed = 0;
+
+static int produce_ok(void *stream_ctx, ShApiStream *out)
+{
+    (void)stream_ctx;
+    if (sh_api_stream_closed(out)) return -1;
+    if (sh_api_stream_send(out, NULL, "alpha", 5) != 0) return -1;
+    if (sh_api_stream_send(out, "progress", "beta", 4) != 0) return -1;
+    return 0;
+}
+
+static int produce_fail(void *stream_ctx, ShApiStream *out)
+{
+    (void)stream_ctx;
+    (void)sh_api_stream_send(out, NULL, "partial", 7);
+    return -1;   /* producer gives up part-way through */
+}
+
+static void stream_freed(void *stream_ctx)
+{
+    (void)stream_ctx;
+    g_stream_freed++;
+}
+
+static int streaming_handler(void *ctx, const ShApiRequest *req,
+                             ShApiResponse *resp)
+{
+    (void)ctx; (void)req;
+    memset(resp, 0, sizeof(*resp));
+    resp->status_code = 200;
+    resp->content_type = "text/event-stream";
+    resp->stream_fn = produce_ok;
+    resp->stream_free = stream_freed;
+    return 0;
+}
+
+static int failing_stream_handler(void *ctx, const ShApiRequest *req,
+                                  ShApiResponse *resp)
+{
+    (void)ctx; (void)req;
+    memset(resp, 0, sizeof(*resp));
+    resp->status_code = 200;
+    resp->content_type = "text/event-stream";
+    resp->stream_fn = produce_fail;
+    resp->stream_free = stream_freed;
+    return 0;
+}
+
+static int stream_case(ShApiResponse *resp)
+{
+    ShApiRequest req;
+    memset(&req, 0, sizeof(req));
+    req.method = "GET";
+    req.path = "/stream";
+    g_stream_freed = 0;
+    return sh_transport_direct_call(streaming_handler, NULL, &req, resp);
+}
+
+static int stream_fail_case(ShApiResponse *resp)
+{
+    ShApiRequest req;
+    memset(&req, 0, sizeof(req));
+    req.method = "GET";
+    req.path = "/stream";
+    return sh_transport_direct_call(failing_stream_handler, NULL, &req, resp);
+}
+
 static int call(RalphAPIContext *ctx, const char *method, const char *path,
                 const char *query, ShApiResponse *resp)
 {
@@ -92,6 +164,49 @@ int main(void)
           "sh_transport_direct is named");
     check(sh_transport_direct.serve != NULL && sh_transport_direct.stop != NULL,
           "sh_transport_direct implements serve and stop");
+
+    /* ------------------------------------------------------------------
+     * Streaming escape hatch.
+     *
+     * Ralph has no streaming endpoint, so without this the whole
+     * DirectStream path would ship untested. A c-audit caught exactly that.
+     * ------------------------------------------------------------------ */
+    memset(&resp, 0, sizeof(resp));
+    check(stream_case(&resp) == 0, "Streaming handler runs to completion");
+    check(resp.stream_fn == NULL,
+          "stream_fn cleared after the transport consumed it");
+    check(g_stream_freed == 1, "stream_free called exactly once");
+    check(resp.body != NULL && resp.body_len > 0,
+          "Streamed chunks collected into the response body");
+    check(resp.body && strstr((const char *)resp.body, "alpha") != NULL &&
+          strstr((const char *)resp.body, "beta") != NULL,
+          "Both chunks present, in order");
+    check(resp.body && strstr((const char *)resp.body, "event: progress") != NULL,
+          "Named event recorded");
+    sh_api_response_free(&resp);
+
+    /* A stream that reports failure must not hand back a half-built body. */
+    memset(&resp, 0, sizeof(resp));
+    g_stream_freed = 0;
+    check(stream_fail_case(&resp) != 0, "Failing stream reports an error");
+    check(resp.body == NULL && resp.body_len == 0,
+          "Failing stream leaves no partial body");
+    check(g_stream_freed == 1, "stream_free still called on the failure path");
+    sh_api_response_free(&resp);
+
+    /* Escaping: a message with quotes/newlines must stay valid JSON. */
+    memset(&resp, 0, sizeof(resp));
+    check(sh_api_response_error(&resp, 400, "bad \"input\"\nline2\ttab") == 0,
+          "sh_api_response_error builds a response");
+    check(resp.status_code == 400, "Error response carries the status");
+    check(resp.body && strstr((const char *)resp.body, "\\\"input\\\"") != NULL,
+          "Quotes escaped");
+    check(resp.body && strstr((const char *)resp.body, "\\n") != NULL &&
+          strstr((const char *)resp.body, "\\t") != NULL,
+          "Newline and tab escaped");
+    check(resp.body && strchr((const char *)resp.body, '\n') == NULL,
+          "No raw control characters survive into the JSON");
+    sh_api_response_free(&resp);
 
     ralph_api_free(ctx);
 
