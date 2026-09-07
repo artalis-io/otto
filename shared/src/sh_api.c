@@ -81,11 +81,16 @@ int sh_api_response_error(ShApiResponse *resp, int status, const char *msg)
             if (*p < 0x20) {
                 /* snprintf returns int and is negative on failure; casting
                  * that to size_t would make `o` enormous and turn the
-                 * terminator write below into an out-of-bounds store. */
+                 * terminator write below into an out-of-bounds store.
+                 *
+                 * On failure skip the character and carry on -- `continue`
+                 * rather than `break`, which inside a switch would only leave
+                 * the switch. The loop guard keeps at least 8 bytes free and
+                 * "\uXXXX" writes 6, so a successful write cannot reach the
+                 * end of the buffer. */
                 int w = snprintf(esc + o, sizeof(esc) - o, "\\u%04x", *p);
-                if (w < 0) break;
+                if (w < 0) continue;
                 o += (size_t)w;
-                if (o >= sizeof(esc)) { o = sizeof(esc) - 1; break; }
             } else {
                 esc[o++] = (char)*p;
             }
