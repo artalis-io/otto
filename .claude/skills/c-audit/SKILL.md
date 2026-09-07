@@ -34,7 +34,7 @@ OTTO follows a [security model](../../../docs/internals/security-model.md) with 
 | Broad file access | `fopen` without path validation | Warning | Restrict to known paths |
 
 **Role Reference:**
-- **Role B (Transport):** Mongoose handlers - should only frame/limit, not parse
+- **Role B (Transport):** Keel handlers - should only frame/limit, not parse
 - **Role P (Parser):** Parsing code - runs in isolated process
 - **Role C (Compute):** Business logic - receives only clean IR, no raw bytes
 - **Role D (Dataset):** Index access - read-only mmap of derived formats
@@ -410,9 +410,10 @@ static void debug_print(const char *msg) { printf("%s\n", msg); }
 | Unused `#define` | Dead macro | Remove |
 | Unused `typedef` | Dead type | Remove |
 
-### 9. Mongoose API Hardening
+### 9. Keel API Hardening
 
-OTTO C APIs using mongoose should implement rate limiting and work queues from `shared/`.
+OTTO C APIs using Keel should implement rate limiting from `shared/` and a
+bounded `KlThreadPool` for CPU-heavy work.
 
 #### Rate Limiting (`shared/include/sh_ratelimit.h`)
 
@@ -523,7 +524,7 @@ sh_workqueue_free(s_work_queue);
 
 #### Required API Endpoints
 
-All mongoose-based API servers MUST implement these standard endpoints:
+All Keel-based API servers MUST implement these standard endpoints:
 
 ```c
 // Health check - NOT rate limited, NOT queued
@@ -1262,9 +1263,9 @@ int vl_route(VLContext *ctx, int from, int to, VLRoute *out);
 - **Testing**: Hard to reset state between tests
 - **Multiple instances**: Can't have two independent instances of library state
 
-#### Exception: Mongoose API Servers
+#### Exception: Keel API Servers
 
-**API servers (mongoose-based) MAY use static/global variables** for:
+**API servers (Keel-based) MAY use static/global variables** for:
 - Configuration loaded at startup
 - Shared resources (rate limiter, work queue, caches)
 - Statistics counters
@@ -2040,7 +2041,7 @@ When `/c-audit <module>` is invoked:
    <module>/
    ├── include/     # Public headers
    ├── src/         # Implementation files
-   ├── api/src/     # API server (if mongoose-based)
+   ├── api/src/     # API server (if Keel-based)
    └── tests/       # Test files
    ```
 
@@ -2084,7 +2085,7 @@ When `/c-audit <module>` is invoked:
    - Find unused variables and parameters
    - Flag commented-out or `#if 0` code blocks
 
-8. **Audit Mongoose APIs** (if `api/` directory exists)
+8. **Audit Keel APIs** (if `api/` directory exists)
    - Check for `#include "sh_ratelimit.h"`
    - Check for `#include "sh_workqueue.h"` (if CPU-intensive ops)
    - Verify rate limiter initialization and cleanup
@@ -2264,7 +2265,7 @@ Before marking a module as "hardened":
 - [ ] No unused variables or parameters
 - [ ] No `#if 0` or commented-out code blocks
 
-**API Hardening (mongoose servers):**
+**API Hardening (Keel servers):**
 - [ ] Rate limiting enabled via `sh_ratelimit`
 - [ ] Work queue for CPU-intensive operations via `sh_workqueue`
 - [ ] Socket write timeout via `sh_mg_set_write_timeout()` on `MG_EV_ACCEPT`

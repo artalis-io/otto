@@ -281,5 +281,5 @@ Enable landmarks:
 ## Dependencies
 
 - **Velo**: Routing engine library
-- **mongoose**: HTTP server (vendor)
+- **Keel**: HTTP server (vendor submodule, MIT)
 - **pthread**: Thread support

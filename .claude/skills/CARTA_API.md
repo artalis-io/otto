@@ -317,5 +317,5 @@ The server includes CORS headers by default. If using a proxy, ensure it forward
 
 - **Carta**: Tile generation library
 - **Shared**: Geo utilities
-- **mongoose**: HTTP server (vendor)
+- **Keel**: HTTP server (vendor submodule, MIT)
 - **miniz**: Compression (vendor)

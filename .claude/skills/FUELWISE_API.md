@@ -2,7 +2,7 @@
 
 ## Overview
 
-The FuelWise API is a lightweight REST server built with mongoose (embedded HTTP library). It exposes the FuelWise optimization library via JSON endpoints for refueling optimization.
+The FuelWise API is a lightweight REST server built with Keel (embedded HTTP library, MIT). It exposes the FuelWise optimization library via JSON endpoints for refueling optimization.
 
 ## Quick Start
 
@@ -284,4 +284,4 @@ static void handle_new_endpoint(struct mg_connection *c, struct mg_http_message 
 
 - **FuelWise**: Refueling library
 - **Ralph**: LP/MIP solver
-- **mongoose**: HTTP server (vendor)
+- **Keel**: HTTP server (vendor submodule, MIT)
