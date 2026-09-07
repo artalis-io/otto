@@ -21,6 +21,12 @@ else
     LDFLAGS = -lm
 endif
 
+# libshared reaches the platform through sh_pal: bcrypt supplies
+# sh_pal_random_bytes, ws2_32 the StatsD sink in sh_metrics.
+ifneq (,$(findstring MINGW,$(UNAME_S)))
+    LDFLAGS += -lbcrypt -lws2_32
+endif
+
 INCLUDES = -Iinclude -I../shared/include
 
 # Debug build (with sanitizers)

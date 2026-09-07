@@ -21,6 +21,12 @@ else
     LDFLAGS = -lm -lpthread
 endif
 
+# libshared reaches the platform through sh_pal: bcrypt supplies
+# sh_pal_random_bytes, ws2_32 the StatsD sink in sh_metrics.
+ifneq (,$(findstring MINGW,$(UNAME_S)))
+    LDFLAGS += -lbcrypt -lws2_32
+endif
+
 INCLUDES = -Iinclude -I../arbor/include -I../shared/include
 
 # Debug build (with sanitizers)
@@ -37,6 +43,9 @@ OBJS = $(SRCS:.c=.o)
 
 LIB = libsurge.a
 TEST_BIN = test_surge
+# Transport abstraction leak detector -- builds with no transport library on
+# the include path. See docs/roadmaps/transport.md.
+TRANSPORT_TEST_BIN = test_transport_direct
 TEST_TB_BIN = test_time_budget
 TEST_NB_BIN = test_neighbor
 TEST_PM_BIN = test_profile_matrix
@@ -69,7 +78,7 @@ TSAN_CFLAGS = -Wall -Wextra -g -O1 -std=c11 -D_GNU_SOURCE -DSG_HAS_THREADS -DDEB
               -fsanitize=thread -fno-omit-frame-pointer
 TSAN_LDFLAGS = -fsanitize=thread
 
-.PHONY: all clean test lib debug bench bench-li-lim bench-cordeau \
+.PHONY: all clean test test-transport lib debug bench bench-li-lim bench-cordeau \
         bench-quick bench-li-lim-quick bench-cordeau-quick bench-all-quick \
         bench-gh-200 bench-gh-all bench-ll-200 bench-ll-all bench-full \
         bench-tune tune-quick tune-all \
@@ -88,6 +97,12 @@ src/%.o: src/%.c
 
 $(TEST_BIN): tests/test_surge.c $(LIB) ../arbor/libarbor.a ../shared/libshared.a
 	$(CC) $(CFLAGS) $(INCLUDES) $< -L. -lsurge -L../arbor -larbor -L../shared -lshared $(LDFLAGS) -o $@
+
+$(TRANSPORT_TEST_BIN): tests/test_transport_direct.c $(LIB) ../arbor/libarbor.a ../shared/libshared.a
+	$(CC) $(CFLAGS) $(INCLUDES) $< -L. -lsurge -L../arbor -larbor -L../shared -lshared $(LDFLAGS) -o $@
+
+test-transport: $(TRANSPORT_TEST_BIN)
+	./$(TRANSPORT_TEST_BIN)
 
 $(TEST_TB_BIN): tests/test_time_budget.c src/sg_time_budget.c src/sg_time_budget.h
 	$(CC) $(CFLAGS) -Isrc -I../shared/include tests/test_time_budget.c src/sg_time_budget.c $(LDFLAGS) -o $@
@@ -118,7 +133,8 @@ $(BENCH_TUNE_BIN): benchmarks/bench_tune.c benchmarks/sg_bench_utils.h $(LIB) ..
 ../shared/libshared.a:
 	$(MAKE) -C ../shared lib
 
-test: $(TEST_BIN) $(TEST_TB_BIN) $(TEST_NB_BIN) $(TEST_PM_BIN)
+test: $(TEST_BIN) $(TEST_TB_BIN) $(TEST_NB_BIN) $(TEST_PM_BIN) $(TRANSPORT_TEST_BIN)
+	./$(TRANSPORT_TEST_BIN)
 	./$(TEST_TB_BIN)
 	./$(TEST_NB_BIN)
 	./$(TEST_PM_BIN)
