@@ -449,8 +449,8 @@ int main(int argc, char *argv[]) {
      * Middleware runs in registration order, before routing. mw_not_found must
      * come last: it short-circuits anything the route table would not match.
      */
-    kl_http_server_use(&server, "*", "/*", mw_rate_limit, NULL);
     kl_http_server_use(&server, "OPTIONS", "/*", mw_preflight, NULL);
+    kl_http_server_use(&server, "*", "/*", mw_rate_limit, NULL);
     kl_http_server_use(&server, "*", "/*", mw_not_found, &app);
 
     /*
