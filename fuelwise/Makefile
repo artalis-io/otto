@@ -126,8 +126,16 @@ $(TRANSPORT_TEST_EXEC): $(TRANSPORT_TEST_SOURCES) $(LIB_NAME) $(SHARED_LIB)
 test-transport: shared ralph $(TRANSPORT_TEST_EXEC)
 	./$(TRANSPORT_TEST_EXEC)
 
-test-regression: $(TEST_EXEC)
+test-regression: test-unit test-bench
+
+# The unit suite on its own -- seconds, no external tools.
+test-unit: $(TEST_EXEC)
 	./$(TEST_EXEC)
+
+# The benchmark regression harness. Separate from test-unit because it is much
+# slower and because it shells out to glpsol, so a CI job can take one without
+# the other.
+test-bench: shared ralph $(LIB_NAME)
 	@echo ""
 	@echo "Running full benchmark regression harness..."
 	$(MAKE) -C bench regression-test
@@ -153,7 +161,7 @@ uninstall:
 	rm -rf /usr/local/include/fuelwise
 	rm -f /usr/local/lib/$(LIB_NAME)
 
-.PHONY: all lib clean clean-all debug test test-regression test-transport wasm install uninstall ralph shared help
+.PHONY: all lib clean clean-all debug test test-regression test-unit test-bench test-transport wasm install uninstall ralph shared help
 
 # Build WASM (delegates to wasm/ subdirectory)
 wasm:
