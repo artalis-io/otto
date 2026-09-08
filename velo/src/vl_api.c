@@ -559,18 +559,6 @@ char *vl_api_route(VLAPIContext *ctx,
  * Main Handler
  * ============================================================================ */
 
-/* vl_api_route() answers with a JSON error object and a status; the handler
- * wants a bare message for the shared error shape. The distinction between a
- * coordinate outside the graph and one with no road near it is already in the
- * body vl_api_route built, so this only has to be true, not specific. */
-static const char *route_status_message(int status) {
-    switch (status) {
-        case 400: return "Invalid route request";
-        case 404: return "No route found";
-        default:  return "Routing failed";
-    }
-}
-
 int vl_api_handle(void *ctx_void,
                   const ShApiRequest *req,
                   ShApiResponse *resp) {
@@ -622,22 +610,20 @@ int vl_api_handle(void *ctx_void,
                                                       : "Invalid request");
         }
 
-        /* vl_api_route() reports its own status: 400 for a coordinate outside
-         * the graph or with no road near it, 404 for no route, 200 otherwise.
-         * On anything but 200 the body it returns is already an error object,
-         * so it is discarded in favour of the shared error shape. */
+        /* vl_api_route() reports its own status -- 400 for a coordinate
+         * outside the graph or with no road near it, 404 for no route, 200
+         * otherwise -- and on failure its body is already {"error": "..."},
+         * the same shape sh_api_response_error() produces. Passing it through
+         * keeps the specific message ("Origin coordinate outside graph
+         * bounds") that a generic one would throw away. */
         body = vl_api_route(ctx, &params, &status, &resp->body_len);
         if (!body) {
             return sh_api_response_error(resp, status ? status : 500,
                                          "Routing failed");
         }
-        if (status != 200) {
-            free(body);
-            return sh_api_response_error(resp, status, route_status_message(status));
-        }
 
         resp->body = (uint8_t *)body;
-        resp->status_code = 200;
+        resp->status_code = status;
         return 0;
     }
 
