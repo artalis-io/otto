@@ -349,6 +349,23 @@ int sh_pal_random_bytes(void *buf, size_t len)
                            BCRYPT_USE_SYSTEM_PREFERRED_RNG) == 0 ? 0 : -1;
 }
 
+/* ------------------------------------------------------------ Environment */
+
+int sh_pal_setenv(const char *name, const char *value)
+{
+    if (!name || !name[0] || strchr(name, '=')) return -1;
+    return _putenv_s(name, value ? value : "") == 0 ? 0 : -1;
+}
+
+int sh_pal_unsetenv(const char *name)
+{
+    if (!name || !name[0] || strchr(name, '=')) return -1;
+    /* An empty value deletes the variable in the MSVC CRT; getenv() then
+     * answers NULL rather than "". */
+    return _putenv_s(name, "") == 0 ? 0 : -1;
+}
+
+
 /* ------------------------------------------------------------- Filesystem */
 
 int sh_pal_mkdir(const char *path)
@@ -356,6 +373,29 @@ int sh_pal_mkdir(const char *path)
     if (!path || !path[0]) return -1;
     if (CreateDirectoryA(path, NULL)) return 0;
     return GetLastError() == ERROR_ALREADY_EXISTS ? 0 : -1;
+}
+
+
+int sh_pal_temp_dir(char *buf, size_t len)
+{
+    char tmp[MAX_PATH + 1];
+    DWORD n;
+
+    if (!buf || len == 0) return -1;
+
+    /* GetTempPathA returns the length written, or the required size when the
+     * buffer is too small -- so a return >= the buffer size is a failure. */
+    n = GetTempPathA((DWORD)sizeof(tmp), tmp);
+    if (n == 0 || n >= sizeof(tmp)) { buf[0] = '\0'; return -1; }
+
+    /* It always ends in a backslash; drop it so callers can always join with
+     * one, matching the POSIX side. */
+    while (n > 1 && (tmp[n - 1] == '\\' || tmp[n - 1] == '/')) n--;
+    if ((size_t)n >= len) { buf[0] = '\0'; return -1; }
+
+    memcpy(buf, tmp, n);
+    buf[n] = '\0';
+    return 0;
 }
 
 

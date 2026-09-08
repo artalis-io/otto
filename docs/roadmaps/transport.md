@@ -188,7 +188,8 @@ surface is deliberate. What OTTO's core needs, Keel does not export:
 | monotonic + wall clock | 15 | partly | `QueryPerformanceCounter`, `GetSystemTimeAsFileTime` |
 | calendar (`gmtime_r`, `localtime_r`) | shimmed | no | `gmtime_s`, `localtime_s` |
 | CPU count (`sysconf`) | 3 | no | `GetSystemInfo` |
-| env (`setenv`, `unsetenv`) | tests/bench | no | `_putenv` |
+| env (`setenv`, `unsetenv`) | tests/bench | no | `_putenv_s` -- built |
+| temp directory | tests/bench | no | `GetTempPathA` -- built |
 | sockets / addresses / DNS | 0 in core | yes | only servers need it; they already use Keel |
 
 **It would invert the layering.** `sh_keelserver.c` is deliberately excluded from
@@ -215,6 +216,35 @@ a `_Static_assert` on size and alignment in the `.c` file.
 **Phase 4 requires a Windows CI job.** CI paths nobody exercises decay silently —
 `build-wasm` sat behind a red `test-c` for months without running. A PAL with no Windows
 job is the same trap with more surface.
+
+### What widening that job found
+
+The job started narrow: core suites plus a *build* of the six servers, with
+FuelWise and Surge running only `test-transport`. Widening those two to their
+full `test` targets found three more defects in the FuelWise bench harness --
+none of which `test-transport` could have caught, because it never compiled
+that code:
+
+| defect | why it is a Windows defect |
+|---|---|
+| `setenv` / `unsetenv` in `test_validator.c` | POSIX-only; the CRT spells it `_putenv_s`. Now `sh_pal_setenv` / `sh_pal_unsetenv`. |
+| `fuelwise/bench/Makefile` missing `-lbcrypt -lws2_32` | the same hole as #63, in a second Makefile nobody had linked on Windows |
+| `glpsol` invoked with `'single quotes'` | `popen()` goes through `cmd.exe`, which does not treat `'...'` as quoting and looks for a program named `'glpsol'` |
+| `mkstemp("/tmp/fw_bench_XXXXXX")` | a mingw binary is a native Windows program, so `/tmp/x` means `C:\tmp\x`. Now `sh_pal_temp_dir()`. |
+
+The `cmd.exe` one has a second layer worth writing down: double quotes *are*
+quoting in cmd, but when the command line begins with one, cmd strips the first
+and the last quote of the whole line. A line quoting three arguments therefore
+needs an extra outer pair, which is what `fw_glpk.c` now emits under `_WIN32`.
+
+`glpk` is installed in the job so the FuelWise regression harness can run its
+objective comparisons against `glpsol` on Windows too. That is a check on
+Ralph's numerics under a different libm and compiler, not merely on whether the
+code compiles.
+
+**Still Linux-only:** the API HTTP suites. They drive a live server with `curl`
+and want a downloaded PBF, which is a bigger CI surface than this job needs; the
+Windows job builds all six servers, which is what was actually unknown.
 
 ## Invariant to enforce in CI
 

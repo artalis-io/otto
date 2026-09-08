@@ -19,6 +19,15 @@ endif
 # Library paths (order matters: fuelwise -> ralph -> shared)
 LDFLAGS = -L.. -L../../shared -L../../ralph -lfuelwise -lralph -lshared -lm -lpthread $(OMP_LDFLAGS)
 
+# libshared reaches the platform through sh_pal: bcrypt supplies
+# sh_pal_random_bytes, ws2_32 the StatsD sink in sh_metrics. The same two
+# lines are in fuelwise/Makefile -- this Makefile links its own binaries and
+# so needs them too, which only surfaced once Windows CI ran `make -C
+# fuelwise test` rather than just `test-transport`.
+ifneq (,$(findstring MINGW,$(UNAME_S)))
+    LDFLAGS += -lbcrypt -lws2_32
+endif
+
 # Source files
 SRCS = main.c fw_bench.c fw_gen.c fw_validate.c fw_glpk.c
 OBJS = $(SRCS:.c=.o)
