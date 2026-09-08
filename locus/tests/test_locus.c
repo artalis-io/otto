@@ -4,6 +4,7 @@
 
 #include "locus.h"
 #include "lc_query.h"
+#include "lc_api.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -1213,6 +1214,138 @@ TEST(search_address_street_only)
  * Main
  * ============================================================================ */
 
+/* ============================================================================
+ * API Handler Tests
+ * ============================================================================ */
+
+/* Build an index of `count` entities whose names all share a search token and
+ * are long enough to be interesting to a JSON writer. */
+static LCIndex *build_long_name_index(int count)
+{
+    LCEntityStore *store = lc_entity_store_create(256);
+    if (!store) return NULL;
+
+    for (int i = 0; i < count; i++) {
+        char name[600];
+        LCEntity e;
+
+        snprintf(name, sizeof(name), "zebra%0*d", 560, i);
+
+        memset(&e, 0, sizeof(e));
+        e.name = lc_entity_store_intern(store, name, 0);
+        e.osm_id = (uint64_t)(1000 + i);
+        e.type = LC_ENTITY_NODE;
+        e.centroid.lat = 43.7 + i * 0.0001;
+        e.centroid.lon = 7.4 + i * 0.0001;
+        if (lc_entity_store_add(store, &e) != LC_OK) {
+            lc_entity_store_free(store);
+            return NULL;
+        }
+    }
+
+    LCIndex *index = lc_index_create();
+    if (!index) { lc_entity_store_free(store); return NULL; }
+    if (lc_index_build(index, store) != LC_OK) {
+        lc_index_free(index);
+        return NULL;
+    }
+    return index;   /* index owns the store from here */
+}
+
+/*
+ * Regression: lc_api_search() built its JSON into a fixed 64 KB malloc and
+ * accumulated snprintf's would-have-written return value into an unclamped
+ * `offset`, so a full page of long-named results walked `json + offset` past
+ * the end of the allocation. Under -D_FORTIFY_SOURCE=2 this aborted the
+ * process with "buffer overflow detected"; without it, it was a heap write
+ * out of bounds. The streaming writer has no fixed ceiling.
+ */
+TEST(api_search_large_result_set)
+{
+    LCIndex *index = build_long_name_index(120);
+    ASSERT(index != NULL);
+
+    LCAPIContext *api = lc_api_create(index, NULL);
+    ASSERT(api != NULL);
+
+    int status = 0;
+    size_t len = 0;
+    char *json = lc_api_search(api, "zebra", 100, &status, &len);
+
+    ASSERT(json != NULL);
+    ASSERT_EQ(status, 200);
+    /* The point of the test: comfortably past the old 64 KB ceiling. */
+    ASSERT(len > 64 * 1024);
+    ASSERT_EQ(strlen(json), len);
+    ASSERT(json[0] == '{');
+    ASSERT(json[len - 1] == '}');
+
+    free(json);
+    lc_api_free(api);
+    lc_index_free(index);
+}
+
+/* A name containing a quote must not be able to break out of the JSON string.
+ * The WASM copy of this endpoint interpolated names with a bare %s. */
+TEST(api_search_escapes_names)
+{
+    LCEntityStore *store = lc_entity_store_create(4);
+    ASSERT(store != NULL);
+
+    LCEntity e;
+    memset(&e, 0, sizeof(e));
+    e.name = lc_entity_store_intern(store, "Cafe \"Quote\" Bar", 0);
+    e.osm_id = 7;
+    e.type = LC_ENTITY_NODE;
+    e.centroid.lat = 43.7;
+    e.centroid.lon = 7.4;
+    ASSERT_EQ(lc_entity_store_add(store, &e), LC_OK);
+
+    LCIndex *index = lc_index_create();
+    ASSERT(index != NULL);
+    ASSERT_EQ(lc_index_build(index, store), LC_OK);
+
+    LCAPIContext *api = lc_api_create(index, NULL);
+    ASSERT(api != NULL);
+
+    int status = 0;
+    size_t len = 0;
+    char *json = lc_api_search(api, "Cafe", 10, &status, &len);
+    ASSERT(json != NULL);
+    ASSERT_EQ(status, 200);
+    /* Escaped, not raw. */
+    ASSERT(strstr(json, "\\\"Quote\\\"") != NULL);
+
+    free(json);
+    lc_api_free(api);
+    lc_index_free(index);
+}
+
+/* Reverse geocoding must reject text that is not a number. sh_parse_double
+ * yields NaN, and NaN fails every range comparison, so the isnan() guard is
+ * what turns it into a 400 rather than a lookup at (0, 0). */
+TEST(api_reverse_rejects_nan)
+{
+    LCIndex *index = build_long_name_index(1);
+    ASSERT(index != NULL);
+
+    LCAPIContext *api = lc_api_create(index, NULL);
+    ASSERT(api != NULL);
+
+    int status = 0;
+    size_t len = 0;
+    char *json = lc_api_reverse(api, NAN, 7.4, &status, &len);
+    ASSERT(json == NULL);
+    ASSERT_EQ(status, 400);
+
+    json = lc_api_reverse(api, 43.7, NAN, &status, &len);
+    ASSERT(json == NULL);
+    ASSERT_EQ(status, 400);
+
+    lc_api_free(api);
+    lc_index_free(index);
+}
+
 int main(void)
 {
     printf("\n=== Locus Test Suite ===\n\n");
@@ -1318,6 +1451,11 @@ int main(void)
     printf("\nAddress Search:\n");
     RUN_TEST(search_address_with_housenumber);
     RUN_TEST(search_address_street_only);
+
+    printf("\nAPI Handler:\n");
+    RUN_TEST(api_search_large_result_set);
+    RUN_TEST(api_search_escapes_names);
+    RUN_TEST(api_reverse_rejects_nan);
 
     printf("\n=== Results: %d/%d tests passed ===\n\n", tests_passed, tests_run);
 
