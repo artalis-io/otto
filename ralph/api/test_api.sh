@@ -92,7 +92,7 @@ CODE=$(curl -s -o /dev/null -w '%{http_code}' -m 10 "http://127.0.0.1:$PORT/api/
 check_code "Unknown path returns 404" "$CODE" "404"
 
 # Ralph dispatches every path through ralph_api_handle(), which answers 404 for
-# a wrong method rather than 405 -- same as the mongoose server did.
+# a wrong method rather than 405.
 CODE=$(curl -s -o /dev/null -w '%{http_code}' -m 10 "http://127.0.0.1:$PORT/api/v1/solve")
 check_code "GET on /solve returns 404" "$CODE" "404"
 

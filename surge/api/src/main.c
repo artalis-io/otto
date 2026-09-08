@@ -18,9 +18,8 @@
  *
  *   Solves run on a Keel thread pool. The connection is suspended via
  *   KlAsyncOp for the duration, so the event loop keeps accepting and serving
- *   other requests while a solve is in flight. (The previous mongoose server
- *   blocked the event loop in sh_completion_wait(), which serialized every
- *   request behind the running solve.)
+ *   other requests while a solve is in flight, rather than serializing every
+ *   request behind the running solve.
  */
 
 #include "surge.h"
@@ -169,7 +168,7 @@ static int mw_preflight(KlHttpRequest *req, KlHttpResponse *res, void *ud) {
  * would otherwise fall through to Keel's built-in text/plain 404, which
  * carries no CORS headers (a browser would see an opaque CORS failure rather
  * than a clean 404). Ask the router what it would do and answer in the same
- * JSON+CORS shape the mongoose server used.
+ * JSON+CORS shape.
  */
 static int mw_not_found(KlHttpRequest *req, KlHttpResponse *res, void *ud) {
     AppCtx *app = (AppCtx *)ud;

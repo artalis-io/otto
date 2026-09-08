@@ -1226,7 +1226,7 @@ Population-based (3 generations, auto threads):
 
 Implemented features: Everything in previous status plus: HGS-style infeasible-space exploration with adaptive penalty manager (6 constraint types — time warp, capacity, duration, ride time, distance, total work — with independent per-constraint self-adjustment), time warping (violation accumulated, start warped to tw_late for downstream propagation), feasible-beats-infeasible best-tracking, cost-proportional penalty scaling (bounds and initial weights adapt to problem cost structure), instance-adaptive SISR L_max (Christiaens & Vanden Berghe 2020). `--population` flag added to Solomon and Li & Lim benchmarks.
 
-Infrastructure: REST API server (Mongoose, rate limiting, work queue, Prometheus metrics, CORS), WASM build (Emscripten), Python bindings (ctypes), Node.js bindings (ffi-napi). REST API e2e test suite.
+Infrastructure: REST API server (Keel, rate limiting, work queue, Prometheus metrics, CORS), WASM build (Emscripten), Python bindings (ctypes), Node.js bindings (ffi-napi). REST API e2e test suite.
 
 #### Previous Status (as of 2026-02-23)
 
@@ -1238,7 +1238,7 @@ Best measured quality (10000 iterations, deterministic seed 42):
 
 Implemented features: Everything in previous status plus: plan/ETA validation mode (`sg_validate_plan()`) — validate pre-existing routes without re-optimizing, compute ETAs for every stop, report constraint violations (hard TW, capacity, PD order, ride time, max duration/distance/tasks, forbidden vehicle, qualifications). JSON API supports `"plan"` key for validation mode. New types: `SGPlanRoute`, `SGViolation`, `SGViolationType`.
 
-Infrastructure: REST API server (Mongoose, rate limiting, work queue, Prometheus metrics, CORS), WASM build (Emscripten), Python bindings (ctypes), Node.js bindings (ffi-napi). REST API e2e test suite.
+Infrastructure: REST API server (Keel, rate limiting, work queue, Prometheus metrics, CORS), WASM build (Emscripten), Python bindings (ctypes), Node.js bindings (ffi-napi). REST API e2e test suite.
 
 #### Previous Status (as of 2026-02-23)
 
@@ -1760,7 +1760,7 @@ These do NOT require solver changes — they are orchestration around the existi
 | **Arena allocator** | Phases 1-3 done | High | Phase 1 (per-solution arena): ~29 malloc → 1, ~26 free → 1. Phase 2 (optimized copy): `init_for_copy()` + single `memcpy` of arena buffer. Phase 3 (scratch buffers): `SGScratchBuffers` on `SGContext` eliminates per-call malloc/free in feasibility and local search. Cumulative: Solomon -14.8%, Li&Lim -5.0%, Cordeau -3.4% vs Phase 1. |
 | **Multi-threading: independent runs** | ✅ Done | High | `sg_solve_parallel()`: N threads × N seeds, pick best. 15 wins vs 0 losses on Li & Lim vs single-threaded. |
 | **Multi-threading: parallel move eval** | Not started | Medium | `sg_route_rank_insertions_for_request()` vehicle loop is read-only per vehicle. Thread pool or OpenMP. |
-| **REST API server** | ✅ Done | High | `surge/api/surge-solver` — Mongoose + `sh_workqueue`. `sg_api_handle()` routes `/api/v1/solve`, `/health`, `/version`. E2e test suite (`test_api.sh`). |
+| **REST API server** | ✅ Done | High | `surge/api/surge-solver` — Keel + `sh_workqueue`. `sg_api_handle()` routes `/api/v1/solve`, `/health`, `/version`. E2e test suite (`test_api.sh`). |
 | **Language bindings** | ✅ Done | Medium | Python (`surge/bindings/python/`) and Node.js (`surge/bindings/node/`) wrappers around JSON API. Test suites for both. |
 | **Population-based search** | ✅ Done | Medium | `sg_solve_population()`: generational ALNS with elite pool warm-starting. 10 wins vs 6 losses on Li & Lim vs independent parallel runs, avg distance -0.6%. |
 | **WASM build** | ✅ Done | Medium | `surge/wasm/` — Emscripten target. `sg_wasm_api.c` wraps `sg_api_handle()`. Transport-agnostic by design. |
@@ -4188,18 +4188,18 @@ Full `/c-audit surge` passed with 0 issues across all categories:
 `sg_parallel.c`, `sg_profile_matrix.c`, `test_surge.c`, `test_profile_matrix.c`.
 ~870 new lines.
 
-## Keel Migration (Mongoose Removal) — Phase 1 of 6
+## Keel Migration — Phase 1 of 6
 
-**Completed for Surge.** Surge's API server no longer links Mongoose.
+**Completed for Surge.** Surge's API server runs on Keel v3.
 
 ### Why
 
-`vendor/mongoose/mongoose.h` is `SPDX-License-Identifier: GPL-2.0-only or
+The previous HTTP server was `SPDX-License-Identifier: GPL-2.0-only or
 commercial`. GPL-2.0-**only** (not "or later") cannot combine with OTTO's
 AGPL-3.0, and the commercial tier in `docs/business/STRATEGY.md` cannot
 sublicense it either. Keel is MIT, which clears both paths.
 
-Secondary win: the mongoose server called `sh_completion_wait()` on the event
+Secondary win: the previous server called `sh_completion_wait()` on the event
 loop thread, so every request serialized behind the running solve. Surge now
 suspends the connection (`KlAsyncOp`) and solves on a `KlThreadPool`.
 
@@ -4209,8 +4209,8 @@ suspends the connection (`KlAsyncOp`) and solves on a `KlThreadPool`.
 |--------|------|
 | Keel v3.0.0-rc.3 as a submodule | `.gitmodules`, `vendor/keel` |
 | Keel-side HTTP helpers (`sh_kl_*`) | `shared/{include,src}/sh_keelserver.{h,c}` |
-| Surge API ported off mongoose | `surge/api/src/main.c` |
-| Mongoose dropped from the build | `surge/api/Makefile` |
+| Surge API ported to Keel | `surge/api/src/main.c` |
+| Legacy HTTP server dropped from the build | `surge/api/Makefile` |
 | `make surge-api`, CI coverage | `Makefile`, `.github/workflows/ci.yml` |
 
 Core Keel only — no mbedTLS/nghttp2 integrations, so no new external build
@@ -4220,9 +4220,9 @@ dependencies. No OTTO API server uses TLS today.
 
 - `sh_keelserver.c` is deliberately **not** in `libshared.a` (it needs Keel
   headers), mirroring how `sh_httpserver.c` is compiled by each API server.
-  The `sh_kl_*` helpers are a 1:1 map of the `sh_mg_*` set, so porting the
-  next server is mostly mechanical.
-- Two Keel behaviours that differ from mongoose and cost time here:
+  The `sh_kl_*` helpers are a 1:1 map of the previous `sh_mg_*` set, so porting
+  the next server is mostly mechanical.
+- Two Keel behaviours that differed from the previous server and cost time here:
   1. `kl_http_response_json()` / `_error()` **borrow** their body. Anything
      heap-allocated or stack-scoped must use `kl_http_response_body_copy()`.
      The `sh_kl_*` helpers already copy.
@@ -4237,9 +4237,8 @@ dependencies. No OTTO API server uses TLS today.
 
 ### Remaining
 
-Carta (56 `mg_` call sites), Velo (100), Locus (63), FuelWise (47), Ralph (30),
-plus `shared/src/sh_httpserver.c` (41) — delete that file once the last server
-is ported, along with `vendor/mongoose/`.
+Carta, Velo, Locus, FuelWise and Ralph remain to port. The legacy
+`shared/src/sh_httpserver.c` will be deleted once the last server is on Keel.
 
 ### Known issue (upstream, not blocking)
 

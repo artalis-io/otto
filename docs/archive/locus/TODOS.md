@@ -28,7 +28,7 @@ locus/
 │   ├── lc_reverse.c      # Reverse geocoding logic
 │   ├── lc_rank.c         # Result ranking/scoring
 │   └── lc_normalize.c    # Text normalization (lowercase, diacritics)
-├── api/                  # REST API (mongoose)
+├── api/                  # REST API (Keel)
 │   ├── src/main.c
 │   └── Makefile
 ├── wasm/                 # WebAssembly build
@@ -486,7 +486,7 @@ locus/
 
 ### 11.3 Implementation
 
-- [ ] Mongoose HTTP server setup
+- [ ] Keel HTTP server setup
 - [ ] Request parsing (query params)
 - [ ] JSON response formatting
 - [ ] Error handling

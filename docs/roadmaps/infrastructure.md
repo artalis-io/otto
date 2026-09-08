@@ -21,7 +21,7 @@ Shared infrastructure improvements for all OTTO API servers (Carta, Velo, Locus,
 
 1. **Slow client vulnerability**: `mg_send()` blocks event loop on slow TCP ACKs. A client reading at 1KB/s can lock an HTTP thread for ~2000s on a 2MB tile.
 
-2. **Single event loop**: Velo/FuelWise use single Mongoose event loops. All requests serialize through one thread.
+2. **Single event loop**: Velo/FuelWise use single HTTP event loops. All requests serialize through one thread.
 
 3. **Work cancellation race**: HTTP handler times out → returns 504 → worker still processes item → result discarded (CPU wasted).
 
@@ -31,7 +31,7 @@ Shared infrastructure improvements for all OTTO API servers (Carta, Velo, Locus,
 
 #### 16.1 sh_httpserver.h - Multi-threaded HTTP Server
 
-Shared abstraction wrapping Mongoose with:
+Shared abstraction wrapping the Keel HTTP server with:
 - Multiple event loops (one per CPU core, uses SO_REUSEPORT)
 - Socket write timeout (prevents slow client DoS)
 - Request context lifecycle management
@@ -91,7 +91,7 @@ void sh_chunked_end(struct mg_connection *c);
 
 ### Migration Path
 
-1. **Phase 1**: Add socket timeout to Mongoose connections (immediate fix)
+1. **Phase 1**: Add socket timeout to HTTP connections (immediate fix)
 2. **Phase 2**: Add cancellation support to sh_workqueue
 3. **Phase 3**: Migrate Velo/FuelWise to multi-threaded HTTP (use Carta pattern)
 4. **Phase 4**: Add chunked streaming for large tiles (optional optimization)
@@ -100,7 +100,7 @@ void sh_chunked_end(struct mg_connection *c);
 
 - [ ] Add `sh_workqueue_item_cancel()` and `sh_workqueue_item_cancelled()`
 - [ ] Add `total_cancelled` to ShWorkQueueStats
-- [ ] Create `sh_httpserver.h` with multi-threaded Mongoose wrapper
+- [ ] Create `sh_httpserver.h` with multi-threaded Keel wrapper
 - [ ] Add socket write timeout to all API servers
 - [ ] Migrate Velo API to multi-threaded HTTP pattern
 - [ ] Migrate FuelWise API to multi-threaded HTTP pattern
@@ -322,44 +322,34 @@ Client Request
 - [ ] Create Grafana dashboard templates
 - [ ] Document alerting thresholds
 
-## Mongoose Removal — Complete
+## HTTP Server: Keel v3 — Complete
 
-`vendor/mongoose/` and `shared/src/sh_httpserver.c` are gone. All six API
-servers run on Keel (`vendor/keel`, MIT, git submodule pinned to v3.0.0-rc.3).
+The previous HTTP server and its `shared/src/sh_httpserver.c` wrapper are gone.
+All six API servers now run on Keel (`vendor/keel`, MIT, git submodule pinned to
+v3.0.0-rc.3).
 
 ### Why this mattered
 
-`vendor/mongoose/mongoose.h` declared
-`SPDX-License-Identifier: GPL-2.0-only or commercial`. GPL-2.0-**only** (not
-"or later") cannot combine with OTTO's AGPL-3.0 — GPLv2-or-later can upgrade
+The previous server was licensed `GPL-2.0-only or commercial`. GPL-2.0-**only**
+(not "or later") cannot combine with OTTO's AGPL-3.0 — GPLv2-or-later can upgrade
 into AGPLv3, `-only` cannot — and the commercial tier in
 `docs/business/STRATEGY.md` could not sublicense it either. Porting the servers
-made the code independent of it; **this deletion is what actually resolves the
-conflict**, because until now the GPL-2.0-only source was still in the tree.
+onto Keel made the code independent of it and resolved the conflict, since the
+GPL-2.0-only source is no longer in the tree.
 
-### Removed
-
-| Path | Size |
-|------|------|
-| `vendor/mongoose/mongoose.c` | 27,331 lines |
-| `vendor/mongoose/mongoose.h` | ~5,000 lines |
-| `vendor/mongoose/CLAUDE.md` | vendor notes |
-| `shared/src/sh_httpserver.c` | 537 lines |
-| `shared/include/sh_httpserver.h` | 440 lines |
-
-`sh_httpserver.h` also carried a clean transport-agnostic API (`ShHttpServer`,
-`ShHttpRequest`, `ShHttpResponse`) that **no server ever adopted** — every one
-of them called `mg_*` directly. It goes with the rest.
+The old `sh_httpserver.h` also carried a clean transport-agnostic API
+(`ShHttpServer`, `ShHttpRequest`, `ShHttpResponse`) that no server ever adopted —
+every one of them called the old server's API directly. It went with the rest.
 
 ### Kept deliberately
 
-Comments in the ported servers that describe how the mongoose server *used to*
-behave are kept in past tense. They explain why several decisions look the way
-they do — the 400 for malformed `/tiles/` paths, the CORS-preflight ordering,
+Comments in the ported servers that describe how the previous HTTP server *used
+to* behave are kept in past tense. They explain why several decisions look the
+way they do — the 400 for malformed `/tiles/` paths, the CORS-preflight ordering,
 the `Method not allowed` shape, and why Carta no longer needs N event loops.
 
 ### Verification
 
 All six `main.c` files plus `sh_keelserver.c` compile clean under
-`-Wall -Wextra` with `vendor/mongoose/` absent, and every server has a gating
-CI suite (Surge 11, Ralph 14, FuelWise 20, Velo 26, Carta 19, Locus 19).
+`-Wall -Wextra`, and every server has a gating CI suite (Surge 11, Ralph 14,
+FuelWise 20, Velo 26, Carta 19, Locus 19).
