@@ -161,6 +161,12 @@ int main(void)
                NULL, &resp) == 0,
           "Route from outside the graph is handled, not an error");
     check(resp.status_code == 400, "Origin outside the bbox responds 400");
+    /* The specific message survives. vl_api_route() already answers with
+     * {"error": "..."}, so the handler passes that body through rather than
+     * flattening it to a generic one -- velo/api/test_api.sh greps for this
+     * exact phrase over live HTTP. */
+    check(body_has(&resp, "outside graph bounds"),
+          "The bbox rejection says which coordinate and why");
     sh_api_response_free(&resp);
 
     /* A POST with no body is malformed, not a request to fall back to the
