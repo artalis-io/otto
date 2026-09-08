@@ -142,7 +142,7 @@ test-bench: shared ralph $(LIB_NAME)
 
 # Clean
 clean:
-	rm -f $(OBJECTS) $(LIB_NAME) $(TEST_EXEC)
+	rm -f $(OBJECTS) $(LIB_NAME) $(TEST_EXEC) $(TRANSPORT_TEST_EXEC)
 	$(MAKE) -C bench clean
 
 # Clean all including Ralph
