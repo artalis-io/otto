@@ -2044,7 +2044,7 @@ kept exactly as the previous server used them, including the
 `sh_completion_wait()` on the event loop thread. Behaviour, response shapes and
 `/api/v1/stats` counters are unchanged.
 
-- `sh_mg_*` → `sh_kl_*` (`shared/src/sh_keelserver.c`). FuelWise is the first
+- `sh_mg_*` → `sh_http_*` (`shared/src/sh_httpserver.c`). FuelWise is the first
   module to exercise those helpers end to end; Ralph needed none of them.
 - `mw_not_found` answers 404/405 via `kl_http_router_match()`, since Keel route
   patterns have no wildcard and its built-in 404 carries no CORS headers.
@@ -2101,6 +2101,7 @@ back alongside the other servers.
 
 ### Status: Complete
 
-All six servers are on Keel v3; the legacy `shared/src/sh_httpserver.c` has
-been removed. See `docs/roadmaps/infrastructure.md` for the cross-cutting
-completion record.
+All six servers are on Keel v3; the previous GPL HTTP server has been removed.
+See `docs/roadmaps/infrastructure.md` for the cross-cutting completion record
+(including the `sh_keelserver`/`sh_keelasync` → `sh_httpserver`/`sh_httpasync`
+rename).

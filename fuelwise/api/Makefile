@@ -61,7 +61,7 @@ SRCS = $(SRC_DIR)/main.c
 OBJS = $(SRCS:.c=.o)
 
 # Shared Keel HTTP helpers (need Keel headers, so not in libshared)
-KEELSERVER_OBJ = $(BUILD_DIR)/sh_keelserver.o $(BUILD_DIR)/sh_keelasync.o
+HTTPSERVER_OBJ = $(BUILD_DIR)/sh_httpserver.o $(BUILD_DIR)/sh_httpasync.o
 
 # Default target
 all: $(BUILD_DIR) $(TARGET)
@@ -70,8 +70,8 @@ $(BUILD_DIR):
 	mkdir -p $(BUILD_DIR)
 
 # Build the API server
-$(TARGET): $(OBJS) $(KEELSERVER_OBJ) $(FUELWISE_LIB) $(RALPH_LIB) $(SHARED_LIB) $(KEEL_LIB)
-	$(CC) $(CFLAGS) $(INCLUDES) -o $@ $(OBJS) $(KEELSERVER_OBJ) $(FUELWISE_LIB) $(RALPH_LIB) $(SHARED_LIB) $(KEEL_LIB) -lm -lpthread $(OPENMP_LDFLAGS) $(PLATFORM_LIBS)
+$(TARGET): $(OBJS) $(HTTPSERVER_OBJ) $(FUELWISE_LIB) $(RALPH_LIB) $(SHARED_LIB) $(KEEL_LIB)
+	$(CC) $(CFLAGS) $(INCLUDES) -o $@ $(OBJS) $(HTTPSERVER_OBJ) $(FUELWISE_LIB) $(RALPH_LIB) $(SHARED_LIB) $(KEEL_LIB) -lm -lpthread $(OPENMP_LDFLAGS) $(PLATFORM_LIBS)
 
 # Build vendored Keel. Core only (no mbedTLS/nghttp2 integrations), so
 # this needs no external libraries.

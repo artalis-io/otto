@@ -841,7 +841,7 @@ duplicated code paths collapsed into one. Net ~100 lines smaller.
 | Previous behavior | Keel replacement |
 |-------------------|------------------|
 | `mg_http_get_var()` | `sh_query_get_str()` |
-| `mg_http_get_header()` | `kl_http_request_header()` / `sh_kl_origin()` |
+| `mg_http_get_header()` | `kl_http_request_header()` / `sh_http_origin()` |
 | `mg_printf()` + `mg_send()` (tiles) | `kl_http_response_*` + `body_copy` |
 | `mg_http_serve_dir()` | `serve_static_file()` (see below) |
 | `mg_match()` | `strcmp()` / route table |
@@ -902,7 +902,9 @@ Not verified locally: Carta needs `mmap`/`sys/mman.h`, which MinGW lacks, so
 unlike Velo this port could not be smoke-tested on Windows first. CI found both
 bugs instead.
 
-### Remaining
+### Status: Complete
 
-Locus is the last module to port, then the legacy
-`shared/src/sh_httpserver.c` can be deleted.
+All six servers are on Keel v3; the previous GPL HTTP server has been removed.
+See `docs/roadmaps/infrastructure.md` for the cross-cutting completion record
+(including the `sh_keelserver`/`sh_keelasync` → `sh_httpserver`/`sh_httpasync`
+rename).

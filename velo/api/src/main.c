@@ -35,8 +35,8 @@
 #include "vl_api.h"
 #include "sh_polyline.h"
 #include "shared.h"   /* For sh_ratelimit, sh_workqueue, sh_cors, sh_capacity */
-#include "sh_keelserver.h"
-#include "sh_keelasync.h"  /* Keel-backed sh_kl_* helpers */
+#include "sh_httpserver.h"
+#include "sh_httpasync.h"  /* Keel-backed sh_http_* helpers */
 #include "sh_args.h"        /* For sh_parse_int, sh_parse_double */
 #include "sh_log.h"
 #include "sh_trace.h"
@@ -127,7 +127,7 @@ static ShRateLimiter *s_rate_limiter = NULL;
 
 
 static KlThreadPool *s_pool = NULL;
-static ShKeelAsyncStats s_qstats;
+static ShHttpAsyncStats s_qstats;
 
 /* CORS configuration (uses shared library) */
 static ShCorsConfig s_cors_config;
@@ -136,7 +136,7 @@ static ShCorsConfig s_cors_config;
 static ShAdaptiveTracker *s_adaptive_tracker = NULL;
 
 typedef struct {
-    ShKeelAsync async;   /* server, pool, cors, timeout, stats */
+    ShHttpAsync async;   /* server, pool, cors, timeout, stats */
 } AppCtx;
 
 
@@ -331,11 +331,11 @@ static int velo_metered_handler(void *ctx, const ShApiRequest *req,
 
 /* Compatibility wrappers for simple calls (uses wildcard origin) */
 static void send_json(KlHttpResponse *res, int status, const char *json) {
-    sh_kl_reply_json(res, status, &s_cors_config, NULL, json);
+    sh_http_reply_json(res, status, &s_cors_config, NULL, json);
 }
 
 static void send_error(KlHttpResponse *res, int status, const char *message) {
-    sh_kl_reply_error(res, status, &s_cors_config, NULL, message);
+    sh_http_reply_error(res, status, &s_cors_config, NULL, message);
 }
 
 /* Note: json_escape_polyline removed - ShJsonWriter handles escaping */
@@ -347,7 +347,7 @@ static void send_error(KlHttpResponse *res, int status, const char *message) {
 static void handle_health(KlHttpRequest *req, KlHttpResponse *res, void *ud) {
     (void)req; (void)ud;
     ShMetricsTimer timer = sh_metrics_timer_start();
-    sh_kl_handle_health(res, &s_cors_config, NULL, "velo-route-server", vl_version());
+    sh_http_handle_health(res, &s_cors_config, NULL, "velo-route-server", vl_version());
     record_metrics(timer, "health");
     sh_trace_clear();
 }
@@ -463,7 +463,7 @@ static void handle_stats(KlHttpRequest *req, KlHttpResponse *res, void *ud) {
 /* GET /metrics - Prometheus metrics endpoint, uses shared helper */
 static void handle_metrics(KlHttpRequest *req, KlHttpResponse *res, void *ud) {
     (void)req; (void)ud;
-    sh_kl_handle_metrics(res);
+    sh_http_handle_metrics(res);
     sh_trace_clear();
 }
 
@@ -478,7 +478,7 @@ static void handle_metrics(KlHttpRequest *req, KlHttpResponse *res, void *ud) {
 /*
  * Marshal the Keel request and hand it to the shared dispatcher. The context,
  * the body copy, on_resume/on_cancel/on_deadline, the 503 on a full queue and
- * the 504 on a deadline are sh_keel_async_dispatch()'s job now.
+ * the 504 on a deadline are sh_http_async_dispatch()'s job now.
  */
 static void handle_route(KlHttpRequest *req, KlHttpResponse *res, void *ud) {
     AppCtx *app = (AppCtx *)ud;
@@ -501,7 +501,7 @@ static void handle_route(KlHttpRequest *req, KlHttpResponse *res, void *ud) {
     api_req.body     = (br && br->len > 0) ? br->data : NULL;
     api_req.body_len = (br && br->len > 0) ? br->len : 0;
 
-    sh_keel_async_dispatch(&app->async, req, res, velo_metered_handler,
+    sh_http_async_dispatch(&app->async, req, res, velo_metered_handler,
                            s_api_ctx, &api_req);
 
     record_metrics(timer, "route");
@@ -514,8 +514,8 @@ static void handle_route(KlHttpRequest *req, KlHttpResponse *res, void *ud) {
 /* CORS preflight, before rate limiting. */
 static int mw_preflight(KlHttpRequest *req, KlHttpResponse *res, void *ud) {
     (void)ud;
-    sh_trace_from_headers(sh_kl_trace_header_getter, req);
-    sh_kl_reply_preflight(res, &s_cors_config, sh_kl_origin(req));
+    sh_trace_from_headers(sh_http_trace_header_getter, req);
+    sh_http_reply_preflight(res, &s_cors_config, sh_http_origin(req));
     sh_trace_clear();
     return 1;  /* short-circuit */
 }
@@ -523,9 +523,9 @@ static int mw_preflight(KlHttpRequest *req, KlHttpResponse *res, void *ud) {
 /* Rate limit every request before routing. */
 static int mw_rate_limit(KlHttpRequest *req, KlHttpResponse *res, void *ud) {
     (void)ud;
-    sh_trace_from_headers(sh_kl_trace_header_getter, req);
-    if (!sh_kl_check_rate_limit(req, res, s_rate_limiter, &s_cors_config,
-                                sh_kl_origin(req))) {
+    sh_trace_from_headers(sh_http_trace_header_getter, req);
+    if (!sh_http_check_rate_limit(req, res, s_rate_limiter, &s_cors_config,
+                                sh_http_origin(req))) {
         sh_metrics_counter_inc("http_requests_total", 1,
             "endpoint", "rate_limited", "status", "429", NULL);
         sh_trace_clear();

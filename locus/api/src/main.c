@@ -31,8 +31,8 @@
 
 /* Shared library includes */
 #include "shared.h"
-#include "sh_keelserver.h"
-#include "sh_keelasync.h"
+#include "sh_httpserver.h"
+#include "sh_httpasync.h"
 #include "sh_log.h"
 #include "sh_trace.h"
 #include "sh_metrics.h"
@@ -92,13 +92,13 @@ static ShRateLimiter *s_rate_limiter = NULL;
  */
 /* Geocode thread pool */
 static KlThreadPool *s_pool = NULL;
-static ShKeelAsyncStats s_qstats;
+static ShHttpAsyncStats s_qstats;
 
 /* Adaptive capacity tracker (uses shared library) */
 static ShAdaptiveTracker *s_adaptive_tracker = NULL;
 
 typedef struct {
-    ShKeelAsync async;   /* server, pool, cors, timeout, stats */
+    ShHttpAsync async;   /* server, pool, cors, timeout, stats */
 } AppCtx;
 
 /* JSON building is handled by sh_json.h (ShJsonWriter + ShJsonBuf) */
@@ -165,19 +165,19 @@ static void load_locus_env(LocusServerConfig *cfg) {
  * Thread-safe using thread-local storage for origin buffer.
  */
 static const char *get_origin_from_request(const KlHttpRequest *req) {
-    return sh_kl_origin(req);
+    return sh_http_origin(req);
 }
 
 
 /* HTTP response helpers - use shared implementation */
 static void send_json_cors(KlHttpResponse *res, const KlHttpRequest *req,
                            int status, const char *json) {
-    sh_kl_reply_json(res, status, &s_cors, get_origin_from_request(req), json);
+    sh_http_reply_json(res, status, &s_cors, get_origin_from_request(req), json);
 }
 
 static void send_error_cors(KlHttpResponse *res, const KlHttpRequest *req,
                             int status, const char *message) {
-    sh_kl_reply_error(res, status, &s_cors, get_origin_from_request(req), message);
+    sh_http_reply_error(res, status, &s_cors, get_origin_from_request(req), message);
 }
 
 /* ============================================================================
@@ -235,7 +235,7 @@ static int locus_metered_handler(void *ctx, const ShApiRequest *req,
 static void handle_health(KlHttpRequest *req, KlHttpResponse *res, void *ud) {
     (void)ud;
     ShMetricsTimer timer = sh_metrics_timer_start();
-    sh_kl_handle_health(res, &s_cors, get_origin_from_request(req),
+    sh_http_handle_health(res, &s_cors, get_origin_from_request(req),
                         "locus-geocoder", lc_version());
     record_metrics(timer, "endpoint:health");
     sh_trace_clear();
@@ -356,7 +356,7 @@ static void handle_stats(KlHttpRequest *req, KlHttpResponse *res, void *ud) {
  * The three geocode endpoints. Each one now does the same three things:
  * marshal a ShApiRequest, hand it to the shared dispatcher, record metrics.
  * Validation, parsing and routing all moved into locus_api_handler(), and the
- * suspend/pool/resume protocol into sh_keel_async_dispatch().
+ * suspend/pool/resume protocol into sh_http_async_dispatch().
  */
 static void handle_geocode(KlHttpRequest *req, KlHttpResponse *res, void *ud,
                            const char *path, const char *endpoint) {
@@ -375,7 +375,7 @@ static void handle_geocode(KlHttpRequest *req, KlHttpResponse *res, void *ud,
     api_req.path   = path;
     api_req.query  = query_buf;
 
-    sh_keel_async_dispatch(&app->async, req, res, locus_metered_handler,
+    sh_http_async_dispatch(&app->async, req, res, locus_metered_handler,
                            g_api_ctx, &api_req);
 
     record_metrics(timer, endpoint);
@@ -397,7 +397,7 @@ static void handle_reverse(KlHttpRequest *req, KlHttpResponse *res, void *ud) {
 /* Handle /metrics endpoint for Prometheus */
 static void handle_metrics(KlHttpRequest *req, KlHttpResponse *res, void *ud) {
     (void)req; (void)ud;
-    sh_kl_handle_metrics(res);
+    sh_http_handle_metrics(res);
     sh_trace_clear();
 }
 
@@ -412,8 +412,8 @@ static void handle_metrics(KlHttpRequest *req, KlHttpResponse *res, void *ud) {
 /* CORS preflight, before rate limiting. */
 static int mw_preflight(KlHttpRequest *req, KlHttpResponse *res, void *ud) {
     (void)ud;
-    sh_trace_from_headers(sh_kl_trace_header_getter, req);
-    sh_kl_reply_preflight(res, &s_cors, get_origin_from_request(req));
+    sh_trace_from_headers(sh_http_trace_header_getter, req);
+    sh_http_reply_preflight(res, &s_cors, get_origin_from_request(req));
     sh_trace_clear();
     return 1;  /* short-circuit */
 }
@@ -421,8 +421,8 @@ static int mw_preflight(KlHttpRequest *req, KlHttpResponse *res, void *ud) {
 /* Rate limit every request before routing. */
 static int mw_rate_limit(KlHttpRequest *req, KlHttpResponse *res, void *ud) {
     (void)ud;
-    sh_trace_from_headers(sh_kl_trace_header_getter, req);
-    if (!sh_kl_check_rate_limit(req, res, s_rate_limiter, &s_cors,
+    sh_trace_from_headers(sh_http_trace_header_getter, req);
+    if (!sh_http_check_rate_limit(req, res, s_rate_limiter, &s_cors,
                                 get_origin_from_request(req))) {
         sh_metrics_counter_inc("http_requests_total", 1,
                                "status:429", "endpoint:ratelimit", NULL);

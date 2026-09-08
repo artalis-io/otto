@@ -2,7 +2,7 @@
  * sh_transport_internal.h - Stream plumbing shared between transports.
  *
  * Private to shared/src and to transport drivers (sh_transport_direct,
- * sh_keelserver). Handlers never see this: they get an opaque ShApiStream and
+ * sh_httpserver). Handlers never see this: they get an opaque ShApiStream and
  * the two functions in sh_api.h.
  *
  * This is the one place a transport-shaped vtable is allowed, because it is a

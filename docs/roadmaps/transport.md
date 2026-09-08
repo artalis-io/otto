@@ -161,7 +161,7 @@ proved nothing.
 
 | transport | how |
 |---|---|
-| `sh_keelasync` | `kl_http_sse_begin` / `_event` / `_end`; backpressure via `KlDrain` (bounded, 1 MiB, flushed by the loop) |
+| `sh_httpasync` | `kl_http_sse_begin` / `_event` / `_end`; backpressure via `KlDrain` (bounded, 1 MiB, flushed by the loop) |
 | `sh_transport_direct` | collects events into a buffer, so streaming handlers are testable without sockets |
 
 `stream_free`, if set, is always called afterwards -- including when a transport
@@ -192,7 +192,7 @@ surface is deliberate. What OTTO's core needs, Keel does not export:
 | temp directory | tests/bench | no | `GetTempPathA` -- built |
 | sockets / addresses / DNS | 0 in core | yes | only servers need it; they already use Keel |
 
-**It would invert the layering.** `sh_keelserver.c` is deliberately excluded from
+**It would invert the layering.** `sh_httpserver.c` is deliberately excluded from
 `libshared.a` so core does not depend on Keel. Making Keel the PAL would put a transport
 vendor underneath Ralph and Shared, and drag it into WASM builds that have no server.
 

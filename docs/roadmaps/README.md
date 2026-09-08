@@ -40,6 +40,14 @@ This directory contains development roadmaps and specifications for OTTO compone
 | [infrastructure.md](infrastructure.md) | API server and observability | Planned |
 | [security.md](security.md) | Role separation, process isolation, hardening | Planned |
 
+**HTTP server — Keel v3 migration: ✅ Complete.** All six API servers (Surge,
+Ralph, FuelWise, Velo, Carta, Locus) run on Keel v3 (MIT, `vendor/keel`),
+replacing the previous GPL-licensed HTTP server. The shared helper layer is
+`sh_httpserver.{c,h}` + `sh_httpasync.{c,h}` (public helpers `sh_http_*`), renamed
+from `sh_keelserver`/`sh_keelasync` after the migration. See
+[infrastructure.md](infrastructure.md) for the cross-cutting completion record and
+each module roadmap's "Keel Migration" section for per-server detail.
+
 ### Cross-Cutting
 
 | Document | Description |

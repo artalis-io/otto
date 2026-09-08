@@ -53,11 +53,11 @@ KEEL_DIR = $(VENDOR_DIR)/keel
 KEEL_LIB = $(KEEL_DIR)/libkeel.a
 
 # Shared Keel HTTP helpers (need Keel headers, so not in libshared)
-KEELSERVER_OBJ = $(BUILD_DIR)/sh_keelserver.o $(BUILD_DIR)/sh_keelasync.o
+HTTPSERVER_OBJ = $(BUILD_DIR)/sh_httpserver.o $(BUILD_DIR)/sh_httpasync.o
 
 # Source files
 SRCS = $(SRC_DIR)/main.c
-OBJS = $(BUILD_DIR)/main.o $(KEELSERVER_OBJ)
+OBJS = $(BUILD_DIR)/main.o $(HTTPSERVER_OBJ)
 
 # Output
 TARGET = locus-geocoder

@@ -1,5 +1,5 @@
 /*
- * sh_keelasync.c - The Keel async protocol, owned once.
+ * sh_httpasync.c - The Keel async protocol, owned once.
  *
  * OWNERSHIP / LIFETIME
  *   The call context is freed in exactly one place: done_fn when the item
@@ -10,8 +10,8 @@
  *
  * See docs/roadmaps/transport.md.
  */
-#include "sh_keelasync.h"
-#include "sh_keelserver.h"
+#include "sh_httpasync.h"
+#include "sh_httpserver.h"
 #include "sh_transport_internal.h"
 
 #include <keel/async.h>
@@ -24,7 +24,7 @@
 typedef struct {
     KlAsyncOp op;                   /* must stay first-ish; recovered via offsetof */
 
-    const ShKeelAsync *cfg;
+    const ShHttpAsync *cfg;
     KlHttpRequest *req;             /* lives in the conn; valid while suspended */
 
     /* Owned copies of the request. The originals belong to the connection,
@@ -120,7 +120,7 @@ static const ShApiStreamVTable keel_stream_vt = {
  * The spin cap catches a producer that answers MORE forever. Without it such a
  * producer would wedge the event loop and take every other connection with it.
  */
-#define SH_KEEL_STREAM_MAX_SPINS 100000UL
+#define SH_HTTP_STREAM_MAX_SPINS 100000UL
 
 static void stream_response(KlHttpResponse *res, ShApiResponse *r)
 {
@@ -137,7 +137,7 @@ static void stream_response(KlHttpResponse *res, ShApiResponse *r)
     }
 
     while (srv == SH_API_STREAM_MORE && !ks.failed) {
-        if (++spins > SH_KEEL_STREAM_MAX_SPINS) break;
+        if (++spins > SH_HTTP_STREAM_MAX_SPINS) break;
         srv = r->stream_fn(r->stream_ctx, &ks.base);
     }
 
@@ -156,7 +156,7 @@ static void stream_response(KlHttpResponse *res, ShApiResponse *r)
  * status (200) with an error payload, and leak stream_ctx by never calling
  * stream_free.
  */
-static void reply_from(const ShKeelAsync *cfg, KlHttpResponse *res,
+static void reply_from(const ShHttpAsync *cfg, KlHttpResponse *res,
                        ShApiResponse *r)
 {
     if (r->stream_fn) {
@@ -168,12 +168,12 @@ static void reply_from(const ShKeelAsync *cfg, KlHttpResponse *res,
     }
 
     if (r->body && r->body_len > 0) {
-        sh_kl_reply_body(res, r->status_code,
+        sh_http_reply_body(res, r->status_code,
                          r->content_type ? r->content_type : "application/json",
                          cfg->cors, NULL,
                          (const char *)r->body, r->body_len);
     } else {
-        sh_kl_reply_error(res, r->status_code ? r->status_code : 500,
+        sh_http_reply_error(res, r->status_code ? r->status_code : 500,
                           cfg->cors, NULL, "Processing failed");
     }
 }
@@ -216,7 +216,7 @@ static void call_done_fn(void *user_data)
     {
         KlHttpResponse *res = kl_http_conn_response(c->op.conn);
         if (c->handler_rc != 0) {
-            sh_kl_reply_error(res, 500, c->cfg->cors, NULL, "Processing failed");
+            sh_http_reply_error(res, 500, c->cfg->cors, NULL, "Processing failed");
         } else {
             reply_from(c->cfg, res, &c->resp);
         }
@@ -272,7 +272,7 @@ static void call_on_deadline(KlAsyncOp *op, void *ud)
     c->detached = 1;
     if (c->cfg->stats) c->cfg->stats->expired++;
 
-    sh_kl_reply_error(kl_http_conn_response(op->conn), 504,
+    sh_http_reply_error(kl_http_conn_response(op->conn), 504,
                       c->cfg->cors, NULL, "Gateway timeout");
     kl_async_complete(c->cfg->server, op);
 }
@@ -281,7 +281,7 @@ static void call_on_deadline(KlAsyncOp *op, void *ud)
  * Entry point
  * ------------------------------------------------------------------------ */
 
-void sh_keel_async_dispatch(const ShKeelAsync *cfg,
+void sh_http_async_dispatch(const ShHttpAsync *cfg,
                             KlHttpRequest *req,
                             KlHttpResponse *res,
                             ShApiHandler handler,
@@ -301,7 +301,7 @@ void sh_keel_async_dispatch(const ShKeelAsync *cfg,
         ShApiResponse r;
         memset(&r, 0, sizeof(r));
         if (handler(handler_ctx, api_req, &r) != 0) {
-            sh_kl_reply_error(res, 500, cfg->cors, NULL, "Processing failed");
+            sh_http_reply_error(res, 500, cfg->cors, NULL, "Processing failed");
         } else {
             reply_from(cfg, res, &r);
         }
@@ -311,7 +311,7 @@ void sh_keel_async_dispatch(const ShKeelAsync *cfg,
 
     c = (KeelCall *)calloc(1, sizeof(*c));
     if (!c) {
-        sh_kl_reply_error(res, 500, cfg->cors, NULL, "Memory allocation failed");
+        sh_http_reply_error(res, 500, cfg->cors, NULL, "Memory allocation failed");
         return;
     }
 
@@ -321,19 +321,19 @@ void sh_keel_async_dispatch(const ShKeelAsync *cfg,
         dup_opt(&c->query, api_req->query) != 0 ||
         dup_opt(&c->host,  api_req->host)  != 0) {
         call_free(c);
-        sh_kl_reply_error(res, 500, cfg->cors, NULL, "Memory allocation failed");
+        sh_http_reply_error(res, 500, cfg->cors, NULL, "Memory allocation failed");
         return;
     }
     if (api_req->body && api_req->body_len > 0) {
         if (api_req->body_len == (size_t)-1) {   /* would wrap the +1 below */
             call_free(c);
-            sh_kl_reply_error(res, 400, cfg->cors, NULL, "Body too large");
+            sh_http_reply_error(res, 400, cfg->cors, NULL, "Body too large");
             return;
         }
         c->body = (char *)malloc(api_req->body_len + 1);
         if (!c->body) {
             call_free(c);
-            sh_kl_reply_error(res, 500, cfg->cors, NULL, "Memory allocation failed");
+            sh_http_reply_error(res, 500, cfg->cors, NULL, "Memory allocation failed");
             return;
         }
         memcpy(c->body, api_req->body, api_req->body_len);
@@ -359,7 +359,7 @@ void sh_keel_async_dispatch(const ShKeelAsync *cfg,
 
     if (kl_async_suspend(cfg->server, kl_http_request_conn(req), &c->op) < 0) {
         call_free(c);
-        sh_kl_reply_error(res, 500, cfg->cors, NULL, "Failed to suspend request");
+        sh_http_reply_error(res, 500, cfg->cors, NULL, "Failed to suspend request");
         return;
     }
 
@@ -376,7 +376,7 @@ void sh_keel_async_dispatch(const ShKeelAsync *cfg,
              * before freeing -- and mark detached so nothing else replies. */
             if (cfg->stats) cfg->stats->dropped++;
             c->detached = 1;
-            sh_kl_reply_error(res, 503, cfg->cors, NULL,
+            sh_http_reply_error(res, 503, cfg->cors, NULL,
                               "Service unavailable - queue full");
             kl_async_complete(cfg->server, &c->op);
             call_free(c);

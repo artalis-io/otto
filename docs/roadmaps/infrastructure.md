@@ -31,6 +31,12 @@ Shared infrastructure improvements for all OTTO API servers (Carta, Velo, Locus,
 
 #### 16.1 sh_httpserver.h - Multi-threaded HTTP Server
 
+> **Superseded.** This was an early planned design that was never built. The
+> actual HTTP layer is the Keel-based helper set in `sh_httpserver.{c,h}` +
+> `sh_httpasync.{c,h}` (public helpers `sh_http_*`) — see
+> "HTTP Server: Keel v3 — Complete" below. The `ShHttpServer`/`sh_httpserver_*`
+> API sketched here never existed.
+
 Shared abstraction wrapping the Keel HTTP server with:
 - Multiple event loops (one per CPU core, uses SO_REUSEPORT)
 - Socket write timeout (prevents slow client DoS)
@@ -324,9 +330,9 @@ Client Request
 
 ## HTTP Server: Keel v3 — Complete
 
-The previous HTTP server and its `shared/src/sh_httpserver.c` wrapper are gone.
-All six API servers now run on Keel (`vendor/keel`, MIT, git submodule pinned to
-v3.0.0-rc.3).
+The previous GPL-licensed HTTP server has been removed. All six API servers now
+run on Keel (`vendor/keel`, MIT, git submodule pinned to v3.0.0-rc.3), through a
+thin shared helper layer in `shared/src/sh_httpserver.c` + `sh_httpasync.c`.
 
 ### Why this mattered
 
@@ -337,9 +343,20 @@ into AGPLv3, `-only` cannot — and the commercial tier in
 onto Keel made the code independent of it and resolved the conflict, since the
 GPL-2.0-only source is no longer in the tree.
 
-The old `sh_httpserver.h` also carried a clean transport-agnostic API
+That server's header had also carried a clean transport-agnostic API
 (`ShHttpServer`, `ShHttpRequest`, `ShHttpResponse`) that no server ever adopted —
-every one of them called the old server's API directly. It went with the rest.
+every one of them called its API directly. It went with the rest.
+
+### Naming
+
+The migration introduced the Keel helper layer as `sh_keelserver.{c,h}` (sync
+reply/CORS/health helpers) and `sh_keelasync.{c,h}` (the async/SSE dispatch
+protocol). With the migration complete and Keel now the permanent HTTP layer,
+these were renamed to the neutral `sh_httpserver.{c,h}` and `sh_httpasync.{c,h}`,
+reclaiming the name the removed server used to hold. The public helpers are
+`sh_http_*`; the async config type is `ShHttpAsync`. The file-local Keel
+adapters inside `sh_httpasync.c` (`KeelCall`, `KeelStream`) keep their names —
+they name the Keel boundary they wrap.
 
 ### Kept deliberately
 
@@ -350,6 +367,6 @@ the `Method not allowed` shape, and why Carta no longer needs N event loops.
 
 ### Verification
 
-All six `main.c` files plus `sh_keelserver.c` compile clean under
-`-Wall -Wextra`, and every server has a gating CI suite (Surge 11, Ralph 14,
+All six `main.c` files plus `sh_httpserver.c` and `sh_httpasync.c` compile clean
+under `-Wall -Wextra`, and every server has a gating CI suite (Surge 11, Ralph 14,
 FuelWise 20, Velo 26, Carta 19, Locus 19).

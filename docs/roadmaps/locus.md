@@ -188,7 +188,7 @@ files, no ETag and no multi-listener model:
 - `ShWorkQueue` + `ShWorkerPool` + `ShCompletion` → `KlThreadPool` +
   `KlAsyncOp`, same `GeoCtx` ownership rules and the `on_resume` fix.
 - `mg_http_var()` → `sh_query_get_str()`.
-- `sh_mg_*` → `sh_kl_*`.
+- `sh_mg_*` → `sh_http_*`.
 - The three direct-execution fallbacks collapsed into `submit_geocode_work()`,
   which runs inline when there is no pool.
 - All six endpoints are exact paths, so all six are real routes — which matters,
@@ -216,7 +216,9 @@ longer silently skip API coverage.
 
 ## Legacy HTTP server removal
 
-Completed — all six servers run on Keel v3, and the legacy
-`shared/src/sh_httpserver.c` + `shared/include/sh_httpserver.h` and the retired
-vendored HTTP server have been removed, along with their entries in
-`docs/ARCHITECTURE.md`'s vendor table and module `CLAUDE.md` files.
+Completed — all six servers run on Keel v3. The previous GPL HTTP server (its
+`.c` wrapper and transport-agnostic header) and the retired vendored HTTP server
+have been removed, along with their entries in `docs/ARCHITECTURE.md`'s vendor
+table and module `CLAUDE.md` files. The Keel helper layer that replaced it was
+later renamed `sh_keelserver`/`sh_keelasync` → `sh_httpserver`/`sh_httpasync`
+(see `docs/roadmaps/infrastructure.md`).

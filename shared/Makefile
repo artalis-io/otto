@@ -79,8 +79,8 @@ SRCS = src/sh_pal_posix.c \
 
 # Keel HTTP helpers (require Keel headers - compiled separately by API servers)
 # Usage: $(CC) $(CFLAGS) -I../shared/include -I../vendor/keel/include \
-#            src/sh_keelserver.c
-KEELSERVER_SRC = src/sh_keelserver.c
+#            src/sh_httpserver.c
+HTTPSERVER_SRC = src/sh_httpserver.c
 
 MINIZ_SRCS = $(VENDOR_DIR)/miniz.c \
              $(VENDOR_DIR)/miniz_tdef.c \
