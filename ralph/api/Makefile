@@ -48,6 +48,10 @@ LDFLAGS = -L.. -lralph -L$(SHARED_DIR) -lshared $(OPENMP_LDFLAGS) -lm -lpthread 
 SRCS = src/main.c
 OBJS = $(SRCS:src/%.c=build/%.o)
 
+# Shared Keel HTTP helpers. They need Keel headers, so each API server compiles
+# them directly rather than linking them from libshared.a.
+HTTPSERVER_OBJ = build/sh_httpserver.o build/sh_httpasync.o
+
 # Keel static library (vendored git submodule, MIT)
 KEEL_DIR = ../../vendor/keel
 KEEL_LIB = $(KEEL_DIR)/libkeel.a
@@ -71,10 +75,14 @@ $(KEEL_LIB):
 	fi
 	$(MAKE) -C $(KEEL_DIR) CC=$(CC)
 
-$(TARGET): $(OBJS) $(KEEL_LIB)
-	$(CC) $(CFLAGS) -o $@ $(OBJS) $(KEEL_LIB) $(LDFLAGS)
+$(TARGET): $(OBJS) $(HTTPSERVER_OBJ) $(KEEL_LIB)
+	$(CC) $(CFLAGS) -o $@ $(OBJS) $(HTTPSERVER_OBJ) $(KEEL_LIB) $(LDFLAGS)
 
 build/%.o: src/%.c | build
+	$(CC) $(CFLAGS) $(INCLUDES) -c $< -o $@
+
+# Compile shared Keel HTTP helpers (require Keel includes).
+build/%.o: $(SHARED_DIR)/src/%.c | build
 	$(CC) $(CFLAGS) $(INCLUDES) -c $< -o $@
 
 build:
