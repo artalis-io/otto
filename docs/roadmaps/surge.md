@@ -4188,7 +4188,7 @@ Full `/c-audit surge` passed with 0 issues across all categories:
 `sg_parallel.c`, `sg_profile_matrix.c`, `test_surge.c`, `test_profile_matrix.c`.
 ~870 new lines.
 
-## Keel Migration — Phase 1 of 6
+## Keel Migration — Phase 1 of 6 (✅ Complete)
 
 **Completed for Surge.** Surge's API server runs on Keel v3.
 
@@ -4235,10 +4235,11 @@ dependencies. No OTTO API server uses TLS today.
   `user_data`. If the route also needs an app context, wrap the factory
   (see `solve_body_reader`) or the cap silently becomes a pointer value.
 
-### Remaining
+### Status: Complete
 
-Carta, Velo, Locus, FuelWise and Ralph remain to port. The legacy
-`shared/src/sh_httpserver.c` will be deleted once the last server is on Keel.
+All six servers (Surge, Ralph, FuelWise, Velo, Carta, Locus) are on Keel v3.
+The legacy `shared/src/sh_httpserver.c` has been removed. See
+`docs/roadmaps/infrastructure.md` for the cross-cutting completion record.
 
 ### Known issue (upstream, not blocking)
 

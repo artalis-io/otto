@@ -2029,7 +2029,7 @@ The FuelWise-specific context is:
 - The suboptimal convergence was discovered during FuelWise benchmark testing
 - Fixes should be validated against FuelWise test cases before closing
 
-## Keel Migration — Phase 3 of 6
+## Keel Migration — Phase 3 of 6 (✅ Complete)
 
 **Completed for FuelWise.** `fuelwise/api` runs on Keel v3.
 
@@ -2099,7 +2099,8 @@ unreachable. Ralph gets this right with `if (arg_index == -2) { ...; return 0; }
 `main()` now distinguishes the two, and the CI job has its `--help` smoke check
 back alongside the other servers.
 
-### Remaining
+### Status: Complete
 
-Velo, Locus and Carta remain to port. The legacy
-`shared/src/sh_httpserver.c` will be deleted once the last server is on Keel.
+All six servers are on Keel v3; the legacy `shared/src/sh_httpserver.c` has
+been removed. See `docs/roadmaps/infrastructure.md` for the cross-cutting
+completion record.

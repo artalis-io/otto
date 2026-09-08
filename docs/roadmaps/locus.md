@@ -173,7 +173,7 @@ typedef struct {
 | `locus/include/locus.h` | Public API |
 | `locus/api/` | REST API server |
 
-## Keel Migration — Phase 6 of 6
+## Keel Migration — Phase 6 of 6 (✅ Complete)
 
 **Completed for Locus.** `locus/api` runs on Keel v3, and with it the last OTTO
 API server has moved off the legacy HTTP server.
