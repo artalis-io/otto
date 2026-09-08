@@ -7,6 +7,7 @@
  */
 
 #include "fw_bench.h"
+#include "sh_pal.h"
 #include "fw_refuel.h"
 #include <stdio.h>
 #include <stdlib.h>
@@ -66,15 +67,21 @@ int fw_glpk_solve(const FWRefuelProblem *problem, FWGlpkResult *result)
 
     memset(result, 0, sizeof(FWGlpkResult));
 
-    /* Create temp files for LP and solution */
-    char base_path[] = "/tmp/fw_bench_XXXXXX";
+    /* Create temp files for LP and solution. The directory comes from the
+     * PAL rather than a literal "/tmp": under MSYS2 this is a native Windows
+     * binary, so "/tmp/x" would mean "C:\\tmp\\x". */
+    char temp_dir[260];
+    char base_path[320];
+    if (sh_pal_temp_dir(temp_dir, sizeof(temp_dir)) != 0) return -1;
+    snprintf(base_path, sizeof(base_path), "%s/fw_bench_XXXXXX", temp_dir);
+
     int fd = mkstemp(base_path);
     if (fd < 0) return -1;
     close(fd);
     unlink(base_path);  /* We just need the unique name */
 
-    char lp_path[64];
-    char sol_path[64];
+    char lp_path[328];
+    char sol_path[328];
     snprintf(lp_path, sizeof(lp_path), "%s.lp", base_path);
     snprintf(sol_path, sizeof(sol_path), "%s.sol", base_path);
 
@@ -85,9 +92,26 @@ int fw_glpk_solve(const FWRefuelProblem *problem, FWGlpkResult *result)
 
     /* Build glpsol command */
     char cmd[512];
+    /*
+     * Quoting here is platform-specific, and single quotes are wrong on both.
+     *
+     * popen() runs the command through cmd.exe on Windows, which does not
+     * treat '...' as quoting at all -- it goes looking for a program named
+     * 'glpsol', quotes included. Double quotes are quoting in cmd and in sh
+     * alike, but cmd has one more rule: when the command line begins with a
+     * quote it strips the first and the last one from the whole line, which
+     * mangles a line that quotes three arguments. The fix is the documented
+     * one, an extra outer pair with the redirection inside it.
+     */
+#ifdef _WIN32
     snprintf(cmd, sizeof(cmd),
-             "'%s' --lp '%s' -o '%s' 2>&1",
+             "\"\"%s\" --lp \"%s\" -o \"%s\" 2>&1\"",
              fw_glpsol_path(), lp_path, sol_path);
+#else
+    snprintf(cmd, sizeof(cmd),
+             "\"%s\" --lp \"%s\" -o \"%s\" 2>&1",
+             fw_glpsol_path(), lp_path, sol_path);
+#endif
 
     /* Time the GLPK solve */
     double t0 = get_time_ms();

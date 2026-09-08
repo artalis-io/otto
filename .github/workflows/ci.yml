@@ -350,6 +350,7 @@ jobs:
           install: >-
             make
             mingw-w64-ucrt-x86_64-gcc
+            mingw-w64-ucrt-x86_64-glpk
 
       - name: Build and run the PAL tests
         run: make -C shared test-pal
@@ -372,11 +373,22 @@ jobs:
       # fuelwise and surge were missing here, and that is exactly why #63 shipped
       # a fuelwise link that had never been tried on Windows. Surge's own LDFLAGS
       # had the same hole, found the moment this step existed.
+      #
+      # These ran `test-transport` rather than `test` until the full suites were
+      # tried on Windows, which found three more portability defects in the
+      # FuelWise bench harness alone: setenv() (POSIX-only, now sh_pal_setenv),
+      # a link missing -lbcrypt -lws2_32 (the same hole as #63, in a second
+      # Makefile), and a glpsol command line quoted with single quotes, which
+      # cmd.exe does not treat as quoting. `test-transport` would never have
+      # compiled any of it. glpk is installed above because the FuelWise
+      # regression harness compares Ralph's MILP objectives against glpsol --
+      # running that on Windows is a real check on Ralph's numerics, not just
+      # on whether the code compiles.
       - name: Build and test FuelWise
-        run: make -C fuelwise test-transport
+        run: make -C fuelwise test
 
       - name: Build and test Surge
-        run: make -C surge test-transport
+        run: make -C surge test
 
       # Servers only build here -- their suites drive a live HTTP server with
       # curl, which is a bigger CI surface than this job needs today. Building

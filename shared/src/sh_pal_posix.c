@@ -14,6 +14,7 @@
 
 #include <errno.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <fcntl.h>
 #include <sys/mman.h>
 #include <sys/stat.h>
@@ -259,6 +260,21 @@ int sh_pal_random_bytes(void *buf, size_t len)
     }
 }
 
+/* ------------------------------------------------------------ Environment */
+
+int sh_pal_setenv(const char *name, const char *value)
+{
+    if (!name || !name[0] || strchr(name, '=')) return -1;
+    return setenv(name, value ? value : "", 1) == 0 ? 0 : -1;
+}
+
+int sh_pal_unsetenv(const char *name)
+{
+    if (!name || !name[0] || strchr(name, '=')) return -1;
+    return unsetenv(name) == 0 ? 0 : -1;
+}
+
+
 /* ------------------------------------------------------------- Filesystem */
 
 int sh_pal_mkdir(const char *path)
@@ -266,6 +282,25 @@ int sh_pal_mkdir(const char *path)
     if (!path || !path[0]) return -1;
     if (mkdir(path, 0755) == 0) return 0;
     return errno == EEXIST ? 0 : -1;
+}
+
+
+int sh_pal_temp_dir(char *buf, size_t len)
+{
+    const char *dir = getenv("TMPDIR");
+    size_t n;
+
+    if (!buf || len == 0) return -1;
+    if (!dir || !dir[0]) dir = "/tmp";
+
+    n = strlen(dir);
+    /* No trailing separator, so callers can always join with one. */
+    while (n > 1 && dir[n - 1] == '/') n--;
+    if (n >= len) { buf[0] = '\0'; return -1; }
+
+    memcpy(buf, dir, n);
+    buf[n] = '\0';
+    return 0;
 }
 
 
