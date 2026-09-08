@@ -25,7 +25,7 @@
 static CTAPIContext *g_api_ctx = NULL;
 
 /* Static response for JS access (reused across calls) */
-static CTAPIResponse g_response = {0};
+static ShApiResponse g_response = {0};
 
 /* ============================================================================
  * Initialization
@@ -59,7 +59,7 @@ int carta_api_init(void) {
 WASM_EXPORT
 void carta_api_free(void) {
     if (g_api_ctx) {
-        ct_api_response_free(&g_response);
+        sh_api_response_free(&g_response);
         ct_api_free(g_api_ctx);
         g_api_ctx = NULL;
     }
@@ -93,14 +93,14 @@ int carta_api_ready(void) {
  * @return Pointer to static response, or NULL on error
  */
 WASM_EXPORT
-CTAPIResponse *carta_api_handle(const char *path, const char *query) {
+ShApiResponse *carta_api_handle(const char *path, const char *query) {
     if (!g_api_ctx) return NULL;
 
     /* Free previous response body */
-    ct_api_response_free(&g_response);
+    sh_api_response_free(&g_response);
 
     /* Build request */
-    CTAPIRequest req = {
+    ShApiRequest req = {
         .path = path,
         .query = query,
         .host = "wasm.demo"  /* Fake host for TileJSON */
@@ -122,7 +122,7 @@ CTAPIResponse *carta_api_handle(const char *path, const char *query) {
  * Get HTTP status code from response.
  */
 WASM_EXPORT
-int carta_response_status(const CTAPIResponse *resp) {
+int carta_response_status(const ShApiResponse *resp) {
     return resp ? resp->status_code : 500;
 }
 
@@ -130,7 +130,7 @@ int carta_response_status(const CTAPIResponse *resp) {
  * Get content type string from response.
  */
 WASM_EXPORT
-const char *carta_response_content_type(const CTAPIResponse *resp) {
+const char *carta_response_content_type(const ShApiResponse *resp) {
     return resp ? resp->content_type : "text/plain";
 }
 
@@ -138,7 +138,7 @@ const char *carta_response_content_type(const CTAPIResponse *resp) {
  * Get response body pointer.
  */
 WASM_EXPORT
-const uint8_t *carta_response_body(const CTAPIResponse *resp) {
+const uint8_t *carta_response_body(const ShApiResponse *resp) {
     return resp ? resp->body : NULL;
 }
 
@@ -146,7 +146,7 @@ const uint8_t *carta_response_body(const CTAPIResponse *resp) {
  * Get response body length.
  */
 WASM_EXPORT
-size_t carta_response_body_len(const CTAPIResponse *resp) {
+size_t carta_response_body_len(const ShApiResponse *resp) {
     return resp ? resp->body_len : 0;
 }
 

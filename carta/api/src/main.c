@@ -124,36 +124,9 @@ static ShAdaptiveTracker *s_adaptive_tracker = NULL;
  *   render pool.
  * ============================================================================ */
 
-typedef enum {
-    RENDER_TYPE_PNG,
-    RENDER_TYPE_MVT,
-    RENDER_TYPE_ASCII
-} RenderType;
-
 typedef struct {
     ShKeelAsync async;   /* server, pool, cors, timeout, stats */
 } AppCtx;
-
-/*
- * One tile render. The async plumbing that used to surround this -- KlAsyncOp,
- * the connection, the detached flag -- now lives in sh_keel_async_dispatch();
- * see shared/src/sh_keelasync.c.
- */
-typedef struct {
-    /* Request info */
-    RenderType type;
-    int z, x, y;
-
-    /* ASCII-specific options */
-    CTAsciiOptions ascii_opts;
-
-    /* Response buffer (set by the render worker) */
-    uint8_t *response_data;
-    size_t response_size;
-    int status_code;        /* HTTP status code */
-    char content_type[64];
-    char error_msg[128];
-} RenderCtx;
 
 /*
  * KlThreadPool exposes no statistics, but /api/v1/stats publishes work-queue
@@ -193,11 +166,6 @@ static void send_tile_cors(KlHttpResponse *res, const KlHttpRequest *req,
                            const char *content_type, const uint8_t *data,
                            size_t size);
 
-static void render_ctx_free(RenderCtx *ctx) {
-    if (!ctx) return;
-    free(ctx->response_data);
-    free(ctx);
-}
 
 static void record_metrics(ShMetricsTimer timer, const char *endpoint) {
     sh_metrics_counter_inc("http_requests_total", 1,
@@ -205,151 +173,10 @@ static void record_metrics(ShMetricsTimer timer, const char *endpoint) {
     sh_metrics_timer_observe(timer, "http_request_duration_ms", endpoint, NULL);
 }
 
-static void process_png_render(RenderCtx *item)
-{
-    int z = item->z, x = item->x, y = item->y;
-
-    /* Check cache first */
-    if (s_png_cache) {
-        const uint8_t *cached_data;
-        size_t cached_size;
-        pthread_mutex_lock(&s_cache_mutex);
-        int hit = ct_cache_get(s_png_cache, z, x, y, &cached_data, &cached_size);
-        if (hit) {
-            item->response_data = malloc(cached_size);
-            if (item->response_data) {
-                memcpy(item->response_data, cached_data, cached_size);
-                item->response_size = cached_size;
-                item->status_code = 200;
-                strncpy(item->content_type, "image/png", sizeof(item->content_type) - 1);
-                item->content_type[sizeof(item->content_type) - 1] = '\0';
-            }
-            pthread_mutex_unlock(&s_cache_mutex);
-            if (item->response_data) return;
-        }
-        pthread_mutex_unlock(&s_cache_mutex);
-    }
-
-    /* Use transport-agnostic API to generate tile */
-    size_t size;
-    item->response_data = ct_api_generate_png(s_api_ctx, z, x, y, &size);
-
-    if (!item->response_data || size == 0) {
-        if (item->response_data) free(item->response_data);
-        item->response_data = NULL;
-        item->status_code = 500;
-        strncpy(item->error_msg, "Tile generation failed",
-                sizeof(item->error_msg) - 1);
-        item->error_msg[sizeof(item->error_msg) - 1] = '\0';
-        return;
-    }
-
-    item->response_size = size;
-    item->status_code = 200;
-    strncpy(item->content_type, "image/png", sizeof(item->content_type) - 1);
-    item->content_type[sizeof(item->content_type) - 1] = '\0';
-
-    /* Cache the result */
-    if (s_png_cache) {
-        pthread_mutex_lock(&s_cache_mutex);
-        ct_cache_put(s_png_cache, z, x, y, item->response_data, size);
-        pthread_mutex_unlock(&s_cache_mutex);
-    }
-}
 
 /* Process an MVT tile render request */
-static void process_mvt_render(RenderCtx *item)
-{
-    int z = item->z, x = item->x, y = item->y;
-
-    /* Check cache first */
-    if (s_mvt_cache) {
-        const uint8_t *cached_data;
-        size_t cached_size;
-        pthread_mutex_lock(&s_cache_mutex);
-        int hit = ct_cache_get(s_mvt_cache, z, x, y, &cached_data, &cached_size);
-        if (hit) {
-            item->response_data = malloc(cached_size);
-            if (item->response_data) {
-                memcpy(item->response_data, cached_data, cached_size);
-                item->response_size = cached_size;
-                item->status_code = 200;
-                strncpy(item->content_type, "application/vnd.mapbox-vector-tile",
-                        sizeof(item->content_type) - 1);
-                item->content_type[sizeof(item->content_type) - 1] = '\0';
-            }
-            pthread_mutex_unlock(&s_cache_mutex);
-            if (item->response_data) return;
-        }
-        pthread_mutex_unlock(&s_cache_mutex);
-    }
-
-    /* Use transport-agnostic API to generate tile */
-    size_t size;
-    item->response_data = ct_api_generate_mvt(s_api_ctx, z, x, y, &size);
-
-    if (!item->response_data) {
-        item->status_code = 500;
-        strncpy(item->error_msg, "Tile generation failed",
-                sizeof(item->error_msg) - 1);
-        item->error_msg[sizeof(item->error_msg) - 1] = '\0';
-        return;
-    }
-
-    item->response_size = size;
-    item->status_code = 200;
-    strncpy(item->content_type, "application/vnd.mapbox-vector-tile",
-            sizeof(item->content_type) - 1);
-    item->content_type[sizeof(item->content_type) - 1] = '\0';
-
-    /* Cache the result */
-    if (s_mvt_cache) {
-        pthread_mutex_lock(&s_cache_mutex);
-        ct_cache_put(s_mvt_cache, z, x, y, item->response_data, size);
-        pthread_mutex_unlock(&s_cache_mutex);
-    }
-}
 
 /* Process an ASCII tile render request */
-static void process_ascii_render(RenderCtx *item)
-{
-    int z = item->z, x = item->x, y = item->y;
-
-    /* Build query string from parsed ASCII options */
-    CTAsciiOptions *opts = &item->ascii_opts;
-    const char *charset_str = "extended";
-    switch (opts->charset) {
-        case CT_ASCII_SIMPLE:   charset_str = "simple"; break;
-        case CT_ASCII_EXTENDED: charset_str = "extended"; break;
-        case CT_ASCII_BLOCKS:   charset_str = "blocks"; break;
-        case CT_ASCII_BRAILLE:  charset_str = "braille"; break;
-    }
-
-    char query[256];
-    snprintf(query, sizeof(query), "width=%d&height=%d&charset=%s&invert=%d&color=%d",
-             opts->width, opts->height, charset_str, opts->invert, opts->color);
-
-    /* Use transport-agnostic API to generate ASCII tile */
-    size_t size;
-    item->response_data = (uint8_t *)ct_api_generate_ascii(s_api_ctx, z, x, y,
-                                                            query, &size);
-
-    if (!item->response_data || size == 0) {
-        if (item->response_data) free(item->response_data);
-        item->response_data = NULL;
-        item->status_code = 500;
-        strncpy(item->error_msg, "ASCII tile generation failed",
-                sizeof(item->error_msg) - 1);
-        item->error_msg[sizeof(item->error_msg) - 1] = '\0';
-        return;
-    }
-
-    item->response_size = size;
-    item->status_code = 200;
-    strncpy(item->content_type, "text/plain; charset=utf-8",
-            sizeof(item->content_type) - 1);
-    item->content_type[sizeof(item->content_type) - 1] = '\0';
-}
 
 /* Render worker callback function (called by ShWorkerPool) */
 /* Worker thread: render the tile. Touches only this context. */
@@ -357,47 +184,10 @@ static void process_ascii_render(RenderCtx *item)
  * Run one render and record its cost. Shared by the ShApiHandler below and by
  * nothing else -- the pool no longer calls this directly.
  */
-static void render_run(RenderCtx *item)
-{
-    /* Measure render time for adaptive capacity */
-    struct timeval render_start, render_end;
-    gettimeofday(&render_start, NULL);
-
-    switch (item->type) {
-        case RENDER_TYPE_PNG:
-            process_png_render(item);
-            break;
-        case RENDER_TYPE_MVT:
-            process_mvt_render(item);
-            break;
-        case RENDER_TYPE_ASCII:
-            process_ascii_render(item);
-            break;
-    }
-
-    gettimeofday(&render_end, NULL);
-    double render_ms = (render_end.tv_sec - render_start.tv_sec) * 1000.0 +
-                       (render_end.tv_usec - render_start.tv_usec) / 1000.0;
-
-    if (s_adaptive_tracker) {
-        sh_adaptive_record(s_adaptive_tracker, render_ms);
-
-        ShCapacityParams new_params;
-        if (sh_adaptive_update(s_adaptive_tracker, &new_params)) {
-            if (s_rate_limiter) {
-                sh_ratelimit_update_rate(s_rate_limiter,
-                                         new_params.rate_limit_rps,
-                                         new_params.rate_limit_burst);
-            }
-        }
-    }
-}
 
 /* Defined below, next to the routing they belong to. */
 static int parse_tile_uri(const char *uri, size_t uri_len,
                           int *z, int *x, int *y, char *ext);
-static int get_query_int(const char *query, const char *name,
-                         int default_val, int min_val, int max_val);
 
 /*
  * The tile handler, as a plain ShApiHandler.
@@ -407,73 +197,87 @@ static int get_query_int(const char *query, const char *name,
  * are unchanged. Binary responses (PNG, MVT) travel in ShApiResponse::body
  * with an explicit content_type, which is what sh_kl_reply_body() exists for.
  */
-static int carta_api_handler(void *unused, const ShApiRequest *req,
-                             ShApiResponse *resp)
+/*
+ * The tile-serving handler is ct_api_handle() in libcarta. This wrapper adds
+ * the two things that are genuinely the server's job and not the library's:
+ * a response cache, and the adaptive-capacity feedback that retunes the rate
+ * limiter.
+ *
+ * What used to be here was a second implementation of ct_api_handle -- its own
+ * routing, its own ASCII option parsing (which then got parsed a second time
+ * inside the library anyway, see the "(void)ascii_opts" that used to sit in
+ * handle_ascii_tile), its own error bodies. The WASM demo ran the library copy
+ * and this server ran that one, which is exactly the split "the demo IS the
+ * product" is supposed to rule out.
+ */
+static int carta_cached_handler(void *ctx, const ShApiRequest *req,
+                                ShApiResponse *resp)
 {
-    RenderCtx item;
-    int z, x, y;
+    CTTileCache *cache = NULL;
+    int z, x, y, rc;
     char ext[8];
+    struct timeval t0, t1;
 
-    (void)unused;
-    memset(&item, 0, sizeof(item));
-    item.status_code = 500;
-
-    if (!req->path ||
-        parse_tile_uri(req->path, strlen(req->path), &z, &x, &y, ext) != 0) {
-        return sh_api_response_error(resp, 400, "Invalid tile URL format");
+    /* Only /tiles/{z}/{x}/{y}.{png,mvt,pbf} are cached. ASCII varies with four
+     * query parameters, and the cache is keyed on z/x/y alone. */
+    if (req->path && strncmp(req->path, "/tiles/", 7) == 0 &&
+        parse_tile_uri(req->path, strlen(req->path), &z, &x, &y, ext) == 0) {
+        if (strcmp(ext, "png") == 0) {
+            cache = s_png_cache;
+        } else if (strcmp(ext, "mvt") == 0 || strcmp(ext, "pbf") == 0) {
+            cache = s_mvt_cache;
+        }
     }
 
-    item.z = z;
-    item.x = x;
-    item.y = y;
-
-    if (strcmp(ext, "mvt") == 0 || strcmp(ext, "pbf") == 0) {
-        item.type = RENDER_TYPE_MVT;
-    } else if (strcmp(ext, "png") == 0) {
-        item.type = RENDER_TYPE_PNG;
-    } else if (strcmp(ext, "txt") == 0 || strcmp(ext, "ascii") == 0) {
-        const char *q = req->query ? req->query : "";
-        item.type = RENDER_TYPE_ASCII;
-        ct_ascii_default_options(&item.ascii_opts);
-        item.ascii_opts.width  = get_query_int(q, "width", 80, 1, 256);
-        item.ascii_opts.height = get_query_int(q, "height", 0, 0, 256);
-        item.ascii_opts.invert = get_query_int(q, "invert", 0, 0, 1);
-        item.ascii_opts.color  = get_query_int(q, "color", 0, 0, 1);
-        /* Clamps that used to sit in handle_ascii_tile; they belong with the
-         * parsing, not with the transport. */
-        if (item.ascii_opts.width < 20)  item.ascii_opts.width = 20;
-        if (item.ascii_opts.width > 400) item.ascii_opts.width = 400;
-        if (item.ascii_opts.height > 200) item.ascii_opts.height = 200;
-    } else {
-        return sh_api_response_error(resp, 400,
-            "Unknown tile format. Use .mvt, .png, .txt, or .ascii");
+    if (cache) {
+        const uint8_t *hit_data;
+        size_t hit_size;
+        pthread_mutex_lock(&s_cache_mutex);
+        if (ct_cache_get(cache, z, x, y, &hit_data, &hit_size)) {
+            uint8_t *copy = malloc(hit_size);
+            if (copy) {
+                memcpy(copy, hit_data, hit_size);
+                pthread_mutex_unlock(&s_cache_mutex);
+                memset(resp, 0, sizeof(*resp));
+                resp->status_code = 200;
+                resp->content_type = (cache == s_png_cache)
+                    ? "image/png"
+                    : "application/vnd.mapbox-vector-tile";
+                resp->body = copy;
+                resp->body_len = hit_size;
+                return 0;
+            }
+        }
+        pthread_mutex_unlock(&s_cache_mutex);
     }
 
-    render_run(&item);
+    gettimeofday(&t0, NULL);
+    rc = ct_api_handle(ctx, req, resp);
+    gettimeofday(&t1, NULL);
 
-    if (item.status_code != 200) {
-        free(item.response_data);
-        return sh_api_response_error(resp, item.status_code,
-                                     item.error_msg[0] ? item.error_msg
-                                                       : "Render failed");
+    if (rc == 0 && cache && resp->status_code == 200 && resp->body) {
+        pthread_mutex_lock(&s_cache_mutex);
+        ct_cache_put(cache, z, x, y, resp->body, resp->body_len);
+        pthread_mutex_unlock(&s_cache_mutex);
     }
 
-    memset(resp, 0, sizeof(*resp));
-    resp->status_code = 200;
-    /* content_type is a fixed-size field on RenderCtx, so it cannot simply be
-     * borrowed once `item` goes out of scope. The renderers only ever set one
-     * of a small set of static strings, so map back to those. */
-    if (item.type == RENDER_TYPE_MVT) {
-        resp->content_type = "application/vnd.mapbox-vector-tile";
-    } else if (item.type == RENDER_TYPE_PNG) {
-        resp->content_type = "image/png";
-    } else {
-        resp->content_type = "text/plain; charset=utf-8";
+    /* Adaptive capacity is a transport concern: it retunes THIS server's rate
+     * limiter. It has no business inside a handler that also runs in WASM. */
+    if (s_adaptive_tracker) {
+        ShCapacityParams np;
+        double ms = (t1.tv_sec - t0.tv_sec) * 1000.0 +
+                    (t1.tv_usec - t0.tv_usec) / 1000.0;
+        sh_adaptive_record(s_adaptive_tracker, ms);
+        if (sh_adaptive_update(s_adaptive_tracker, &np) && s_rate_limiter) {
+            sh_ratelimit_update_rate(s_rate_limiter,
+                                     np.rate_limit_rps,
+                                     np.rate_limit_burst);
+        }
     }
-    resp->body = item.response_data;      /* ownership moves */
-    resp->body_len = item.response_size;
-    return 0;
+
+    return rc;
 }
+
 
 /* ============================================================================
  * Configuration Loading
@@ -972,7 +776,7 @@ static void submit_render_work(KlHttpRequest *req, KlHttpResponse *res,
     api_req.path   = path;
     api_req.query  = query;
 
-    sh_keel_async_dispatch(&app->async, req, res, carta_api_handler, NULL,
+    sh_keel_async_dispatch(&app->async, req, res, carta_cached_handler, s_api_ctx,
                            &api_req);
 
     record_metrics(timer, endpoint);
@@ -1020,22 +824,9 @@ static void handle_mvt_tile(KlHttpRequest *req, KlHttpResponse *res, void *ud,
     submit_render_work(req, res, ud, z, x, y, "mvt", timer, "endpoint:mvt");
 }
 
-/* Parse query string for a parameter with bounds, returns default if not found/invalid.
- * Thin wrapper over sh_query_get_int_bounded(). */
-static int get_query_int(const char *query, const char *name, int default_val,
-                         int min_val, int max_val) {
-    return sh_query_get_int_bounded(query ? query : "", name,
-                                    default_val, min_val, max_val);
-}
-
 /* GET /tiles/{z}/{x}/{y}.txt or .ascii */
 static void handle_ascii_tile(KlHttpRequest *req, KlHttpResponse *res, void *ud,
                               int z, int x, int y, ShMetricsTimer timer) {
-    char query[512];
-    size_t qlen = req->query_len < sizeof(query) - 1 ? req->query_len
-                                                     : sizeof(query) - 1;
-    if (req->query && qlen > 0) memcpy(query, req->query, qlen);
-    query[req->query && qlen > 0 ? qlen : 0] = '\0';
     if (!s_pbf_ctx) {
         send_error(res, 503, "PBF not loaded");
         return;
@@ -1052,36 +843,6 @@ static void handle_ascii_tile(KlHttpRequest *req, KlHttpResponse *res, void *ud,
         return;
     }
 
-    /* Parse query parameters for ASCII options */
-    CTAsciiOptions ascii_opts;
-    ct_ascii_default_options(&ascii_opts);
-
-    ascii_opts.width = get_query_int(query, "width", 80, 1, 256);
-    ascii_opts.height = get_query_int(query, "height", 0, 0, 256);  /* 0 = auto */
-    ascii_opts.invert = get_query_int(query, "invert", 0, 0, 1);
-    ascii_opts.color = get_query_int(query, "color", 0, 0, 1);
-
-    /* Parse charset: simple, extended, blocks, braille */
-    char charset_buf[16];
-    if (sh_query_get_str(query, "charset",
-                         charset_buf, sizeof(charset_buf)) > 0) {
-        if (strcmp(charset_buf, "simple") == 0) {
-            ascii_opts.charset = CT_ASCII_SIMPLE;
-        } else if (strcmp(charset_buf, "extended") == 0) {
-            ascii_opts.charset = CT_ASCII_EXTENDED;
-        } else if (strcmp(charset_buf, "blocks") == 0) {
-            ascii_opts.charset = CT_ASCII_BLOCKS;
-        } else if (strcmp(charset_buf, "braille") == 0) {
-            ascii_opts.charset = CT_ASCII_BRAILLE;
-        }
-    }
-
-    /* Clamp dimensions to reasonable range */
-    if (ascii_opts.width < 20) ascii_opts.width = 20;
-    if (ascii_opts.width > 400) ascii_opts.width = 400;
-    if (ascii_opts.height > 200) ascii_opts.height = 200;
-
-    (void)ascii_opts;   /* parsed again, with the clamps, in carta_api_handler */
     submit_render_work(req, res, ud, z, x, y, "txt", timer, "endpoint:ascii");
 }
 
