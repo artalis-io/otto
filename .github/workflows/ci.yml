@@ -404,6 +404,66 @@ jobs:
           make -C locus/api
 
   # ==========================================================================
+  # macOS Core
+  #
+  # OTTO is developed on macOS, but CI only covered Linux and Windows -- a
+  # macOS-specific break (Apple clang vs GCC, Homebrew libomp/glpk paths, BSD
+  # vs GNU userland) could land unseen. This mirrors the Windows job: every
+  # module's full suite plus a build of all six API servers.
+  #
+  # The Ralph and FuelWise Makefiles already select the macOS OpenMP flags
+  # (-Xclang -fopenmp against Homebrew's libomp under /opt/homebrew, resolved
+  # via `brew --prefix libomp`); macos-latest is Apple Silicon, so those paths
+  # match. glpk supplies glpsol for FuelWise's MILP-objective regression.
+  #
+  # The live-server curl e2e suites are left out for the same reason as
+  # Windows -- a bigger CI surface than this job needs. Both the full lib
+  # suites and all six e2e suites were validated locally on macOS.
+  # ==========================================================================
+  macos:
+    name: macOS Core
+    runs-on: macos-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install dependencies
+        run: brew install glpk libomp
+
+      - name: Build and test all of shared
+        run: make -C shared test
+
+      - name: Build and test Ralph
+        run: make -C ralph test
+
+      - name: Build and test Velo
+        run: make -C velo test
+
+      - name: Build and test Carta
+        run: make -C carta test
+
+      - name: Build and test Locus
+        run: make -C locus test
+
+      - name: Build and test FuelWise
+        run: make -C fuelwise test
+
+      - name: Build and test Surge
+        run: make -C surge test
+
+      - name: Build the API servers
+        run: |
+          make -C ralph/api
+          make -C fuelwise/api
+          make -C surge/api
+          make -C velo/api
+          make -C carta/api
+          make -C locus/api
+
+  # ==========================================================================
   # Sanitizers
   #
   # A c-audit of the Phase 1 transport code found two heap overflows and an
