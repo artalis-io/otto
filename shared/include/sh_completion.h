@@ -38,7 +38,7 @@
 #ifndef SH_COMPLETION_H
 #define SH_COMPLETION_H
 
-#include <pthread.h>
+#include "sh_pal.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -53,8 +53,8 @@ extern "C" {
  * Embed this in your work item struct.
  */
 typedef struct {
-    pthread_mutex_t mutex;
-    pthread_cond_t cond;
+    ShMutex mutex;
+    ShCond cond;
     int completed;
     volatile int cancelled;
 } ShCompletion;

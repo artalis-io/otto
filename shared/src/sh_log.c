@@ -10,7 +10,6 @@
 #include <string.h>
 #include "sh_pal.h"
 #include <time.h>
-#include <pthread.h>
 #include <unistd.h>
 #include <stdarg.h>
 
@@ -18,15 +17,36 @@
  * Thread-Local Storage
  * ============================================================================ */
 
-static pthread_key_t s_trace_id_key;
-static pthread_once_t s_key_once = PTHREAD_ONCE_INIT;
+static ShTls s_trace_id_key;
+static ShOnce s_key_once = SH_ONCE_INIT;
+
+/*
+ * PTHREAD_MUTEX_INITIALIZER has no portable PAL equivalent, and zeroed storage
+ * is not a substitute: glibc's static initialiser happens to be all zeroes,
+ * but macOS uses a signature value, so a zero-initialised pthread_mutex_t is
+ * not a valid mutex there. The portable form is lazy initialisation through
+ * sh_once(), which is why every lock goes through the helper below.
+ */
+static ShMutex s_log_mutex;
 
 static void trace_id_destructor(void *ptr) {
     free(ptr);
 }
 
-static void create_trace_id_key(void) {
-    pthread_key_create(&s_trace_id_key, trace_id_destructor);
+/* Both the TLS key and the log mutex, so a single sh_once() covers whichever
+ * entry point the process reaches first. */
+static void log_init_once(void) {
+    sh_mutex_init(&s_log_mutex);
+    sh_tls_create(&s_trace_id_key, trace_id_destructor);
+}
+
+static void log_lock(void) {
+    sh_once(&s_key_once, log_init_once);
+    sh_mutex_lock(&s_log_mutex);
+}
+
+static void log_unlock(void) {
+    sh_mutex_unlock(&s_log_mutex);
 }
 
 /* ============================================================================
@@ -39,7 +59,6 @@ static void create_trace_id_key(void) {
  * Thread safety: All access to s_config protected by s_log_mutex.
  * ============================================================================ */
 
-static pthread_mutex_t s_log_mutex = PTHREAD_MUTEX_INITIALIZER;
 static ShLogConfig s_config = SH_LOG_CONFIG_DEFAULT;
 static int s_initialized = 0;
 
@@ -109,9 +128,9 @@ ShLogFormat sh_log_format_from_string(const char *str) {
  * ============================================================================ */
 
 void sh_log_init(const ShLogConfig *config) {
-    pthread_once(&s_key_once, create_trace_id_key);
+    sh_once(&s_key_once, log_init_once);
 
-    pthread_mutex_lock(&s_log_mutex);
+    log_lock();
 
     if (config) {
         s_config = *config;
@@ -146,13 +165,13 @@ void sh_log_init(const ShLogConfig *config) {
 
     s_initialized = 1;
 
-    pthread_mutex_unlock(&s_log_mutex);
+    log_unlock();
 }
 
 void sh_log_shutdown(void) {
-    pthread_mutex_lock(&s_log_mutex);
+    log_lock();
     s_initialized = 0;
-    pthread_mutex_unlock(&s_log_mutex);
+    log_unlock();
 
     /* Flush stderr */
     fflush(stderr);
@@ -163,9 +182,9 @@ ShLogLevel sh_log_get_level(void) {
 }
 
 void sh_log_set_level(ShLogLevel level) {
-    pthread_mutex_lock(&s_log_mutex);
+    log_lock();
     s_config.level = level;
-    pthread_mutex_unlock(&s_log_mutex);
+    log_unlock();
 }
 
 int sh_log_enabled(ShLogLevel level) {
@@ -177,10 +196,10 @@ int sh_log_enabled(ShLogLevel level) {
  * ============================================================================ */
 
 void sh_log_set_trace_id(const char *trace_id) {
-    pthread_once(&s_key_once, create_trace_id_key);
+    sh_once(&s_key_once, log_init_once);
 
     /* Free existing trace ID */
-    char *old = pthread_getspecific(s_trace_id_key);
+    char *old = sh_tls_get(&s_trace_id_key);
     if (old) {
         free(old);
     }
@@ -188,16 +207,16 @@ void sh_log_set_trace_id(const char *trace_id) {
     if (trace_id) {
         char *copy = strdup(trace_id);
         if (copy) {
-            pthread_setspecific(s_trace_id_key, copy);
+            sh_tls_set(&s_trace_id_key, copy);
         }
     } else {
-        pthread_setspecific(s_trace_id_key, NULL);
+        sh_tls_set(&s_trace_id_key, NULL);
     }
 }
 
 const char *sh_log_get_trace_id(void) {
-    pthread_once(&s_key_once, create_trace_id_key);
-    return pthread_getspecific(s_trace_id_key);
+    sh_once(&s_key_once, log_init_once);
+    return sh_tls_get(&s_trace_id_key);
 }
 
 /* ============================================================================
@@ -283,7 +302,7 @@ void sh_log_v(ShLogLevel level, const char *file, int line,
         if (slash) filename = slash + 1;
     }
 
-    pthread_mutex_lock(&s_log_mutex);
+    log_lock();
 
     if (s_config.format == SH_LOG_FORMAT_JSON) {
         /* JSON format */
@@ -377,7 +396,7 @@ void sh_log_v(ShLogLevel level, const char *file, int line,
         fputc('\n', stderr);
     }
 
-    pthread_mutex_unlock(&s_log_mutex);
+    log_unlock();
 
     /* Flush immediately for ERROR and FATAL */
     if (level >= SH_LOG_LEVEL_ERROR) {
