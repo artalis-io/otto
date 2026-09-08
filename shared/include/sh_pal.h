@@ -163,6 +163,32 @@ int sh_localtime(int64_t unix_sec, struct tm *out);
 uint64_t sh_pal_pid(void);
 
 /* ============================================================================
+ * Environment
+ * ============================================================================ */
+
+/*
+ * Set an environment variable for this process, overwriting any current value.
+ *
+ * Returns 0 on success, -1 on failure. POSIX setenv(name, value, 1); Windows
+ * _putenv_s, which has no "do not overwrite" mode -- so neither does this.
+ * Nothing in OTTO wanted one.
+ *
+ * `name` must not be empty or contain '='.
+ */
+int sh_pal_setenv(const char *name, const char *value);
+
+/*
+ * Remove an environment variable.
+ *
+ * Returns 0 on success -- including when the variable was not set, matching
+ * sh_pal_mkdir's treatment of "already exists" -- and -1 on failure.
+ *
+ * On Windows this is _putenv_s(name, "") : assigning an empty value is how
+ * the CRT deletes a variable, and getenv() then returns NULL rather than "".
+ */
+int sh_pal_unsetenv(const char *name);
+
+/* ============================================================================
  * Randomness
  * ============================================================================ */
 
@@ -188,6 +214,20 @@ int sh_pal_random_bytes(void *buf, size_t len);
  * it keeps errno/GetLastError handling out of them.
  */
 int sh_pal_mkdir(const char *path);
+
+/*
+ * Write this process's temporary directory into `buf`, with no trailing
+ * separator.
+ *
+ * Returns 0 on success, -1 if it would not fit. POSIX answers $TMPDIR, or
+ * "/tmp" when that is unset; Windows answers GetTempPathA, which consults
+ * TMP, TEMP and USERPROFILE in turn.
+ *
+ * A hardcoded "/tmp" is not portable even under MSYS2: a mingw-compiled
+ * binary is a native Windows program, so it reads "/tmp/x" as "C:\tmp\x",
+ * a directory that need not exist.
+ */
+int sh_pal_temp_dir(char *buf, size_t len);
 
 /* ============================================================================
  * Read-only file mapping
