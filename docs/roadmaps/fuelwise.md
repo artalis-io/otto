@@ -2029,18 +2029,18 @@ The FuelWise-specific context is:
 - The suboptimal convergence was discovered during FuelWise benchmark testing
 - Fixes should be validated against FuelWise test cases before closing
 
-## Keel Migration (Mongoose Removal) — Phase 3 of 6
+## Keel Migration — Phase 3 of 6
 
-**Completed for FuelWise.** `fuelwise/api` no longer links Mongoose.
+**Completed for FuelWise.** `fuelwise/api` runs on Keel v3.
 
-Rationale and shared context: `docs/roadmaps/surge.md` (Phase 1). Mongoose is
-`GPL-2.0-only or commercial`, incompatible with OTTO's AGPL-3.0 and
+Rationale and shared context: `docs/roadmaps/surge.md` (Phase 1). The previous
+server was `GPL-2.0-only or commercial`, incompatible with OTTO's AGPL-3.0 and
 unsublicensable for the commercial tier; Keel is MIT.
 
 ### Shape of the port
 
 A **transport swap only**. `ShWorkQueue` + `ShWorkerPool` + `ShCompletion` are
-kept exactly as the mongoose server used them, including the
+kept exactly as the previous server used them, including the
 `sh_completion_wait()` on the event loop thread. Behaviour, response shapes and
 `/api/v1/stats` counters are unchanged.
 
@@ -2054,7 +2054,7 @@ kept exactly as the mongoose server used them, including the
 
 ### Fixed in passing
 
-The mongoose handler leaked `work->request_path` on the queue-full (503) path —
+The previous handler leaked `work->request_path` on the queue-full (503) path —
 it freed `request_body` and the item but not the `strdup`'d path. There is now
 a single `solve_work_item_free()` that releases everything.
 
@@ -2101,6 +2101,5 @@ back alongside the other servers.
 
 ### Remaining
 
-Velo (100 `mg_` call sites), Locus (63), Carta (56), plus
-`shared/src/sh_httpserver.c` (41). Delete that file and `vendor/mongoose/`
-once the last server is ported.
+Velo, Locus and Carta remain to port. The legacy
+`shared/src/sh_httpserver.c` will be deleted once the last server is on Keel.

@@ -1591,7 +1591,7 @@ iris/
 | `nexus/include/nx_issue.h` | Reuse NxIssueList for validation errors |
 | Keel HTTP client (`kl_client_request`, `kl_h2_client_request`) | LLM API calls + REST provider calls |
 | Keel mbedTLS integration (`kl_tls_*`) | HTTPS for LLM APIs + external TMS endpoints |
-| Keel server (`kl_server`) | HTTP server (replaces mongoose across OTTO) |
+| Keel server (`kl_server`) | HTTP server across OTTO |
 
 ### Per-Component (each component owns its dependency)
 | Component | Dependency | What It Must Match |

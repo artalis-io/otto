@@ -1843,7 +1843,7 @@ ralph/
 │   ├── ralph_api.c          # API handler implementation
 │   └── ralph_parse_lp.c     # LP format parser
 ├── api/
-│   └── src/main.c           # Mongoose wrapper (port 8084)
+│   └── src/main.c           # HTTP wrapper (port 8084)
 └── wasm/
     └── ralph_wasm_api.c     # WASM wrapper
 ```
@@ -3299,7 +3299,7 @@ Reference implementation: `carta/api/src/main.c` (~1,937 lines).
 
 ### Context
 
-The current Ralph HTTP server is a minimal ~207-line Mongoose wrapper. It handles requests
+The current Ralph HTTP server is a minimal ~207-line HTTP wrapper. It handles requests
 synchronously on the event-loop thread — a single long-running MIP solve blocks all other
 clients. No rate limiting, no backpressure, no observability.
 
@@ -3357,7 +3357,7 @@ The transport-agnostic split is already clean (`ralph_api.c` handles all logic,
    - Call `ralph_api_handle()` on the copied request
    - Call `sh_completion_signal()` when done
 6. HTTP handler for `/api/v1/solve`:
-   - Copy request into work item (body must be duplicated — Mongoose reuses buffer)
+   - Copy request into work item (body must be duplicated — the server reuses its buffer)
    - `sh_workqueue_try_push()` — return 503 if queue full
    - `sh_completion_wait()` with timeout — return 504 if timed out,
      call `sh_completion_cancel()` so worker skips processing

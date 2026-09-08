@@ -38,7 +38,7 @@ static RalphAPIContext *s_ctx = NULL;
  * Response Helpers
  * ============================================================================ */
 
-/* Same four headers the mongoose server emitted on every response. */
+/* The same four CORS headers on every response. */
 static void add_cors_headers(KlHttpResponse *res) {
     kl_http_response_header(res, "Access-Control-Allow-Origin", "*");
     kl_http_response_header(res, "Access-Control-Allow-Methods",
@@ -77,8 +77,8 @@ static void dispatch(KlHttpRequest *req, KlHttpResponse *res) {
     slice_to_buf(req->query, req->query_len, query, sizeof(query));
 
     /*
-     * Body is passed as (pointer, length) exactly as the mongoose server did:
-     * neither mongoose's slice nor Keel's buffer reader NUL-terminates it.
+     * Body is passed as (pointer, length): Keel's buffer reader does not
+     * NUL-terminate it.
      */
     const char *body = NULL;
     size_t body_len = 0;
@@ -143,8 +143,7 @@ static int mw_preflight(KlHttpRequest *req, KlHttpResponse *res, void *ud) {
  * patterns -- so a catch-all route is not expressible. Without this, unmatched
  * paths would hit Keel's built-in text/plain 404, losing both the CORS headers
  * and Ralph's own {"error":"Endpoint not found"} body. Forwarding to dispatch()
- * keeps Ralph the single source of truth for status and body, exactly as when
- * mongoose handed it every request.
+ * keeps Ralph the single source of truth for status and body.
  */
 static int mw_fallback(KlHttpRequest *req, KlHttpResponse *res, void *ud) {
     KlHttpServer *server = (KlHttpServer *)ud;
