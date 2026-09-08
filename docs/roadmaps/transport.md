@@ -183,7 +183,7 @@ surface is deliberate. What OTTO's core needs, Keel does not export:
 
 | area | call sites | in Keel? | Windows mapping |
 |---|---|---|---|
-| mutex / cond / rwlock / once / TLS | ~150 | no | `SRWLOCK`, `CONDITION_VARIABLE`, `INIT_ONCE`, `FlsAlloc` |
+| mutex / cond / once / TLS / threads | ~150 | no | `SRWLOCK`, `CONDITION_VARIABLE`, `INIT_ONCE`, `FlsAlloc` -- built, and `shared/` migrated |
 | read-only file mapping | 7 files (velo, carta, locus) | no | `CreateFileMapping` + `MapViewOfFile` |
 | monotonic + wall clock | 15 | partly | `QueryPerformanceCounter`, `GetSystemTimeAsFileTime` |
 | calendar (`gmtime_r`, `localtime_r`) | shimmed | no | `gmtime_s`, `localtime_s` |
@@ -195,6 +195,54 @@ surface is deliberate. What OTTO's core needs, Keel does not export:
 **It would invert the layering.** `sh_httpserver.c` is deliberately excluded from
 `libshared.a` so core does not depend on Keel. Making Keel the PAL would put a transport
 vendor underneath Ralph and Shared, and drag it into WASM builds that have no server.
+
+### Adoption: built is not the same as used
+
+Phase 4 built the threading layer and stopped there. Months later `ShMutex`,
+`ShCond`, `ShOnce` and `ShTls` had exactly two users -- the PAL's own two
+backends -- while `shared/src` still made **155 direct `pthread_*` calls**
+across nine files, which is the same count the table above estimated for the
+migration. `shared/include/sh_completion.h` included `<pthread.h>` and put
+`pthread_mutex_t` in a public struct, so every consumer of that header
+inherited the dependency.
+
+It compiled on Windows only because MinGW-w64 ships winpthreads and every
+Makefile links `-lpthread`. That is worth stating plainly: the PAL's whole
+justification is that Keel does not export these primitives and native Windows
+needs them, and until now that need was being met by a third-party pthread
+emulation rather than by the PAL. It also ruled out MSVC entirely.
+
+`shared/` is now fully migrated -- library, public header and its own test
+suite. `nm libshared.a` reports no undefined `pthread` symbols, and a program
+links against it and runs with no `-lpthread` on the command line. On Windows
+that means SRWLOCK and CONDITION_VARIABLE directly instead of an emulation
+layer.
+
+Three things in the migration were not mechanical:
+
+- **`pthread_cond_timedwait` is absolute, `sh_cond_timedwait` is relative.**
+  Both callers computed an absolute deadline once and looped. Re-passing the
+  original relative timeout after a spurious wakeup would restart the full
+  wait, so the deadline is now held and the remaining time recomputed each
+  pass. Both moved from `CLOCK_REALTIME` to monotonic as a result, so a
+  wall-clock adjustment can no longer stretch or collapse a wait.
+
+- **`PTHREAD_MUTEX_INITIALIZER` has no PAL equivalent, and zeroed storage is
+  not a substitute.** glibc's static initialiser happens to be all zeroes;
+  macOS uses a signature value, so a zero-initialised `pthread_mutex_t` is not
+  a valid mutex there. The two statically initialised mutexes (`sh_log`,
+  `sh_metrics`) now initialise lazily through `sh_once()`, behind a small
+  lock helper.
+
+- **`ShThread` is opaque storage, not a scalar.** `sh_worker_pool.c` used a
+  `pthread_t` as its own "is this slot live" flag (`if (thread)`,
+  `thread = 0`). That needed an explicit `joined` field.
+
+**Still on pthreads:** `carta/` (four files, including the public
+`ct_metatile.h`), `ralph/src/lp_external_adapter.c` and its three tests --
+this is the recursive-mutex caller the header already anticipates -- plus
+`carta/api/src/main.c` and `surge/benchmarks/bench_tune.c`. Those keep
+`-lpthread` alive on Windows; `shared/` no longer needs it.
 
 ### Header strategy
 

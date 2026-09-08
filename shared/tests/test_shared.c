@@ -30,7 +30,6 @@
 #include <stdint.h>
 #include <time.h>
 #include <unistd.h>
-#include <pthread.h>
 
 /* ============================================================================
  * Test Framework
@@ -1442,14 +1441,14 @@ TEST(completion_wait_success)
     sh_completion_init(&comp);
 
     /* Start worker thread */
-    pthread_t worker;
-    pthread_create(&worker, NULL, completion_worker_thread, &comp);
+    ShThread worker;
+    sh_thread_create(&worker, completion_worker_thread, &comp);
 
     /* Wait for completion with generous timeout */
     int result = sh_completion_wait(&comp, 1000);
     ASSERT_EQ(result, 1);  /* Should complete */
 
-    pthread_join(worker, NULL);
+    sh_thread_join(&worker, NULL);
     sh_completion_cleanup(&comp);
 }
 
@@ -1471,7 +1470,12 @@ TEST(completion_wait_timeout)
 
 /* Counter for worker pool tests */
 static volatile int s_pool_items_processed = 0;
-static pthread_mutex_t s_pool_test_mutex = PTHREAD_MUTEX_INITIALIZER;
+/* Lazily initialised: the PAL deliberately has no static mutex initialiser,
+ * because zeroed storage is not a valid mutex on every POSIX platform. */
+static ShMutex s_pool_test_mutex;
+static ShOnce s_pool_test_once = SH_ONCE_INIT;
+
+static void pool_test_mutex_init(void) { sh_mutex_init(&s_pool_test_mutex); }
 
 static void pool_test_callback(ShWorkItem *item, void *ctx)
 {
@@ -1482,9 +1486,10 @@ static void pool_test_callback(ShWorkItem *item, void *ctx)
     usleep(10000);  /* 10ms */
 
     /* Increment counter */
-    pthread_mutex_lock(&s_pool_test_mutex);
+    sh_once(&s_pool_test_once, pool_test_mutex_init);
+    sh_mutex_lock(&s_pool_test_mutex);
     s_pool_items_processed++;
-    pthread_mutex_unlock(&s_pool_test_mutex);
+    sh_mutex_unlock(&s_pool_test_mutex);
 
     sh_workqueue_item_free(item);
 }

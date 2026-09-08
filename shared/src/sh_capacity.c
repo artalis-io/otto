@@ -5,11 +5,11 @@
  */
 
 #include "sh_capacity.h"
+#include "sh_pal.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <math.h>
-#include <pthread.h>
 #include <stdint.h>
 
 /* ============================================================================
@@ -334,7 +334,7 @@ struct ShAdaptiveTracker {
     void *callback_user_data;
 
     /* Thread safety */
-    pthread_mutex_t mutex;
+    ShMutex mutex;
 };
 
 /*
@@ -424,7 +424,7 @@ ShAdaptiveTracker *sh_adaptive_create(const ShAdaptiveConfig *config) {
     tracker->max_ms = 0;
 
     /* Initialize mutex */
-    if (pthread_mutex_init(&tracker->mutex, NULL) != 0) {
+    if (sh_mutex_init(&tracker->mutex) != 0) {
         free(tracker->samples);
         free(tracker);
         return NULL;
@@ -436,7 +436,7 @@ ShAdaptiveTracker *sh_adaptive_create(const ShAdaptiveConfig *config) {
 void sh_adaptive_free(ShAdaptiveTracker *tracker) {
     if (!tracker) return;
 
-    pthread_mutex_destroy(&tracker->mutex);
+    sh_mutex_destroy(&tracker->mutex);
     free(tracker->samples);
     free(tracker);
 }
@@ -452,7 +452,7 @@ void sh_adaptive_record(ShAdaptiveTracker *tracker, double response_ms) {
         response_ms = 0;
     }
 
-    pthread_mutex_lock(&tracker->mutex);
+    sh_mutex_lock(&tracker->mutex);
 
     /* Update EMA */
     if (tracker->total_samples == 0) {
@@ -482,7 +482,7 @@ void sh_adaptive_record(ShAdaptiveTracker *tracker, double response_ms) {
     tracker->sample_head = (tracker->sample_head + 1) % tracker->config.window_size;
     tracker->total_samples++;
 
-    pthread_mutex_unlock(&tracker->mutex);
+    sh_mutex_unlock(&tracker->mutex);
 }
 
 /*
@@ -574,27 +574,27 @@ static int adaptive_recalc_locked(ShAdaptiveTracker *tracker, ShCapacityParams *
 int sh_adaptive_update(ShAdaptiveTracker *tracker, ShCapacityParams *params) {
     if (!tracker) return 0;
 
-    pthread_mutex_lock(&tracker->mutex);
+    sh_mutex_lock(&tracker->mutex);
 
     /* Check if it's time to recalculate */
     uint64_t samples_since_recalc = tracker->total_samples - tracker->last_recalc_sample;
     if (samples_since_recalc < (uint64_t)tracker->config.recalc_interval) {
-        pthread_mutex_unlock(&tracker->mutex);
+        sh_mutex_unlock(&tracker->mutex);
         return 0;
     }
 
     int result = adaptive_recalc_locked(tracker, params);
 
-    pthread_mutex_unlock(&tracker->mutex);
+    sh_mutex_unlock(&tracker->mutex);
     return result;
 }
 
 int sh_adaptive_recalculate(ShAdaptiveTracker *tracker, ShCapacityParams *params) {
     if (!tracker) return 0;
 
-    pthread_mutex_lock(&tracker->mutex);
+    sh_mutex_lock(&tracker->mutex);
     int result = adaptive_recalc_locked(tracker, params);
-    pthread_mutex_unlock(&tracker->mutex);
+    sh_mutex_unlock(&tracker->mutex);
 
     return result;
 }
@@ -604,7 +604,7 @@ void sh_adaptive_stats(ShAdaptiveTracker *tracker, ShAdaptiveStats *stats) {
 
     memset(stats, 0, sizeof(*stats));
 
-    pthread_mutex_lock(&tracker->mutex);
+    sh_mutex_lock(&tracker->mutex);
 
     if (tracker->sample_count > 0) {
         /* Copy and sort for percentiles - use calloc for overflow protection */
@@ -629,7 +629,7 @@ void sh_adaptive_stats(ShAdaptiveTracker *tracker, ShAdaptiveStats *stats) {
     stats->sample_count = tracker->total_samples;
     stats->recalc_count = tracker->recalc_count;
 
-    pthread_mutex_unlock(&tracker->mutex);
+    sh_mutex_unlock(&tracker->mutex);
 }
 
 void sh_adaptive_set_callback(ShAdaptiveTracker *tracker,
@@ -637,22 +637,22 @@ void sh_adaptive_set_callback(ShAdaptiveTracker *tracker,
                               void *user_data) {
     if (!tracker) return;
 
-    pthread_mutex_lock(&tracker->mutex);
+    sh_mutex_lock(&tracker->mutex);
     tracker->callback = callback;
     tracker->callback_user_data = user_data;
-    pthread_mutex_unlock(&tracker->mutex);
+    sh_mutex_unlock(&tracker->mutex);
 }
 
 int sh_adaptive_get_params(ShAdaptiveTracker *tracker, ShCapacityParams *params) {
     if (!tracker || !params) return 0;
 
-    pthread_mutex_lock(&tracker->mutex);
+    sh_mutex_lock(&tracker->mutex);
 
     int valid = tracker->params_valid;
     if (valid) {
         *params = tracker->current_params;
     }
 
-    pthread_mutex_unlock(&tracker->mutex);
+    sh_mutex_unlock(&tracker->mutex);
     return valid;
 }

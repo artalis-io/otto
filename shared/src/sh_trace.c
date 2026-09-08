@@ -10,7 +10,6 @@
 #include <string.h>
 #include "sh_pal.h"
 #include <time.h>
-#include <pthread.h>
 #include <ctype.h>
 
 /* Entropy comes from sh_pal_random_bytes(); no platform header here.
@@ -23,19 +22,19 @@
  * actual trace data is per-thread (not shared). This is an accepted exception
  * to the "no static state in libraries" rule, as TLS keys are inherently global.
  *
- * Thread safety: pthread_key_create is called once via pthread_once. TLS access
+ * Thread safety: sh_tls_create is called once via sh_once. TLS access
  * is thread-safe by design.
  * ============================================================================ */
 
-static pthread_key_t s_trace_key;
-static pthread_once_t s_key_once = PTHREAD_ONCE_INIT;
+static ShTls s_trace_key;
+static ShOnce s_key_once = SH_ONCE_INIT;
 
 static void trace_destructor(void *ptr) {
     free(ptr);
 }
 
 static void create_trace_key(void) {
-    pthread_key_create(&s_trace_key, trace_destructor);
+    sh_tls_create(&s_trace_key, trace_destructor);
 }
 
 /* ============================================================================
@@ -59,7 +58,12 @@ static void get_random_bytes(void *buf, size_t len) {
      */
     static unsigned int seed = 0;
     if (seed == 0) {
-        seed = (unsigned int)time(NULL) ^ (unsigned int)pthread_self();
+        /* Process id, not a thread id: `seed` is a single static shared
+         * by every thread that reaches this fallback, so mixing in a
+         * per-thread value never actually distinguished them. The PAL
+         * has no thread-id call and this path does not warrant adding
+         * one -- it runs only when the platform CSPRNG has failed. */
+        seed = (unsigned int)time(NULL) ^ (unsigned int)sh_pal_pid();
     }
     unsigned char *p = buf;
     for (size_t i = 0; i < len; i++) {
@@ -129,10 +133,10 @@ int sh_trace_validate(const char *trace_id) {
  * ============================================================================ */
 
 void sh_trace_set(const char *trace_id) {
-    pthread_once(&s_key_once, create_trace_key);
+    sh_once(&s_key_once, create_trace_key);
 
     /* Free existing trace ID */
-    char *old = pthread_getspecific(s_trace_key);
+    char *old = sh_tls_get(&s_trace_key);
     if (old) {
         free(old);
     }
@@ -140,18 +144,18 @@ void sh_trace_set(const char *trace_id) {
     if (trace_id && trace_id[0]) {
         char *copy = strdup(trace_id);
         if (copy) {
-            pthread_setspecific(s_trace_key, copy);
+            sh_tls_set(&s_trace_key, copy);
             sh_log_set_trace_id(copy);
         }
     } else {
-        pthread_setspecific(s_trace_key, NULL);
+        sh_tls_set(&s_trace_key, NULL);
         sh_log_set_trace_id(NULL);
     }
 }
 
 const char *sh_trace_get(void) {
-    pthread_once(&s_key_once, create_trace_key);
-    return pthread_getspecific(s_trace_key);
+    sh_once(&s_key_once, create_trace_key);
+    return sh_tls_get(&s_trace_key);
 }
 
 const char *sh_trace_new(void) {

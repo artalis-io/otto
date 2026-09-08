@@ -3,9 +3,9 @@
  */
 
 #include "sh_ratelimit.h"
+#include "sh_pal.h"
 #include <stdlib.h>
 #include <string.h>
-#include <pthread.h>
 #include <sys/time.h>
 
 /* ============================================================================
@@ -26,7 +26,7 @@ struct ShRateLimiter {
     size_t mask;               /* capacity - 1, for fast modulo */
     double rps;                /* Tokens per second (refill rate) */
     double burst;              /* Maximum tokens (bucket capacity) */
-    pthread_mutex_t mutex;     /* Mutex for thread safety */
+    ShMutex mutex;     /* Mutex for thread safety */
 
     /* Statistics (updated under mutex) */
     uint64_t requests_allowed;
@@ -144,7 +144,7 @@ ShRateLimiter *sh_ratelimit_create(double rps, double burst, size_t table_size)
     limiter->rps = rps;
     limiter->burst = burst;
 
-    if (pthread_mutex_init(&limiter->mutex, NULL) != 0) {
+    if (sh_mutex_init(&limiter->mutex) != 0) {
         free(limiter->table);
         free(limiter);
         return NULL;
@@ -157,7 +157,7 @@ void sh_ratelimit_free(ShRateLimiter *limiter)
 {
     if (!limiter) return;
 
-    pthread_mutex_destroy(&limiter->mutex);
+    sh_mutex_destroy(&limiter->mutex);
     free(limiter->table);
     free(limiter);
 }
@@ -174,7 +174,7 @@ int sh_ratelimit_check(ShRateLimiter *limiter, const ShRateLimitAddr *addr)
     size_t idx = (size_t)(h & limiter->mask);
     int allowed = 0;
 
-    pthread_mutex_lock(&limiter->mutex);
+    sh_mutex_lock(&limiter->mutex);
 
     /* Linear probing to find existing entry or empty slot */
     RateLimitEntry *entry = NULL;
@@ -237,7 +237,7 @@ int sh_ratelimit_check(ShRateLimiter *limiter, const ShRateLimitAddr *addr)
         limiter->requests_denied++;
     }
 
-    pthread_mutex_unlock(&limiter->mutex);
+    sh_mutex_unlock(&limiter->mutex);
     return allowed;
 }
 
@@ -245,23 +245,23 @@ void sh_ratelimit_stats(ShRateLimiter *limiter, ShRateLimitStats *stats)
 {
     if (!limiter || !stats) return;
 
-    pthread_mutex_lock(&limiter->mutex);
+    sh_mutex_lock(&limiter->mutex);
     stats->requests_allowed = limiter->requests_allowed;
     stats->requests_denied = limiter->requests_denied;
     stats->active_entries = limiter->active_entries;
     stats->table_capacity = limiter->capacity;
     stats->evictions = limiter->evictions;
-    pthread_mutex_unlock(&limiter->mutex);
+    sh_mutex_unlock(&limiter->mutex);
 }
 
 void sh_ratelimit_reset(ShRateLimiter *limiter)
 {
     if (!limiter) return;
 
-    pthread_mutex_lock(&limiter->mutex);
+    sh_mutex_lock(&limiter->mutex);
     memset(limiter->table, 0, limiter->capacity * sizeof(RateLimitEntry));
     limiter->active_entries = 0;
-    pthread_mutex_unlock(&limiter->mutex);
+    sh_mutex_unlock(&limiter->mutex);
 }
 
 void sh_ratelimit_update_rate(ShRateLimiter *limiter, double rps, double burst)
@@ -269,8 +269,8 @@ void sh_ratelimit_update_rate(ShRateLimiter *limiter, double rps, double burst)
     if (!limiter) return;
     if (rps <= 0 || burst <= 0) return;
 
-    pthread_mutex_lock(&limiter->mutex);
+    sh_mutex_lock(&limiter->mutex);
     limiter->rps = rps;
     limiter->burst = burst;
-    pthread_mutex_unlock(&limiter->mutex);
+    sh_mutex_unlock(&limiter->mutex);
 }
