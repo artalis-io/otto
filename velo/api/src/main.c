@@ -641,7 +641,10 @@ int main(int argc, char *argv[]) {
         if (strcmp(argv[i], "-p") == 0 || strcmp(argv[i], "--port") == 0) {
             if (++i < argc) safe_parse_int(argv[i], &s_config.port);
         } else if (strcmp(argv[i], "-h") == 0 || strcmp(argv[i], "--host") == 0) {
-            if (++i < argc) strncpy(s_config.listen_addr, argv[i], sizeof(s_config.listen_addr) - 1);
+            if (++i < argc) {
+                strncpy(s_config.listen_addr, argv[i], sizeof(s_config.listen_addr) - 1);
+                s_config.listen_addr[sizeof(s_config.listen_addr) - 1] = '\0';
+            }
         } else if (strcmp(argv[i], "-c") == 0 || strcmp(argv[i], "--config") == 0) {
             if (++i < argc) {
                 if (load_config_file(argv[i], &s_config) != 0) {
@@ -667,6 +670,7 @@ int main(int argc, char *argv[]) {
             return 0;
         } else if (argv[i][0] != '-') {
             strncpy(s_config.graph_path, argv[i], sizeof(s_config.graph_path) - 1);
+            s_config.graph_path[sizeof(s_config.graph_path) - 1] = '\0';
         }
     }
 

@@ -106,9 +106,6 @@ static pthread_mutex_t s_cache_mutex = PTHREAD_MUTEX_INITIALIZER;
 /* Rate limiter instance (uses shared library) */
 static ShRateLimiter *s_rate_limiter = NULL;
 
-/* Work queue instance (uses shared library) */
-static ShWorkQueue *s_work_queue = NULL;
-
 /* Adaptive capacity tracker (uses shared library) */
 static ShAdaptiveTracker *s_adaptive_tracker = NULL;
 
@@ -546,12 +543,6 @@ static void handle_stats(KlHttpRequest *req, KlHttpResponse *res, void *ud) {
     CTBBox bbox;
     ct_pbf_stats(s_pbf_ctx, &nodes, &ways, &features, &bbox);
 
-    /* Get work queue stats */
-    ShWorkQueueStats wq_stats = {0};
-    if (s_work_queue) {
-        sh_workqueue_stats(s_work_queue, &wq_stats);
-    }
-
     /* Get rate limiter stats */
     ShRateLimitStats rl_stats = {0};
     if (s_rate_limiter) {
@@ -609,23 +600,25 @@ static void handle_stats(KlHttpRequest *req, KlHttpResponse *res, void *ud) {
     sh_json_write_array_end(&jw);
     sh_json_write_object_end(&jw);
 
-    /* work_queue object */
+    /* work_queue object -- backed by the Keel render pool (s_pool). Depth is
+       outstanding items (pushed not yet completed); KlThreadPool exposes no
+       live queue depth, so this is the best available signal. */
     sh_json_write_key(&jw, "work_queue");
     sh_json_write_object_start(&jw);
     sh_json_write_key(&jw, "enabled");
-    sh_json_write_bool(&jw, s_work_queue != NULL);
+    sh_json_write_bool(&jw, s_pool != NULL);
     sh_json_write_key(&jw, "depth");
-    sh_json_write_int(&jw, (int64_t)wq_stats.current_depth);
+    sh_json_write_int(&jw, (int64_t)(s_qstats.pushed - s_qstats.popped));
     sh_json_write_key(&jw, "capacity");
-    sh_json_write_int(&jw, (int64_t)wq_stats.max_capacity);
+    sh_json_write_int(&jw, (int64_t)s_config.server.work_queue_depth);
     sh_json_write_key(&jw, "pushed");
-    sh_json_write_int(&jw, (int64_t)wq_stats.total_pushed);
+    sh_json_write_int(&jw, (int64_t)s_qstats.pushed);
     sh_json_write_key(&jw, "popped");
-    sh_json_write_int(&jw, (int64_t)wq_stats.total_popped);
+    sh_json_write_int(&jw, (int64_t)s_qstats.popped);
     sh_json_write_key(&jw, "dropped");
-    sh_json_write_int(&jw, (int64_t)wq_stats.total_dropped);
+    sh_json_write_int(&jw, (int64_t)s_qstats.dropped);
     sh_json_write_key(&jw, "expired");
-    sh_json_write_int(&jw, (int64_t)wq_stats.total_expired);
+    sh_json_write_int(&jw, (int64_t)s_qstats.expired);
     sh_json_write_object_end(&jw);
 
     /* rate_limit object */
@@ -1517,18 +1510,6 @@ int main(int argc, char *argv[]) {
     printf("Render queue: %lu pushed, %lu popped, %lu dropped, %lu expired\n",
            (unsigned long)s_qstats.pushed, (unsigned long)s_qstats.popped,
            (unsigned long)s_qstats.dropped, (unsigned long)s_qstats.expired);
-
-
-    /* Print work queue stats */
-    if (s_work_queue) {
-        ShWorkQueueStats wq_stats;
-        sh_workqueue_stats(s_work_queue, &wq_stats);
-        printf("Work queue: %lu pushed, %lu popped, %lu dropped, %lu expired\n",
-               (unsigned long)wq_stats.total_pushed,
-               (unsigned long)wq_stats.total_popped,
-               (unsigned long)wq_stats.total_dropped,
-               (unsigned long)wq_stats.total_expired);
-    }
 
     /* Print cache stats */
     if (s_png_cache || s_mvt_cache) {

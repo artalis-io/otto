@@ -274,6 +274,12 @@ static void call_on_deadline(KlAsyncOp *op, void *ud)
 
     sh_http_reply_error(kl_http_conn_response(op->conn), 504,
                       c->cfg->cors, NULL, "Gateway timeout");
+    /*
+     * Resolve the op with complete() rather than cancel() on purpose: we just
+     * wrote a 504 body and need Keel to drive the send path, which cancel()
+     * skips. The op becomes terminal here; the worker's later done_fn sees
+     * c->detached and does not complete again (Keel terminals are idempotent).
+     */
     kl_async_complete(c->cfg->server, op);
 }
 

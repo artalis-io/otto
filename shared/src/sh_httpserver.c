@@ -75,7 +75,7 @@ static const char *sh_http_header_dup(const KlHttpRequest *req, const char *name
         if (req->headers[i].name_len == name_len &&
             kl_ascii_strncasecmp(req->headers[i].name, name, name_len) == 0) {
             size_t len = req->headers[i].value_len;
-            if (len == 0) return NULL;
+            if (len == 0 || buflen == 0) return NULL;
             if (len > buflen - 1) len = buflen - 1;
             memcpy(buf, req->headers[i].value, len);
             buf[len] = '\0';
