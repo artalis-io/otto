@@ -232,6 +232,86 @@ static void test_cpu(void)
     printf("  (detected %d logical processors)\n", n);
 }
 
+/* ------------------------------------------------------------ Environment */
+
+static void test_env(void)
+{
+    const char *k = "SH_PAL_TEST_VAR";
+    const char *v;
+
+    printf("\n=== Environment ===\n");
+
+    check(sh_pal_setenv(k, "hello") == 0, "setenv succeeds");
+    v = getenv(k);
+    check(v != NULL && strcmp(v, "hello") == 0, "the value reads back");
+
+    /* Overwriting is the only mode the PAL offers, so it must actually
+     * overwrite -- POSIX setenv defaults to not doing so. */
+    check(sh_pal_setenv(k, "world") == 0, "setenv over an existing value succeeds");
+    v = getenv(k);
+    check(v != NULL && strcmp(v, "world") == 0, "the new value replaced the old");
+
+    /* Deleted, not emptied: _putenv_s(name, "") is how Windows deletes, and
+     * getenv() must answer NULL rather than "" on both platforms. */
+    check(sh_pal_unsetenv(k) == 0, "unsetenv succeeds");
+    check(getenv(k) == NULL, "the variable is gone, not empty");
+
+    check(sh_pal_unsetenv(k) == 0, "unsetenv on an unset variable still succeeds");
+
+    check(sh_pal_setenv(k, "") == 0, "setenv accepts an empty value");
+    sh_pal_unsetenv(k);
+
+    /* A NULL value is treated as empty rather than crashing. */
+    check(sh_pal_setenv(k, NULL) == 0, "setenv accepts a NULL value");
+    sh_pal_unsetenv(k);
+
+    check(sh_pal_setenv(NULL, "x") == -1, "setenv rejects a NULL name");
+    check(sh_pal_setenv("", "x") == -1, "setenv rejects an empty name");
+    check(sh_pal_setenv("A=B", "x") == -1, "setenv rejects '=' in the name");
+    check(sh_pal_unsetenv(NULL) == -1, "unsetenv rejects a NULL name");
+    check(sh_pal_unsetenv("") == -1, "unsetenv rejects an empty name");
+}
+
+/* ----------------------------------------------------- Temp directory */
+
+static void test_temp_dir(void)
+{
+    char buf[512];
+    char tiny[2];
+
+    printf("\n=== Temp directory ===\n");
+
+    check(sh_pal_temp_dir(buf, sizeof(buf)) == 0, "temp dir resolves");
+    check(buf[0] != '\0', "temp dir is not empty");
+
+    /* No trailing separator, so callers can always join with one. */
+    {
+        size_t n = strlen(buf);
+        check(n > 0 && buf[n - 1] != '/' && buf[n - 1] != '\\',
+              "temp dir has no trailing separator");
+    }
+
+    /* It has to be a directory we can actually create a file in -- the point
+     * of the call. A literal "/tmp" is not that on Windows. */
+    {
+        char path[600];
+        FILE *f;
+        snprintf(path, sizeof(path), "%s/sh_pal_temp_probe.tmp", buf);
+        f = fopen(path, "w");
+        check(f != NULL, "a file can be created in the temp dir");
+        if (f) {
+            fclose(f);
+            remove(path);
+        }
+    }
+
+    check(sh_pal_temp_dir(tiny, sizeof(tiny)) == -1,
+          "a buffer too small is refused");
+    check(tiny[0] == '\0', "the refused buffer is still terminated");
+    check(sh_pal_temp_dir(NULL, sizeof(buf)) == -1, "NULL buffer is refused");
+    check(sh_pal_temp_dir(buf, 0) == -1, "zero length is refused");
+}
+
 /* ------------------------------------------------------------------- main */
 
 int main(void)
@@ -245,6 +325,8 @@ int main(void)
     test_tls();
     test_clocks();
     test_cpu();
+    test_env();
+    test_temp_dir();
 
     printf("\n%d passed, %d failed\n", g_pass, g_fail);
     return g_fail ? 1 : 0;

@@ -12,6 +12,7 @@
 #include "fuelwise.h"
 #include "ralph_mip.h"
 #include "sh_units.h"
+#include "sh_pal.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -421,7 +422,14 @@ void test_raw_milp100_seed43_cut_presolve_characterization(void)
     memset(&instance, 0, sizeof(instance));
     ASSERT(fw_bench_generate(&cfg, &instance) == 0, "Generated raw MILP100 seed=43 instance");
 
-    char base_path[] = "/tmp/fw_validator_raw_mip100_XXXXXX";
+    /* Via the PAL, not a literal "/tmp" -- see fw_glpk.c. */
+    char temp_dir[260];
+    char base_path[320];
+    ASSERT(sh_pal_temp_dir(temp_dir, sizeof(temp_dir)) == 0,
+           "Resolved the platform temp directory");
+    snprintf(base_path, sizeof(base_path),
+             "%s/fw_validator_raw_mip100_XXXXXX", temp_dir);
+
     int fd = mkstemp(base_path);
     ASSERT(fd >= 0, "Created temp path for raw LP export");
     if (fd >= 0) {
@@ -429,7 +437,7 @@ void test_raw_milp100_seed43_cut_presolve_characterization(void)
         unlink(base_path);
     }
 
-    char lp_path[96];
+    char lp_path[328];
     snprintf(lp_path, sizeof(lp_path), "%s.lp", base_path);
     ASSERT(fw_export_milp_lp(&instance.problem, lp_path) == 0, "Exported raw MILP LP");
 
@@ -608,7 +616,7 @@ void test_raw_milp100_seed125_shifted_presolve_mir_optin(void)
 
     fw_set_mip_hint_flags(FW_HINT_NONE);
     fw_set_presolve(1, 0x100F);
-    setenv("RALPH_ENABLE_MIR_ROOT_CUTS", "1", 1);
+    sh_pal_setenv("RALPH_ENABLE_MIR_ROOT_CUTS", "1");
 
     int raw_rc = fw_solve_refuel_milp(&instance.problem, &raw);
     int raw_feasible = (raw_rc == 0 && raw.status == FW_STATUS_OPTIMAL) ?
@@ -626,9 +634,9 @@ void test_raw_milp100_seed125_shifted_presolve_mir_optin(void)
            "Raw seed=125 MIR opt-in path matches GLPK objective");
 
     if (saved_mir_env) {
-        setenv("RALPH_ENABLE_MIR_ROOT_CUTS", saved_mir_env, 1);
+        sh_pal_setenv("RALPH_ENABLE_MIR_ROOT_CUTS", saved_mir_env);
     } else {
-        unsetenv("RALPH_ENABLE_MIR_ROOT_CUTS");
+        sh_pal_unsetenv("RALPH_ENABLE_MIR_ROOT_CUTS");
     }
     free(saved_mir_env);
     fw_set_mip_hint_flags(previous_hint_flags);
