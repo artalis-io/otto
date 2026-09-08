@@ -418,10 +418,24 @@ static int mw_preflight(KlHttpRequest *req, KlHttpResponse *res, void *ud) {
     return 1;  /* short-circuit */
 }
 
-/* Rate limit every request before routing. */
+/*
+ * Rate limit every request before routing, except the monitoring endpoints --
+ * a health/metrics probe must not consume the request budget. Middleware
+ * patterns have no alternation, so the exemptions are checked here.
+ */
 static int mw_rate_limit(KlHttpRequest *req, KlHttpResponse *res, void *ud) {
     (void)ud;
     sh_trace_from_headers(sh_http_trace_header_getter, req);
+
+    static const char *exempt[] = {
+        "/api/v1/health", "/api/v1/stats", "/metrics"
+    };
+    for (size_t i = 0; i < sizeof(exempt) / sizeof(exempt[0]); i++) {
+        size_t len = strlen(exempt[i]);
+        if (req->path_len == len && memcmp(req->path, exempt[i], len) == 0)
+            return 0;
+    }
+
     if (!sh_http_check_rate_limit(req, res, s_rate_limiter, &s_cors,
                                 get_origin_from_request(req))) {
         sh_metrics_counter_inc("http_requests_total", 1,
