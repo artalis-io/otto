@@ -333,7 +333,7 @@ preserved exactly:
   in middleware patterns) and Keel's built-in 404 is `text/plain` with no CORS.
 - CORS headers are the same four the previous server emitted on every response.
 
-Ralph needs **no** `sh_keelserver.c` helpers — it uses neither `sh_cors`,
+Ralph needs **no** `sh_httpserver.c` helpers — it uses neither `sh_cors`,
 `sh_metrics`, `sh_ratelimit` nor `sh_trace`. Its handlers are fully
 synchronous, so no `KlAsyncOp`/`KlThreadPool` wiring either. This made it the
 cheapest second module.
@@ -369,6 +369,7 @@ it is an API-contract decision touching documented behaviour, not a cleanup.
 
 ### Status: Complete
 
-All six servers are on Keel v3; the legacy `shared/src/sh_httpserver.c` has
-been removed. See `docs/roadmaps/infrastructure.md` for the cross-cutting
-completion record.
+All six servers are on Keel v3; the previous GPL HTTP server has been removed.
+See `docs/roadmaps/infrastructure.md` for the cross-cutting completion record
+(including the `sh_keelserver`/`sh_keelasync` → `sh_httpserver`/`sh_httpasync`
+rename).

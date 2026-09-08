@@ -31,8 +31,8 @@
 #include "fuelwise.h"
 #include "fw_api.h"  /* Transport-agnostic API handler */
 #include "shared.h"  /* For sh_ratelimit, sh_args */
-#include "sh_keelserver.h"
-#include "sh_keelasync.h"
+#include "sh_httpserver.h"
+#include "sh_httpasync.h"
 #include "sh_log.h"
 #include "sh_trace.h"
 #include "sh_metrics.h"
@@ -61,15 +61,15 @@ static ShCorsConfig s_cors;
  *
  * KlThreadPool replaces ShWorkQueue + ShWorkerPool + ShCompletion. It exposes
  * no statistics of its own, but /api/v1/stats publishes work-queue counters
- * that test_api.sh asserts on, so sh_keel_async_dispatch() maintains them in
- * the ShKeelAsyncStats below.
+ * that test_api.sh asserts on, so sh_http_async_dispatch() maintains them in
+ * the ShHttpAsyncStats below.
  * ============================================================================ */
 
 static KlThreadPool *s_pool = NULL;
-static ShKeelAsyncStats s_qstats;
+static ShHttpAsyncStats s_qstats;
 
 typedef struct {
-    ShKeelAsync async;   /* server, pool, cors, timeout, stats */
+    ShHttpAsync async;   /* server, pool, cors, timeout, stats */
 } AppCtx;
 
 /* ============================================================================
@@ -77,11 +77,11 @@ typedef struct {
  * ============================================================================ */
 
 static void send_error(KlHttpResponse *res, int status, const char *message) {
-    sh_kl_reply_error(res, status, &s_cors, NULL, message);
+    sh_http_reply_error(res, status, &s_cors, NULL, message);
 }
 
 static void send_json_status(KlHttpResponse *res, int status, const char *json) {
-    sh_kl_reply_json(res, status, &s_cors, NULL, json);
+    sh_http_reply_json(res, status, &s_cors, NULL, json);
 }
 
 static void send_json(KlHttpResponse *res, const char *json) {
@@ -119,9 +119,9 @@ static void handle_via_queue(KlHttpRequest *req, KlHttpResponse *res, void *ud,
 
     /* Everything the suspend/pool/resume protocol used to do by hand here --
      * the context, the body copy, on_resume/on_cancel/on_deadline, the 503 on
-     * a full queue and the 504 on a deadline -- is sh_keel_async_dispatch's
-     * job now. See shared/src/sh_keelasync.c. */
-    sh_keel_async_dispatch(&app->async, req, res, fw_api_handle, NULL, &api_req);
+     * a full queue and the 504 on a deadline -- is sh_http_async_dispatch's
+     * job now. See shared/src/sh_httpasync.c. */
+    sh_http_async_dispatch(&app->async, req, res, fw_api_handle, NULL, &api_req);
 
     record_metrics(timer, endpoint);
 }
@@ -133,7 +133,7 @@ static void handle_via_queue(KlHttpRequest *req, KlHttpResponse *res, void *ud,
 static void handle_health(KlHttpRequest *req, KlHttpResponse *res, void *ud) {
     (void)req; (void)ud;
     ShMetricsTimer timer = sh_metrics_timer_start();
-    sh_kl_handle_health(res, &s_cors, NULL, "fuelwise-api", fw_version());
+    sh_http_handle_health(res, &s_cors, NULL, "fuelwise-api", fw_version());
     record_metrics(timer, "health");
     sh_trace_clear();
 }
@@ -218,7 +218,7 @@ static void handle_stats(KlHttpRequest *req, KlHttpResponse *res, void *ud) {
 
 static void handle_metrics(KlHttpRequest *req, KlHttpResponse *res, void *ud) {
     (void)req; (void)ud;
-    sh_kl_handle_metrics(res);
+    sh_http_handle_metrics(res);
     sh_trace_clear();
 }
 
@@ -244,8 +244,8 @@ static void handle_optimize(KlHttpRequest *req, KlHttpResponse *res, void *ud) {
 /* CORS preflight, before rate limiting. */
 static int mw_preflight(KlHttpRequest *req, KlHttpResponse *res, void *ud) {
     (void)ud;
-    sh_trace_from_headers(sh_kl_trace_header_getter, req);
-    sh_kl_reply_preflight(res, &s_cors, NULL);
+    sh_trace_from_headers(sh_http_trace_header_getter, req);
+    sh_http_reply_preflight(res, &s_cors, NULL);
     sh_trace_clear();
     return 1;  /* short-circuit */
 }
@@ -260,7 +260,7 @@ static int mw_preflight(KlHttpRequest *req, KlHttpResponse *res, void *ud) {
 static int mw_rate_limit(KlHttpRequest *req, KlHttpResponse *res, void *ud) {
     (void)ud;
 
-    sh_trace_from_headers(sh_kl_trace_header_getter, req);
+    sh_trace_from_headers(sh_http_trace_header_getter, req);
 
     static const char *exempt[] = {
         "/api/v1/health", "/api/v1/stats", "/metrics"
@@ -271,7 +271,7 @@ static int mw_rate_limit(KlHttpRequest *req, KlHttpResponse *res, void *ud) {
             return 0;
     }
 
-    if (!sh_kl_check_rate_limit(req, res, s_rate_limiter, &s_cors, NULL)) {
+    if (!sh_http_check_rate_limit(req, res, s_rate_limiter, &s_cors, NULL)) {
         sh_metrics_counter_inc("http_requests_total", 1,
             "endpoint", "rate_limited", "status", "429", NULL);
         sh_trace_clear();

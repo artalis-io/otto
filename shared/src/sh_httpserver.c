@@ -1,10 +1,10 @@
 /*
- * sh_keelserver.c - Keel-backed HTTP helpers for OTTO API servers
+ * sh_httpserver.c - Keel-backed HTTP helpers for OTTO API servers
  *
- * See sh_keelserver.h for the contract.
+ * See sh_httpserver.h for the contract.
  */
 
-#include "sh_keelserver.h"
+#include "sh_httpserver.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -28,7 +28,7 @@
  * (no colon) are skipped rather than passed through, so a bad CORS config can
  * never inject a partial header.
  */
-static void sh_kl_append_header_block(KlHttpResponse *res, const char *block)
+static void sh_http_append_header_block(KlHttpResponse *res, const char *block)
 {
     const char *p = block;
 
@@ -64,7 +64,7 @@ static void sh_kl_append_header_block(KlHttpResponse *res, const char *block)
 }
 
 /* Copy a header value into the caller's buffer as a NUL-terminated string. */
-static const char *sh_kl_header_dup(const KlHttpRequest *req, const char *name,
+static const char *sh_http_header_dup(const KlHttpRequest *req, const char *name,
                                     char *buf, size_t buflen)
 {
     if (!req || !name) return NULL;
@@ -89,16 +89,16 @@ static const char *sh_kl_header_dup(const KlHttpRequest *req, const char *name,
  * Request Helpers
  * ============================================================================ */
 
-const char *sh_kl_origin(const KlHttpRequest *req)
+const char *sh_http_origin(const KlHttpRequest *req)
 {
     static __thread char origin_buf[256];
-    return sh_kl_header_dup(req, "Origin", origin_buf, sizeof(origin_buf));
+    return sh_http_header_dup(req, "Origin", origin_buf, sizeof(origin_buf));
 }
 
-const char *sh_kl_trace_header_getter(const char *name, void *ctx)
+const char *sh_http_trace_header_getter(const char *name, void *ctx)
 {
     static __thread char hdr_buf[128];
-    return sh_kl_header_dup((const KlHttpRequest *)ctx, name,
+    return sh_http_header_dup((const KlHttpRequest *)ctx, name,
                             hdr_buf, sizeof(hdr_buf));
 }
 
@@ -106,7 +106,7 @@ const char *sh_kl_trace_header_getter(const char *name, void *ctx)
  * Response Helpers
  * ============================================================================ */
 
-void sh_kl_apply_cors(KlHttpResponse *res, const struct ShCorsConfig *cors,
+void sh_http_apply_cors(KlHttpResponse *res, const struct ShCorsConfig *cors,
                       const char *origin)
 {
     if (!res) return;
@@ -118,10 +118,10 @@ void sh_kl_apply_cors(KlHttpResponse *res, const struct ShCorsConfig *cors,
         snprintf(cors_hdrs, sizeof(cors_hdrs),
                  "Access-Control-Allow-Origin: *\r\n");
     }
-    sh_kl_append_header_block(res, cors_hdrs);
+    sh_http_append_header_block(res, cors_hdrs);
 }
 
-void sh_kl_reply_body(KlHttpResponse *res, int status,
+void sh_http_reply_body(KlHttpResponse *res, int status,
                       const char *content_type,
                       const struct ShCorsConfig *cors, const char *origin,
                       const char *body, size_t body_len)
@@ -131,16 +131,16 @@ void sh_kl_reply_body(KlHttpResponse *res, int status,
     kl_http_response_status(res, status);
     kl_http_response_header(res, "Content-Type",
                             content_type ? content_type : "application/json");
-    sh_kl_apply_cors(res, cors, origin);
+    sh_http_apply_cors(res, cors, origin);
 
     /* Copy: Keel's response_json/_error borrow, and callers free their
-     * buffers. Same reason every other sh_kl_reply_* copies. */
+     * buffers. Same reason every other sh_http_reply_* copies. */
     if (body && body_len > 0) {
         kl_http_response_body_copy(res, body, body_len);
     }
 }
 
-void sh_kl_reply_json(KlHttpResponse *res, int status,
+void sh_http_reply_json(KlHttpResponse *res, int status,
                       const struct ShCorsConfig *cors, const char *origin,
                       const char *json)
 {
@@ -150,13 +150,13 @@ void sh_kl_reply_json(KlHttpResponse *res, int status,
 
     kl_http_response_status(res, status);
     kl_http_response_header(res, "Content-Type", "application/json");
-    sh_kl_apply_cors(res, cors, origin);
+    sh_http_apply_cors(res, cors, origin);
 
     /* Copy: kl_http_response_json() borrows, and callers free their buffers. */
     kl_http_response_body_copy(res, json, strlen(json));
 }
 
-void sh_kl_reply_error(KlHttpResponse *res, int status,
+void sh_http_reply_error(KlHttpResponse *res, int status,
                        const struct ShCorsConfig *cors, const char *origin,
                        const char *message)
 {
@@ -176,17 +176,17 @@ void sh_kl_reply_error(KlHttpResponse *res, int status,
     char *json = sh_json_buf_take(&jb);
     if (!json || jw.error) {
         sh_json_buf_free(&jb);
-        sh_kl_reply_json(res, status, cors, origin,
+        sh_http_reply_json(res, status, cors, origin,
                          "{\"error\":\"JSON write error\"}");
         free(json);
         return;
     }
 
-    sh_kl_reply_json(res, status, cors, origin, json);
+    sh_http_reply_json(res, status, cors, origin, json);
     free(json);
 }
 
-void sh_kl_reply_preflight(KlHttpResponse *res, const struct ShCorsConfig *cors,
+void sh_http_reply_preflight(KlHttpResponse *res, const struct ShCorsConfig *cors,
                            const char *origin)
 {
     if (!res) return;
@@ -200,11 +200,11 @@ void sh_kl_reply_preflight(KlHttpResponse *res, const struct ShCorsConfig *cors,
     }
 
     kl_http_response_status(res, 204);
-    sh_kl_append_header_block(res, cors_hdrs);
+    sh_http_append_header_block(res, cors_hdrs);
     kl_http_response_body_borrow(res, "", 0);
 }
 
-void sh_kl_handle_health(KlHttpResponse *res, const struct ShCorsConfig *cors,
+void sh_http_handle_health(KlHttpResponse *res, const struct ShCorsConfig *cors,
                          const char *origin, const char *service,
                          const char *version)
 {
@@ -220,10 +220,10 @@ void sh_kl_handle_health(KlHttpResponse *res, const struct ShCorsConfig *cors,
         service ? service : "unknown",
         version ? version : "0.0.0");
 
-    sh_kl_reply_json(res, 200, cors, origin, body);
+    sh_http_reply_json(res, 200, cors, origin, body);
 }
 
-void sh_kl_handle_metrics(KlHttpResponse *res)
+void sh_http_handle_metrics(KlHttpResponse *res)
 {
     if (!res) return;
 
@@ -247,7 +247,7 @@ void sh_kl_handle_metrics(KlHttpResponse *res)
  * Rate Limiting
  * ============================================================================ */
 
-int sh_kl_check_rate_limit(const KlHttpRequest *req, KlHttpResponse *res,
+int sh_http_check_rate_limit(const KlHttpRequest *req, KlHttpResponse *res,
                            struct ShRateLimiter *limiter,
                            const struct ShCorsConfig *cors, const char *origin)
 {
@@ -276,7 +276,7 @@ int sh_kl_check_rate_limit(const KlHttpRequest *req, KlHttpResponse *res,
     kl_http_response_status(res, 429);
     kl_http_response_header(res, "Content-Type", "text/plain");
     kl_http_response_header(res, "Retry-After", "1");
-    sh_kl_apply_cors(res, cors, origin);
+    sh_http_apply_cors(res, cors, origin);
     kl_http_response_body_copy(res, msg, sizeof(msg) - 1);
     return 0;
 }

@@ -34,8 +34,8 @@
 
 /* Shared library includes */
 #include "shared.h"
-#include "sh_keelserver.h"
-#include "sh_keelasync.h"
+#include "sh_httpserver.h"
+#include "sh_httpasync.h"
 #include "sh_args.h"
 #include "sh_cors.h"
 #include "sh_json.h"
@@ -86,7 +86,7 @@ static ShRateLimiter *s_rate_limiter = NULL;
  * ============================================================================ */
 
 typedef struct {
-    ShKeelAsync async;   /* server, pool, cors, timeout, stats */
+    ShHttpAsync async;   /* server, pool, cors, timeout, stats */
 } AppCtx;
 
 /* ============================================================================
@@ -139,10 +139,10 @@ static int mw_rate_limit(KlHttpRequest *req, KlHttpResponse *res, void *ud) {
     (void)ud;
 
     /* Extract or generate trace ID for this request. */
-    sh_trace_from_headers(sh_kl_trace_header_getter, req);
+    sh_trace_from_headers(sh_http_trace_header_getter, req);
 
-    if (!sh_kl_check_rate_limit(req, res, s_rate_limiter, &s_cors,
-                                sh_kl_origin(req))) {
+    if (!sh_http_check_rate_limit(req, res, s_rate_limiter, &s_cors,
+                                sh_http_origin(req))) {
         SH_LOG_WARN("Rate limit exceeded", "status", "429");
         sh_metrics_counter_inc("http_requests_total", 1,
                                "status:429", "endpoint:ratelimit", NULL);
@@ -155,7 +155,7 @@ static int mw_rate_limit(KlHttpRequest *req, KlHttpResponse *res, void *ud) {
 /* CORS preflight. */
 static int mw_preflight(KlHttpRequest *req, KlHttpResponse *res, void *ud) {
     (void)ud;
-    sh_kl_reply_preflight(res, &s_cors, sh_kl_origin(req));
+    sh_http_reply_preflight(res, &s_cors, sh_http_origin(req));
     sh_trace_clear();
     return 1;  /* short-circuit */
 }
@@ -183,12 +183,12 @@ static int mw_not_found(KlHttpRequest *req, KlHttpResponse *res, void *ud) {
     if (rc == 200) return 0;  /* a route will handle this */
 
     if (rc == 405) {
-        sh_kl_reply_error(res, 405, &s_cors, sh_kl_origin(req),
+        sh_http_reply_error(res, 405, &s_cors, sh_http_origin(req),
                           "Method not allowed");
         sh_metrics_counter_inc("http_requests_total", 1,
                                "status:405", "endpoint:unknown", NULL);
     } else {
-        sh_kl_reply_error(res, 404, &s_cors, sh_kl_origin(req), "Not found");
+        sh_http_reply_error(res, 404, &s_cors, sh_http_origin(req), "Not found");
         sh_metrics_counter_inc("http_requests_total", 1,
                                "status:404", "endpoint:unknown", NULL);
     }
@@ -202,7 +202,7 @@ static int mw_not_found(KlHttpRequest *req, KlHttpResponse *res, void *ud) {
 
 static void handle_health(KlHttpRequest *req, KlHttpResponse *res, void *ud) {
     (void)ud;
-    sh_kl_handle_health(res, &s_cors, sh_kl_origin(req), "surge", sg_version());
+    sh_http_handle_health(res, &s_cors, sh_http_origin(req), "surge", sg_version());
     sh_metrics_counter_inc("http_requests_total", 1,
                            "status:200", "endpoint:health", NULL);
     sh_trace_clear();
@@ -213,10 +213,10 @@ static void handle_version(KlHttpRequest *req, KlHttpResponse *res, void *ud) {
     size_t out_len;
     char *json = sg_api_version(&out_len);
     if (json) {
-        sh_kl_reply_json(res, 200, &s_cors, sh_kl_origin(req), json);
+        sh_http_reply_json(res, 200, &s_cors, sh_http_origin(req), json);
         free(json);
     } else {
-        sh_kl_reply_error(res, 500, &s_cors, sh_kl_origin(req),
+        sh_http_reply_error(res, 500, &s_cors, sh_http_origin(req),
                           "Failed to generate version response");
     }
     sh_metrics_counter_inc("http_requests_total", 1,
@@ -230,10 +230,10 @@ static void handle_stats(KlHttpRequest *req, KlHttpResponse *res, void *ud) {
     ShApiResponse resp = {0};
 
     if (sg_api_handle(s_api_ctx, &api_req, &resp) == 0 && resp.body) {
-        sh_kl_reply_json(res, resp.status_code, &s_cors, sh_kl_origin(req),
+        sh_http_reply_json(res, resp.status_code, &s_cors, sh_http_origin(req),
                          (const char *)resp.body);
     } else {
-        sh_kl_reply_error(res, 500, &s_cors, sh_kl_origin(req),
+        sh_http_reply_error(res, 500, &s_cors, sh_http_origin(req),
                           "Failed to generate stats response");
     }
     sh_api_response_free(&resp);
@@ -245,17 +245,17 @@ static void handle_stats(KlHttpRequest *req, KlHttpResponse *res, void *ud) {
 
 static void handle_metrics(KlHttpRequest *req, KlHttpResponse *res, void *ud) {
     (void)req; (void)ud;
-    sh_kl_handle_metrics(res);
+    sh_http_handle_metrics(res);
     sh_trace_clear();
 }
 
 static void handle_solve(KlHttpRequest *req, KlHttpResponse *res, void *ud) {
     AppCtx *app = (AppCtx *)ud;
-    const char *origin = sh_kl_origin(req);
+    const char *origin = sh_http_origin(req);
 
     /* Registered for "*" so a non-POST gets 405 rather than the catch-all 404. */
     if (req->method_len != 4 || memcmp(req->method, "POST", 4) != 0) {
-        sh_kl_reply_error(res, 405, &s_cors, origin,
+        sh_http_reply_error(res, 405, &s_cors, origin,
                           "Method not allowed. Use POST.");
         sh_trace_clear();
         return;
@@ -263,7 +263,7 @@ static void handle_solve(KlHttpRequest *req, KlHttpResponse *res, void *ud) {
 
     KlHttpBufReader *br = (KlHttpBufReader *)req->body_reader;
     if (!br || br->len == 0) {
-        sh_kl_reply_error(res, 400, &s_cors, origin, "Empty request body");
+        sh_http_reply_error(res, 400, &s_cors, origin, "Empty request body");
         sh_trace_clear();
         return;
     }
@@ -277,8 +277,8 @@ static void handle_solve(KlHttpRequest *req, KlHttpResponse *res, void *ud) {
 
     /* The context, the body copy, on_resume/on_cancel/on_deadline, the 503 on
      * a full queue and the 504 on a deadline all live in
-     * sh_keel_async_dispatch() now. See shared/src/sh_keelasync.c. */
-    sh_keel_async_dispatch(&app->async, req, res, sg_api_handle, s_api_ctx,
+     * sh_http_async_dispatch() now. See shared/src/sh_httpasync.c. */
+    sh_http_async_dispatch(&app->async, req, res, sg_api_handle, s_api_ctx,
                            &api_req);
 
     sh_trace_clear();

@@ -806,6 +806,7 @@ rather than one silently mis-parsing.
 
 ### Status: Complete
 
-All six servers are on Keel v3; the legacy `shared/src/sh_httpserver.c` has
-been removed. See `docs/roadmaps/infrastructure.md` for the cross-cutting
-completion record.
+All six servers are on Keel v3; the previous GPL HTTP server has been removed.
+See `docs/roadmaps/infrastructure.md` for the cross-cutting completion record
+(including the `sh_keelserver`/`sh_keelasync` → `sh_httpserver`/`sh_httpasync`
+rename).

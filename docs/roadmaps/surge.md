@@ -4208,7 +4208,7 @@ suspends the connection (`KlAsyncOp`) and solves on a `KlThreadPool`.
 | Change | File |
 |--------|------|
 | Keel v3.0.0-rc.3 as a submodule | `.gitmodules`, `vendor/keel` |
-| Keel-side HTTP helpers (`sh_kl_*`) | `shared/{include,src}/sh_keelserver.{h,c}` |
+| Keel-side HTTP helpers (`sh_http_*`) | `shared/{include,src}/sh_httpserver.{h,c}` |
 | Surge API ported to Keel | `surge/api/src/main.c` |
 | Legacy HTTP server dropped from the build | `surge/api/Makefile` |
 | `make surge-api`, CI coverage | `Makefile`, `.github/workflows/ci.yml` |
@@ -4218,14 +4218,14 @@ dependencies. No OTTO API server uses TLS today.
 
 ### Notes for the next module
 
-- `sh_keelserver.c` is deliberately **not** in `libshared.a` (it needs Keel
-  headers), mirroring how `sh_httpserver.c` is compiled by each API server.
-  The `sh_kl_*` helpers are a 1:1 map of the previous `sh_mg_*` set, so porting
-  the next server is mostly mechanical.
+- `sh_httpserver.c` is deliberately **not** in `libshared.a` — it needs Keel
+  headers, so each API server compiles it directly. The `sh_http_*` helpers are a
+  1:1 map of the previous `sh_mg_*` set, so porting the next server is mostly
+  mechanical.
 - Two Keel behaviours that differed from the previous server and cost time here:
   1. `kl_http_response_json()` / `_error()` **borrow** their body. Anything
      heap-allocated or stack-scoped must use `kl_http_response_body_copy()`.
-     The `sh_kl_*` helpers already copy.
+     The `sh_http_*` helpers already copy.
   2. Route patterns have **no wildcard** — `*` is only special in *middleware*
      patterns. A catch-all route is not expressible; the JSON 404/405 is done
      by a last-registered middleware that calls `kl_http_router_match()`
@@ -4238,8 +4238,10 @@ dependencies. No OTTO API server uses TLS today.
 ### Status: Complete
 
 All six servers (Surge, Ralph, FuelWise, Velo, Carta, Locus) are on Keel v3.
-The legacy `shared/src/sh_httpserver.c` has been removed. See
-`docs/roadmaps/infrastructure.md` for the cross-cutting completion record.
+The previous GPL HTTP server has been removed. See
+`docs/roadmaps/infrastructure.md` for the cross-cutting completion record
+(including the `sh_keelserver`/`sh_keelasync` → `sh_httpserver`/`sh_httpasync`
+rename).
 
 ### Known issue (upstream, not blocking)
 

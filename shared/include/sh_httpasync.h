@@ -1,5 +1,5 @@
 /*
- * sh_keelasync.h - The Keel async protocol, owned once.
+ * sh_httpasync.h - The Keel async protocol, owned once.
  *
  * Five OTTO servers hand-rolled the same suspend/pool/resume dance. It is
  * subtle in ways that are not obvious from Keel's examples, and both real
@@ -11,15 +11,15 @@
  * loop or on a pool worker is decided here, not by the handler.
  *
  * NOT part of libshared.a -- it needs Keel headers, so API servers compile it
- * directly, the same way they compile sh_keelserver.c:
+ * directly, the same way they compile sh_httpserver.c:
  *
  *   $(CC) $(CFLAGS) -I../shared/include -I../vendor/keel/include \
- *         ../shared/src/sh_keelasync.c
+ *         ../shared/src/sh_httpasync.c
  *
  * See docs/roadmaps/transport.md.
  */
-#ifndef SH_KEELASYNC_H
-#define SH_KEELASYNC_H
+#ifndef SH_HTTPASYNC_H
+#define SH_HTTPASYNC_H
 
 #include <stdint.h>
 #include <stddef.h>
@@ -47,7 +47,7 @@ typedef struct {
     uint64_t popped;    /* completed (done_fn ran) */
     uint64_t dropped;   /* rejected, queue full -> 503 */
     uint64_t expired;   /* deadline passed before completion -> 504 */
-} ShKeelAsyncStats;
+} ShHttpAsyncStats;
 
 /*
  * Everything the protocol needs. Fill once at startup and reuse.
@@ -57,8 +57,8 @@ typedef struct {
     KlThreadPool *pool;                 /* NULL: run handlers inline */
     const struct ShCorsConfig *cors;    /* NULL: no CORS headers */
     double        timeout_s;            /* <= 0: no deadline */
-    ShKeelAsyncStats *stats;            /* NULL: no counting */
-} ShKeelAsync;
+    ShHttpAsyncStats *stats;            /* NULL: no counting */
+} ShHttpAsync;
 
 /*
  * Run `handler` for one request and reply.
@@ -75,7 +75,7 @@ typedef struct {
  * deadline replies 504, and a dropped connection is detected so nothing is
  * written to a dead conn.
  */
-void sh_keel_async_dispatch(const ShKeelAsync *cfg,
+void sh_http_async_dispatch(const ShHttpAsync *cfg,
                             KlHttpRequest *req,
                             KlHttpResponse *res,
                             ShApiHandler handler,
@@ -86,4 +86,4 @@ void sh_keel_async_dispatch(const ShKeelAsync *cfg,
 }
 #endif
 
-#endif /* SH_KEELASYNC_H */
+#endif /* SH_HTTPASYNC_H */

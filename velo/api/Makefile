@@ -46,7 +46,7 @@ KEEL_DIR = ../../vendor/keel
 KEEL_LIB = $(KEEL_DIR)/libkeel.a
 
 # Shared Keel HTTP helpers (need Keel headers, so not in libshared)
-KEELSERVER_OBJ = build/sh_keelserver.o build/sh_keelasync.o
+HTTPSERVER_OBJ = build/sh_httpserver.o build/sh_httpasync.o
 
 TARGET = velo-route-server
 
@@ -67,8 +67,8 @@ $(KEEL_LIB):
 	fi
 	$(MAKE) -C $(KEEL_DIR) CC=$(CC)
 
-$(TARGET): $(OBJS) $(KEELSERVER_OBJ) $(KEEL_LIB)
-	$(CC) $(CFLAGS) -o $@ $(OBJS) $(KEELSERVER_OBJ) $(KEEL_LIB) $(LDFLAGS)
+$(TARGET): $(OBJS) $(HTTPSERVER_OBJ) $(KEEL_LIB)
+	$(CC) $(CFLAGS) -o $@ $(OBJS) $(HTTPSERVER_OBJ) $(KEEL_LIB) $(LDFLAGS)
 
 build/%.o: src/%.c | build
 	$(CC) $(CFLAGS) $(INCLUDES) -c $< -o $@

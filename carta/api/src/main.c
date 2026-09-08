@@ -36,8 +36,8 @@
 #include "ct_api.h"
 #include "ct_cache.h"
 #include "shared.h"   /* For sh_ratelimit, sh_workqueue */
-#include "sh_keelserver.h"
-#include "sh_keelasync.h"  /* Keel-backed sh_kl_* helpers */
+#include "sh_httpserver.h"
+#include "sh_httpasync.h"  /* Keel-backed sh_http_* helpers */
 #include "sh_completion.h"  /* For ShCompletion */
 #include "sh_worker_pool.h" /* For ShWorkerPool */
 #include "sh_log.h"         /* For structured logging */
@@ -122,7 +122,7 @@ static ShAdaptiveTracker *s_adaptive_tracker = NULL;
  * ============================================================================ */
 
 typedef struct {
-    ShKeelAsync async;   /* server, pool, cors, timeout, stats */
+    ShHttpAsync async;   /* server, pool, cors, timeout, stats */
 } AppCtx;
 
 /*
@@ -131,7 +131,7 @@ typedef struct {
  * on the event loop thread.
  */
 static KlThreadPool *s_pool = NULL;
-static ShKeelAsyncStats s_qstats;
+static ShHttpAsyncStats s_qstats;
 static int s_num_workers = 0;
 static char s_listen_url[SH_URL_MAX] = "";
 
@@ -192,7 +192,7 @@ static int parse_tile_uri(const char *uri, size_t uri_len,
  * Routing (which extension, therefore which renderer) and the ASCII options
  * are parsed here rather than in the transport. The three process_* renderers
  * are unchanged. Binary responses (PNG, MVT) travel in ShApiResponse::body
- * with an explicit content_type, which is what sh_kl_reply_body() exists for.
+ * with an explicit content_type, which is what sh_http_reply_body() exists for.
  */
 /*
  * The tile-serving handler is ct_api_handle() in libcarta. This wrapper adds
@@ -464,18 +464,18 @@ static void load_carta_env(TileServerConfig *cfg) {
  * Thread-safe using thread-local storage for origin buffer.
  */
 static const char *get_origin_from_request(const KlHttpRequest *req) {
-    return sh_kl_origin(req);
+    return sh_http_origin(req);
 }
 
 /* HTTP response helpers - use shared implementation */
 static void send_json_cors(KlHttpResponse *res, const KlHttpRequest *req,
                            int status, const char *json) {
-    sh_kl_reply_json(res, status, &s_cors, get_origin_from_request(req), json);
+    sh_http_reply_json(res, status, &s_cors, get_origin_from_request(req), json);
 }
 
 static void send_error_cors(KlHttpResponse *res, const KlHttpRequest *req,
                             int status, const char *message) {
-    sh_kl_reply_error(res, status, &s_cors, get_origin_from_request(req), message);
+    sh_http_reply_error(res, status, &s_cors, get_origin_from_request(req), message);
 }
 
 /*
@@ -500,7 +500,7 @@ static void send_tile_cors(KlHttpResponse *res, const KlHttpRequest *req,
             kl_http_response_status(res, 304);
             kl_http_response_header(res, "ETag", etag);
             kl_http_response_header(res, "Cache-Control", "public, max-age=86400");
-            sh_kl_apply_cors(res, &s_cors, get_origin_from_request(req));
+            sh_http_apply_cors(res, &s_cors, get_origin_from_request(req));
             kl_http_response_body_borrow(res, "", 0);
             return;
         }
@@ -510,7 +510,7 @@ static void send_tile_cors(KlHttpResponse *res, const KlHttpRequest *req,
     kl_http_response_header(res, "Content-Type", content_type);
     kl_http_response_header(res, "Cache-Control", "public, max-age=86400");
     if (etag[0]) kl_http_response_header(res, "ETag", etag);
-    sh_kl_apply_cors(res, &s_cors, get_origin_from_request(req));
+    sh_http_apply_cors(res, &s_cors, get_origin_from_request(req));
     /* Copy: Keel body setters borrow, and callers free their buffers. */
     kl_http_response_body_copy(res, (const char *)data, size);
 }
@@ -529,7 +529,7 @@ static void handle_health(KlHttpRequest *req, KlHttpResponse *res, void *ud) {
     (void)ud;
     ShMetricsTimer timer = sh_metrics_timer_start();
     record_metrics(timer, "endpoint:health");
-    sh_kl_handle_health(res, &s_cors, get_origin_from_request(req),
+    sh_http_handle_health(res, &s_cors, get_origin_from_request(req),
                         "carta-tile-server", ct_version());
 }
 
@@ -748,8 +748,8 @@ static void handle_tilejson(KlHttpRequest *req, KlHttpResponse *res, void *ud) {
 /*
  * Marshal the tile request and hand it to the shared dispatcher. The context,
  * on_resume/on_cancel/on_deadline, the 503 on a full queue and the 504 on a
- * deadline are sh_keel_async_dispatch()'s job now; see
- * shared/src/sh_keelasync.c.
+ * deadline are sh_http_async_dispatch()'s job now; see
+ * shared/src/sh_httpasync.c.
  */
 static void submit_render_work(KlHttpRequest *req, KlHttpResponse *res,
                                void *ud, int z, int x, int y, const char *ext,
@@ -773,7 +773,7 @@ static void submit_render_work(KlHttpRequest *req, KlHttpResponse *res,
     api_req.path   = path;
     api_req.query  = query;
 
-    sh_keel_async_dispatch(&app->async, req, res, carta_cached_handler, s_api_ctx,
+    sh_http_async_dispatch(&app->async, req, res, carta_cached_handler, s_api_ctx,
                            &api_req);
 
     record_metrics(timer, endpoint);
@@ -929,7 +929,7 @@ static int parse_tile_uri(const char *uri, size_t uri_len, int *z, int *x, int *
 /* Handle /metrics endpoint for Prometheus - uses shared helper */
 static void handle_metrics(KlHttpRequest *req, KlHttpResponse *res, void *ud) {
     (void)req; (void)ud;
-    sh_kl_handle_metrics(res);
+    sh_http_handle_metrics(res);
 }
 
 /* ============================================================================
@@ -984,7 +984,7 @@ static int serve_static_file(const KlHttpRequest *req, KlHttpResponse *res) {
 
     kl_http_response_status(res, 200);
     kl_http_response_header(res, "Content-Type", static_content_type(path));
-    sh_kl_apply_cors(res, &s_cors, get_origin_from_request(req));
+    sh_http_apply_cors(res, &s_cors, get_origin_from_request(req));
     kl_http_response_body_copy(res, data, size);
     free(data);
     return 1;
@@ -997,8 +997,8 @@ static int serve_static_file(const KlHttpRequest *req, KlHttpResponse *res) {
 /* CORS preflight, before rate limiting. */
 static int mw_preflight(KlHttpRequest *req, KlHttpResponse *res, void *ud) {
     (void)ud;
-    sh_trace_from_headers(sh_kl_trace_header_getter, req);
-    sh_kl_reply_preflight(res, &s_cors, get_origin_from_request(req));
+    sh_trace_from_headers(sh_http_trace_header_getter, req);
+    sh_http_reply_preflight(res, &s_cors, get_origin_from_request(req));
     sh_trace_clear();
     return 1;  /* short-circuit */
 }
@@ -1006,8 +1006,8 @@ static int mw_preflight(KlHttpRequest *req, KlHttpResponse *res, void *ud) {
 /* Rate limit every request before routing. */
 static int mw_rate_limit(KlHttpRequest *req, KlHttpResponse *res, void *ud) {
     (void)ud;
-    sh_trace_from_headers(sh_kl_trace_header_getter, req);
-    if (!sh_kl_check_rate_limit(req, res, s_rate_limiter, &s_cors,
+    sh_trace_from_headers(sh_http_trace_header_getter, req);
+    if (!sh_http_check_rate_limit(req, res, s_rate_limiter, &s_cors,
                                 get_origin_from_request(req))) {
         SH_LOG_WARN("Rate limit exceeded", "status", "429");
         sh_metrics_counter_inc("http_requests_total", 1,
