@@ -6,6 +6,28 @@
 *.dSYM/
 
 # Test binaries
+#
+# The named rules below are an allowlist, and an allowlist of built artifacts
+# only holds until someone adds a test. It did not hold: test_geojson, test_eov,
+# test_metatile and four copies of test_transport_direct were committed as
+# macOS arm64 executables, which broke the Windows job -- `./test_geojson`
+# found the Mach-O file instead of test_geojson.exe and exited 126.
+#
+# So ignore built test binaries by shape instead. These patterns are anchored
+# with a leading slash and contain no further slash, so each matches only a
+# DIRECT child of that module directory -- where the Makefiles put their
+# executables. Test *sources* live in <module>/tests/ and are unaffected.
+/arbor/test_*
+/carta/test_*
+/clayshards/test_*
+/fuelwise/test_*
+/locus/test_*
+/nexus/test_*
+/ralph/test_*
+/shared/test_*
+/surge/test_*
+/velo/test_*
+
 test_ralph
 test_fuelwise
 test_shared
