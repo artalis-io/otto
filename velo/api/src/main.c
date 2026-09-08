@@ -139,27 +139,6 @@ typedef struct {
     ShKeelAsync async;   /* server, pool, cors, timeout, stats */
 } AppCtx;
 
-/*
- * One route request. The async plumbing that used to surround this --
- * KlAsyncOp, the connection, the detached flag -- now lives in
- * sh_keel_async_dispatch(); see shared/src/sh_keelasync.c.
- */
-typedef struct {
-    /* Request parameters */
-    double from_lat, from_lon;
-    double to_lat, to_lon;
-    VLProfile profile;
-    VLWeightType weight;
-    int include_geometry;
-
-    /* Result (set by the worker) */
-    VLRoute route;
-    VLStatus status;
-    char *response_json;        /* owned */
-    int status_code;
-    char error_msg[128];
-} RouteCtx;
-
 
 /* ============================================================================
  * Configuration Loading
@@ -303,17 +282,6 @@ static void load_config_env(RouteServerConfig *cfg) {
     }
 }
 
-/* ============================================================================
- * Route Context Helpers
- * ============================================================================ */
-
-static void route_ctx_free(RouteCtx *ctx) {
-    if (!ctx) return;
-    vl_free_route(&ctx->route);
-    free(ctx->response_json);
-    free(ctx);
-}
-
 static void record_metrics(ShMetricsTimer timer, const char *endpoint) {
     sh_metrics_counter_inc("http_requests_total", 1,
         "endpoint", endpoint, "service", "velo", NULL);
@@ -321,59 +289,40 @@ static void record_metrics(ShMetricsTimer timer, const char *endpoint) {
         "endpoint", endpoint, "service", "velo", NULL);
 }
 
-/* Process a single route request */
-static void process_route_request(RouteCtx *item) {
-    VLRouteOptions opts = {0};
-    opts.algorithm = VL_ALGORITHM_ASTAR_BIDIR;
-    opts.weight = item->weight;
-    opts.profile = item->profile;
-    opts.include_geometry = item->include_geometry;
+/*
+ * The route handler is vl_api_handle() in libvelo. This wrapper adds the one
+ * thing that is genuinely the server's job and not the library's: the
+ * adaptive-capacity feedback that retunes this server's rate limiter.
+ *
+ * What used to be here was a second implementation of vl_api_handle -- its own
+ * RouteCtx, its own GET and POST parsing, its own bounds checks, its own
+ * response building in route_render(). A third lived in
+ * wasm/src/vl_wasm_api.c. Three copies of three endpoints, and they disagreed:
+ * see docs/roadmaps/transport.md for the table.
+ */
+static int velo_metered_handler(void *ctx, const ShApiRequest *req,
+                                ShApiResponse *resp)
+{
+    struct timeval t0, t1;
+    int rc;
 
-    VLCoord from = {item->from_lat, item->from_lon};
-    VLCoord to = {item->to_lat, item->to_lon};
+    gettimeofday(&t0, NULL);
+    rc = vl_api_handle(ctx, req, resp);
+    gettimeofday(&t1, NULL);
 
-    if (s_landmarks) {
-        /* Use landmarks for faster routing */
-        uint32_t from_node = vl_graph_nearest_node_grid(s_graph, from);
-        uint32_t to_node = vl_graph_nearest_node_grid(s_graph, to);
-
-        if (from_node == VL_INVALID_NODE) {
-            item->status = VL_ERROR_NODE_NOT_FOUND;
-            strncpy(item->error_msg, "Could not find road near origin",
-                    sizeof(item->error_msg) - 1);
-            item->error_msg[sizeof(item->error_msg) - 1] = '\0';
-            return;
+    if (s_adaptive_tracker) {
+        ShCapacityParams np;
+        double ms = (t1.tv_sec - t0.tv_sec) * 1000.0 +
+                    (t1.tv_usec - t0.tv_usec) / 1000.0;
+        sh_adaptive_record(s_adaptive_tracker, ms);
+        if (sh_adaptive_update(s_adaptive_tracker, &np) && s_rate_limiter) {
+            sh_ratelimit_update_rate(s_rate_limiter,
+                                     np.rate_limit_rps,
+                                     np.rate_limit_burst);
         }
-        if (to_node == VL_INVALID_NODE) {
-            item->status = VL_ERROR_NODE_NOT_FOUND;
-            strncpy(item->error_msg, "Could not find road near destination",
-                    sizeof(item->error_msg) - 1);
-            item->error_msg[sizeof(item->error_msg) - 1] = '\0';
-            return;
-        }
-
-        item->status = vl_route_astar_landmarks_bidir(s_graph, s_landmarks,
-                                                       from_node, to_node,
-                                                       &opts, &item->route);
-    } else {
-        item->status = vl_route_coords(s_graph, from, to, &opts, &item->route);
     }
 
-    if (item->status != VL_OK) {
-        switch (item->status) {
-            case VL_ERROR_NO_ROUTE:
-                strncpy(item->error_msg, "No route found", sizeof(item->error_msg) - 1);
-                break;
-            case VL_ERROR_NODE_NOT_FOUND:
-                strncpy(item->error_msg, "Could not find road near coordinate",
-                        sizeof(item->error_msg) - 1);
-                break;
-            default:
-                strncpy(item->error_msg, "Routing failed", sizeof(item->error_msg) - 1);
-                break;
-        }
-        item->error_msg[sizeof(item->error_msg) - 1] = '\0';
-    }
+    return rc;
 }
 
 /* ============================================================================
@@ -390,59 +339,6 @@ static void send_error(KlHttpResponse *res, int status, const char *message) {
 }
 
 /* Note: json_escape_polyline removed - ShJsonWriter handles escaping */
-
-/* ============================================================================
- * Query Parameter Parsing
- * ============================================================================ */
-
-static int parse_coord(const char *str, double *lat, double *lon) {
-    if (!str || !*str) return -1;
-
-    /* Use shared library coordinate parser */
-    SHCoord coord;
-    if (sh_parse_coord(str, &coord) != 0) return -1;
-    *lat = coord.lat;
-    *lon = coord.lon;
-    return 0;
-}
-
-static VLProfile parse_profile(const char *str) {
-    if (!str || !*str) return VL_PROFILE_CAR;
-
-    if (strcmp(str, "car") == 0) return VL_PROFILE_CAR;
-    if (strcmp(str, "truck") == 0) return VL_PROFILE_TRUCK;
-    if (strcmp(str, "bike") == 0) return VL_PROFILE_BIKE;
-    if (strcmp(str, "bicycle") == 0) return VL_PROFILE_BIKE;
-    if (strcmp(str, "foot") == 0) return VL_PROFILE_FOOT;
-    if (strcmp(str, "pedestrian") == 0) return VL_PROFILE_FOOT;
-    if (strcmp(str, "walk") == 0) return VL_PROFILE_FOOT;
-
-    return VL_PROFILE_CAR;
-}
-
-static VLWeightType parse_mode(const char *str) {
-    if (!str || !*str) return VL_WEIGHT_DURATION;
-
-    if (strcmp(str, "fastest") == 0) return VL_WEIGHT_DURATION;
-    if (strcmp(str, "shortest") == 0) return VL_WEIGHT_DISTANCE;
-    if (strcmp(str, "duration") == 0) return VL_WEIGHT_DURATION;
-    if (strcmp(str, "distance") == 0) return VL_WEIGHT_DISTANCE;
-
-    return VL_WEIGHT_DURATION;
-}
-
-static int parse_bool(const char *str, int default_val) {
-    if (!str || !*str) return default_val;
-
-    if (strcmp(str, "true") == 0) return 1;
-    if (strcmp(str, "1") == 0) return 1;
-    if (strcmp(str, "yes") == 0) return 1;
-    if (strcmp(str, "false") == 0) return 0;
-    if (strcmp(str, "0") == 0) return 0;
-    if (strcmp(str, "no") == 0) return 0;
-
-    return default_val;
-}
 
 /* ============================================================================
  * API Handlers
@@ -575,266 +471,9 @@ static void handle_metrics(KlHttpRequest *req, KlHttpResponse *res, void *ud) {
  * Runs on a pool worker thread: route, encode geometry, render the JSON
  * response. Touches only this context plus the read-only graph/landmarks.
  */
-static void route_render(RouteCtx *ctx) {
-    struct timeval route_start, route_end;
-    gettimeofday(&route_start, NULL);
-
-    process_route_request(ctx);
-
-    gettimeofday(&route_end, NULL);
-    double route_ms = (route_end.tv_sec - route_start.tv_sec) * 1000.0 +
-                      (route_end.tv_usec - route_start.tv_usec) / 1000.0;
-
-    /* Record response time for adaptive capacity */
-    if (s_adaptive_tracker) {
-        sh_adaptive_record(s_adaptive_tracker, route_ms);
-
-        ShCapacityParams new_params;
-        if (sh_adaptive_update(s_adaptive_tracker, &new_params)) {
-            if (s_rate_limiter) {
-                sh_ratelimit_update_rate(s_rate_limiter,
-                                         new_params.rate_limit_rps,
-                                         new_params.rate_limit_burst);
-            }
-        }
-    }
-
-    if (ctx->status != VL_OK) {
-        ctx->status_code = 404;
-        return;
-    }
-
-    /* Encode polyline if geometry requested */
-    char *polyline = NULL;
-    if (ctx->include_geometry && ctx->route.num_coords > 0) {
-        size_t max_len = sh_polyline_max_encoded_size(ctx->route.num_coords);
-        polyline = malloc(max_len);
-        if (polyline) {
-            /* Convert VLCoord array to double array (check for overflow first) */
-            double *coords = NULL;
-            if ((size_t)ctx->route.num_coords <= SIZE_MAX / (2 * sizeof(double))) {
-                size_t coord_size = (size_t)ctx->route.num_coords * 2 * sizeof(double);
-                coords = malloc(coord_size);
-            }
-            if (coords) {
-                for (int i = 0; i < ctx->route.num_coords; i++) {
-                    coords[i * 2] = ctx->route.coords[i].lat;
-                    coords[i * 2 + 1] = ctx->route.coords[i].lon;
-                }
-                sh_polyline_encode(coords, ctx->route.num_coords, 5, polyline, max_len);
-                free(coords);
-            } else {
-                free(polyline);
-                polyline = NULL;
-            }
-        }
-    }
-
-    /* Build JSON response using streaming writer */
-    ShJsonBuf jb;
-    sh_json_buf_init(&jb);
-
-    ShJsonWriter jw;
-    sh_json_writer_init(&jw, sh_json_buf_write, &jb);
-
-    const char *profile_str = "car";
-    switch (ctx->profile) {
-        case VL_PROFILE_TRUCK: profile_str = "truck"; break;
-        case VL_PROFILE_BIKE: profile_str = "bike"; break;
-        case VL_PROFILE_FOOT: profile_str = "foot"; break;
-        default: break;
-    }
-
-    const char *mode_str = ctx->weight == VL_WEIGHT_DISTANCE ? "shortest" : "fastest";
-
-    sh_json_write_object_start(&jw);
-    sh_json_write_kv_string(&jw, "status", "ok");
-
-    sh_json_write_key(&jw, "route");
-    sh_json_write_object_start(&jw);
-    sh_json_write_kv_double_fmt(&jw, "distance", ctx->route.distance_m, 2);
-    sh_json_write_kv_double_fmt(&jw, "duration", ctx->route.duration_s, 2);
-    sh_json_write_kv_string(&jw, "profile", profile_str);
-    sh_json_write_kv_string(&jw, "mode", mode_str);
-
-    /* from: [lat, lon] */
-    sh_json_write_key(&jw, "from");
-    sh_json_write_array_start(&jw);
-    sh_json_write_double_fmt(&jw, ctx->from_lat, 6);
-    sh_json_write_double_fmt(&jw, ctx->from_lon, 6);
-    sh_json_write_array_end(&jw);
-
-    /* to: [lat, lon] */
-    sh_json_write_key(&jw, "to");
-    sh_json_write_array_start(&jw);
-    sh_json_write_double_fmt(&jw, ctx->to_lat, 6);
-    sh_json_write_double_fmt(&jw, ctx->to_lon, 6);
-    sh_json_write_array_end(&jw);
-
-    /* geometry (optional) - ShJsonWriter handles escaping */
-    if (polyline) {
-        sh_json_write_kv_string(&jw, "geometry", polyline);
-    }
-
-    sh_json_write_object_end(&jw);  /* Close route */
-
-    /* meta object */
-    sh_json_write_key(&jw, "meta");
-    sh_json_write_object_start(&jw);
-    sh_json_write_kv_int(&jw, "nodes_explored", (int64_t)ctx->route.nodes_explored);
-    sh_json_write_kv_double_fmt(&jw, "search_time_ms", ctx->route.search_time_ms, 2);
-    sh_json_write_object_end(&jw);
-
-    sh_json_write_object_end(&jw);  /* Close root */
-
-    if (polyline) free(polyline);
-
-    if (!sh_json_writer_error(&jw) && jb.buf) {
-        ctx->response_json = sh_json_buf_take(&jb);
-        ctx->status_code = 200;
-    } else {
-        ctx->status_code = 500;
-        snprintf(ctx->error_msg, sizeof(ctx->error_msg),
-                 "Failed to generate response");
-    }
-    sh_json_buf_free(&jb);
-}
-
 /* ============================================================================
  * Async Plumbing
  * ============================================================================ */
-
-/*
- * The route handler, as a plain ShApiHandler.
- *
- * Parsing (JSON body for POST, query string for GET), bounds validation and
- * response shaping all live here rather than in the transport -- that is the
- * point of the shared interface. process_route_request() and route_render()
- * are unchanged.
- */
-static int velo_api_handler(void *unused, const ShApiRequest *req,
-                            ShApiResponse *resp) {
-    RouteCtx ctx;
-    int is_post;
-
-    (void)unused;
-    memset(&ctx, 0, sizeof(ctx));
-    ctx.profile = VL_PROFILE_CAR;
-    ctx.weight = VL_WEIGHT_DURATION;
-    ctx.include_geometry = 1;
-    ctx.status_code = 500;
-
-    if (!s_graph) {
-        return sh_api_response_error(resp, 503, "Graph not loaded");
-    }
-
-    is_post = (req->method && strcmp(req->method, "POST") == 0);
-
-    if (is_post) {
-        SHArena *arena;
-        ShJsonValue *root = NULL;
-        const char *from_str, *to_str;
-        ShJsonValue *geom;
-
-        if (!req->body || req->body_len == 0) {
-            return sh_api_response_error(resp, 400, "Empty request body");
-        }
-
-        /* Arena-backed parse; released before we return. */
-        arena = sh_arena_create(req->body_len * 4 + 4096);
-        if (!arena) {
-            return sh_api_response_error(resp, 500, "Out of memory");
-        }
-        if (sh_json_parse(req->body, req->body_len, arena, &root) != SH_JSON_OK) {
-            sh_arena_free(arena);
-            return sh_api_response_error(resp, 400, "Invalid JSON body");
-        }
-
-        from_str = sh_json_as_string(sh_json_get_path(root, "from"), NULL);
-        if (from_str && parse_coord(from_str, &ctx.from_lat, &ctx.from_lon) != 0) {
-            sh_arena_free(arena);
-            return sh_api_response_error(resp, 400, "Invalid 'from' coordinate");
-        }
-
-        to_str = sh_json_as_string(sh_json_get_path(root, "to"), NULL);
-        if (to_str && parse_coord(to_str, &ctx.to_lat, &ctx.to_lon) != 0) {
-            sh_arena_free(arena);
-            return sh_api_response_error(resp, 400, "Invalid 'to' coordinate");
-        }
-
-        ctx.profile = parse_profile(
-            sh_json_as_string(sh_json_get_path(root, "profile"), NULL));
-        ctx.weight = parse_mode(
-            sh_json_as_string(sh_json_get_path(root, "mode"), NULL));
-
-        geom = sh_json_get_path(root, "geometry");
-        if (geom) ctx.include_geometry = sh_json_as_bool(geom, true) ? 1 : 0;
-
-        sh_arena_free(arena);
-    } else {
-        const char *query = req->query ? req->query : "";
-        char from_val[128] = "", to_val[128] = "";
-        char profile_val[32] = "", mode_val[32] = "", geom_val[16] = "";
-
-        sh_query_get_str(query, "from", from_val, sizeof(from_val));
-        sh_query_get_str(query, "to", to_val, sizeof(to_val));
-        sh_query_get_str(query, "profile", profile_val, sizeof(profile_val));
-        sh_query_get_str(query, "mode", mode_val, sizeof(mode_val));
-        sh_query_get_str(query, "geometry", geom_val, sizeof(geom_val));
-
-        if (from_val[0] == '\0') {
-            return sh_api_response_error(resp, 400, "Missing 'from' parameter");
-        }
-        if (to_val[0] == '\0') {
-            return sh_api_response_error(resp, 400, "Missing 'to' parameter");
-        }
-        if (parse_coord(from_val, &ctx.from_lat, &ctx.from_lon) != 0) {
-            return sh_api_response_error(resp, 400,
-                                         "Invalid 'from' coordinate (format: lat,lon)");
-        }
-        if (parse_coord(to_val, &ctx.to_lat, &ctx.to_lon) != 0) {
-            return sh_api_response_error(resp, 400,
-                                         "Invalid 'to' coordinate (format: lat,lon)");
-        }
-
-        ctx.profile = parse_profile(profile_val);
-        ctx.weight = parse_mode(mode_val);
-        ctx.include_geometry = parse_bool(geom_val, 1);
-    }
-
-    /* Validate coordinates are within graph bounds */
-    if (ctx.from_lat < s_graph->bbox_min.lat || ctx.from_lat > s_graph->bbox_max.lat ||
-        ctx.from_lon < s_graph->bbox_min.lon || ctx.from_lon > s_graph->bbox_max.lon) {
-        return sh_api_response_error(resp, 400,
-                                     "Origin coordinate outside graph bounds");
-    }
-    if (ctx.to_lat < s_graph->bbox_min.lat || ctx.to_lat > s_graph->bbox_max.lat ||
-        ctx.to_lon < s_graph->bbox_min.lon || ctx.to_lon > s_graph->bbox_max.lon) {
-        return sh_api_response_error(resp, 400,
-                                     "Destination coordinate outside graph bounds");
-    }
-
-    route_render(&ctx);
-
-    if (ctx.status_code == 200 && ctx.response_json) {
-        memset(resp, 0, sizeof(*resp));
-        resp->status_code = 200;
-        resp->content_type = "application/json";
-        resp->body = (uint8_t *)ctx.response_json;   /* ownership moves */
-        resp->body_len = strlen(ctx.response_json);
-        return 0;
-    }
-
-    free(ctx.response_json);
-    if (ctx.status_code == 404) {
-        return sh_api_response_error(resp, 404,
-                                     ctx.error_msg[0] ? ctx.error_msg
-                                                      : "Routing failed");
-    }
-    return sh_api_response_error(resp, 500,
-                                 ctx.error_msg[0] ? ctx.error_msg
-                                                  : "Failed to generate response");
-}
 
 /*
  * Marshal the Keel request and hand it to the shared dispatcher. The context,
@@ -862,8 +501,8 @@ static void handle_route(KlHttpRequest *req, KlHttpResponse *res, void *ud) {
     api_req.body     = (br && br->len > 0) ? br->data : NULL;
     api_req.body_len = (br && br->len > 0) ? br->len : 0;
 
-    sh_keel_async_dispatch(&app->async, req, res, velo_api_handler, NULL,
-                           &api_req);
+    sh_keel_async_dispatch(&app->async, req, res, velo_metered_handler,
+                           s_api_ctx, &api_req);
 
     record_metrics(timer, "route");
 }
