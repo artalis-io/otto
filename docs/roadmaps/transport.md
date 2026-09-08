@@ -1,6 +1,6 @@
 # Transport Interface + Platform Abstraction Layer
 
-**Status:** Phases 1-4 done. Phase 5 done for Carta; Velo and Locus remain.
+**Status:** Phases 1-4 done. Phase 5 done for Carta and Locus; Velo in review (#67).
 **Scope:** `shared/` transport interface, per-module API types, `sh_pal.h`
 
 ## Motivation
@@ -222,7 +222,7 @@ A test that links every module's handler against `sh_transport_direct` **with no
 headers on the include path**. If that stops compiling, the abstraction has leaked, and
 it will be caught immediately rather than at the next transport migration.
 
-### Status: 4 of 6
+### Status: 5 of 6
 
 | module | handler lives in | invariant test |
 |---|---|---|
@@ -230,25 +230,71 @@ it will be caught immediately rather than at the next transport migration.
 | FuelWise | `fuelwise/src/fw_api.c` | `make -C fuelwise test-transport` |
 | Surge | `surge/src/sg_api.c` | `make -C surge test-transport` |
 | Carta | `carta/src/ct_api.c` | `make -C carta test-transport` |
-| Velo | **`velo/api/src/main.c`** | none possible yet |
-| Locus | **`locus/api/src/main.c`** | none possible yet |
+| Locus | `locus/src/lc_api.c` | `make -C locus test-transport` |
+| Velo | **`velo/api/src/main.c`** | none possible yet (PR #67) |
 
-Velo and Locus have no library-side `ShApiHandler` to link against at all: their
-`src/*_api.c` is a context and lifecycle layer with zero `ShApi` references, and
-the handler itself lives in `api/src/main.c` next to 25-44 Keel references.
-Phase 2 gave all six the shared request/response *types*, but only Ralph,
-FuelWise and Surge ended up with a handler the direct transport could call.
+Velo still has no library-side `ShApiHandler` to link against: `velo/src/vl_api.c`
+is a context and lifecycle layer with zero `ShApi` references, and the handler
+itself lives in `api/src/main.c` next to 25 Keel references. Phase 2 gave all
+six the shared request/response *types*, but only Ralph, FuelWise and Surge
+ended up with a handler the direct transport could call.
 
-So for those two the invariant is not merely unenforced -- it is currently
-unenforceable, and "no Keel on the include path" is trivially false for the only
-translation unit that has a handler.
-
-Closing it means extracting the handler out of `api/src/main.c` into the library,
-as `ralph_api.c` already does, leaving `main.c` as the thin Keel wrapper the
-manifesto describes. That is a real refactor of two servers (1276 and 1096 line
-files), not a test-writing exercise.
+Closing it means extracting the handler out of `api/src/main.c` into the
+library, as `ralph_api.c` already does, leaving `main.c` as the thin Keel
+wrapper the manifesto describes.
 
 ### Phase 5 progress
+
+**Locus: done.** `lc_api_handle()` is now a plain `ShApiHandler` in
+`locus/src/lc_api.c`, and `api/src/main.c` went from 1096 lines to 760.
+
+Locus did not have two implementations of its five endpoints. It had **three**,
+and nothing in the repo called the library one:
+
+| | server (`api/src/main.c`) | library (`src/lc_api.c`) | WASM (`wasm/src/lc_wasm_api.c`) |
+|---|---|---|---|
+| JSON built by | `ShJsonWriter`, grows | 64 KB `malloc`, **overflows** | 64 KB static, truncates |
+| `total` | `total_matches` | `total_matches` | `num_results` (the page size) |
+| `osm_id` / `osm_type` | yes | yes | **absent** |
+| `took_ms` | yes | yes | **absent** |
+| name escaping | writer escapes | `json_escape` | **none** -- bare `%s` |
+| `display_name` | `lc_format_address()` | `lc_format_address()` | hand-concatenated |
+| non-mmap index | handled | handled | **derefs `mmap_idx->header`** |
+| `?q=` decoding | none | none | its own `url_decode` |
+| bad `lat` | `atof` -> `0.0` | `sh_parse_double` -> NaN | `atof` -> `0.0` |
+
+The library's overflow was real, not theoretical. `lc_api_search()` accumulated
+`snprintf`'s would-have-written return value into an unclamped `offset`, so
+`json + offset` walked past the 64 KB allocation and `64 * 1024 - offset` went
+negative into a `size_t` parameter. A hundred results with long names is enough:
+under `-D_FORTIFY_SOURCE=2` the process aborts with "buffer overflow detected".
+It was unreachable in production only because nothing called it --
+`locus/tests/test_locus.c::api_search_large_result_set` now pins it, and the
+same input produces a correct 66 KB response.
+
+`atof("north")` is `0.0`, which passes a `-90..90` range check, so the server
+would have answered a reverse-geocode for the Gulf of Guinea rather than
+rejecting the request. The library's `sh_parse_double` yields NaN instead, and
+the handler rejects NaN *before* consulting the index, so a malformed
+coordinate is a 400 whether or not data is loaded.
+
+The single implementation is the safe one: the streaming `ShJsonWriter` the
+server already used, moved into the library. `api/src/main.c` keeps only the
+adaptive-capacity feedback that retunes *this server's* rate limiter, wrapped
+around the handler as `locus_metered_handler()`. `wasm/src/lc_wasm_api.c` is now
+a bridge -- marshal, call, hold the response -- with its exported names and
+shapes unchanged, so `site/js/locus-api-demo.js` needed no edit.
+
+`/api/v1/stats` deliberately stays split. The server's version reports rate
+limiter, work queue and adaptive-capacity counters that only a server has; the
+library's reports index size and bounds. That is the same division as Carta's
+response cache, not a second implementation of one thing.
+
+One shared addition was needed to collapse the three without regressing:
+`sh_query_get_str_decoded()`. The WASM copy percent-decoded `?q=`; the server
+and library did not, so `?q=Monte%20Carlo` searched for the literal string
+`Monte%20Carlo`. Decoding in the shared handler is what makes all three agree,
+and it fixes the HTTP API rather than removing the behaviour from the demo.
 
 **Carta: done.** `ct_api_handle()` is now a plain `ShApiHandler` in
 `carta/src/ct_api.c`, and `carta/api/src/main.c` lost 238 lines to it.
@@ -286,5 +332,6 @@ Two things surfaced on the way and are fixed here rather than left as traps:
   home of `CTLODConfig`, which lives in `ct_lod.h`. Nothing caught it because
   every existing includer pulled in `carta.h` first.
 
-**Velo and Locus: not started.** Velo is the larger of the two but its handler is
-the more mechanical extraction; Locus has the smaller `main.c`.
+**Velo: in review as #67.** `api/src/main.c` is 1276 lines with 25 Keel
+references, and `wasm/src/vl_wasm_api.c` does not call `vl_api_*` either -- the
+same three-way split Locus had.

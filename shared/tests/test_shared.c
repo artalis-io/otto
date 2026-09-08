@@ -3833,6 +3833,55 @@ TEST(query_get_str_basic)
     ASSERT(strcmp(buf, "test") == 0);
 }
 
+TEST(query_get_str_decoded_basic)
+{
+    char buf[64];
+    /* What a browser sends for the text "Monte Carlo". */
+    ASSERT_EQ(sh_query_get_str_decoded("q=Monte%20Carlo&limit=5", "q",
+                                       buf, sizeof(buf)), 11);
+    ASSERT(strcmp(buf, "Monte Carlo") == 0);
+    /* '+' is the other spelling of a space in a query string. */
+    ASSERT_EQ(sh_query_get_str_decoded("q=Monte+Carlo", "q", buf, sizeof(buf)), 11);
+    ASSERT(strcmp(buf, "Monte Carlo") == 0);
+    /* Lower and upper case hex both decode. */
+    ASSERT_EQ(sh_query_get_str_decoded("q=caf%c3%a9", "q", buf, sizeof(buf)), 5);
+    ASSERT(strcmp(buf, "caf\xc3\xa9") == 0);
+    ASSERT_EQ(sh_query_get_str_decoded("q=caf%C3%A9", "q", buf, sizeof(buf)), 5);
+    ASSERT(strcmp(buf, "caf\xc3\xa9") == 0);
+}
+
+TEST(query_get_str_decoded_malformed)
+{
+    char buf[64];
+    /* A '%' with nothing usable after it is a literal '%', not a truncation
+     * and not a read past the end of the string. */
+    ASSERT_EQ(sh_query_get_str_decoded("q=100%", "q", buf, sizeof(buf)), 4);
+    ASSERT(strcmp(buf, "100%") == 0);
+    ASSERT_EQ(sh_query_get_str_decoded("q=100%z9", "q", buf, sizeof(buf)), 6);
+    ASSERT(strcmp(buf, "100%z9") == 0);
+    ASSERT_EQ(sh_query_get_str_decoded("q=a%4", "q", buf, sizeof(buf)), 3);
+    ASSERT(strcmp(buf, "a%4") == 0);
+    /* A '%' immediately before the next parameter stops at the '&'. */
+    ASSERT_EQ(sh_query_get_str_decoded("q=a%&limit=5", "q", buf, sizeof(buf)), 2);
+    ASSERT(strcmp(buf, "a%") == 0);
+}
+
+TEST(query_get_str_decoded_bounds)
+{
+    char buf[5];
+    /* Truncates to fit and still terminates. */
+    ASSERT_EQ(sh_query_get_str_decoded("q=%41%42%43%44%45%46", "q",
+                                       buf, sizeof(buf)), 4);
+    ASSERT(strcmp(buf, "ABCD") == 0);
+
+    char small[64];
+    small[0] = 'X';
+    ASSERT_EQ(sh_query_get_str_decoded("q=hello", "missing", small,
+                                       sizeof(small)), 0);
+    ASSERT(small[0] == '\0');
+    ASSERT_EQ(sh_query_get_str_decoded(NULL, "q", small, sizeof(small)), 0);
+}
+
 TEST(query_get_str_not_found)
 {
     char buf[64];
@@ -5643,6 +5692,9 @@ int main(void)
     RUN_TEST(query_get_int_default);
     RUN_TEST(query_get_int_edge_cases);
     RUN_TEST(query_get_str_basic);
+    RUN_TEST(query_get_str_decoded_basic);
+    RUN_TEST(query_get_str_decoded_malformed);
+    RUN_TEST(query_get_str_decoded_bounds);
     RUN_TEST(query_get_str_not_found);
     RUN_TEST(query_get_str_null_safety);
     RUN_TEST(query_has_basic);
