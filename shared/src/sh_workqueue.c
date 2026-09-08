@@ -3,9 +3,9 @@
  */
 
 #include "sh_workqueue.h"
+#include "sh_pal.h"
 #include <stdlib.h>
 #include <string.h>
-#include <pthread.h>
 #include <sys/time.h>
 #include <errno.h>
 
@@ -25,9 +25,9 @@ struct ShWorkQueue {
     double timeout_sec;      /* Request timeout (0 = no timeout) */
 
     /* Synchronization */
-    pthread_mutex_t mutex;
-    pthread_cond_t not_empty;  /* Signaled when items are available */
-    pthread_cond_t not_full;   /* Signaled when space is available (optional) */
+    ShMutex mutex;
+    ShCond not_empty;  /* Signaled when items are available */
+    ShCond not_full;   /* Signaled when space is available (optional) */
     int shutdown;              /* Set to 1 during shutdown */
 
     /* Statistics */
@@ -47,22 +47,6 @@ static double get_time_seconds(void)
     struct timeval tv;
     gettimeofday(&tv, NULL);
     return (double)tv.tv_sec + (double)tv.tv_usec / 1000000.0;
-}
-
-/* Convert timeout_ms to absolute timespec for pthread_cond_timedwait */
-static void timeout_to_abstime(int timeout_ms, struct timespec *ts)
-{
-    struct timeval tv;
-    gettimeofday(&tv, NULL);
-
-    ts->tv_sec = tv.tv_sec + timeout_ms / 1000;
-    ts->tv_nsec = tv.tv_usec * 1000 + (timeout_ms % 1000) * 1000000;
-
-    /* Handle nanosecond overflow */
-    if (ts->tv_nsec >= 1000000000) {
-        ts->tv_sec++;
-        ts->tv_nsec -= 1000000000;
-    }
 }
 
 /* ============================================================================
@@ -85,22 +69,22 @@ ShWorkQueue *sh_workqueue_create(size_t max_items, double timeout_sec)
     queue->capacity = max_items;
     queue->timeout_sec = timeout_sec;
 
-    if (pthread_mutex_init(&queue->mutex, NULL) != 0) {
+    if (sh_mutex_init(&queue->mutex) != 0) {
         free(queue->items);
         free(queue);
         return NULL;
     }
 
-    if (pthread_cond_init(&queue->not_empty, NULL) != 0) {
-        pthread_mutex_destroy(&queue->mutex);
+    if (sh_cond_init(&queue->not_empty) != 0) {
+        sh_mutex_destroy(&queue->mutex);
         free(queue->items);
         free(queue);
         return NULL;
     }
 
-    if (pthread_cond_init(&queue->not_full, NULL) != 0) {
-        pthread_cond_destroy(&queue->not_empty);
-        pthread_mutex_destroy(&queue->mutex);
+    if (sh_cond_init(&queue->not_full) != 0) {
+        sh_cond_destroy(&queue->not_empty);
+        sh_mutex_destroy(&queue->mutex);
         free(queue->items);
         free(queue);
         return NULL;
@@ -113,12 +97,12 @@ void sh_workqueue_shutdown(ShWorkQueue *queue)
 {
     if (!queue) return;
 
-    pthread_mutex_lock(&queue->mutex);
+    sh_mutex_lock(&queue->mutex);
     queue->shutdown = 1;
     /* Wake up all waiting consumers */
-    pthread_cond_broadcast(&queue->not_empty);
-    pthread_cond_broadcast(&queue->not_full);
-    pthread_mutex_unlock(&queue->mutex);
+    sh_cond_broadcast(&queue->not_empty);
+    sh_cond_broadcast(&queue->not_full);
+    sh_mutex_unlock(&queue->mutex);
 }
 
 void sh_workqueue_free(ShWorkQueue *queue)
@@ -126,7 +110,7 @@ void sh_workqueue_free(ShWorkQueue *queue)
     if (!queue) return;
 
     /* Free any remaining items */
-    pthread_mutex_lock(&queue->mutex);
+    sh_mutex_lock(&queue->mutex);
     while (queue->count > 0) {
         ShWorkItem *item = &queue->items[queue->tail];
         free(item->data);
@@ -134,11 +118,11 @@ void sh_workqueue_free(ShWorkQueue *queue)
         queue->tail = (queue->tail + 1) % queue->capacity;
         queue->count--;
     }
-    pthread_mutex_unlock(&queue->mutex);
+    sh_mutex_unlock(&queue->mutex);
 
-    pthread_cond_destroy(&queue->not_full);
-    pthread_cond_destroy(&queue->not_empty);
-    pthread_mutex_destroy(&queue->mutex);
+    sh_cond_destroy(&queue->not_full);
+    sh_cond_destroy(&queue->not_empty);
+    sh_mutex_destroy(&queue->mutex);
     free(queue->items);
     free(queue);
 }
@@ -151,12 +135,12 @@ int sh_workqueue_push(ShWorkQueue *queue, const ShWorkItem *item)
 {
     if (!queue || !item) return 0;
 
-    pthread_mutex_lock(&queue->mutex);
+    sh_mutex_lock(&queue->mutex);
 
     /* Check if full or shutting down */
     if (queue->count >= queue->capacity || queue->shutdown) {
         queue->total_dropped++;
-        pthread_mutex_unlock(&queue->mutex);
+        sh_mutex_unlock(&queue->mutex);
         return 0;
     }
 
@@ -172,9 +156,9 @@ int sh_workqueue_push(ShWorkQueue *queue, const ShWorkItem *item)
     queue->total_pushed++;
 
     /* Wake up one waiting consumer */
-    pthread_cond_signal(&queue->not_empty);
+    sh_cond_signal(&queue->not_empty);
 
-    pthread_mutex_unlock(&queue->mutex);
+    sh_mutex_unlock(&queue->mutex);
     return 1;
 }
 
@@ -185,7 +169,7 @@ int sh_workqueue_try_push(ShWorkQueue *queue, const ShWorkItem *item, double *pr
         return 0;
     }
 
-    pthread_mutex_lock(&queue->mutex);
+    sh_mutex_lock(&queue->mutex);
 
     if (pressure) {
         *pressure = (double)queue->count / (double)queue->capacity;
@@ -194,7 +178,7 @@ int sh_workqueue_try_push(ShWorkQueue *queue, const ShWorkItem *item, double *pr
     /* Check if full or shutting down */
     if (queue->count >= queue->capacity || queue->shutdown) {
         queue->total_dropped++;
-        pthread_mutex_unlock(&queue->mutex);
+        sh_mutex_unlock(&queue->mutex);
         return 0;
     }
 
@@ -209,9 +193,9 @@ int sh_workqueue_try_push(ShWorkQueue *queue, const ShWorkItem *item, double *pr
     queue->count++;
     queue->total_pushed++;
 
-    pthread_cond_signal(&queue->not_empty);
+    sh_cond_signal(&queue->not_empty);
 
-    pthread_mutex_unlock(&queue->mutex);
+    sh_mutex_unlock(&queue->mutex);
     return 1;
 }
 
@@ -223,23 +207,23 @@ ShWorkItem *sh_workqueue_pop(ShWorkQueue *queue)
 {
     if (!queue) return NULL;
 
-    pthread_mutex_lock(&queue->mutex);
+    sh_mutex_lock(&queue->mutex);
 
     /* Wait for item or shutdown */
     while (queue->count == 0 && !queue->shutdown) {
-        pthread_cond_wait(&queue->not_empty, &queue->mutex);
+        sh_cond_wait(&queue->not_empty, &queue->mutex);
     }
 
     /* Check for shutdown with empty queue */
     if (queue->count == 0) {
-        pthread_mutex_unlock(&queue->mutex);
+        sh_mutex_unlock(&queue->mutex);
         return NULL;
     }
 
     /* Allocate result (we need to return a pointer the caller can free) */
     ShWorkItem *result = malloc(sizeof(ShWorkItem));
     if (!result) {
-        pthread_mutex_unlock(&queue->mutex);
+        sh_mutex_unlock(&queue->mutex);
         return NULL;
     }
 
@@ -260,9 +244,9 @@ ShWorkItem *sh_workqueue_pop(ShWorkQueue *queue)
         }
     }
 
-    pthread_cond_signal(&queue->not_full);
+    sh_cond_signal(&queue->not_full);
 
-    pthread_mutex_unlock(&queue->mutex);
+    sh_mutex_unlock(&queue->mutex);
     return result;
 }
 
@@ -270,23 +254,33 @@ ShWorkItem *sh_workqueue_pop_timeout(ShWorkQueue *queue, int timeout_ms)
 {
     if (!queue) return NULL;
 
-    pthread_mutex_lock(&queue->mutex);
+    sh_mutex_lock(&queue->mutex);
 
     /* Non-blocking check */
     if (timeout_ms == 0) {
         if (queue->count == 0 || queue->shutdown) {
-            pthread_mutex_unlock(&queue->mutex);
+            sh_mutex_unlock(&queue->mutex);
             return NULL;
         }
     } else {
-        /* Wait with timeout */
-        struct timespec abstime;
-        timeout_to_abstime(timeout_ms, &abstime);
+        /*
+         * Deadline held fixed, remaining time recomputed each pass:
+         * sh_cond_timedwait takes a RELATIVE timeout, so re-passing the
+         * original one after a spurious wakeup would restart the full wait.
+         * Monotonic, so a wall-clock adjustment cannot change it.
+         */
+        uint64_t deadline = sh_monotonic_ms() + (uint64_t)timeout_ms;
 
         while (queue->count == 0 && !queue->shutdown) {
-            int rc = pthread_cond_timedwait(&queue->not_empty, &queue->mutex, &abstime);
-            if (rc == ETIMEDOUT) {
-                pthread_mutex_unlock(&queue->mutex);
+            uint64_t now = sh_monotonic_ms();
+            if (now >= deadline) {
+                sh_mutex_unlock(&queue->mutex);
+                return NULL;
+            }
+            if (sh_cond_timedwait(&queue->not_empty, &queue->mutex,
+                                  deadline - now) == 0 &&
+                queue->count == 0 && !queue->shutdown) {
+                sh_mutex_unlock(&queue->mutex);
                 return NULL;
             }
         }
@@ -294,14 +288,14 @@ ShWorkItem *sh_workqueue_pop_timeout(ShWorkQueue *queue, int timeout_ms)
 
     /* Check for shutdown with empty queue */
     if (queue->count == 0) {
-        pthread_mutex_unlock(&queue->mutex);
+        sh_mutex_unlock(&queue->mutex);
         return NULL;
     }
 
     /* Allocate result */
     ShWorkItem *result = malloc(sizeof(ShWorkItem));
     if (!result) {
-        pthread_mutex_unlock(&queue->mutex);
+        sh_mutex_unlock(&queue->mutex);
         return NULL;
     }
 
@@ -321,9 +315,9 @@ ShWorkItem *sh_workqueue_pop_timeout(ShWorkQueue *queue, int timeout_ms)
         }
     }
 
-    pthread_cond_signal(&queue->not_full);
+    sh_cond_signal(&queue->not_full);
 
-    pthread_mutex_unlock(&queue->mutex);
+    sh_mutex_unlock(&queue->mutex);
     return result;
 }
 
@@ -357,9 +351,9 @@ void sh_workqueue_item_cancel(ShWorkQueue *queue, ShWorkItem *item)
 
     /* Update stats if queue provided */
     if (queue) {
-        pthread_mutex_lock(&queue->mutex);
+        sh_mutex_lock(&queue->mutex);
         queue->total_cancelled++;
-        pthread_mutex_unlock(&queue->mutex);
+        sh_mutex_unlock(&queue->mutex);
     }
 }
 
@@ -388,7 +382,7 @@ void sh_workqueue_stats(ShWorkQueue *queue, ShWorkQueueStats *stats)
 {
     if (!queue || !stats) return;
 
-    pthread_mutex_lock(&queue->mutex);
+    sh_mutex_lock(&queue->mutex);
     stats->current_depth = queue->count;
     stats->max_capacity = queue->capacity;
     stats->total_pushed = queue->total_pushed;
@@ -397,16 +391,16 @@ void sh_workqueue_stats(ShWorkQueue *queue, ShWorkQueueStats *stats)
     stats->total_expired = queue->total_expired;
     stats->total_cancelled = queue->total_cancelled;
     stats->timeout_sec = queue->timeout_sec;
-    pthread_mutex_unlock(&queue->mutex);
+    sh_mutex_unlock(&queue->mutex);
 }
 
 size_t sh_workqueue_depth(ShWorkQueue *queue)
 {
     if (!queue) return 0;
 
-    pthread_mutex_lock(&queue->mutex);
+    sh_mutex_lock(&queue->mutex);
     size_t depth = queue->count;
-    pthread_mutex_unlock(&queue->mutex);
+    sh_mutex_unlock(&queue->mutex);
 
     return depth;
 }
@@ -415,9 +409,9 @@ int sh_workqueue_full(ShWorkQueue *queue)
 {
     if (!queue) return 1;
 
-    pthread_mutex_lock(&queue->mutex);
+    sh_mutex_lock(&queue->mutex);
     int full = (queue->count >= queue->capacity);
-    pthread_mutex_unlock(&queue->mutex);
+    sh_mutex_unlock(&queue->mutex);
 
     return full;
 }

@@ -9,7 +9,6 @@
 #include <stdlib.h>
 #include <string.h>
 #include <stdarg.h>
-#include <pthread.h>
 #include <time.h>
 #include <errno.h>
 
@@ -52,7 +51,28 @@
  * Thread safety: All access to metrics protected by s_mutex.
  * ============================================================================ */
 
-static pthread_mutex_t s_mutex = PTHREAD_MUTEX_INITIALIZER;
+/*
+ * PTHREAD_MUTEX_INITIALIZER has no portable PAL equivalent, and zeroed storage
+ * is not a substitute: glibc's static initialiser happens to be all zeroes,
+ * but macOS uses a signature value, so a zero-initialised pthread_mutex_t is
+ * not a valid mutex there. The portable form is lazy initialisation through
+ * sh_once(), which is why every lock goes through the helper below.
+ */
+static ShMutex s_mutex;
+static ShOnce s_mutex_once = SH_ONCE_INIT;
+
+static void metrics_mutex_init(void) {
+    sh_mutex_init(&s_mutex);
+}
+
+static void metrics_lock(void) {
+    sh_once(&s_mutex_once, metrics_mutex_init);
+    sh_mutex_lock(&s_mutex);
+}
+
+static void metrics_unlock(void) {
+    sh_mutex_unlock(&s_mutex);
+}
 static ShMetricsConfig s_config = SH_METRICS_CONFIG_DEFAULT;
 static int s_initialized = 0;
 
@@ -137,7 +157,7 @@ static void send_statsd(const char *metric) {
  * ============================================================================ */
 
 int sh_metrics_init(const ShMetricsConfig *config) {
-    pthread_mutex_lock(&s_mutex);
+    metrics_lock();
 
     if (config) {
         s_config = *config;
@@ -160,7 +180,7 @@ int sh_metrics_init(const ShMetricsConfig *config) {
     s_max_metrics = s_config.max_metrics > 0 ? s_config.max_metrics : 1000;
     s_metrics = calloc(s_max_metrics, sizeof(ShMetric));
     if (!s_metrics) {
-        pthread_mutex_unlock(&s_mutex);
+        metrics_unlock();
         return -1;
     }
     s_num_metrics = 0;
@@ -171,12 +191,12 @@ int sh_metrics_init(const ShMetricsConfig *config) {
     }
 
     s_initialized = 1;
-    pthread_mutex_unlock(&s_mutex);
+    metrics_unlock();
     return 0;
 }
 
 void sh_metrics_shutdown(void) {
-    pthread_mutex_lock(&s_mutex);
+    metrics_lock();
 
     /* Flush pending metrics */
     if (s_statsd_socket != SH_INVALID_SOCKET) {
@@ -189,7 +209,7 @@ void sh_metrics_shutdown(void) {
     s_num_metrics = 0;
     s_initialized = 0;
 
-    pthread_mutex_unlock(&s_mutex);
+    metrics_unlock();
 }
 
 /* ============================================================================
@@ -276,7 +296,7 @@ void sh_metrics_counter_inc_tags(const char *name, int64_t value,
     char tag_str[256];
     format_tags_array(tag_str, sizeof(tag_str), tags, num_tags);
 
-    pthread_mutex_lock(&s_mutex);
+    metrics_lock();
 
     ShMetric *m = find_or_create_metric(name, tag_str, SH_METRIC_COUNTER);
     if (m) {
@@ -300,7 +320,7 @@ void sh_metrics_counter_inc_tags(const char *name, int64_t value,
         send_statsd(statsd_msg);
     }
 
-    pthread_mutex_unlock(&s_mutex);
+    metrics_unlock();
 }
 
 void sh_metrics_counter_inc(const char *name, int64_t value, ...) {
@@ -338,7 +358,7 @@ void sh_metrics_gauge_set_tags(const char *name, double value,
     char tag_str[256];
     format_tags_array(tag_str, sizeof(tag_str), tags, num_tags);
 
-    pthread_mutex_lock(&s_mutex);
+    metrics_lock();
 
     ShMetric *m = find_or_create_metric(name, tag_str, SH_METRIC_GAUGE);
     if (m) {
@@ -362,7 +382,7 @@ void sh_metrics_gauge_set_tags(const char *name, double value,
         send_statsd(statsd_msg);
     }
 
-    pthread_mutex_unlock(&s_mutex);
+    metrics_unlock();
 }
 
 void sh_metrics_gauge_set(const char *name, double value, ...) {
@@ -388,14 +408,14 @@ void sh_metrics_gauge_inc(const char *name, double delta, ...) {
     format_tags(tag_str, sizeof(tag_str), args);
     va_end(args);
 
-    pthread_mutex_lock(&s_mutex);
+    metrics_lock();
 
     ShMetric *m = find_or_create_metric(name, tag_str, SH_METRIC_GAUGE);
     if (m) {
         m->value.gauge += delta;
     }
 
-    pthread_mutex_unlock(&s_mutex);
+    metrics_unlock();
 }
 
 /* ============================================================================
@@ -409,7 +429,7 @@ void sh_metrics_histogram_observe_tags(const char *name, double value,
     char tag_str[256];
     format_tags_array(tag_str, sizeof(tag_str), tags, num_tags);
 
-    pthread_mutex_lock(&s_mutex);
+    metrics_lock();
 
     ShMetric *m = find_or_create_metric(name, tag_str, SH_METRIC_HISTOGRAM);
     if (m) {
@@ -442,7 +462,7 @@ void sh_metrics_histogram_observe_tags(const char *name, double value,
         send_statsd(statsd_msg);
     }
 
-    pthread_mutex_unlock(&s_mutex);
+    metrics_unlock();
 }
 
 void sh_metrics_histogram_observe(const char *name, double value, ...) {
@@ -495,10 +515,10 @@ void sh_metrics_timer_observe(ShMetricsTimer timer, const char *name, ...) {
  * ============================================================================ */
 
 char *sh_metrics_prometheus_output(void) {
-    pthread_mutex_lock(&s_mutex);
+    metrics_lock();
 
     if (!s_initialized || !s_metrics) {
-        pthread_mutex_unlock(&s_mutex);
+        metrics_unlock();
         return NULL;
     }
 
@@ -506,7 +526,7 @@ char *sh_metrics_prometheus_output(void) {
     size_t buf_size = s_num_metrics * 512 + 1024;
     char *output = malloc(buf_size);
     if (!output) {
-        pthread_mutex_unlock(&s_mutex);
+        metrics_unlock();
         return NULL;
     }
 
@@ -601,7 +621,7 @@ char *sh_metrics_prometheus_output(void) {
         }
     }
 
-    pthread_mutex_unlock(&s_mutex);
+    metrics_unlock();
     return output;
 }
 
@@ -616,17 +636,17 @@ void sh_metrics_flush_statsd(void) {
 const ShMetric *sh_metrics_get(const char *name, const char *tags) {
     if (!s_initialized || !s_metrics || !name) return NULL;
 
-    pthread_mutex_lock(&s_mutex);
+    metrics_lock();
 
     for (int i = 0; i < s_num_metrics; i++) {
         if (strcmp(s_metrics[i].name, name) == 0 &&
             strcmp(s_metrics[i].tags, tags ? tags : "") == 0) {
-            pthread_mutex_unlock(&s_mutex);
+            metrics_unlock();
             return &s_metrics[i];
         }
     }
 
-    pthread_mutex_unlock(&s_mutex);
+    metrics_unlock();
     return NULL;
 }
 
