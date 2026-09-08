@@ -814,7 +814,7 @@ curl -sI http://localhost:8081/tiles/14/8529/5974.mvt | grep ETag
 | miniz | `vendor/miniz/` | PNG compression |
 | Font assets | `clayshards/fonts/` | ui-font.json, ui-font.png |
 
-## Keel Migration — Phase 5 of 6
+## Keel Migration — Phase 5 of 6 (✅ Complete)
 
 **Completed for Carta.** `carta/api` runs on Keel v3.
 

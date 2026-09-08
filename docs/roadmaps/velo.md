@@ -743,7 +743,7 @@ GET /api/v1/route?from=...&to=...&profile=truck
 - [ ] Routes validated against known truck GPS traces
 - [ ] API accepts truck dimensions
 
-## Keel Migration — Phase 4 of 6
+## Keel Migration — Phase 4 of 6 (✅ Complete)
 
 **Completed for Velo.** `velo/api` runs on Keel v3.
 
@@ -804,7 +804,8 @@ GET and POST were cross-checked on the same inputs: `foot`+`shortest` returns
 "No route found" on both, confirming the JSON path and the query path agree
 rather than one silently mis-parsing.
 
-### Remaining
+### Status: Complete
 
-Locus and Carta remain to port. The legacy `shared/src/sh_httpserver.c` will be
-deleted once the last server is on Keel.
+All six servers are on Keel v3; the legacy `shared/src/sh_httpserver.c` has
+been removed. See `docs/roadmaps/infrastructure.md` for the cross-cutting
+completion record.

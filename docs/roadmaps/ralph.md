@@ -310,7 +310,7 @@ For deep-dive documentation, see [docs/internals/](../internals/):
 | `ralph/include/detect.h` | Problem structure detection |
 | `docs/archive/ralph-roadmap-pre-r4.md` | Full historical roadmap (3,977 lines) |
 
-## Keel Migration — Phase 2 of 6
+## Keel Migration — Phase 2 of 6 (✅ Complete)
 
 **Completed for Ralph.** `ralph/api` runs on Keel v3.
 
@@ -367,7 +367,8 @@ That said, JSON status case is inconsistent *across modules*: Ralph is
 lowercase while FuelWise and Surge are uppercase. Worth settling one way, but
 it is an API-contract decision touching documented behaviour, not a cleanup.
 
-### Remaining
+### Status: Complete
 
-Velo, Locus, Carta and FuelWise remain to port. The legacy
-`shared/src/sh_httpserver.c` will be deleted once the last server is on Keel.
+All six servers are on Keel v3; the legacy `shared/src/sh_httpserver.c` has
+been removed. See `docs/roadmaps/infrastructure.md` for the cross-cutting
+completion record.
