@@ -3,9 +3,9 @@
  */
 
 #include "sh_worker_pool.h"
+#include "sh_pal.h"
 #include <stdlib.h>
 #include <string.h>
-#include <pthread.h>
 
 #ifdef _WIN32
 #include <windows.h>
@@ -19,7 +19,10 @@
 
 typedef struct {
     int id;
-    pthread_t thread;
+    ShThread thread;
+    /* ShThread is opaque storage, not a scalar, so it cannot double as its own
+     * "is this slot live" flag the way a pthread_t was being used here. */
+    int joined;
 } Worker;
 
 struct ShWorkerPool {
@@ -113,7 +116,7 @@ ShWorkerPool *sh_worker_pool_create(int num_workers, const ShWorkerPoolConfig *c
     pool->num_workers = 0;
     for (int i = 0; i < num_workers; i++) {
         pool->workers[i].id = i;
-        if (pthread_create(&pool->workers[i].thread, NULL, worker_thread_fn, pool) != 0) {
+        if (sh_thread_create(&pool->workers[i].thread, worker_thread_fn, pool) != 0) {
             /* Failed to create thread - stop here */
             break;
         }
@@ -146,10 +149,12 @@ void sh_worker_pool_join(ShWorkerPool *pool)
 {
     if (!pool) return;
 
+    /* Slots [0, num_workers) are exactly the threads that started: creation
+     * stops at the first failure and only counts successes. */
     for (int i = 0; i < pool->num_workers; i++) {
-        if (pool->workers[i].thread) {
-            pthread_join(pool->workers[i].thread, NULL);
-            pool->workers[i].thread = 0;
+        if (!pool->workers[i].joined) {
+            sh_thread_join(&pool->workers[i].thread, NULL);
+            pool->workers[i].joined = 1;
         }
     }
 }
