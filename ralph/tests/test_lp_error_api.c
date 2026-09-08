@@ -6,6 +6,7 @@
 #include <string.h>
 
 #include "ralph_lp.h"
+#include "test_tmp.h"
 #include "ralph_mip.h"
 
 static int tests_run = 0;
@@ -138,7 +139,11 @@ static void test_tls_io_open_failure_maps_error(void) {
 
     ASSERT_INT_EQ(ralph_lp_clear_error(NULL), 0,
                   "tls-io: clear TLS error succeeds");
-    basis = ralph_lp_read_basis_file("/tmp/ralph_missing_basis_file.bas");
+    char missing_path[320];
+    ASSERT_TRUE(ralph_tmp_path(missing_path, sizeof(missing_path),
+                               "ralph_missing_basis_file.bas") != NULL,
+                "tls-io: resolved a temp path for the missing-basis check");
+    basis = ralph_lp_read_basis_file(missing_path);
     ASSERT_TRUE(basis == NULL, "tls-io: read basis fails for missing file");
     ASSERT_INT_EQ(ralph_lp_get_last_error(NULL, &err), 0,
                   "tls-io: TLS last error available");

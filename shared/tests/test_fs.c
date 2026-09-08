@@ -52,7 +52,18 @@ static void rmdir_r(const char *path)
     (void)system(cmd); /* OK for test cleanup only */
 }
 
-/* Base temp directory for tests */
+/*
+ * Base temp directory for tests.
+ *
+ * This suite creates its own tree with sh_mkdirs(), so a literal "/tmp" is
+ * safe here even on Windows, where a mingw binary reads it as "C:\\tmp".
+ *
+ * Be aware of the side effect: running this suite CREATES C:\\tmp. Ralph tests
+ * used to write to literal /tmp paths of their own and passed on CI only
+ * because this suite ran earlier in the same job and made the directory for
+ * them. They now go through sh_pal_temp_dir(); see ralph/tests/test_tmp.h.
+ * Do not add a new test that leans on this happening.
+ */
 #define TEST_DIR "/tmp/otto_test_fs"
 
 /* ============================================================================

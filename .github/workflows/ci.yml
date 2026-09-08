@@ -350,7 +350,6 @@ jobs:
           install: >-
             make
             mingw-w64-ucrt-x86_64-gcc
-            mingw-w64-ucrt-x86_64-glpk
 
       - name: Build and run the PAL tests
         run: make -C shared test-pal
@@ -374,21 +373,17 @@ jobs:
       # a fuelwise link that had never been tried on Windows. Surge's own LDFLAGS
       # had the same hole, found the moment this step existed.
       #
-      # These ran `test-transport` rather than `test` until the full suites were
-      # tried on Windows, which found three more portability defects in the
-      # FuelWise bench harness alone: setenv() (POSIX-only, now sh_pal_setenv),
-      # a link missing -lbcrypt -lws2_32 (the same hole as #63, in a second
-      # Makefile), and a glpsol command line quoted with single quotes, which
-      # cmd.exe does not treat as quoting. `test-transport` would never have
-      # compiled any of it. glpk is installed above because the FuelWise
-      # regression harness compares Ralph's MILP objectives against glpsol --
-      # running that on Windows is a real check on Ralph's numerics, not just
-      # on whether the code compiles.
+      # The slow halves of both suites live in Windows Suites below; what stays
+      # here is what gives fast feedback. FuelWise's unit suite is 2s and its
+      # bench harness is a minute; Surge's transport test is instant and
+      # test_surge is five minutes of actual solving.
       - name: Build and test FuelWise
-        run: make -C fuelwise test
+        run: |
+          make -C fuelwise test-transport
+          make -C fuelwise test-unit
 
       - name: Build and test Surge
-        run: make -C surge test
+        run: make -C surge test-transport
 
       # Servers only build here -- their suites drive a live HTTP server with
       # curl, which is a bigger CI surface than this job needs today. Building
@@ -462,6 +457,66 @@ jobs:
           make -C velo/api
           make -C carta/api
           make -C locus/api
+
+  # ==========================================================================
+  # Windows Suites
+  #
+  # The two Windows suites that are slow enough to be worth waiting for
+  # separately, so Windows Core stays fast feedback rather than a ten-minute
+  # gate on every push.
+  #
+  # Where the time went, from the Windows Core run on #68 (620s total):
+  #
+  #   Build and test Surge          338s
+  #   Build and test Ralph           66s
+  #   Build and test FuelWise        65s
+  #   Build the API servers          54s
+  #   toolchain setup + checkout     49s
+  #   everything else                48s
+  #
+  # Of that Surge step, test_surge is ~297s on its own -- it is the 18k-line
+  # suite and it actually solves. The other four Surge binaries together run
+  # in under 1.5s. Of the FuelWise step, the bench regression is most of it.
+  #
+  # So this split is not "move the slow-looking thing": it moves the two
+  # measured costs, which takes Windows Core to roughly three minutes and lets
+  # it drop the glpk package, since only the bench harness shells out to
+  # glpsol.
+  # ==========================================================================
+  windows-suites:
+    name: Windows Suites
+    runs-on: windows-latest
+
+    defaults:
+      run:
+        shell: msys2 {0}
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Set up MSYS2 + UCRT64 toolchain
+        uses: msys2/setup-msys2@v2
+        with:
+          msystem: UCRT64
+          update: false
+          install: >-
+            make
+            mingw-w64-ucrt-x86_64-gcc
+            mingw-w64-ucrt-x86_64-glpk
+
+      # The full Surge suite. Windows Core runs its transport test, which is
+      # the invariant; this is the solver behaviour.
+      - name: Build and test Surge
+        run: make -C surge test
+
+      # The FuelWise benchmark regression compares Ralph's MILP objectives
+      # against glpsol. Running that on Windows checks Ralph's numerics under a
+      # different libm and compiler, not merely that the code compiles.
+      - name: Build and run the FuelWise bench regression
+        run: make -C fuelwise test-bench
 
   # ==========================================================================
   # Sanitizers

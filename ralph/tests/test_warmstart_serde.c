@@ -6,6 +6,7 @@
 #include <stdlib.h>
 #include <math.h>
 #include "ralph_test_mod_api.h"
+#include "test_tmp.h"
 
 static int tests_run = 0;
 static int tests_passed = 0;
@@ -71,8 +72,12 @@ static RalphModel* build_mip_model(void) {
 }
 
 int main(void) {
-    const char *basis_file = "/tmp/ralph_basis_v1.chk";
-    const char *mip_file = "/tmp/ralph_mipstart_v1.chk";
+    char basis_buf[320], mip_buf[320];
+    const char *basis_file = ralph_tmp_path(basis_buf, sizeof(basis_buf),
+                                            "ralph_basis_v1.chk");
+    const char *mip_file = ralph_tmp_path(mip_buf, sizeof(mip_buf),
+                                          "ralph_mipstart_v1.chk");
+    ASSERT(basis_file && mip_file, "Resolved temp paths for the checkpoints");
 
     /* Basis serialization round-trip */
     {
