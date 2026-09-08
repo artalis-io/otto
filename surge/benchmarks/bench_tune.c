@@ -23,7 +23,7 @@
 #include "sh_arena.h"
 
 #include <math.h>
-#include <pthread.h>
+#include "sh_pal.h"
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -237,7 +237,7 @@ static void print_tune_params_json(FILE *fp, const SGTuneParams *p);
 
 typedef struct {
     FILE *fp;                  /* Append handle (NULL = no checkpoint) */
-    pthread_mutex_t mutex;     /* Protects fp writes */
+    ShMutex mutex;             /* Protects fp writes */
     /* Loaded state from existing checkpoint */
     int tier_done[7];          /* 1 = tier fully completed */
     SGTuneParams tier_best[7]; /* Best params from each completed tier */
@@ -253,7 +253,7 @@ typedef struct {
 
 static void cp_init(CheckpointState *cp) {
     memset(cp, 0, sizeof(*cp));
-    pthread_mutex_init(&cp->mutex, NULL);
+    sh_mutex_init(&cp->mutex);
     for (int i = 0; i < 7; i++)
         sg_tune_params_default(&cp->tier_best[i]);
 }
@@ -263,14 +263,14 @@ static void cp_free(CheckpointState *cp) {
     free(cp->cached_tier);
     free(cp->cached_idx);
     free(cp->cached_results);
-    pthread_mutex_destroy(&cp->mutex);
+    sh_mutex_destroy(&cp->mutex);
 }
 
 /* Write one JSONL line for a result (thread-safe) */
 static void cp_write_result(CheckpointState *cp, int tier, int idx,
                             const TuneResult *r, const TuneInstance *instances) {
     if (!cp->fp) return;
-    pthread_mutex_lock(&cp->mutex);
+    sh_mutex_lock(&cp->mutex);
 
     fprintf(cp->fp, "{\"type\":\"result\",\"tier\":%d,\"idx\":%d,"
             "\"score\":%.6f,\"avg_vgap\":%.6f,\"avg_dgap\":%.6f,"
@@ -287,7 +287,7 @@ static void cp_write_result(CheckpointState *cp, int tier, int idx,
     fprintf(cp->fp, "]}\n");
     fflush(cp->fp);
 
-    pthread_mutex_unlock(&cp->mutex);
+    sh_mutex_unlock(&cp->mutex);
 }
 
 static void cp_write_baseline(CheckpointState *cp, const TuneResult *r) {
@@ -467,7 +467,7 @@ typedef struct {
     int cached_count;         /* pre-filled from checkpoint */
     int current_tier;
     CheckpointState *checkpoint;
-    pthread_mutex_t mutex;
+    ShMutex mutex;
 } TuneWorkContext;
 
 static void *tune_worker(void *arg) {
@@ -475,17 +475,17 @@ static void *tune_worker(void *arg) {
 
     for (;;) {
         int idx;
-        pthread_mutex_lock(&wctx->mutex);
+        sh_mutex_lock(&wctx->mutex);
         idx = wctx->next_config++;
-        pthread_mutex_unlock(&wctx->mutex);
+        sh_mutex_unlock(&wctx->mutex);
 
         if (idx >= wctx->total_configs) break;
 
         /* Skip if already loaded from checkpoint */
         if (wctx->results[idx].valid) {
-            pthread_mutex_lock(&wctx->mutex);
+            sh_mutex_lock(&wctx->mutex);
             wctx->done_count++;
-            pthread_mutex_unlock(&wctx->mutex);
+            sh_mutex_unlock(&wctx->mutex);
             continue;
         }
 
@@ -500,7 +500,7 @@ static void *tune_worker(void *arg) {
                             &wctx->results[idx], wctx->instances);
         }
 
-        pthread_mutex_lock(&wctx->mutex);
+        sh_mutex_lock(&wctx->mutex);
         wctx->done_count++;
         if (wctx->cached_count > 0) {
             fprintf(stderr, "\r  [%d/%d] evaluated (%d cached)",
@@ -509,7 +509,7 @@ static void *tune_worker(void *arg) {
             fprintf(stderr, "\r  [%d/%d] configs evaluated",
                     wctx->done_count, wctx->total_configs);
         }
-        pthread_mutex_unlock(&wctx->mutex);
+        sh_mutex_unlock(&wctx->mutex);
     }
     return NULL;
 }
@@ -521,7 +521,7 @@ static void evaluate_configs_parallel(const TuneInstance *instances, int num_ins
                                       int num_threads, TuneResult *results,
                                       int current_tier, CheckpointState *checkpoint) {
     TuneWorkContext wctx;
-    pthread_t *threads;
+    ShThread *threads;
     int i;
     int cached = 0;
 
@@ -551,9 +551,9 @@ static void evaluate_configs_parallel(const TuneInstance *instances, int num_ins
     wctx.cached_count = cached;
     wctx.current_tier = current_tier;
     wctx.checkpoint = checkpoint;
-    pthread_mutex_init(&wctx.mutex, NULL);
+    sh_mutex_init(&wctx.mutex);
 
-    threads = (pthread_t *)calloc((size_t)num_threads, sizeof(*threads));
+    threads = (ShThread *)calloc((size_t)num_threads, sizeof(*threads));
     if (!threads) {
         /* Fallback to single-threaded */
         for (i = 0; i < num_configs; i++) {
@@ -572,15 +572,15 @@ static void evaluate_configs_parallel(const TuneInstance *instances, int num_ins
     }
 
     for (i = 0; i < num_threads; i++) {
-        pthread_create(&threads[i], NULL, tune_worker, &wctx);
+        sh_thread_create(&threads[i], tune_worker, &wctx);
     }
     for (i = 0; i < num_threads; i++) {
-        pthread_join(threads[i], NULL);
+        sh_thread_join(&threads[i], NULL);
     }
     fprintf(stderr, "\n");
 
     free(threads);
-    pthread_mutex_destroy(&wctx.mutex);
+    sh_mutex_destroy(&wctx.mutex);
 }
 
 /* ---- Result Sorting ---- */

@@ -6,7 +6,7 @@
 
 #include <stdio.h>
 #include <string.h>
-#include <pthread.h>
+#include "sh_pal.h"
 #include <stdatomic.h>
 
 #include "../src/lp_external_adapter.h"
@@ -323,8 +323,8 @@ static void test_multi_provider_lifecycle_and_solve(void) {
 
 static void test_thread_safety_registry_churn(void) {
     AdapterThreadHarness harness;
-    pthread_t writer_thread;
-    pthread_t reader_thread;
+    ShThread writer_thread;
+    ShThread reader_thread;
 
     memset(&harness, 0, sizeof(harness));
     memset(&harness.dummy_solver, 0, sizeof(harness.dummy_solver));
@@ -339,16 +339,16 @@ static void test_thread_safety_registry_churn(void) {
     harness.adapter.solve = thread_safe_solve;
 
     lp_external_adapter_unregister_all();
-    ASSERT_INT_EQ(pthread_create(&writer_thread, NULL, adapter_thread_writer, &harness),
+    ASSERT_INT_EQ(sh_thread_create(&writer_thread, adapter_thread_writer, &harness),
                   0,
                   "thread-safety: create writer thread");
-    ASSERT_INT_EQ(pthread_create(&reader_thread, NULL, adapter_thread_reader, &harness),
+    ASSERT_INT_EQ(sh_thread_create(&reader_thread, adapter_thread_reader, &harness),
                   0,
                   "thread-safety: create reader thread");
 
-    ASSERT_INT_EQ(pthread_join(writer_thread, NULL), 0,
+    ASSERT_INT_EQ(sh_thread_join(&writer_thread, NULL), 0,
                   "thread-safety: join writer thread");
-    ASSERT_INT_EQ(pthread_join(reader_thread, NULL), 0,
+    ASSERT_INT_EQ(sh_thread_join(&reader_thread, NULL), 0,
                   "thread-safety: join reader thread");
     ASSERT_INT_EQ(atomic_load(&harness.failed), 0,
                   "thread-safety: concurrent registry churn stable");

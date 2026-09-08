@@ -6,7 +6,7 @@
 
 #include <stdio.h>
 #include <string.h>
-#include <pthread.h>
+#include "sh_pal.h"
 #include <stdatomic.h>
 
 #include "ralph_test_mod_api.h"
@@ -283,8 +283,8 @@ static void test_public_adapter_provider_dispatch(void) {
 
 static void test_public_adapter_thread_safety(void) {
     PublicThreadHarness harness;
-    pthread_t writer_thread;
-    pthread_t reader_thread;
+    ShThread writer_thread;
+    ShThread reader_thread;
 
     memset(&harness, 0, sizeof(harness));
     harness.iterations = 2000;
@@ -298,16 +298,16 @@ static void test_public_adapter_thread_safety(void) {
     harness.adapter.solve = public_thread_solve;
 
     ralph_lp_external_unregister_all_adapters();
-    ASSERT_INT_EQ(pthread_create(&writer_thread, NULL, public_thread_writer, &harness),
+    ASSERT_INT_EQ(sh_thread_create(&writer_thread, public_thread_writer, &harness),
                   0,
                   "public thread-safety: create writer thread");
-    ASSERT_INT_EQ(pthread_create(&reader_thread, NULL, public_thread_reader, &harness),
+    ASSERT_INT_EQ(sh_thread_create(&reader_thread, public_thread_reader, &harness),
                   0,
                   "public thread-safety: create reader thread");
 
-    ASSERT_INT_EQ(pthread_join(writer_thread, NULL), 0,
+    ASSERT_INT_EQ(sh_thread_join(&writer_thread, NULL), 0,
                   "public thread-safety: join writer thread");
-    ASSERT_INT_EQ(pthread_join(reader_thread, NULL), 0,
+    ASSERT_INT_EQ(sh_thread_join(&reader_thread, NULL), 0,
                   "public thread-safety: join reader thread");
     ASSERT_INT_EQ(atomic_load(&harness.failed), 0,
                   "public thread-safety: registry/capability queries stable");
