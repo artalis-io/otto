@@ -12,7 +12,7 @@
 #include <stdlib.h>
 #include <stdint.h>
 #include <string.h>
-#include <pthread.h>
+#include "sh_pal.h"
 
 /* SIMD support detection */
 #if defined(__SSE2__) && !defined(__EMSCRIPTEN__)
@@ -33,10 +33,10 @@ static const uint8_t PNG_SIGNATURE[8] = {137, 80, 78, 71, 13, 10, 26, 10};
  * ============================================================================ */
 
 static uint32_t crc32_table[256];
-static pthread_once_t crc32_table_once = PTHREAD_ONCE_INIT;
+static ShOnce crc32_table_once = SH_ONCE_INIT;
 
 /*
- * Initialize CRC32 lookup table (thread-safe via pthread_once).
+ * Initialize CRC32 lookup table (thread-safe via sh_once).
  */
 static void make_crc32_table(void)
 {
@@ -54,7 +54,7 @@ static void make_crc32_table(void)
 
 static uint32_t crc32(const uint8_t *data, size_t len)
 {
-    pthread_once(&crc32_table_once, make_crc32_table);
+    sh_once(&crc32_table_once, make_crc32_table);
 
     uint32_t c = 0xffffffff;
     for (size_t i = 0; i < len; i++) {
@@ -283,13 +283,12 @@ size_t ct_encode_png_ex(const uint8_t *pixels, int width, int height,
  * Render Context Cache (Thread-Safe with Proper Cleanup)
  * ============================================================================ */
 
-#include <pthread.h>
 
 /*
  * Thread-local render context cache for common tile sizes.
  * Avoids malloc/free overhead for repeated tile generation.
  *
- * Uses pthread_key with destructor for automatic cleanup when threads exit.
+ * Uses sh_tls with a destructor for automatic cleanup when threads exit.
  * This prevents memory leaks in applications with short-lived threads.
  */
 #define CT_CACHE_SIZE_256 0
@@ -301,8 +300,8 @@ typedef struct {
     CTRenderContext *contexts[CT_CACHE_COUNT];
 } CTThreadCache;
 
-static pthread_key_t ct_cache_key;
-static pthread_once_t ct_cache_key_once = PTHREAD_ONCE_INIT;
+static ShTls ct_cache_key;
+static ShOnce ct_cache_key_once = SH_ONCE_INIT;
 
 /* Destructor called automatically when thread exits */
 static void ct_cache_destructor(void *data)
@@ -320,18 +319,18 @@ static void ct_cache_destructor(void *data)
 
 static void ct_cache_key_init(void)
 {
-    pthread_key_create(&ct_cache_key, ct_cache_destructor);
+    sh_tls_create(&ct_cache_key, ct_cache_destructor);
 }
 
 static CTThreadCache *get_thread_cache(void)
 {
-    pthread_once(&ct_cache_key_once, ct_cache_key_init);
+    sh_once(&ct_cache_key_once, ct_cache_key_init);
 
-    CTThreadCache *cache = pthread_getspecific(ct_cache_key);
+    CTThreadCache *cache = sh_tls_get(&ct_cache_key);
     if (!cache) {
         cache = calloc(1, sizeof(CTThreadCache));
         if (cache) {
-            pthread_setspecific(ct_cache_key, cache);
+            sh_tls_set(&ct_cache_key, cache);
         }
     }
     return cache;
