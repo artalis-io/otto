@@ -16,7 +16,10 @@
 
 #include <stddef.h>
 #include <stdint.h>
-#include "ct_types.h"  /* For CTPBFContext, CTLODConfig */
+#include "ct_types.h"  /* CTPBFContext, CTRenderOptions */
+#include "ct_lod.h"    /* CTLODConfig -- not in ct_types.h, despite the
+                        * comment that used to sit on the line above */
+#include "sh_api.h"    /* ShApiRequest/ShApiResponse/ShApiHandler */
 #include "ct_metatile.h"
 
 #ifdef __cplusplus
@@ -223,56 +226,36 @@ CTMetatileLabelCache *ct_api_get_metatile_cache(CTAPIContext *ctx);
  * ============================================================================ */
 
 /*
- * API request structure.
- *
- * The path should be the URI path (e.g., "/tiles/14/8529/5974.png").
- * The query string is optional and should NOT include the leading '?'.
- */
-typedef struct {
-    const char *path;       /* URI path (required) */
-    const char *query;      /* Query string without '?' (optional, NULL ok) */
-    const char *host;       /* Host header for TileJSON URLs (optional) */
-} CTAPIRequest;
-
-/*
- * API response structure.
- *
- * The body is heap-allocated and must be freed by the caller using
- * ct_api_response_free() or free().
- */
-typedef struct {
-    int status_code;        /* HTTP status code (200, 400, 404, 500, etc.) */
-    const char *content_type; /* MIME type (static string, do not free) */
-    uint8_t *body;          /* Response body (caller must free) */
-    size_t body_len;        /* Response body length in bytes */
-} CTAPIResponse;
-
-/*
  * Handle an API request.
  *
- * Routes the request based on path and generates the appropriate response.
- * The response body is heap-allocated - caller must free with
- * ct_api_response_free().
+ * This is a plain ShApiHandler: the request and response are the shared types
+ * from sh_api.h, so any transport can drive it -- Keel, the WASM bridge, a
+ * direct call in a test. Carta used to declare its own CTAPIRequest and
+ * CTAPIResponse here, which meant the WASM demo went through this function
+ * while the HTTP server ran a second, separately maintained copy in
+ * api/src/main.c. Same product surface, two implementations, one of them
+ * already missing charset support. Now there is one.
+ *
+ * `ctx` is a CTAPIContext*, passed as void* so the signature matches
+ * ShApiHandler exactly and the compiler checks that for us.
  *
  * Supported paths:
- *   /tiles/{z}/{x}/{y}.png  - PNG tile
- *   /tiles/{z}/{x}/{y}.mvt  - MVT tile
- *   /tiles.json             - TileJSON metadata
- *   /api/v1/health          - Health check
- *   /api/v1/stats           - PBF statistics
+ *   /tiles/{z}/{x}/{y}.png        - PNG tile
+ *   /tiles/{z}/{x}/{y}.mvt|.pbf   - MVT tile
+ *   /tiles/{z}/{x}/{y}.txt|.ascii - ASCII tile (?width,height,invert,color,charset)
+ *   /tiles.json                   - TileJSON metadata (uses req->host)
+ *   /api/v1/health                - Health check
+ *   /api/v1/stats                 - PBF statistics
  *
- * Returns 0 on success (response filled in), -1 on internal error.
- */
-int ct_api_handle(CTAPIContext *ctx,
-                  const CTAPIRequest *req,
-                  CTAPIResponse *resp);
-
-/*
- * Free response body.
+ * Returns 0 when the response has been filled in -- including error responses,
+ * since a 404 is a successful handling -- and non-zero only on an internal
+ * failure that leaves the response unusable.
  *
- * Safe to call with NULL response or NULL body.
+ * Free the response with sh_api_response_free().
  */
-void ct_api_response_free(CTAPIResponse *resp);
+int ct_api_handle(void *ctx,
+                  const ShApiRequest *req,
+                  ShApiResponse *resp);
 
 /* ============================================================================
  * Individual Handlers (for advanced use)

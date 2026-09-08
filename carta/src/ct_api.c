@@ -479,17 +479,11 @@ static int parse_tile_path(const char *path, int *z, int *x, int *y, char *ext) 
  * Request Handling
  * ============================================================================ */
 
-void ct_api_response_free(CTAPIResponse *resp) {
-    if (resp && resp->body) {
-        free(resp->body);
-        resp->body = NULL;
-        resp->body_len = 0;
-    }
-}
+int ct_api_handle(void *ctx_void,
+                  const ShApiRequest *req,
+                  ShApiResponse *resp) {
+    CTAPIContext *ctx = (CTAPIContext *)ctx_void;
 
-int ct_api_handle(CTAPIContext *ctx,
-                  const CTAPIRequest *req,
-                  CTAPIResponse *resp) {
     if (!ctx || !req || !resp || !req->path) return -1;
 
     /* Initialize response */
@@ -534,27 +528,18 @@ int ct_api_handle(CTAPIContext *ctx,
         char ext[8];
 
         if (parse_tile_path(req->path, &z, &x, &y, ext) != 0) {
-            resp->status_code = 400;
-            resp->body = (uint8_t *)strdup("Invalid tile path format");
-            resp->body_len = resp->body ? strlen((char *)resp->body) : 0;
-            return 0;
+            return sh_api_response_error(resp, 400, "Invalid tile path format");
         }
 
         /* Validate zoom */
         if (z < ctx->min_zoom || z > ctx->max_zoom) {
-            resp->status_code = 400;
-            resp->body = (uint8_t *)strdup("Zoom level out of range");
-            resp->body_len = resp->body ? strlen((char *)resp->body) : 0;
-            return 0;
+            return sh_api_response_error(resp, 400, "Zoom level out of range");
         }
 
         /* Validate coordinates */
         int max_coord = (int)sh_tiles_per_axis(z);
         if (x < 0 || x >= max_coord || y < 0 || y >= max_coord) {
-            resp->status_code = 400;
-            resp->body = (uint8_t *)strdup("Tile coordinates out of range");
-            resp->body_len = resp->body ? strlen((char *)resp->body) : 0;
-            return 0;
+            return sh_api_response_error(resp, 400, "Tile coordinates out of range");
         }
 
         /* Generate tile based on extension */
@@ -564,9 +549,7 @@ int ct_api_handle(CTAPIContext *ctx,
                 resp->status_code = 200;
                 resp->content_type = "image/png";
             } else {
-                resp->status_code = 500;
-                resp->body = (uint8_t *)strdup("Tile generation failed");
-                resp->body_len = resp->body ? strlen((char *)resp->body) : 0;
+                return sh_api_response_error(resp, 500, "Tile generation failed");
             }
         } else if (strcmp(ext, "mvt") == 0 || strcmp(ext, "pbf") == 0) {
             resp->body = ct_api_generate_mvt(ctx, z, x, y, &resp->body_len);
@@ -574,9 +557,7 @@ int ct_api_handle(CTAPIContext *ctx,
                 resp->status_code = 200;
                 resp->content_type = "application/vnd.mapbox-vector-tile";
             } else {
-                resp->status_code = 500;
-                resp->body = (uint8_t *)strdup("Tile generation failed");
-                resp->body_len = resp->body ? strlen((char *)resp->body) : 0;
+                return sh_api_response_error(resp, 500, "Tile generation failed");
             }
         } else if (strcmp(ext, "txt") == 0 || strcmp(ext, "ascii") == 0) {
             resp->body = (uint8_t *)ct_api_generate_ascii(ctx, z, x, y,
@@ -585,22 +566,15 @@ int ct_api_handle(CTAPIContext *ctx,
                 resp->status_code = 200;
                 resp->content_type = "text/plain; charset=utf-8";
             } else {
-                resp->status_code = 500;
-                resp->body = (uint8_t *)strdup("ASCII tile generation failed");
-                resp->body_len = resp->body ? strlen((char *)resp->body) : 0;
+                return sh_api_response_error(resp, 500, "ASCII tile generation failed");
             }
         } else {
-            resp->status_code = 400;
-            resp->body = (uint8_t *)strdup("Unknown tile format. Use .png, .mvt, or .txt");
-            resp->body_len = resp->body ? strlen((char *)resp->body) : 0;
+            return sh_api_response_error(resp, 400, "Unknown tile format. Use .png, .mvt, or .txt");
         }
 
         return 0;
     }
 
     /* 404 for unknown paths */
-    resp->status_code = 404;
-    resp->body = (uint8_t *)strdup("Not found");
-    resp->body_len = resp->body ? strlen((char *)resp->body) : 0;
-    return 0;
+    return sh_api_response_error(resp, 404, "Not found");
 }
