@@ -8,7 +8,7 @@
 #include <stdint.h>
 #include <string.h>
 #include <math.h>
-#include <pthread.h>
+#include "sh_pal.h"
 
 /* ct_latlon_to_mercator is now inline in ct_tile.h */
 
@@ -77,10 +77,10 @@ void ct_latlon_to_tile_pixel(double lat, double lon, CTTileCoord tile,
 #define MERCATOR_LAT_RANGE (MERCATOR_LAT_MAX - MERCATOR_LAT_MIN)
 
 static double mercator_lut[MERCATOR_LUT_SIZE];
-static pthread_once_t mercator_lut_once = PTHREAD_ONCE_INIT;
+static ShOnce mercator_lut_once = SH_ONCE_INIT;
 
 /*
- * Initialize the Mercator lookup table (thread-safe via pthread_once).
+ * Initialize the Mercator lookup table (thread-safe via sh_once).
  * Index i corresponds to lat = MIN + i * RANGE / (SIZE - 1)
  * so index 0 = MIN, index SIZE-1 = MAX.
  */
@@ -95,7 +95,7 @@ static void mercator_lut_init_impl(void)
 
 static void mercator_lut_init(void)
 {
-    pthread_once(&mercator_lut_once, mercator_lut_init_impl);
+    sh_once(&mercator_lut_once, mercator_lut_init_impl);
 }
 
 /*
