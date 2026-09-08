@@ -511,7 +511,7 @@ static void handle_route(KlHttpRequest *req, KlHttpResponse *res, void *ud) {
  * Middleware
  * ============================================================================ */
 
-/* CORS preflight, before rate limiting (as in the mongoose server). */
+/* CORS preflight, before rate limiting. */
 static int mw_preflight(KlHttpRequest *req, KlHttpResponse *res, void *ud) {
     (void)ud;
     sh_trace_from_headers(sh_kl_trace_header_getter, req);

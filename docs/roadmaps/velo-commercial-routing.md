@@ -23,7 +23,7 @@ This document provides a comprehensive analysis of what is required to upgrade t
 ```
 ┌─────────────────────────────────────────────────────────────────────┐
 │                        API Layer (main.c)                          │
-│  HTTP REST via Mongoose │ Rate Limiting │ Work Queue │ CORS        │
+│  HTTP REST via Keel     │ Rate Limiting │ Work Queue │ CORS        │
 ├─────────────────────────────────────────────────────────────────────┤
 │                     Core Routing (vl_route.c)                       │
 │  Dijkstra │ Bidir Dijkstra │ A* │ Bidir A* │ ALT (Landmarks)       │

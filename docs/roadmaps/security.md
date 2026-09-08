@@ -21,7 +21,7 @@ OTTO supports multiple deployment modes with different security/performance trad
 │  │   Transport   │ ───────────────► │    Worker Pool      │    │
 │  │   (Role B)    │                  │   (Roles P + C)     │    │
 │  │               │ ◄─────────────── │                     │    │
-│  │   Mongoose    │   sh_completion  │  parse → compute    │    │
+│  │     Keel      │   sh_completion  │  parse → compute    │    │
 │  │  rate limit   │                  │  sh_worker_pool     │    │
 │  └───────────────┘                  └─────────────────────┘    │
 │                                              │                  │

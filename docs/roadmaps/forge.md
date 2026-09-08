@@ -554,7 +554,7 @@ curl http://localhost:8084/api/v1/jobs/fg_abc123/result
 ## Dependencies
 
 - **SQLite**: Embedded database (public domain, will be vendored)
-- **mongoose**: HTTP/WebSocket server (already vendored)
+- **Keel**: HTTP server (vendor/keel submodule)
 - **pthreads**: Thread pool for dispatcher (standard POSIX)
 
 No external services required. Everything runs in a single process with SQLite for persistence.

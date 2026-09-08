@@ -3,7 +3,7 @@
  *
  * Five OTTO servers hand-rolled the same suspend/pool/resume dance. It is
  * subtle in ways that are not obvious from Keel's examples, and both real
- * bugs found during the Mongoose->Keel migration lived in it: a SEGV from
+ * bugs found during the Keel migration lived in it: a SEGV from
  * suspending inside middleware, and a hang from a no-op on_resume. This file
  * is that protocol, written once, so a handler never has to know it exists.
  *

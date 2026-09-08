@@ -173,10 +173,10 @@ typedef struct {
 | `locus/include/locus.h` | Public API |
 | `locus/api/` | REST API server |
 
-## Keel Migration (Mongoose Removal) — Phase 6 of 6
+## Keel Migration — Phase 6 of 6
 
-**Completed for Locus.** `locus/api` no longer links Mongoose, and with it the
-last Mongoose dependency in an OTTO API server is gone.
+**Completed for Locus.** `locus/api` runs on Keel v3, and with it the last OTTO
+API server has moved off the legacy HTTP server.
 
 Rationale and shared context: `docs/roadmaps/surge.md` (Phase 1).
 
@@ -214,15 +214,9 @@ With Locus done, every API server has its own standalone gating job, so the
 no longer depend on `test-c`, which means an unrelated failure there can no
 longer silently skip API coverage.
 
-## Mongoose removal: what is left
+## Legacy HTTP server removal
 
-All six servers are ported. Still to delete, once these PRs land:
-
-- `shared/src/sh_httpserver.c` + `shared/include/sh_httpserver.h` (41 `mg_`
-  call sites) — nothing references them any more.
-- `vendor/mongoose/` (`mongoose.c`, `mongoose.h`, `CLAUDE.md`).
-- The Mongoose entry in `docs/ARCHITECTURE.md`'s vendor table and any
-  remaining references in module `CLAUDE.md` files.
-
-That removal is deliberately a separate change: it is pure deletion, and it is
-easier to review once every server has landed on Keel.
+Completed — all six servers run on Keel v3, and the legacy
+`shared/src/sh_httpserver.c` + `shared/include/sh_httpserver.h` and the retired
+vendored HTTP server have been removed, along with their entries in
+`docs/ARCHITECTURE.md`'s vendor table and module `CLAUDE.md` files.

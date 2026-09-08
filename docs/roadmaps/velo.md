@@ -743,21 +743,21 @@ GET /api/v1/route?from=...&to=...&profile=truck
 - [ ] Routes validated against known truck GPS traces
 - [ ] API accepts truck dimensions
 
-## Keel Migration (Mongoose Removal) — Phase 4 of 6
+## Keel Migration — Phase 4 of 6
 
-**Completed for Velo.** `velo/api` no longer links Mongoose.
+**Completed for Velo.** `velo/api` runs on Keel v3.
 
-Rationale and shared context: `docs/roadmaps/surge.md` (Phase 1). Mongoose is
-`GPL-2.0-only or commercial`, incompatible with OTTO's AGPL-3.0 and
+Rationale and shared context: `docs/roadmaps/surge.md` (Phase 1). The previous
+server was `GPL-2.0-only or commercial`, incompatible with OTTO's AGPL-3.0 and
 unsublicensable for the commercial tier; Keel is MIT.
 
 ### The largest port so far
 
-Velo had 100 `mg_` call sites — and unlike Surge, Ralph and FuelWise it used
-Mongoose for *parsing*, not just transport:
+Velo had 100 legacy HTTP call sites — and unlike Surge, Ralph and FuelWise the
+old server was used for *parsing*, not just transport:
 
-| Mongoose | Replacement |
-|----------|-------------|
+| Previous behavior | Keel replacement |
+|-------------------|------------------|
 | `mg_http_var(query, "k")` | `sh_query_get_str()` (`shared/include/sh_query.h`) |
 | `mg_json_get_str(body, "$.k")` | `sh_json_parse()` + `sh_json_get_path()` + `sh_json_as_string()` |
 | `mg_json_get_bool(body, "$.k", &b)` | `sh_json_as_bool()` |
@@ -806,6 +806,5 @@ rather than one silently mis-parsing.
 
 ### Remaining
 
-Locus (63 `mg_` call sites), Carta (56), plus
-`shared/src/sh_httpserver.c` (41). Delete that file and `vendor/mongoose/`
-once the last server is ported.
+Locus and Carta remain to port. The legacy `shared/src/sh_httpserver.c` will be
+deleted once the last server is on Keel.

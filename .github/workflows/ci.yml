@@ -132,7 +132,7 @@ jobs:
           make surge
           make test-surge
 
-      # Surge API is served by Keel (vendor/keel submodule), not mongoose
+      # Surge API is served by Keel (vendor/keel submodule)
       - name: Build Surge API
         run: |
           make surge-api
