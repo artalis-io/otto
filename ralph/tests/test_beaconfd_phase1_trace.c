@@ -3,6 +3,7 @@
 #include <string.h>
 #include <unistd.h>
 #include "ralph_test_mod_api.h"
+#include "test_tmp.h"
 
 #define EXPECTED_TRACE_SIG 0x2629fb3048395f1cULL
 
@@ -79,7 +80,12 @@ int main(void) {
     ralph_test_set_int_param(model, "max_iterations", 4000);
     ralph_test_set_int_param(model, "trace_phase1", 1);
 
-    char trace_path[] = "/tmp/ralph_phase1_trace_XXXXXX";
+    char trace_path[320];
+    if (!ralph_tmp_path(trace_path, sizeof(trace_path),
+                        "ralph_phase1_trace_XXXXXX")) {
+        fprintf(stderr, "could not resolve a temp directory\n");
+        return 1;
+    }
     int trace_fd = mkstemp(trace_path);
     TEST(trace_fd >= 0, "Created trace temp file");
     if (trace_fd < 0) {

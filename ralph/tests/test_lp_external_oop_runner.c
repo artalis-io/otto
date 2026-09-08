@@ -8,6 +8,8 @@
 #include <unistd.h>
 #include <sys/stat.h>
 
+#include "test_tmp.h"
+
 #include "../src/lp_external_oop.h"
 
 static int tests_run = 0;
@@ -36,7 +38,7 @@ static int write_script(const char *body, char *path, size_t path_size) {
     FILE *f;
     if (!body || !path || path_size < 32) return -1;
 
-    snprintf(path, path_size, "/tmp/ralph_oop_runner_XXXXXX");
+    if (!ralph_tmp_path(path, path_size, "ralph_oop_runner_XXXXXX")) return -1;
     fd = mkstemp(path);
     if (fd < 0) return -1;
     f = fdopen(fd, "w");
