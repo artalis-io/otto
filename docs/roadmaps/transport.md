@@ -246,6 +246,65 @@ code compiles.
 and want a downloaded PBF, which is a bigger CI surface than this job needs; the
 Windows job builds all six servers, which is what was actually unknown.
 
+### Two Windows jobs, not one
+
+Widening the job took it to ten minutes, which is too long to sit in front of
+every push. The split that followed is worth recording because the obvious
+guess was wrong.
+
+The suspicion was the FuelWise bench harness -- it is the part that shells out
+to an external solver, so it *looks* expensive. The step timings from the run
+said otherwise:
+
+| step | time |
+|---|---|
+| Build and test Surge | 338s |
+| Build and test Ralph | 66s |
+| Build and test FuelWise | 65s |
+| Build the API servers | 54s |
+| toolchain setup + checkout | 49s |
+| everything else | 48s |
+
+Surge was more than half the job, and inside it `test_surge` alone is ~297s:
+it is an 18k-line suite that actually solves. The other four Surge binaries
+together run in under 1.5 seconds. The bench harness was ~40s.
+
+So the cut is by *measured* cost rather than by which step sounds heavy:
+
+- **Windows Core** -- the PAL, every library suite, FuelWise's transport and
+  unit suites, Surge's transport test, and a build of all six servers. Roughly
+  three minutes, and it no longer installs `glpk`, because only the bench
+  harness needs `glpsol`.
+- **Windows Suites** -- the full Surge suite and the FuelWise bench regression.
+
+They run in parallel, so the Windows coverage still completes in about the time
+Surge takes, but Core answers in three minutes.
+
+`fuelwise/Makefile` grew `test-unit` and `test-bench` for this; `test-regression`
+is now the two together, so `make -C fuelwise test` is unchanged and Linux CI
+did not move.
+
+### What the split itself found
+
+Splitting turned three Ralph tests red -- `test_lp.c`'s LP and MPS round-trips
+-- that had passed in the single job an hour earlier. Nothing about Ralph had
+changed. The tests wrote to literal `/tmp/test_write.lp` and `/tmp/roundtrip.mps`,
+which for a mingw binary means `C:\tmp\...`, and on the runner that directory
+existed *only because `shared/tests/test_fs.c` had created it earlier in the
+same job* as a side effect of its own `sh_mkdirs` test.
+
+So the single job had been green by accident: one suite was silently providing
+a directory another suite depended on. Ordering them into separate jobs removed
+the accident, which is the correct outcome and the reason to write it down --
+a job split is supposed to be behaviour-preserving, and when it is not, the
+thing it broke was already broken.
+
+All twelve literal `/tmp` paths across six Ralph test files now go through
+`ralph/tests/test_tmp.h`, a two-line helper over `sh_pal_temp_dir()`. The files
+land in `%TEMP%` on Windows and `$TMPDIR` or `/tmp` on POSIX. `test_fs.c` keeps
+its literal path -- it creates its own tree, so it is correct on both platforms
+-- but now carries a comment saying not to lean on the side effect.
+
 ## Invariant to enforce in CI
 
 A test that links every module's handler against `sh_transport_direct` **with no Keel

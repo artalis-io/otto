@@ -11,6 +11,8 @@
 #include <unistd.h>
 #include <sys/stat.h>
 
+#include "test_tmp.h"
+
 #include "ralph_test_mod_api.h"
 
 static int tests_run = 0;
@@ -48,7 +50,7 @@ static int write_mock_script(const char *script_body, char *path, size_t path_si
     FILE *f;
 
     if (!script_body || !path || path_size < 32) return -1;
-    snprintf(path, path_size, "/tmp/ralph_glpk_mock_XXXXXX");
+    if (!ralph_tmp_path(path, path_size, "ralph_glpk_mock_XXXXXX")) return -1;
     fd = mkstemp(path);
     if (fd < 0) return -1;
     f = fdopen(fd, "w");
