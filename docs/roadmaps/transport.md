@@ -238,11 +238,18 @@ Three things in the migration were not mechanical:
   `pthread_t` as its own "is this slot live" flag (`if (thread)`,
   `thread = 0`). That needed an explicit `joined` field.
 
-**Still on pthreads:** `carta/` (four files, including the public
-`ct_metatile.h`), `ralph/src/lp_external_adapter.c` and its three tests --
-this is the recursive-mutex caller the header already anticipates -- plus
-`carta/api/src/main.c` and `surge/benchmarks/bench_tune.c`. Those keep
-`-lpthread` alive on Windows; `shared/` no longer needs it.
+`carta/` followed, and turned up a lock that was lying about itself.
+`ct_metatile.c` held a `pthread_rwlock_t`, but all three of its lock sites took
+the **write** lock -- there was never an `rdlock`, because even the lookup path
+mutates when a cache hit moves its entry to the head of the LRU list. An rwlock
+only ever write-locked is a mutex with extra machinery, so it is now an
+`ShMutex`, and the PAL does not have to grow an `ShRwLock` for a lock nothing
+shares. `libcarta.a` has no undefined pthread symbols left either.
+
+**Still on pthreads:** `ralph/src/lp_external_adapter.c` and its three tests --
+the recursive-mutex caller this header already anticipates -- and
+`surge/benchmarks/bench_tune.c`. Those keep `-lpthread` alive on Windows;
+`shared/` and `carta/` no longer need it.
 
 ### Header strategy
 

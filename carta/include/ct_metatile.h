@@ -5,7 +5,7 @@
  * grid, then caches the result.  Sub-tiles extract their portion from the
  * cached metatile so labels are consistent across tile boundaries.
  *
- * The cache is thread-safe (pthread_rwlock) and uses LRU eviction.
+ * The cache is thread-safe (sh_pal mutex) and uses LRU eviction.
  */
 
 #ifndef CT_METATILE_H

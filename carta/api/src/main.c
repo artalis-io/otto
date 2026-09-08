@@ -27,7 +27,7 @@
 #include <strings.h>  /* For strcasecmp */
 #include <ctype.h>
 #include <unistd.h>   /* For sleep, sysconf */
-#include <pthread.h>
+#include "sh_pal.h"
 #include <sys/time.h> /* For gettimeofday */
 #include <errno.h>    /* For ETIMEDOUT */
 #include <keel/keel.h>
@@ -101,7 +101,23 @@ static CTTileCache *s_png_cache = NULL;
 static CTTileCache *s_mvt_cache = NULL;
 
 /* Cache mutex for thread-safe access */
-static pthread_mutex_t s_cache_mutex = PTHREAD_MUTEX_INITIALIZER;
+/*
+ * Lazily initialised: the PAL has no static mutex initialiser, and zeroed
+ * storage is not a substitute (glibc's PTHREAD_MUTEX_INITIALIZER is all
+ * zeroes, macOS uses a signature value). Every lock goes through cache_lock().
+ */
+static ShMutex s_cache_mutex;
+static ShOnce s_cache_mutex_once = SH_ONCE_INIT;
+
+static void cache_mutex_init(void) { sh_mutex_init(&s_cache_mutex); }
+
+static void cache_lock(void)
+{
+    sh_once(&s_cache_mutex_once, cache_mutex_init);
+    sh_mutex_lock(&s_cache_mutex);
+}
+
+static void cache_unlock(void) { sh_mutex_unlock(&s_cache_mutex); }
 
 /* Rate limiter instance (uses shared library) */
 static ShRateLimiter *s_rate_limiter = NULL;
@@ -226,12 +242,12 @@ static int carta_cached_handler(void *ctx, const ShApiRequest *req,
     if (cache) {
         const uint8_t *hit_data;
         size_t hit_size;
-        pthread_mutex_lock(&s_cache_mutex);
+        cache_lock();
         if (ct_cache_get(cache, z, x, y, &hit_data, &hit_size)) {
             uint8_t *copy = malloc(hit_size);
             if (copy) {
                 memcpy(copy, hit_data, hit_size);
-                pthread_mutex_unlock(&s_cache_mutex);
+                cache_unlock();
                 memset(resp, 0, sizeof(*resp));
                 resp->status_code = 200;
                 resp->content_type = (cache == s_png_cache)
@@ -242,7 +258,7 @@ static int carta_cached_handler(void *ctx, const ShApiRequest *req,
                 return 0;
             }
         }
-        pthread_mutex_unlock(&s_cache_mutex);
+        cache_unlock();
     }
 
     gettimeofday(&t0, NULL);
@@ -250,9 +266,9 @@ static int carta_cached_handler(void *ctx, const ShApiRequest *req,
     gettimeofday(&t1, NULL);
 
     if (rc == 0 && cache && resp->status_code == 200 && resp->body) {
-        pthread_mutex_lock(&s_cache_mutex);
+        cache_lock();
         ct_cache_put(cache, z, x, y, resp->body, resp->body_len);
-        pthread_mutex_unlock(&s_cache_mutex);
+        cache_unlock();
     }
 
     /* Adaptive capacity is a transport concern: it retunes THIS server's rate
@@ -795,20 +811,20 @@ static void handle_mvt_tile(KlHttpRequest *req, KlHttpResponse *res, void *ud,
     if (s_mvt_cache) {
         const uint8_t *cached_data;
         size_t cached_size;
-        pthread_mutex_lock(&s_cache_mutex);
+        cache_lock();
         int hit = ct_cache_get(s_mvt_cache, z, x, y, &cached_data, &cached_size);
         if (hit) {
             /* Copy data before unlocking - cache data may be evicted */
             uint8_t *copy = malloc(cached_size);
             if (copy) {
                 memcpy(copy, cached_data, cached_size);
-                pthread_mutex_unlock(&s_cache_mutex);
+                cache_unlock();
                 send_tile_cors(res, req, "application/vnd.mapbox-vector-tile", copy, cached_size);
                 free(copy);
                 return;
             }
         }
-        pthread_mutex_unlock(&s_cache_mutex);
+        cache_unlock();
     }
 
     submit_render_work(req, res, ud, z, x, y, "mvt", timer, "endpoint:mvt");
@@ -859,19 +875,19 @@ static void handle_png_tile(KlHttpRequest *req, KlHttpResponse *res, void *ud,
     if (s_png_cache) {
         const uint8_t *cached_data;
         size_t cached_size;
-        pthread_mutex_lock(&s_cache_mutex);
+        cache_lock();
         int hit = ct_cache_get(s_png_cache, z, x, y, &cached_data, &cached_size);
         if (hit) {
             uint8_t *copy = malloc(cached_size);
             if (copy) {
                 memcpy(copy, cached_data, cached_size);
-                pthread_mutex_unlock(&s_cache_mutex);
+                cache_unlock();
                 send_tile_cors(res, req, "image/png", copy, cached_size);
                 free(copy);
                 return;
             }
         }
-        pthread_mutex_unlock(&s_cache_mutex);
+        cache_unlock();
     }
 
     submit_render_work(req, res, ud, z, x, y, "png", timer, "endpoint:png");
@@ -1553,7 +1569,7 @@ int main(int argc, char *argv[]) {
     ct_lod_free(&s_lod_config);
     ct_api_free(s_api_ctx);
     ct_free_pbf_context(s_pbf_ctx);
-    pthread_mutex_destroy(&s_cache_mutex);
+    sh_mutex_destroy(&s_cache_mutex);
 
     SH_LOG_INFO("Server shutdown complete");
     sh_metrics_shutdown();

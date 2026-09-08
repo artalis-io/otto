@@ -18,7 +18,7 @@
 #include <math.h>
 
 #ifndef __EMSCRIPTEN__
-#include <pthread.h>
+#include "sh_pal.h"
 #endif
 
 /* ============================================================================
@@ -46,7 +46,16 @@ struct CTMetatileLabelCache {
     CTMetatileCacheEntry *lru_tail;
 
 #ifndef __EMSCRIPTEN__
-    pthread_rwlock_t lock;
+    /*
+     * A mutex, not a reader/writer lock, which is what this was.
+     *
+     * Every one of the three lock sites took the WRITE lock -- there was never
+     * an rdlock -- because even the lookup path mutates: a cache hit moves the
+     * entry to the head of the LRU list. An rwlock that is only ever
+     * write-locked is a mutex with extra machinery, so this now says so, and
+     * the PAL does not have to grow an ShRwLock for a lock nothing shares.
+     */
+    ShMutex lock;
 #endif
 };
 
@@ -134,7 +143,7 @@ CTMetatileLabelCache *ct_metatile_cache_create(size_t max_entries)
     cache->max_entries = max_entries;
 
 #ifndef __EMSCRIPTEN__
-    pthread_rwlock_init(&cache->lock, NULL);
+    sh_mutex_init(&cache->lock);
 #endif
 
     return cache;
@@ -157,7 +166,7 @@ void ct_metatile_cache_free(CTMetatileLabelCache *cache)
     free(cache->buckets);
 
 #ifndef __EMSCRIPTEN__
-    pthread_rwlock_destroy(&cache->lock);
+    sh_mutex_destroy(&cache->lock);
 #endif
 
     free(cache);
@@ -172,7 +181,7 @@ const CTMetatileLabelResult *ct_metatile_cache_get(
     size_t bucket = mt_bucket(key);
 
 #ifndef __EMSCRIPTEN__
-    pthread_rwlock_wrlock(&cache->lock);
+    sh_mutex_lock(&cache->lock);
 #endif
 
     CTMetatileCacheEntry *entry = cache->buckets[bucket];
@@ -181,7 +190,7 @@ const CTMetatileLabelResult *ct_metatile_cache_get(
             entry->result->refcount++;
             lru_touch(cache, entry);
 #ifndef __EMSCRIPTEN__
-            pthread_rwlock_unlock(&cache->lock);
+            sh_mutex_unlock(&cache->lock);
 #endif
             return entry->result;
         }
@@ -189,7 +198,7 @@ const CTMetatileLabelResult *ct_metatile_cache_get(
     }
 
 #ifndef __EMSCRIPTEN__
-    pthread_rwlock_unlock(&cache->lock);
+    sh_mutex_unlock(&cache->lock);
 #endif
 
     return NULL;
@@ -201,14 +210,14 @@ void ct_metatile_cache_release(
     if (!cache || !result) return;
 
 #ifndef __EMSCRIPTEN__
-    pthread_rwlock_wrlock(&cache->lock);
+    sh_mutex_lock(&cache->lock);
 #endif
 
     /* Safe cast: we only decrement refcount */
     ((CTMetatileLabelResult *)result)->refcount--;
 
 #ifndef __EMSCRIPTEN__
-    pthread_rwlock_unlock(&cache->lock);
+    sh_mutex_unlock(&cache->lock);
 #endif
 }
 
@@ -225,7 +234,7 @@ void ct_metatile_cache_put(
     size_t bucket = mt_bucket(key);
 
 #ifndef __EMSCRIPTEN__
-    pthread_rwlock_wrlock(&cache->lock);
+    sh_mutex_lock(&cache->lock);
 #endif
 
     /* Check if already exists (race: another thread computed it) */
@@ -234,7 +243,7 @@ void ct_metatile_cache_put(
         if (existing->key == key) {
             /* Already cached — discard the new result */
 #ifndef __EMSCRIPTEN__
-            pthread_rwlock_unlock(&cache->lock);
+            sh_mutex_unlock(&cache->lock);
 #endif
             ct_metatile_result_free(result);
             return;
@@ -264,7 +273,7 @@ void ct_metatile_cache_put(
     CTMetatileCacheEntry *entry = calloc(1, sizeof(*entry));
     if (!entry) {
 #ifndef __EMSCRIPTEN__
-        pthread_rwlock_unlock(&cache->lock);
+        sh_mutex_unlock(&cache->lock);
 #endif
         ct_metatile_result_free(result);
         return;
@@ -288,7 +297,7 @@ void ct_metatile_cache_put(
     cache->num_entries++;
 
 #ifndef __EMSCRIPTEN__
-    pthread_rwlock_unlock(&cache->lock);
+    sh_mutex_unlock(&cache->lock);
 #endif
 
     /* Free evicted entries outside the lock */
