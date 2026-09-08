@@ -2,7 +2,7 @@
  * Locus API Server
  *
  * REST API for geocoding operations.
- * Uses mongoose for HTTP serving.
+ * Uses Keel for HTTP serving.
  *
  * Features:
  * - Rate limiting (per-IP token bucket)
@@ -409,7 +409,7 @@ static void handle_metrics(KlHttpRequest *req, KlHttpResponse *res, void *ud) {
  * Middleware
  * ============================================================================ */
 
-/* CORS preflight, before rate limiting (as in the mongoose server). */
+/* CORS preflight, before rate limiting. */
 static int mw_preflight(KlHttpRequest *req, KlHttpResponse *res, void *ud) {
     (void)ud;
     sh_trace_from_headers(sh_kl_trace_header_getter, req);

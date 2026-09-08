@@ -814,15 +814,15 @@ curl -sI http://localhost:8081/tiles/14/8529/5974.mvt | grep ETag
 | miniz | `vendor/miniz/` | PNG compression |
 | Font assets | `clayshards/fonts/` | ui-font.json, ui-font.png |
 
-## Keel Migration (Mongoose Removal) — Phase 5 of 6
+## Keel Migration — Phase 5 of 6
 
-**Completed for Carta.** `carta/api` no longer links Mongoose.
+**Completed for Carta.** `carta/api` runs on Keel v3.
 
 Rationale and shared context: `docs/roadmaps/surge.md` (Phase 1).
 
 ### The concurrency model collapsed
 
-Carta ran **N mongoose event-loop threads**, each with its own `mg_mgr`
+Carta ran **N event-loop threads**, each with its own `mg_mgr`
 listening on the same port via SO_REUSEPORT. That existed because every one of
 those threads blocked in `render_work_item_wait()` for the duration of a
 render — N loops was the only way to serve more than one tile at a time.
@@ -838,8 +838,8 @@ duplicated code paths collapsed into one. Net ~100 lines smaller.
 
 ### Transport replacements
 
-| Mongoose | Replacement |
-|----------|-------------|
+| Previous behavior | Keel replacement |
+|-------------------|------------------|
 | `mg_http_get_var()` | `sh_query_get_str()` |
 | `mg_http_get_header()` | `kl_http_request_header()` / `sh_kl_origin()` |
 | `mg_printf()` + `mg_send()` (tiles) | `kl_http_response_*` + `body_copy` |
@@ -852,8 +852,8 @@ from `kl_http_request_header(req, "If-None-Match")`.
 ### Static files
 
 `mg_http_serve_dir()` has no Keel equivalent, so `serve_static_file()` reads
-the file and responds. **It rejects any path containing `..`** — mongoose did
-that containment internally, and with Keel it is our job. Keel's own
+the file and responds. **It rejects any path containing `..`** — the previous
+server did that containment internally, and with Keel it is our job. Keel's own
 `examples/static_files.c` registers `"/*"` as a *route*, which cannot match
 (route patterns have no wildcard), so it was not usable as a model; static
 serving lives in `mw_fallback` alongside the `/tiles/` prefix and the 404.
@@ -885,7 +885,7 @@ Keel route params express the prefix: `/tiles/:z/:x/:y` matches
 `/tiles/14/8529/5975.mvt`, and `parse_tile_uri()` still reads the extension off
 the full path. `mw_fallback` keeps only synchronous work — static files, the
 JSON 404, and a 400 for `/tiles/` paths with the wrong segment count (which
-mongoose's prefix check used to answer).
+the previous server's prefix check used to answer).
 
 **Rule of thumb: anything that suspends must be a route; middleware may only
 answer synchronously.**
@@ -904,5 +904,5 @@ bugs instead.
 
 ### Remaining
 
-Locus (63 `mg_` call sites) is the last module, then
-`shared/src/sh_httpserver.c` (41) and `vendor/mongoose/` can be deleted.
+Locus is the last module to port, then the legacy
+`shared/src/sh_httpserver.c` can be deleted.

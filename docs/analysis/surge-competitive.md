@@ -260,7 +260,7 @@ License cost $50K+/year.
 | **Offline capable** | Y | Y | N | N | N (needs OSRM) | Y | Y | Y (needs GPU) |
 | **Source available** | Y (open) | Y (open) | N | N | Y (open) | Y (open) | N | N |
 | **JSON API** | Y | P (protobuf native) | Y | Y | Y | N | Y | Y |
-| **REST server** | Y (Mongoose) | N (build your own) | Y | Y (SaaS) | Y | N | Y | Y (cloud) |
+| **REST server** | Y (Keel) | N (build your own) | Y | Y (SaaS) | Y | N | Y | Y (cloud) |
 | **Python bindings** | Y (ctypes) | Y (native) | Y | Y (REST) | Y (REST) | N | Y | Y (native) |
 
 ---

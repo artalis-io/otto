@@ -245,7 +245,7 @@ GET  /api/v1/formats    - List supported input formats
 ralph/include/ralph_api.h      # Transport-agnostic API handler
 ralph/src/ralph_api.c          # API handler implementation
 ralph/src/ralph_parse_lp.c     # LP format parser
-ralph/api/src/main.c           # Mongoose wrapper (port 8084)
+ralph/api/src/main.c           # Keel HTTP wrapper (port 8084)
 ralph/wasm/ralph_wasm_api.c    # WASM wrapper
 ```
 
@@ -310,13 +310,13 @@ For deep-dive documentation, see [docs/internals/](../internals/):
 | `ralph/include/detect.h` | Problem structure detection |
 | `docs/archive/ralph-roadmap-pre-r4.md` | Full historical roadmap (3,977 lines) |
 
-## Keel Migration (Mongoose Removal) — Phase 2 of 6
+## Keel Migration — Phase 2 of 6
 
-**Completed for Ralph.** `ralph/api` no longer links Mongoose.
+**Completed for Ralph.** `ralph/api` runs on Keel v3.
 
-Rationale and the shared context are in `docs/roadmaps/surge.md` (Phase 1):
-Mongoose is `GPL-2.0-only or commercial`, which is incompatible with OTTO's
-AGPL-3.0 and unsublicensable for the commercial tier. Keel is MIT.
+Rationale and the shared context are in `docs/roadmaps/surge.md` (Phase 1): the
+previous server was `GPL-2.0-only or commercial`, which is incompatible with
+OTTO's AGPL-3.0 and unsublicensable for the commercial tier. Keel is MIT.
 
 ### Shape of the port
 
@@ -331,7 +331,7 @@ preserved exactly:
   `{"error":"Endpoint not found"}` rather than a transport-invented body. This
   is required because Keel route patterns have no wildcard (`*` is only special
   in middleware patterns) and Keel's built-in 404 is `text/plain` with no CORS.
-- CORS headers are the same four the mongoose server emitted on every response.
+- CORS headers are the same four the previous server emitted on every response.
 
 Ralph needs **no** `sh_keelserver.c` helpers — it uses neither `sh_cors`,
 `sh_metrics`, `sh_ratelimit` nor `sh_trace`. Its handlers are fully
@@ -369,6 +369,5 @@ it is an API-contract decision touching documented behaviour, not a cleanup.
 
 ### Remaining
 
-Velo (100 `mg_` call sites), Locus (63), Carta (56), FuelWise (47), plus
-`shared/src/sh_httpserver.c` (41). Delete that file and `vendor/mongoose/`
-once the last server is ported.
+Velo, Locus, Carta and FuelWise remain to port. The legacy
+`shared/src/sh_httpserver.c` will be deleted once the last server is on Keel.

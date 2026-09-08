@@ -123,7 +123,7 @@ For comparison:
 
 The C ABI means you can call Surge from literally anything: Python (ctypes/cffi), Node (ffi-napi), Go (cgo), Rust (bindgen), Java (JNI/Panama), Swift, Kotlin Native, WASM. The JSON API means you can also just send a JSON blob and get a JSON blob back — zero FFI needed.
 
-The transport-agnostic `sg_api_handle()` function already exists. The same handler works for HTTP, WASM, sockets, or direct function calls. A Mongoose-based REST API server following Otto's established pattern (as done for FuelWise) is ~600 lines of boilerplate using existing shared infrastructure (`sh_workqueue`, `sh_ratelimit`, `sh_metrics`, `sh_cors`, `sh_args`).
+The transport-agnostic `sg_api_handle()` function already exists. The same handler works for HTTP, WASM, sockets, or direct function calls. A Keel-based REST API server following Otto's established pattern (as done for FuelWise) is ~600 lines of boilerplate using existing shared infrastructure (`sh_workqueue`, `sh_ratelimit`, `sh_metrics`, `sh_cors`, `sh_args`).
 
 Language bindings are trivial given the JSON API — each binding is just a thin wrapper around "serialize JSON, call `sg_api_handle()`, deserialize JSON." The C ABI makes FFI mechanical, not architectural.
 
@@ -283,7 +283,7 @@ ALNS+SA is the right architecture for Surge's constraint portfolio. HGS is worth
 | Parallelism | B+ | C | B | B |
 | Community / ecosystem | D | B | A | B+ |
 
-Revised grades vs. initial assessment: Constraint richness A (compartments, precedence, request locking close all solver-layer gaps vs PTV/Ortec — Surge now exceeds OR-Tools on constraint breadth). Language bindings A- (Python + Node.js bindings exist and work; packaging/distribution remaining). REST API A (Mongoose-based server with rate limiting, work queue, Prometheus metrics, CORS). Parallelism B+ (independent runs + population-based search implemented).
+Revised grades vs. initial assessment: Constraint richness A (compartments, precedence, request locking close all solver-layer gaps vs PTV/Ortec — Surge now exceeds OR-Tools on constraint breadth). Language bindings A- (Python + Node.js bindings exist and work; packaging/distribution remaining). REST API A (Keel-based server with rate limiting, work queue, Prometheus metrics, CORS). Parallelism B+ (independent runs + population-based search implemented).
 
 ---
 
@@ -300,7 +300,7 @@ Revised grades vs. initial assessment: Constraint richness A (compartments, prec
 
 | Gap | Status | Notes |
 |-----|--------|-------|
-| ~~REST API server~~ | **Done** | Mongoose-based, rate limiting, work queue, Prometheus metrics, CORS. E2e test suite added. |
+| ~~REST API server~~ | **Done** | Keel-based, rate limiting, work queue, Prometheus metrics, CORS. E2e test suite added. |
 | ~~WASM build~~ | **Done** | Emscripten target compiles and runs. |
 | ~~Language bindings~~ | **Done** | Python (ctypes) + Node.js (ffi-napi) exist and work. PyPI/npm packaging remaining. |
 

@@ -116,12 +116,9 @@ static ShAdaptiveTracker *s_adaptive_tracker = NULL;
  * Render Request Context
  *
  * CONCURRENCY NOTE
- *   The mongoose server ran N event-loop threads, each with its own mg_mgr
- *   listening via SO_REUSEPORT, because every one of them blocked in
- *   render_work_item_wait() for the duration of a render. With KlAsyncOp the
- *   single Keel loop never blocks, so the multi-listener design is no longer
- *   needed: one event loop plus the render pool. --threads now sizes the
- *   render pool.
+ *   With KlAsyncOp the single Keel loop never blocks during a render, so no
+ *   multi-listener design is needed: one event loop plus the render pool.
+ *   --threads now sizes the render pool.
  * ============================================================================ */
 
 typedef struct {
@@ -997,7 +994,7 @@ static int serve_static_file(const KlHttpRequest *req, KlHttpResponse *res) {
  * Middleware and Routing
  * ============================================================================ */
 
-/* CORS preflight, before rate limiting (as in the mongoose server). */
+/* CORS preflight, before rate limiting. */
 static int mw_preflight(KlHttpRequest *req, KlHttpResponse *res, void *ud) {
     (void)ud;
     sh_trace_from_headers(sh_kl_trace_header_getter, req);
@@ -1072,8 +1069,8 @@ static int mw_fallback(KlHttpRequest *req, KlHttpResponse *res, void *ud) {
 
     /*
      * A /tiles/ path that did not match the route is malformed (too few or
-     * too many segments). The mongoose server answered 400 there; keep that
-     * rather than letting it fall through to the static handler.
+     * too many segments). Answer 400 there rather than letting it fall through
+     * to the static handler.
      */
     if (req->path_len > 7 && memcmp(req->path, "/tiles/", 7) == 0) {
         send_error_cors(res, req, 400, "Invalid tile URL format");
@@ -1461,8 +1458,7 @@ int main(int argc, char *argv[]) {
     }
 
     /*
-     * Render pool. --threads used to size the number of mongoose event-loop
-     * threads; with a non-blocking loop it sizes the render pool instead.
+     * Render pool. With a non-blocking loop, --threads sizes the render pool.
      */
     if (s_config.server.work_queue_enabled) {
         s_num_workers = s_config.render_workers > 0 ? s_config.render_workers

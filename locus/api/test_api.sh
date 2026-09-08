@@ -80,7 +80,7 @@ check "Search with no matches still returns results" "$RESP" '"results"'
 echo ""
 echo "=== Autocomplete ==="
 # Autocomplete returns a bare JSON array of suggestion strings, not an object
-# with a "results" key -- that is the shape the mongoose server returned too.
+# with a "results" key.
 RESP=$(curl -s -m 20 "http://127.0.0.1:$PORT/api/v1/autocomplete?q=Mon&limit=5")
 check "Autocomplete returns a JSON array" "$RESP" '^\['
 

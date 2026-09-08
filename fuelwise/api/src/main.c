@@ -8,10 +8,9 @@
  * Uses the transport-agnostic fw_api_handle() for core processing.
  *
  * Solves run on a Keel thread pool with the connection suspended via
- * KlAsyncOp, so the event loop keeps serving while a solve is in flight. The
- * previous mongoose server blocked the loop in sh_completion_wait(), which
- * serialized every request behind the running solve. See solve_on_resume()
- * for the one non-obvious part of the Keel async contract.
+ * KlAsyncOp, so the event loop keeps serving while a solve is in flight,
+ * rather than serializing every request behind the running solve. See
+ * solve_on_resume() for the one non-obvious part of the Keel async contract.
  *
  * Endpoints:
  *   GET  /api/v1/health         - Health check (bypasses queue + rate limit)
@@ -242,7 +241,7 @@ static void handle_optimize(KlHttpRequest *req, KlHttpResponse *res, void *ud) {
  * Middleware
  * ============================================================================ */
 
-/* CORS preflight, before rate limiting (as in the mongoose server). */
+/* CORS preflight, before rate limiting. */
 static int mw_preflight(KlHttpRequest *req, KlHttpResponse *res, void *ud) {
     (void)ud;
     sh_trace_from_headers(sh_kl_trace_header_getter, req);
@@ -447,7 +446,7 @@ int main(int argc, char *argv[]) {
     /*
      * Routes are method-specific, so a wrong method (e.g. GET /api/v1/solve)
      * makes kl_http_router_match() return 405 and mw_not_found answers with
-     * "Method not allowed" -- the same response the mongoose server gave.
+     * "Method not allowed".
      */
     kl_http_server_route(&server, "GET",  "/api/v1/health",   handle_health,   NULL, NULL);
     kl_http_server_route(&server, "GET",  "/api/v1/stats",    handle_stats,    NULL, NULL);

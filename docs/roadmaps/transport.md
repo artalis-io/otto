@@ -25,7 +25,7 @@ The abstraction is not missing. It is duplicated six times, and validated by six
 independent implementations. This work deletes five copies rather than inventing
 something new.
 
-The Mongoose to Keel migration confirmed the cost of not having it: the expensive part
+The migration to Keel v3 confirmed the cost of not having it: the expensive part
 was not swapping HTTP libraries, it was that each server hand-rolled the same async
 ownership protocol, and two of the migration's real bugs came from that duplication
 (the Carta SEGV from suspending inside middleware, and the `on_resume` hang).

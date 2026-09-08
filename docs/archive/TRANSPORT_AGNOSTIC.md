@@ -2,7 +2,7 @@
 
 ## 0. What This Means
 
-**OTTO APIs are transport-agnostic.** The core logic is pure C functions that take input and produce output. HTTP (Mongoose), WebAssembly, Unix sockets, embedded calls - these are all just thin wrappers over the same core.
+**OTTO APIs are transport-agnostic.** The core logic is pure C functions that take input and produce output. HTTP (Keel), WebAssembly, Unix sockets, embedded calls - these are all just thin wrappers over the same core.
 
 This is the backend equivalent of the [ClayShards Manifesto](../clayshards/clay-shards/MANIFESTO.md):
 
@@ -31,7 +31,7 @@ No HTTP. No request objects. No response writers. Just input → output.
 
 ### 2) Transport is a thin wrapper
 
-Mongoose HTTP is one transport:
+Keel HTTP is one transport:
 
 ```c
 static void handle_tile(struct mg_connection *c, struct mg_http_message *hm) {
@@ -90,7 +90,7 @@ They open it, click "Try it", and the real API runs locally.
 │  React UI │ CLI tool │ Browser demo │ Embedded system           │
 ├─────────────────────────────────────────────────────────────────┤
 │                    Transport Layer (thin)                        │
-│  Mongoose HTTP │ WASM+JS │ Unix socket │ Direct C call          │
+│  Keel HTTP     │ WASM+JS │ Unix socket │ Direct C call          │
 ├─────────────────────────────────────────────────────────────────┤
 │                    Core API (pure C)                             │
 │  carta_render_tile() │ vl_route() │ lc_search() │ fw_optimize() │
