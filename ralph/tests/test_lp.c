@@ -9,6 +9,7 @@
 #include <string.h>
 #include <math.h>
 #include "ralph_test_mod_api.h"
+#include "test_tmp.h"
 
 static int tests_passed = 0;
 static int tests_failed = 0;
@@ -206,14 +207,17 @@ static void test_write_lp(void) {
     ralph_test_set_con_name(model, 0, "sum");
 
     /* Write to file */
-    int ret = ralph_test_write_lp(model, "/tmp/test_write.lp");
+    char lp_path[320];
+    ASSERT(ralph_tmp_path(lp_path, sizeof(lp_path), "test_write.lp") != NULL,
+           "Resolved a temp path for the LP file");
+    int ret = ralph_test_write_lp(model, lp_path);
     ASSERT(ret == 0, "LP file written successfully");
 
     ralph_test_free(model);
 
     /* Read it back */
     RalphModel *model2 = ralph_test_create();
-    ret = ralph_test_read_lp(model2, "/tmp/test_write.lp");
+    ret = ralph_test_read_lp(model2, lp_path);
     ASSERT(ret == 0, "LP file read back successfully");
 
     ASSERT(ralph_test_get_num_vars(model2) == 3, "3 variables after round-trip");
@@ -244,12 +248,15 @@ static void test_roundtrip(void) {
     double obj1 = ralph_test_get_objval(model1);
 
     /* Write to temp file */
-    ret = ralph_test_write_lp(model1, "/tmp/roundtrip.lp");
+    char rt_path[320];
+    ASSERT(ralph_tmp_path(rt_path, sizeof(rt_path), "roundtrip.lp") != NULL,
+           "Resolved a temp path for the round-trip LP");
+    ret = ralph_test_write_lp(model1, rt_path);
     ASSERT(ret == 0, "LP file written");
 
     /* Read back */
     RalphModel *model2 = ralph_test_create();
-    ret = ralph_test_read_lp(model2, "/tmp/roundtrip.lp");
+    ret = ralph_test_read_lp(model2, rt_path);
     ASSERT(ret == 0, "LP file read back");
 
     /* Solve */
@@ -302,11 +309,14 @@ static void test_write_mps_roundtrip(void) {
     ASSERT(ralph_test_get_status(model1) == RALPH_STATUS_OPTIMAL, "Model 1 optimal");
     ASSERT_EQ_DBL(ralph_test_get_objval(model1), 8.0, "Model 1 objective = 8.0");
 
-    ASSERT(ralph_test_write_mps(model1, "/tmp/roundtrip.mps") == 0, "MPS file written");
+    char mps_path[320];
+    ASSERT(ralph_tmp_path(mps_path, sizeof(mps_path), "roundtrip.mps") != NULL,
+           "Resolved a temp path for the MPS file");
+    ASSERT(ralph_test_write_mps(model1, mps_path) == 0, "MPS file written");
 
     RalphModel *model2 = ralph_test_create();
     ASSERT(model2 != NULL, "Model 2 created");
-    ASSERT(ralph_test_read_mps(model2, "/tmp/roundtrip.mps") == 0, "MPS file read back");
+    ASSERT(ralph_test_read_mps(model2, mps_path) == 0, "MPS file read back");
 
     ASSERT(ralph_test_get_num_vars(model2) == 3, "Round-trip keeps 3 variables");
     ASSERT(ralph_test_get_num_cons(model2) == 2, "Round-trip keeps 2 constraints");
