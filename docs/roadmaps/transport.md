@@ -246,10 +246,37 @@ only ever write-locked is a mutex with extra machinery, so it is now an
 `ShMutex`, and the PAL does not have to grow an `ShRwLock` for a lock nothing
 shares. `libcarta.a` has no undefined pthread symbols left either.
 
-**Still on pthreads:** `ralph/src/lp_external_adapter.c` and its three tests --
-the recursive-mutex caller this header already anticipates -- and
-`surge/benchmarks/bench_tune.c`. Those keep `-lpthread` alive on Windows;
-`shared/` and `carta/` no longer need it.
+`ralph/` finished it. `lp_external_adapter.c` is the recursive-mutex caller
+this header names, and it is now the first user of `sh_mutex_init_recursive()`
+-- which on Windows is a CRITICAL_SECTION, because the plain mutex there is an
+SRWLOCK and SRWLOCK is not recursive. Its lock helper lost a failure branch in
+the process: `sh_once()` cannot fail, so the only way to end up without a
+usable mutex is an init that failed, which the existing `ready` flag already
+recorded.
+
+**Migration complete.** Every OTTO library reports zero undefined `pthread`
+symbols:
+
+| library | undefined pthread symbols |
+|---|---|
+| libshared.a | 0 |
+| libralph.a | 0 |
+| libcarta.a | 0 |
+| libvelo.a | 0 |
+| liblocus.a | 0 |
+| libsurge.a | 0 |
+| libfuelwise.a | 0 |
+
+The one file that cannot be verified this way is
+`surge/benchmarks/bench_tune.c`: `sg_bench_utils.h` includes `<glob.h>` and
+uses `dirent.d_type`/`DT_DIR`, so the tuning benchmark does not build on
+Windows at all and nothing in CI builds it on any platform. Its migration was
+checked by syntax-only compilation against stub headers; the errors that remain
+are in `sg_bench_utils.h`, not in the migrated code.
+
+The Makefiles still pass `-lpthread`, and should: on POSIX the PAL's own
+backend is implemented with pthreads. What changed is that nothing *above* the
+PAL asks for it any more.
 
 ### Header strategy
 

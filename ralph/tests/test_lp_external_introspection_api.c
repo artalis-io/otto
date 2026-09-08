@@ -6,7 +6,7 @@
 
 #include <stdio.h>
 #include <string.h>
-#include <pthread.h>
+#include "sh_pal.h"
 #include <stdatomic.h>
 
 #include "ralph_test_mod_api.h"
@@ -311,8 +311,8 @@ static void* intro_reader_thread(void *arg) {
 
 static void test_introspection_thread_safety(void) {
     IntroThreadHarness harness;
-    pthread_t writer;
-    pthread_t reader;
+    ShThread writer;
+    ShThread reader;
 
     memset(&harness, 0, sizeof(harness));
     harness.iterations = 2000;
@@ -332,13 +332,13 @@ static void test_introspection_thread_safety(void) {
         build_adapter(&harness.clp_fx, RALPH_LP_EXTERNAL_PROVIDER_CLP, "ThreadCLP");
 
     ralph_lp_external_unregister_all_adapters();
-    ASSERT_INT_EQ(pthread_create(&writer, NULL, intro_writer_thread, &harness), 0,
+    ASSERT_INT_EQ(sh_thread_create(&writer, intro_writer_thread, &harness), 0,
                   "thread-safety: create writer");
-    ASSERT_INT_EQ(pthread_create(&reader, NULL, intro_reader_thread, &harness), 0,
+    ASSERT_INT_EQ(sh_thread_create(&reader, intro_reader_thread, &harness), 0,
                   "thread-safety: create reader");
-    ASSERT_INT_EQ(pthread_join(writer, NULL), 0,
+    ASSERT_INT_EQ(sh_thread_join(&writer, NULL), 0,
                   "thread-safety: join writer");
-    ASSERT_INT_EQ(pthread_join(reader, NULL), 0,
+    ASSERT_INT_EQ(sh_thread_join(&reader, NULL), 0,
                   "thread-safety: join reader");
     ASSERT_INT_EQ(atomic_load(&harness.failed), 0,
                   "thread-safety: introspection APIs stable under churn");

@@ -1,4 +1,4 @@
-#include <pthread.h>
+#include "sh_pal.h"
 #include <string.h>
 
 #include "lp_external_adapter.h"
@@ -16,7 +16,7 @@ typedef struct {
  * Process-wide external solver adapter registry (singleton).
  *
  * THREAD SAFETY: All access is serialized through g_lp_external_registry_mutex
- * (recursive, initialized via pthread_once). The registry is inherently global
+ * (recursive, initialized via sh_once). The registry is inherently global
  * because external solver backends (GLPK, CPLEX, etc.) are registered once per
  * process and shared across all models/threads.
  *
@@ -25,38 +25,34 @@ typedef struct {
  * external solvers doesn't change between models.
  */
 static LPExternalAdapterRegistry g_lp_external_registry = {0};
-static pthread_mutex_t g_lp_external_registry_mutex;
-static pthread_once_t g_lp_external_registry_mutex_once = PTHREAD_ONCE_INIT;
+static ShMutex g_lp_external_registry_mutex;
+static ShOnce g_lp_external_registry_mutex_once = SH_ONCE_INIT;
 static int g_lp_external_registry_mutex_ready = 0;
 
+/*
+ * The PAL exposes the recursive mutex as its own entry point rather than an
+ * attribute, because Windows cannot build one out of the plain mutex: that is
+ * an SRWLOCK, which is not recursive, so the recursive variant is a
+ * CRITICAL_SECTION instead. This registry is the caller sh_pal.h names.
+ */
 static void lp_external_registry_mutex_init_once(void) {
-    pthread_mutexattr_t attr;
-    if (pthread_mutexattr_init(&attr) != 0) return;
-    if (pthread_mutexattr_settype(&attr, PTHREAD_MUTEX_RECURSIVE) != 0) {
-        pthread_mutexattr_destroy(&attr);
-        return;
-    }
-    if (pthread_mutex_init(&g_lp_external_registry_mutex, &attr) != 0) {
-        pthread_mutexattr_destroy(&attr);
-        return;
-    }
-    pthread_mutexattr_destroy(&attr);
+    if (sh_mutex_init_recursive(&g_lp_external_registry_mutex) != 0) return;
     g_lp_external_registry_mutex_ready = 1;
 }
 
 static int lp_external_registry_lock(void) {
-    if (pthread_once(&g_lp_external_registry_mutex_once,
-                     lp_external_registry_mutex_init_once) != 0) {
-        return -1;
-    }
+    /* sh_once() cannot fail, so the only way to have no usable mutex is an
+     * init that failed -- which is exactly what the ready flag records. */
+    sh_once(&g_lp_external_registry_mutex_once,
+            lp_external_registry_mutex_init_once);
     if (!g_lp_external_registry_mutex_ready) return -1;
-    if (pthread_mutex_lock(&g_lp_external_registry_mutex) != 0) return -1;
+    sh_mutex_lock(&g_lp_external_registry_mutex);
     return 0;
 }
 
 static void lp_external_registry_unlock(void) {
     if (!g_lp_external_registry_mutex_ready) return;
-    (void)pthread_mutex_unlock(&g_lp_external_registry_mutex);
+    sh_mutex_unlock(&g_lp_external_registry_mutex);
 }
 
 static int lp_external_provider_valid(LPExternalProvider provider) {
