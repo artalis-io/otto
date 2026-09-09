@@ -1436,6 +1436,98 @@ TEST(graph_validation_detects_issues)
 }
 
 /* ============================================================================
+ * PBF file loading
+ *
+ * vl_pbf_parse_file() had no coverage at all, which is how it carried two
+ * implementations -- mmap on POSIX, read-the-whole-file on Windows -- that
+ * disagreed about what an empty file should report, for as long as they did.
+ *
+ * These cover the loader rather than the parser: the errors it maps, and that
+ * the bytes it hands over are the file's, at the right length. The parser is
+ * lenient with malformed input -- most garbage parses as an empty extract --
+ * so the two OSMData cases below are what actually pin the handover.
+ * ============================================================================ */
+
+/* Writes bytes to a temp file, parses it, removes it. */
+static VLStatus parse_bytes(const char *name, const void *bytes, size_t len)
+{
+    FILE *f = fopen(name, "wb");
+    if (!f) return VL_ERROR_FILE_READ;
+    if (len && fwrite(bytes, 1, len, f) != len) {
+        fclose(f);
+        remove(name);
+        return VL_ERROR_FILE_READ;
+    }
+    fclose(f);
+
+    VLPBFContext *ctx = vl_pbf_context_create();
+    VLStatus st = ctx ? vl_pbf_parse_file(ctx, name) : VL_ERROR_OUT_OF_MEMORY;
+    if (ctx) vl_pbf_context_free(ctx);
+    remove(name);
+    return st;
+}
+
+TEST(pbf_missing_file_is_not_found)
+{
+    VLPBFContext *ctx = vl_pbf_context_create();
+    ASSERT(ctx != NULL);
+    ASSERT_EQ(vl_pbf_parse_file(ctx, "velo-test-no-such-file.pbf"),
+              VL_ERROR_FILE_NOT_FOUND);
+    vl_pbf_context_free(ctx);
+}
+
+TEST(pbf_empty_file_is_read_error)
+{
+    /* The case the two old implementations disagreed on: POSIX mapped a
+     * zero-length file, got EINVAL, and called it out-of-memory. */
+    ASSERT_EQ(parse_bytes("velo_test_empty.pbf", "", 0), VL_ERROR_FILE_READ);
+}
+
+TEST(pbf_short_framing_is_tolerated)
+{
+    /* Fewer bytes than the four-byte blob length: the parser stops without
+     * calling it an error, which is what callers have always seen. */
+    const unsigned char two[2] = { 0x00, 0x00 };
+    ASSERT_EQ(parse_bytes("velo_test_short.pbf", two, sizeof two), VL_OK);
+}
+
+TEST(pbf_blob_contents_reach_the_parser)
+{
+    /* A well-formed BlobHeader -- four-byte big-endian length 11, then
+     * type="OSMData" (field 1) and datasize=4 (field 3) -- followed by four
+     * bytes that are not a Blob.
+     *
+     * The parse error is the point. Reaching it means the file was mapped, and
+     * that at least 19 bytes arrived at the offsets the framing implies. A
+     * loader handing over nothing would fail earlier, with INVALID_ARGUMENT. */
+    const unsigned char osmdata[] = {
+        0x00, 0x00, 0x00, 0x0B,
+        0x0A, 0x07, 'O', 'S', 'M', 'D', 'a', 't', 'a',
+        0x18, 0x04,
+        0xFF, 0xFF, 0xFF, 0xFF
+    };
+    ASSERT_EQ(parse_bytes("velo_test_osmdata.pbf", osmdata, sizeof osmdata),
+              VL_ERROR_PARSE_ERROR);
+}
+
+TEST(pbf_blob_length_is_honoured)
+{
+    /* The same header, except the declared blob runs past the end of the file.
+     * That must stop cleanly rather than read past the mapping -- and it is the
+     * pair to the test above: identical bytes up to the length, one parse error
+     * and one clean stop, so the two together pin how much the loader delivers. */
+    const unsigned char shortblob[] = {
+        0x00, 0x00, 0x00, 0x0B,
+        0x0A, 0x07, 'O', 'S', 'M', 'D', 'a', 't', 'a',
+        0x18, 0x40,
+        0xFF
+    };
+    ASSERT_EQ(parse_bytes("velo_test_shortblob.pbf", shortblob, sizeof shortblob),
+              VL_OK);
+}
+
+
+/* ============================================================================
  * Main
  * ============================================================================ */
 
@@ -1520,6 +1612,14 @@ int main(void)
     RUN_TEST(perf_bidir_explores_fewer_nodes_than_unidir);
     RUN_TEST(perf_search_time_is_recorded);
     RUN_TEST(graph_validation_detects_issues);
+    printf("\n");
+
+    printf("PBF File Loading Tests:\n");
+    RUN_TEST(pbf_missing_file_is_not_found);
+    RUN_TEST(pbf_empty_file_is_read_error);
+    RUN_TEST(pbf_short_framing_is_tolerated);
+    RUN_TEST(pbf_blob_contents_reach_the_parser);
+    RUN_TEST(pbf_blob_length_is_honoured);
     printf("\n");
 
     printf("================\n");
