@@ -529,7 +529,7 @@ struct mg_http_serve_opts opts = {
 };
 mg_http_serve_dir(c, hm, &opts);
 ```
-**Risk:** Mongoose handled path sanitization internally.
+**Risk:** The previous HTTP server handled path sanitization internally.
 **UPDATE (Keel migration):** `mg_http_serve_dir()` is gone. Static files are
 now served by `serve_static_file()` in `carta/api/src/main.c`, which rejects
 any path containing `..` before joining it to `static_dir`. The containment
