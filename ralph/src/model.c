@@ -290,6 +290,16 @@ static int ensure_build_state(LPModel *model) {
 int lp_model_add_constraint(LPModel *model, int nnz, const int *indices,
                             const double *values, char sense, double rhs) {
     if (!model) return -1;
+    if (nnz < 0) return -1;
+    if (nnz > 0 && (!indices || !values)) return -1;
+
+    /* Validate column indices up front. An out-of-range index must be a clean
+     * error, not a coefficient silently dropped later by triplets_to_csc at
+     * finalize (which would build the model wrong with no signal). Mirrors the
+     * var-bounds check in lp_model_set_coefficient. */
+    for (int k = 0; k < nnz; k++) {
+        if (indices[k] < 0 || indices[k] >= model->num_vars) return -1;
+    }
 
     /* If model was already finalized, rebuild build state from A
      * so we can add the new constraint. */
