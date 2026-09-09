@@ -1,5 +1,5 @@
 {
-  "source_commit": "4965176",
+  "source_commit": "f0319cd",
   "description": "Crash6 explicit norelax/noflip diagnostics baseline (non-gating).",
   "defaults": {
     "hard_cap_sec": 20,

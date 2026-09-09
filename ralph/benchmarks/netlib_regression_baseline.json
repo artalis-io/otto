@@ -1,5 +1,5 @@
 {
-  "source_commit": "efd5c8b",
+  "source_commit": "55bd38d",
   "description": "Known NETLIB gate baseline for no-regression checks",
   "defaults": {
     "hard_cap_sec": 20,

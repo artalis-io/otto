@@ -1,9 +1,9 @@
 # Ralph vs Production LP/MIP Solvers — Frank Assessment
 
-## 2026-02-23 Addendum (API/Architecture Baseline `abd62fa`)
+## 2026-02-23 Addendum (API/Architecture Baseline `d3185e7`)
 
 This document started as a performance-only snapshot. Ralph now has a materially stronger LP API
-contract and cleaner internal architecture than the original `f58b421` context used below.
+contract and cleaner internal architecture than the original `af94170` context used below.
 
 What changed in API/architecture since that snapshot:
 - Explicit LP/MIP solve entry points: `ralph_optimize_lp()` and `ralph_optimize_mip()`, with
@@ -14,7 +14,7 @@ What changed in API/architecture since that snapshot:
   `ralph_get_lp_capabilities`, `ralph_get_last_lp_algorithm_report`,
   `RalphLPAlgorithm`, `RalphLPCrossoverMode`, `RalphLPFallbackReason`.
 - Internal LP backend routing extracted into dedicated module:
-  `ralph/src/lp_dispatch.c` + `ralph/src/lp_dispatch.h` (baseline `abd62fa`), with orthogonal
+  `ralph/src/lp_dispatch.c` + `ralph/src/lp_dispatch.h` (baseline `d3185e7`), with orthogonal
   module test coverage in `test_lp_dispatch`.
 - LP diagnostics/operability expanded: presolve report, LP/LU telemetry snapshots, solution
   quality metrics, LP progress + cancellation hooks, typed LP conflict API.
@@ -40,7 +40,7 @@ This removes implicit external routing from the default LP path and makes extern
 deliberate opt-in behavior.
 
 **Date:** 2026-02-16
-**Ralph version:** `f58b421` (universal two-phase + redundant row presolve)
+**Ralph version:** `af94170` (universal two-phase + redundant row presolve)
 
 ## Summary
 
@@ -79,7 +79,7 @@ problems (< 500 vars) where solve time is < 100ms regardless of solver efficienc
 | Post-solve verification | Yes | No | Yes | Yes | T2.3 |
 | Hyper-sparse FTRAN/BTRAN | Yes | No | Yes | Yes | DFS-based |
 | Dynamic refactorization | Yes | Yes | Yes | Yes | T3.2 |
-| Two-phase simplex (no Big-M) | Yes | No | Yes | Yes | Universal since `f58b421` |
+| Two-phase simplex (no Big-M) | Yes | No | Yes | Yes | Universal since `af94170` |
 | Redundant row presolve | Yes | No | Yes | Yes | Equality-only rank detection |
 | NETLIB pass rate | 20/22 | 17/17 | 17/17 | 17/17 | Ralph: beaconfd, lotfi fail |
 

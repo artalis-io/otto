@@ -1,6 +1,6 @@
 # Ralph LP Solver: GLOP Comparison & Improvement Plan
 
-## 2026-02-23 Addendum (API/Architecture Baseline `abd62fa`)
+## 2026-02-23 Addendum (API/Architecture Baseline `d3185e7`)
 
 The original comparison focused on LP/MIP runtime behavior. Ralph now also has a significantly
 improved API/architecture baseline:
@@ -44,7 +44,7 @@ MIP branch-and-bound performance.
 | Dual steepest edge | Exact Forrest-Goldfarb DSE with incremental updates | Most-infeasible leaving variable, basic Harris | Exact DSE with incremental weight updates, persists across B&B nodes |
 | Bound flipping | Flips boxed variable bounds without basis change | Every pivot does full LU update | Two-pass Harris bound flipping in dual ratio test |
 
-**Status: IMPLEMENTED** (Phase E complete, `140a1f2`, Feb 2026)
+**Status: IMPLEMENTED** (Phase E complete, `dfa169a`, Feb 2026)
 
 Benchmarks (FuelWise MILP, seed=42):
 
@@ -85,7 +85,7 @@ Benchmarks (FuelWise MILP, seed=42):
 - **Pseudocost branching + root strong branching**: Probe 20 fractional vars × 50 dual pivots.
   Obj-coeff init `fmax(|c_j|, 1.0)`, updated from actual bound changes.
 - **Column-based probing**: Bound tightening at nodes with depth < 20.
-- **Phase E (`140a1f2`)**: Replaced `dual_reopt` (3-path dispatch) with single warm-start
+- **Phase E (`dfa169a`)**: Replaced `dual_reopt` (3-path dispatch) with single warm-start
   path via `dual_simplex_solve_v2()`. Net -1124 LoC. MIP uses method=2 (auto: dual first,
   primal fallback) — same solver for LP and MIP.
 
@@ -167,7 +167,7 @@ GLOP's more aggressive probing (non-binary integer implications, clique detectio
 
 ### 5. DynamicMaximum Pricing (Top-K Heap)
 
-**Status: IMPLEMENTED** (`pricing=4` in `ralph/src/simplex.c`, Feb 2026, commit `b3594c6`)
+**Status: IMPLEMENTED** (`pricing=4` in `ralph/src/simplex.c`, Feb 2026, commit `5c3e021`)
 
 Binary max-heap over non-basic variables keyed by improvement score. Heap maintained incrementally
 during `simplex_pivot()`. Critical bound-flip bug found and fixed (zombied heap entries from status
@@ -262,10 +262,10 @@ All priority items P0-P8 are now implemented. Key milestones:
 ### P8: Dual simplex as default LP + MIP — ✅ DONE
 
 Completed in two phases:
-- **Phase D** (`dac309a`): Changed default `method` from 0 to 2 (auto: dual first, primal fallback).
+- **Phase D** (`46a34f8`): Changed default `method` from 0 to 2 (auto: dual first, primal fallback).
   `dual_simplex_solve_from_scratch_v2()` with proper `dual_phase1()`, exact DSE, bound
   perturbation with unshift cleanup, and `verify_solution()` safety net.
-- **Phase E** (`140a1f2`): Replaced `dual_reopt()` in B&B with `dual_simplex_solve_v2()` warm-start.
+- **Phase E** (`dfa169a`): Replaced `dual_reopt()` in B&B with `dual_simplex_solve_v2()` warm-start.
   Collapsed `solve_node_lp()` from 3-path dispatch to single path. Deleted ~1124 net LoC including
   old `dual_simplex_solve()`, `dual_reopt()`, and associated helpers.
 

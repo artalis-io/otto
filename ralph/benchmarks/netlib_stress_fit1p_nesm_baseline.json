@@ -1,5 +1,5 @@
 {
-  "source_commit": "c0f59aa",
+  "source_commit": "35c8e6f",
   "description": "fit1p/nesm stress diagnostics baseline (promote to gating when stable).",
   "defaults": {
     "hard_cap_sec": 20,

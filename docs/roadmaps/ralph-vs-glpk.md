@@ -1297,7 +1297,7 @@ Verification:
 
 Completed slices:
 1. `W2.1` bound phase-1 dual-rescue churn.
-   - committed as `b94fe5b`
+   - committed as `f50bc50`
    - added compute-context attribution for dual rescue
    - reduced rescue-dominated recompute cost on `greenbeb` and `wood1p`
      without changing the global timeout count
@@ -1314,7 +1314,7 @@ Completed slices:
 
 3. `W2.3` arm existing force-pivot mode from chronic extreme-direction
    refactor loops without queueing an extra forced refactor.
-   - committed as `5d33ff4`
+   - committed as `f646afd`
    - the new path counts repeated `force_extreme_dir` refactors into the
      existing force-pivot budget instead of scheduling another immediate
      forced refactor
@@ -1331,7 +1331,7 @@ Completed slices:
      `22` timeouts, `0` dense fallbacks, and no new mismatches
 4. `W2.4` force ratio-breakdown ladder escalation earlier on large degenerate
    runs, and add direct dual-rescue guard telemetry.
-   - committed as `c35c31f`
+   - committed as `13730cd`
    - added direct phase-1 dual-rescue guard/attempt telemetry to separate
      direct rescue sites from ladder rescue sites
    - finding: current `greenbeb`/`wood1p` runs are still dominated by ladder
