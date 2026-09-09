@@ -134,3 +134,75 @@ Include:
 - Expected vs actual behavior
 - Ralph version (`ralph_version()`)
 - Platform and compiler
+
+## Compiler-Dependent Behaviour
+
+### bore3d does not converge under plain IEEE arithmetic
+
+- **Severity**: High. This is a solver bug, not a build problem, and OTTO's own
+  flags are what hide it. Any build without `-march=native` or `-ffast-math` --
+  a plain `gcc -O2`, a distro package, another compiler -- fails to solve a
+  NETLIB LP that takes 45 iterations here.
+- **Status**: Diagnosed, not fixed.
+- **Found**: While bringing Ralph up on MSVC, which has no equivalent of either
+  flag. It looked like an MSVC problem for exactly as long as it took to
+  reproduce it under GCC.
+
+**The behaviour.** Same source, same solver parameters, same machine, one
+NETLIB problem:
+
+| build | iterations | time | status |
+|---|---|---|---|
+| `-march=native -ffast-math` (OTTO default) | **45** | 15.1 ms | OPTIMAL, 6.2e-12 |
+| drop `-march=native` only | 45 | 13.6 ms | OPTIMAL |
+| drop fast-math only | 45 | 15.1 ms | OPTIMAL |
+| **drop both** | **20000** (cap) | 75.9 s | iteration limit |
+| MSVC 19.44, any `/fp:` setting | **20000** (cap) | 78.5 s | iteration limit |
+
+Either flag alone masks it. Removing both exposes it, and MSVC has neither.
+
+**It is not the optimiser and not fast-math semantics.** `-O0` and `-O2` both
+stall, at 20000 iterations, once the two flags are gone. What the flags change
+is the arithmetic -- FMA contraction from `-march=native`, reassociation from
+`-ffast-math` -- and either perturbation is enough to knock the pivot sequence
+off whatever degenerate path strict IEEE evaluation walks into.
+
+**It is not floating-point mode.** `/fp:precise`, `/fp:fast` and `/fp:strict`
+are identical on MSVC. All three differ from the GCC flags, and none reproduces
+GCC's result.
+
+**It is not OpenMP.** Building the GCC side without `-fopenmp`, so the 29
+`#pragma omp simd` directives are ignored exactly as MSVC ignores them, still
+converges in 45 iterations.
+
+**Presolve is in the loop.** With `presolve=0` the failing build errors out in
+125 ms instead of stalling. Presolve alone does not explain it -- the passing
+builds run the same presolve -- but the stall needs it.
+
+**Reproduce, with GCC, no MSVC required:**
+
+    make -C ralph clean
+    make -C ralph lib CC_ARCH= CC_FP_FASTMATH= CC_FP_KEEP_NONFINITE=
+    # then run bore3d through the NETLIB harness
+
+The parameters the harness uses for this case, captured rather than guessed:
+
+    verbose=0  max_iterations=10000000  presolve=1  verify=1
+    method=2   random_seed=0  lp_basis_governor_mode=0
+    lp_reinvert_controller_mode=1
+
+`max_iterations=10000000` is why an untouched run burns its whole wall-clock cap
+instead of reporting an iteration limit; clamp it to see the real outcome.
+
+**Where to look.** 20000 iterations on a 315x233 LP, with time per iteration
+roughly 11x the healthy build's, is what a basis degrading into constant
+refactorization looks like. Ralph's anti-cycling machinery -- Bland,
+perturbation, the stabilise and rescue ladders -- is either not triggering on
+this path or not helping. That machinery has only ever been exercised against
+arithmetic that carries FMA or reassociation, which is the gap this exposes.
+
+**A note for whoever picks this up.** The NETLIB harness runs each problem in a
+child process, and on Windows that child is created with `bInheritHandles=FALSE`
+-- anything it writes to stderr is lost. Diagnostics added inside
+`solve_with_ralph` will not appear until the isolation is bypassed by calling
+`test_run_job()` directly.
