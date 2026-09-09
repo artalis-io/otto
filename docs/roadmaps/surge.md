@@ -4250,3 +4250,5 @@ hangs on WSAPoll and returns no valid response on IOCP, while sync routes work o
 both. Reproduced with Keel's own unmodified example, so it is not OTTO code.
 Linux (the deploy and CI target) is unaffected; it only means the Surge API server
 cannot be smoke-tested on a Windows dev box.
+
+Tracked upstream: [artalis-io/keel#262](https://github.com/artalis-io/keel/issues/262).
