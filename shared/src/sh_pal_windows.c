@@ -412,6 +412,75 @@ int sh_pal_mkdir(const char *path)
     return GetLastError() == ERROR_ALREADY_EXISTS ? 0 : -1;
 }
 
+int sh_pal_is_dir(const char *path)
+{
+    DWORD attr;
+    if (!path || !path[0]) return 0;
+    attr = GetFileAttributesA(path);
+    if (attr == INVALID_FILE_ATTRIBUTES) return 0;
+    return (attr & FILE_ATTRIBUTE_DIRECTORY) != 0;
+}
+
+struct ShPalDir {
+    HANDLE           handle;
+    WIN32_FIND_DATAA data;
+    /* FindFirstFile already returned an entry; hand it out before advancing. */
+    int              pending;
+};
+
+ShPalDir *sh_pal_dir_open(const char *path)
+{
+    ShPalDir *d;
+    char pattern[MAX_PATH];
+    size_t len;
+
+    if (!path || !path[0]) return NULL;
+
+    len = strlen(path);
+    /* room for the separator, the wildcard and the terminator */
+    if (len + 3 > sizeof(pattern)) return NULL;
+
+    memcpy(pattern, path, len);
+    if (path[len - 1] != (char)92 && path[len - 1] != 0x2F) {
+        pattern[len++] = 0x2F;
+    }
+    pattern[len++] = 0x2A;   /* the wildcard FindFirstFile requires */
+    pattern[len]   = 0;
+
+    d = (ShPalDir *)calloc(1, sizeof(*d));
+    if (!d) return NULL;
+
+    d->handle = FindFirstFileA(pattern, &d->data);
+    if (d->handle == INVALID_HANDLE_VALUE) {
+        free(d);
+        return NULL;
+    }
+    d->pending = 1;
+    return d;
+}
+
+int sh_pal_dir_next(ShPalDir *dir, ShPalDirEntry *out)
+{
+    if (!dir || !out) return 0;
+
+    if (dir->pending) {
+        dir->pending = 0;
+    } else if (!FindNextFileA(dir->handle, &dir->data)) {
+        return 0;
+    }
+
+    out->name   = dir->data.cFileName;
+    out->is_dir = (dir->data.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) != 0;
+    return 1;
+}
+
+void sh_pal_dir_close(ShPalDir *dir)
+{
+    if (!dir) return;
+    if (dir->handle != INVALID_HANDLE_VALUE) FindClose(dir->handle);
+    free(dir);
+}
+
 
 int sh_pal_temp_dir(char *buf, size_t len)
 {

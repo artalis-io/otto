@@ -135,6 +135,13 @@ LD_RELRO  :=
 # bcrypt: sh_pal_random_bytes. ws2_32: the StatsD sink in sh_metrics.
 LD_PLATFORM := bcrypt.lib ws2_32.lib
 
+# MSVC gives an executable a 1 MB stack; Linux gives 8 MB and MinGW 2 MB. Code
+# written against the larger default overflows on entry, before its first
+# statement runs, so it dies with no output at all and an exit code that says
+# nothing -- ralph-benchmark holds a 200-entry array of 4 KB paths, ~840 KB, in
+# one frame. Match the Linux default rather than leave that trap set.
+LD_STACK  := /F8388608
+
 # cl accepts -c, -I and -D, but its output flags are unlike anyone else's and
 # -o is deprecated (D9035). These carry the whole difference.
 # Header dependency tracking. MSVC's /showIncludes emits a different format
@@ -174,6 +181,7 @@ LD_SANITIZE  := -fsanitize=address,undefined
 
 LD_MATH   := -lm
 LD_THREAD := -lpthread
+LD_STACK  :=
 
 ifeq ($(UNAME_S),Darwin)
   # macOS: Homebrew libomp with clang. -pie is implicit here.

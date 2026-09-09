@@ -18,6 +18,7 @@
 #include <fcntl.h>
 #include <sys/mman.h>
 #include <sys/stat.h>
+#include <dirent.h>
 #include <pthread.h>
 #include <string.h>
 #include <sys/time.h>
@@ -317,6 +318,63 @@ int sh_pal_mkdir(const char *path)
     if (!path || !path[0]) return -1;
     if (mkdir(path, 0755) == 0) return 0;
     return errno == EEXIST ? 0 : -1;
+}
+
+int sh_pal_is_dir(const char *path)
+{
+    struct stat st;
+    if (!path || !path[0]) return 0;
+    return stat(path, &st) == 0 && S_ISDIR(st.st_mode);
+}
+
+struct ShPalDir {
+    DIR *dir;
+};
+
+ShPalDir *sh_pal_dir_open(const char *path)
+{
+    ShPalDir *d;
+    DIR *dir;
+
+    if (!path || !path[0]) return NULL;
+    dir = opendir(path);
+    if (!dir) return NULL;
+
+    d = (ShPalDir *)calloc(1, sizeof(*d));
+    if (!d) {
+        closedir(dir);
+        return NULL;
+    }
+    d->dir = dir;
+    return d;
+}
+
+int sh_pal_dir_next(ShPalDir *dir, ShPalDirEntry *out)
+{
+    struct dirent *e;
+
+    if (!dir || !out) return 0;
+    e = readdir(dir->dir);
+    if (!e) return 0;
+
+    out->name = e->d_name;
+#ifdef DT_DIR
+    /* d_type is not in POSIX and some filesystems report DT_UNKNOWN, so fall
+     * back to stat rather than reporting "not a directory" on a guess. */
+    if (e->d_type != DT_UNKNOWN) {
+        out->is_dir = (e->d_type == DT_DIR);
+        return 1;
+    }
+#endif
+    out->is_dir = 0;
+    return 1;
+}
+
+void sh_pal_dir_close(ShPalDir *dir)
+{
+    if (!dir) return;
+    if (dir->dir) closedir(dir->dir);
+    free(dir);
 }
 
 

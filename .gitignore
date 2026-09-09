@@ -178,3 +178,9 @@ nexus/schemas/gls-hu-pudo-pdf-v2.json
 
 # velo OpenMP build-mode stamp (see velo/Makefile)
 .omp-mode
+
+# MSVC build artifacts (cl writes .obj beside the source it links from)
+*.obj
+*.pdb
+*.ilk
+*.exp

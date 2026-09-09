@@ -18,11 +18,15 @@
 #include <inttypes.h>
 #include <math.h>
 #include <time.h>
-#include <sys/time.h>
 #include <sys/stat.h>
 #include <signal.h>
-#include <dirent.h>
-#include <unistd.h>
+#ifdef _MSC_VER
+  /* MSVC has no <unistd.h>; these declare the same POSIX names. */
+  #include <io.h>
+  #include <process.h>
+#else
+  #include <unistd.h>
+#endif
 #include <errno.h>
 #include <ctype.h>
 #ifdef _WIN32
@@ -34,6 +38,7 @@
   #include <sys/wait.h>
 #endif
 
+#include "sh_pal.h"
 #include "ralph_test_mod_api.h"
 #include "lp.h"
 #include "lp_refactor_policy.h"
@@ -1121,9 +1126,7 @@ static int compute_solution_feasibility(LPModel *lp, const double *x, int n,
  * ============================================================================ */
 
 static double get_time_ms(void) {
-    struct timeval tv;
-    gettimeofday(&tv, NULL);
-    return tv.tv_sec * 1000.0 + tv.tv_usec / 1000.0;
+    return (double)sh_wall_ns() / 1.0e6;
 }
 
 static int file_exists(const char *path) {
@@ -1132,8 +1135,7 @@ static int file_exists(const char *path) {
 }
 
 static int dir_exists(const char *path) {
-    struct stat st;
-    return stat(path, &st) == 0 && S_ISDIR(st.st_mode);
+    return sh_pal_is_dir(path);
 }
 
 static void get_benchmark_dir(char *buf, size_t size) {
@@ -3413,19 +3415,19 @@ static int count_netlib_problems(void) {
         return 0;
     }
 
-    DIR *dir = opendir(netlib_path);
+    ShPalDir *dir = sh_pal_dir_open(netlib_path);
     if (!dir) return 0;
 
     int count = 0;
-    struct dirent *entry;
-    while ((entry = readdir(dir)) != NULL) {
-        if (entry->d_name[0] == '.') continue;
-        const char *ext = strrchr(entry->d_name, '.');
+    ShPalDirEntry entry;
+    while (sh_pal_dir_next(dir, &entry)) {
+        if (entry.name[0] == '.') continue;
+        const char *ext = strrchr(entry.name, '.');
         if (ext && (strcasecmp(ext, ".mps") == 0 || strcasecmp(ext, ".lp") == 0)) {
             count++;
         }
     }
-    closedir(dir);
+    sh_pal_dir_close(dir);
     return count;
 }
 
@@ -3435,24 +3437,24 @@ static int list_netlib_problems(ProblemInfo *problems, int max_problems, int lp_
         return 0;
     }
 
-    DIR *dir = opendir(netlib_path);
+    ShPalDir *dir = sh_pal_dir_open(netlib_path);
     if (!dir) return 0;
 
     int count = 0;
-    struct dirent *entry;
-    while ((entry = readdir(dir)) != NULL && count < max_problems) {
-        if (entry->d_name[0] == '.') continue;
-        const char *ext = strrchr(entry->d_name, '.');
+    ShPalDirEntry entry;
+    while (sh_pal_dir_next(dir, &entry) && count < max_problems) {
+        if (entry.name[0] == '.') continue;
+        const char *ext = strrchr(entry.name, '.');
         if (!ext) continue;
         if (strcasecmp(ext, ".mps") != 0 && strcasecmp(ext, ".lp") != 0) continue;
 
         /* Extract name without extension */
-        strncpy(problems[count].name, entry->d_name, sizeof(problems[count].name) - 1);
+        strncpy(problems[count].name, entry.name, sizeof(problems[count].name) - 1);
         char *dot = strrchr(problems[count].name, '.');
         if (dot) *dot = '\0';
 
         snprintf(problems[count].path, sizeof(problems[count].path),
-                 "%s/%s", netlib_path, entry->d_name);
+                 "%s/%s", netlib_path, entry.name);
 
         /* Quick check if MIP (look for GENERAL/BINARY in file) */
         problems[count].is_mip = 0;
@@ -3474,7 +3476,7 @@ static int list_netlib_problems(ProblemInfo *problems, int max_problems, int lp_
 
         count++;
     }
-    closedir(dir);
+    sh_pal_dir_close(dir);
     return count;
 }
 
