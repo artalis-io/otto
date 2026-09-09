@@ -1,50 +1,22 @@
 # Velo Makefile
 # Zero-dependency OSM routing engine
 
-CC ?= gcc
+# Every compiler difference lives in one place; see mk/toolchain.mk.
+include ../mk/toolchain.mk
 
-# OpenMP and SIMD optimization flags
-# -fopenmp: Enable OpenMP parallelization
-# -fopenmp-simd: Enable SIMD vectorization pragmas
-# -march=native: Optimize for current CPU (AVX/AVX2/etc)
-# -ftree-vectorize: Auto-vectorization
-# -ffast-math: Allow aggressive FP optimizations (safe for our use)
-SIMD_FLAGS = -march=native -ftree-vectorize -ffast-math
-
-# Platform-specific OpenMP detection
-UNAME_S := $(shell uname -s)
-ifeq ($(UNAME_S),Darwin)
-    # macOS with Homebrew libomp
-    OPENMP_FLAGS = -Xclang -fopenmp
-    OPENMP_LDFLAGS = -L/opt/homebrew/opt/libomp/lib -lomp
-    OPENMP_INCLUDES = -I/opt/homebrew/opt/libomp/include
-    RELRO_FLAGS =
-else
-    # Linux - native GCC OpenMP with RELRO
-    OPENMP_FLAGS = -fopenmp -fopenmp-simd
-    OPENMP_LDFLAGS = -fopenmp
-    OPENMP_INCLUDES =
-    RELRO_FLAGS = -Wl,-z,relro,-z,now
-endif
-
-# Production build (with hardening)
-# Note: -pie is implicit on macOS, only add on Linux
-CFLAGS = -Wall -Wextra -O3 -std=c11 -D_GNU_SOURCE $(OPENMP_FLAGS) $(SIMD_FLAGS) \
-         -fstack-protector-strong -D_FORTIFY_SOURCE=2 -fPIE -fno-common
-ifeq ($(UNAME_S),Linux)
-    LDFLAGS = -lm $(OPENMP_LDFLAGS) -pie $(RELRO_FLAGS)
-else
-    LDFLAGS = -lm $(OPENMP_LDFLAGS)
-endif
-
-# libshared now reaches the platform through sh_pal: bcrypt supplies
-# sh_pal_random_bytes, ws2_32 the StatsD sink in sh_metrics.
-ifneq (,$(findstring MINGW,$(UNAME_S)))
-    LDFLAGS += -lbcrypt -lws2_32
-endif
+# Production build (with hardening).
+#
+# Velo asks for fast math but NOT for -fno-finite-math-only, which is why the
+# floating-point knobs in the toolchain are separate from each other: Ralph
+# wants both, Velo wants one.
+CFLAGS = $(strip $(CC_WARN) $(CC_OPT) $(CC_STD) $(CC_DEFS) $(CC_PORT_DEFS) \
+                 $(CC_OMP) $(CC_OMP_SIMD) \
+                 $(CC_ARCH) $(CC_VECTORIZE) $(CC_FP_MODE) $(CC_FP_FASTMATH) \
+                 $(CC_HARDEN))
+LDFLAGS = $(strip $(LD_MATH) $(LD_OMP) $(LD_PLATFORM) $(LD_PIE) $(LD_RELRO) $(LD_STACK))
 
 # Include paths
-INCLUDES = -Iinclude -I../shared/include -I../vendor/miniz $(OPENMP_INCLUDES)
+INCLUDES = -Iinclude -I../shared/include -I../vendor/miniz
 
 # Vendor path
 VENDOR_DIR = ../vendor/miniz
@@ -101,7 +73,9 @@ MINIZ_OBJS = $(MINIZ_SRCS:.c=.o)
 ALL_OBJS = $(CORE_OBJS) $(MINIZ_OBJS)
 
 # Library
-LIB = libvelo.a
+# Not LIB: that is MSVC's library search path, and make re-exports any variable
+# that also exists in the environment. See mk/toolchain.mk.
+LIB_FILE = libvelo.a
 
 # Test binary
 TEST_BIN = test_velo
@@ -122,34 +96,34 @@ WASM_OUT = velo.js
 all: lib $(TEST_BIN)
 
 # Build library
-lib: omp-mode $(LIB)
+lib: omp-mode $(LIB_FILE)
 
 # Drop objects built in the other OpenMP mode before anything depends on them.
 omp-mode:
 	@if [ ! -f $(OMP_STAMP) ] || [ "`cat $(OMP_STAMP)`" != "$(OMP_MODE)" ]; then \
-		rm -f $(CORE_OBJS) $(LIB); \
+		rm -f $(CORE_OBJS) $(LIB_FILE); \
 		echo $(OMP_MODE) > $(OMP_STAMP); \
 	fi
 
-$(LIB): $(ALL_OBJS) $(SHARED_DIR)/libshared.a
+$(LIB_FILE): $(ALL_OBJS) $(SHARED_DIR)/libshared.a
 	ar rcs $@ $(ALL_OBJS)
 
 # Compile rules
 src/%.o: src/%.c
-	$(CC) $(CFLAGS) $(INCLUDES) -c $< -o $@
+	$(CC) $(CFLAGS) $(INCLUDES) -c $< $(OBJ_OUT)$@
 
 # Build shared library first
 $(SHARED_DIR)/libshared.a:
 	$(MAKE) -C $(SHARED_DIR) lib
 
 # Test binary
-$(TEST_BIN): tests/test_velo.c $(LIB) $(SHARED_DIR)/libshared.a
-	$(CC) $(CFLAGS) $(INCLUDES) $< -L. -lvelo -L$(SHARED_DIR) -lshared $(LDFLAGS) -o $@
+$(TEST_BIN): tests/test_velo.c $(LIB_FILE) $(SHARED_DIR)/libshared.a
+	$(CC) $(CFLAGS) $(INCLUDES) $< $(call link_lib,.,velo) $(call link_lib,$(SHARED_DIR),shared) $(LDFLAGS) $(EXE_OUT)$@
 
 # Transport invariant: vl_api_handle driven by sh_transport_direct with no
 # transport library on the include path. See docs/roadmaps/transport.md.
-$(TEST_TRANSPORT_BIN): tests/test_transport_direct.c $(LIB) $(SHARED_DIR)/libshared.a
-	$(CC) $(CFLAGS) $(INCLUDES) $< -L. -lvelo -L$(SHARED_DIR) -lshared $(LDFLAGS) -o $@
+$(TEST_TRANSPORT_BIN): tests/test_transport_direct.c $(LIB_FILE) $(SHARED_DIR)/libshared.a
+	$(CC) $(CFLAGS) $(INCLUDES) $< $(call link_lib,.,velo) $(call link_lib,$(SHARED_DIR),shared) $(LDFLAGS) $(EXE_OUT)$@
 
 test-transport: $(TEST_TRANSPORT_BIN)
 	./$(TEST_TRANSPORT_BIN)
@@ -160,25 +134,25 @@ test: $(TEST_BIN) $(TEST_TRANSPORT_BIN)
 	./$(TEST_TRANSPORT_BIN)
 
 # OSRM comparison test
-$(TEST_OSRM): tests/test_osrm_comparison.c $(LIB) $(SHARED_DIR)/libshared.a
-	$(CC) $(CFLAGS) $(INCLUDES) $< -L. -lvelo -L$(SHARED_DIR) -lshared $(LDFLAGS) -o $@
+$(TEST_OSRM): tests/test_osrm_comparison.c $(LIB_FILE) $(SHARED_DIR)/libshared.a
+	$(CC) $(CFLAGS) $(INCLUDES) $< $(call link_lib,.,velo) $(call link_lib,$(SHARED_DIR),shared) $(LDFLAGS) $(EXE_OUT)$@
 
 test-osrm: $(TEST_OSRM)
 	@echo "Run: ./$(TEST_OSRM) <graph.vlg> [osrm_host:port]"
 
 # Benchmarks
-$(BENCH_ROUTING): benchmarks/bench_routing.c $(LIB) $(SHARED_DIR)/libshared.a
-	$(CC) $(CFLAGS) $(INCLUDES) $< -L. -lvelo -L$(SHARED_DIR) -lshared $(LDFLAGS) -o $@
+$(BENCH_ROUTING): benchmarks/bench_routing.c $(LIB_FILE) $(SHARED_DIR)/libshared.a
+	$(CC) $(CFLAGS) $(INCLUDES) $< $(call link_lib,.,velo) $(call link_lib,$(SHARED_DIR),shared) $(LDFLAGS) $(EXE_OUT)$@
 
-$(BENCH_PBF): benchmarks/bench_pbf.c $(LIB) $(SHARED_DIR)/libshared.a
-	$(CC) $(CFLAGS) $(INCLUDES) $< -L. -lvelo -L$(SHARED_DIR) -lshared $(LDFLAGS) -o $@
+$(BENCH_PBF): benchmarks/bench_pbf.c $(LIB_FILE) $(SHARED_DIR)/libshared.a
+	$(CC) $(CFLAGS) $(INCLUDES) $< $(call link_lib,.,velo) $(call link_lib,$(SHARED_DIR),shared) $(LDFLAGS) $(EXE_OUT)$@
 
 bench: $(BENCH_ROUTING) $(BENCH_PBF)
 	./$(BENCH_ROUTING)
 
 # Route quality benchmark
-$(ROUTE_BENCH): benchmarks/velo_route_bench.c $(LIB) $(SHARED_DIR)/libshared.a
-	$(CC) $(CFLAGS) $(INCLUDES) $< -L. -lvelo -L$(SHARED_DIR) -lshared $(LDFLAGS) -o $@
+$(ROUTE_BENCH): benchmarks/velo_route_bench.c $(LIB_FILE) $(SHARED_DIR)/libshared.a
+	$(CC) $(CFLAGS) $(INCLUDES) $< $(call link_lib,.,velo) $(call link_lib,$(SHARED_DIR),shared) $(LDFLAGS) $(EXE_OUT)$@
 
 route-bench: $(ROUTE_BENCH)
 	@echo "Route benchmark built: ./$(ROUTE_BENCH)"
@@ -195,7 +169,7 @@ wasm:
 
 # Clean
 clean:
-	rm -f $(CORE_OBJS) $(LIB) $(OMP_STAMP)
+	rm -f $(CORE_OBJS) $(LIB_FILE) $(OMP_STAMP)
 	rm -f $(TEST_BIN) $(TEST_TRANSPORT_BIN) $(TEST_OSRM) $(BENCH_ROUTING) $(BENCH_PBF) $(ROUTE_BENCH)
 	rm -f $(WASM_OUT) velo.wasm
 

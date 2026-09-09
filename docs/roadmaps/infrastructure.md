@@ -498,3 +498,49 @@ port tracked separately.
 - The API servers, which need Keel to build under MSVC first. Keel is
   MinGW-targeted (`CC = cc`, no CMake/sln, `_MSC_VER` nowhere in its own source)
   and is a submodule, so that is upstream work.
+
+### Velo on MSVC
+
+Velo needed no port. Its sources were already clean: commit 0a06781e had moved
+file mapping into the PAL (`sh_map_file_readonly` / `sh_unmap_file`) for shared,
+velo, carta and locus, and `vl_pbf.c` already carried a Windows read-the-file
+fallback. All 9 sources and all 3 tests compile with `cl` untouched. The mmap
+design decision this was expected to need had already been made elsewhere.
+
+What it did need was the Makefile wiring, plus two things that will recur:
+
+**The floating-point knobs had to split.** `CC_FP` was Ralph-shaped -- fast math
+with `-fno-finite-math-only`. Velo wants fast math *without* that carve-out, and
+adds `-ftree-vectorize`. One variable could not serve both without changing one
+of them, so the toolchain now exposes `CC_FP_MODE`, `CC_FP_FASTMATH`,
+`CC_FP_KEEP_NONFINITE` and `CC_VECTORIZE`, and each module says what it wants.
+Same for OpenMP: Velo passes `-fopenmp-simd`, Ralph does not, so `CC_OMP_SIMD`
+is its own knob.
+
+**The `LIB` trap is not Velo's alone.** velo, carta, locus, surge and arbor all
+define `LIB = lib<module>.a`. `LIB` is MSVC's library search path and make
+re-exports any variable that also exists in the environment, so each of them
+will fail to link with an error naming `bcrypt.lib` until renamed. Velo is
+renamed here; the other four are waiting.
+
+Two smaller notes for whoever takes the next module:
+
+- Link lines are not spelled uniformly. Velo used `-L$(SHARED_DIR) -lshared`
+  where ralph used a literal `-L../shared -lshared`, so a search-and-replace
+  tuned to one will silently miss the other. `$(call link_lib,<dir>,<name>)`
+  is the form to land on.
+- Mixing toolchains in one tree does not work: an MSVC `libshared.a` linked by
+  gcc, or the reverse, produces undefined references to things that are plainly
+  in the archive. `make clean` between compilers, always.
+
+Verified on Windows 11, full suites, zero failures either way:
+
+| | GCC (UCRT64) | MSVC 19.44 |
+|---|---|---|
+| shared | pass | pass |
+| ralph | pass | pass |
+| velo | 51/51 + 32 | 51/51 + 32 |
+
+GCC command lines for velo are unchanged apart from one collapsed double space,
+left by dropping an `OPENMP_INCLUDES` variable that was always empty off macOS.
+shared and ralph remain byte-identical.
