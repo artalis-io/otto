@@ -498,3 +498,93 @@ port tracked separately.
 - The API servers, which need Keel to build under MSVC first. Keel is
   MinGW-targeted (`CC = cc`, no CMake/sln, `_MSC_VER` nowhere in its own source)
   and is a submodule, so that is upstream work.
+
+### Velo on MSVC
+
+Velo needed no port. Its sources were already clean: commit 0a06781e had moved
+file mapping into the PAL (`sh_map_file_readonly` / `sh_unmap_file`) for shared,
+velo, carta and locus, and `vl_pbf.c` already carried a Windows read-the-file
+fallback. All 9 sources and all 3 tests compile with `cl` untouched. The mmap
+design decision this was expected to need had already been made elsewhere.
+
+What it did need was the Makefile wiring, plus two things that will recur:
+
+**The floating-point knobs had to split.** `CC_FP` was Ralph-shaped -- fast math
+with `-fno-finite-math-only`. Velo wants fast math *without* that carve-out, and
+adds `-ftree-vectorize`. One variable could not serve both without changing one
+of them, so the toolchain now exposes `CC_FP_MODE`, `CC_FP_FASTMATH`,
+`CC_FP_KEEP_NONFINITE` and `CC_VECTORIZE`, and each module says what it wants.
+Same for OpenMP: Velo passes `-fopenmp-simd`, Ralph does not, so `CC_OMP_SIMD`
+is its own knob.
+
+**The `LIB` trap is not Velo's alone.** velo, carta, locus, surge and arbor all
+define `LIB = lib<module>.a`. `LIB` is MSVC's library search path and make
+re-exports any variable that also exists in the environment, so each of them
+will fail to link with an error naming `bcrypt.lib` until renamed. Velo is
+renamed here; the other four are waiting.
+
+Two smaller notes for whoever takes the next module:
+
+- Link lines are not spelled uniformly. Velo used `-L$(SHARED_DIR) -lshared`
+  where ralph used a literal `-L../shared -lshared`, so a search-and-replace
+  tuned to one will silently miss the other. `$(call link_lib,<dir>,<name>)`
+  is the form to land on.
+- Mixing toolchains in one tree does not work: an MSVC `libshared.a` linked by
+  gcc, or the reverse, produces undefined references to things that are plainly
+  in the archive. `make clean` between compilers, always.
+
+Verified on Windows 11, full suites, zero failures either way:
+
+| | GCC (UCRT64) | MSVC 19.44 |
+|---|---|---|
+| shared | pass | pass |
+| ralph | pass | pass |
+| velo | 51/51 + 32 | 51/51 + 32 |
+
+GCC command lines for velo are unchanged apart from one collapsed double space,
+left by dropping an `OPENMP_INCLUDES` variable that was always empty off macOS.
+shared and ralph remain byte-identical.
+
+#### vl_pbf.c: the file 0a06781e missed
+
+That commit set out to remove direct mmap calls from six files and moved velo's
+`vl_graph.c` and carta's `ct_pbf.c` onto the PAL, but `vl_pbf.c` kept its old
+`#ifndef _WIN32` split: mmap on POSIX, read-the-whole-file on Windows. It
+compiled cleanly on every platform, which is why nothing flagged it.
+
+That mattered more than the duplication suggests. This is the OSM extract
+loader -- the README's own example is a ~300 MB country and continental extracts
+run to several GB. The POSIX path mapped the file; the Windows path malloc'd its
+full size and read it in. Same routing engine, one platform paying resident
+memory equal to the input.
+
+Now one mapped implementation on both, via `sh_map_file_readonly` plus
+`sh_map_advise_sequential`, and the guarded POSIX include block is gone.
+
+Error reporting is unified rather than preserved verbatim, because the two
+branches did not agree:
+
+| input | old POSIX | old Windows | now |
+|---|---|---|---|
+| missing | File not found | File not found | File not found |
+| empty | Out of memory | File read error | File read error |
+
+The PAL reports one failure for missing, empty and unmappable alike, so the
+common case is distinguished with an `fopen` probe on the failure path only --
+the message a user sees is the only thing that differed, and no caller branches
+on the code.
+
+Verified against a real 676 KB Monaco extract plus missing, empty and garbage
+inputs. GCC and MSVC now produce identical output on all four:
+
+    real     OK nodes=41701 ways=6248 highway=1232
+    missing  File not found
+    empty    File read error
+    garbage  OK nodes=0 ways=0 highway=0
+
+One limit worth stating: MinGW defines `_WIN32`, so the old code already took
+the Windows branch there. Nothing on this machine could execute the old POSIX
+mmap branch, and the before/after comparison above is against the Windows one.
+The Linux matrix is what exercises the new unified path on the side that used to
+mmap. No velo test covers `vl_pbf_parse_file` at all, which is how the split
+survived this long.

@@ -26,12 +26,7 @@
 #include <stdint.h>
 #include <limits.h>
 
-#ifndef _WIN32
-#include <sys/mman.h>
-#include <sys/stat.h>
-#include <fcntl.h>
-#include <unistd.h>
-#endif
+#include "sh_pal.h"
 
 /* PBF field numbers - use shared definitions from sh_pbf.h */
 
@@ -631,78 +626,33 @@ VLStatus vl_pbf_parse(VLPBFContext *ctx, const uint8_t *data, size_t len)
  * File Loading
  * ============================================================================ */
 
-#ifndef _WIN32
 VLStatus vl_pbf_parse_file(VLPBFContext *ctx, const char *filename)
 {
     if (!ctx || !filename) {
         return VL_ERROR_INVALID_ARGUMENT;
     }
 
-    int fd = open(filename, O_RDONLY);
-    if (fd < 0) {
-        return VL_ERROR_FILE_NOT_FOUND;
-    }
-
-    struct stat st;
-    if (fstat(fd, &st) < 0) {
-        close(fd);
+    /* One mapped path on every platform. This used to be two: mmap here and a
+     * read-the-whole-file fallback on Windows, which mattered because these are
+     * OSM extracts -- hundreds of megabytes for a country, more for a continent.
+     * Reading one into the heap costs its full size in resident memory where
+     * mapping costs almost nothing. */
+    ShFileMap map;
+    if (sh_map_file_readonly(filename, &map) != 0) {
+        /* The PAL reports one failure for missing, empty and unmappable alike.
+         * Only the message differs to a user, so distinguish the common case
+         * here, off the path that matters. */
+        FILE *probe = fopen(filename, "rb");
+        if (!probe) return VL_ERROR_FILE_NOT_FOUND;
+        fclose(probe);
         return VL_ERROR_FILE_READ;
     }
 
-    size_t len = (size_t)st.st_size;
-    void *data = mmap(NULL, len, PROT_READ, MAP_PRIVATE, fd, 0);
-    close(fd);
+    sh_map_advise_sequential(&map);
 
-    if (data == MAP_FAILED) {
-        return VL_ERROR_OUT_OF_MEMORY;
-    }
+    VLStatus status = vl_pbf_parse(ctx, map.data, map.size);
 
-    VLStatus status = vl_pbf_parse(ctx, data, len);
-
-    munmap(data, len);
+    sh_unmap_file(&map);
 
     return status;
 }
-#else
-/* Windows fallback: read entire file */
-VLStatus vl_pbf_parse_file(VLPBFContext *ctx, const char *filename)
-{
-    if (!ctx || !filename) {
-        return VL_ERROR_INVALID_ARGUMENT;
-    }
-
-    FILE *f = fopen(filename, "rb");
-    if (!f) {
-        return VL_ERROR_FILE_NOT_FOUND;
-    }
-
-    fseek(f, 0, SEEK_END);
-    long len = ftell(f);
-    fseek(f, 0, SEEK_SET);
-
-    if (len <= 0) {
-        fclose(f);
-        return VL_ERROR_FILE_READ;
-    }
-
-    uint8_t *data = malloc((size_t)len);
-    if (!data) {
-        fclose(f);
-        return VL_ERROR_OUT_OF_MEMORY;
-    }
-
-    if (fread(data, 1, (size_t)len, f) != (size_t)len) {
-        free(data);
-        fclose(f);
-        return VL_ERROR_FILE_READ;
-    }
-
-    fclose(f);
-
-    VLStatus status = vl_pbf_parse(ctx, data, (size_t)len);
-
-    free(data);
-
-    return status;
-}
-#endif

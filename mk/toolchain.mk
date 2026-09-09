@@ -73,10 +73,19 @@ CC_ARCH   :=
 # which in a simplex is precisely the assumption that fails.
 FP_MODE ?= precise
 ifeq ($(FP_MODE),fast)
-  CC_FP := /fp:fast
+  CC_FP_MODE := /fp:fast
 else
-  CC_FP := /fp:precise
+  CC_FP_MODE := /fp:precise
 endif
+
+# The GNU spellings have no MSVC counterpart beyond the mode above: /fp: is the
+# whole dial, so asking for fast math and for finite-math to stay on cannot be
+# expressed separately. Nothing is emitted rather than something different.
+CC_FP_FASTMATH       :=
+CC_FP_KEEP_NONFINITE :=
+
+# MSVC auto-vectorises at /O2; there is no separate switch to ask for it.
+CC_VECTORIZE :=
 
 # M_PI: MSVC gates the math constants behind _USE_MATH_DEFINES, where glibc
 # exposes them under _GNU_SOURCE. Same intent, different spelling.
@@ -121,8 +130,9 @@ CC_HARDEN := /GS /guard:cf
 # warnings, identical results -- and auto-vectorises under /O2 anyway. The three
 # genuine `parallel` constructs in lap.c degrade to serial, which is a defined
 # OpenMP property and is already covered by Ralph's "parallel disabled" tests.
-CC_OMP    :=
-LD_OMP    :=
+CC_OMP      :=
+CC_OMP_SIMD :=
+LD_OMP      :=
 
 CC_DEBUG_OPT := /Zi /Od
 CC_SANITIZE  :=
@@ -170,7 +180,11 @@ CC_STD_BASELINE :=
 CC_WARN   := -Wall -Wextra
 CC_OPT    := -O3
 CC_ARCH   := -march=native
-CC_FP     := -ffast-math -fno-finite-math-only
+# Two knobs, not one: Ralph wants both, Velo wants only the first.
+CC_FP_MODE           :=
+CC_FP_FASTMATH       := -ffast-math
+CC_FP_KEEP_NONFINITE := -fno-finite-math-only
+CC_VECTORIZE         := -ftree-vectorize
 CC_DEFS   := -D_GNU_SOURCE
 CC_PORT_DEFS :=
 CC_HARDEN := -fstack-protector-strong -D_FORTIFY_SOURCE=2 -fPIE -fno-common
@@ -186,22 +200,28 @@ LD_STACK  :=
 ifeq ($(UNAME_S),Darwin)
   # macOS: Homebrew libomp with clang. -pie is implicit here.
   OMP_PREFIX := $(shell brew --prefix libomp 2>/dev/null || echo "/opt/homebrew/opt/libomp")
-  CC_OMP    := -Xclang -fopenmp -I$(OMP_PREFIX)/include
-  LD_OMP    := -L$(OMP_PREFIX)/lib -lomp
+  CC_OMP      := -Xclang -fopenmp -I$(OMP_PREFIX)/include
+  CC_OMP_SIMD :=
+  LD_OMP      := -L$(OMP_PREFIX)/lib -lomp
   LD_PIE    :=
   LD_RELRO  :=
   LD_PLATFORM :=
 else ifneq (,$(findstring MINGW,$(UNAME_S)))
   # Windows/MinGW: -z relro/now are ELF-only and MinGW ld rejects them outright.
   # bcrypt and ws2_32 come from libshared's use of sh_pal.
-  CC_OMP    := -fopenmp
-  LD_OMP    := -fopenmp
+  CC_OMP      := -fopenmp
+  # Velo has always passed this on Windows too -- its old Makefile keyed the
+  # SIMD half on "not macOS", not on Linux specifically.
+  CC_OMP_SIMD := -fopenmp-simd
+  LD_OMP      := -fopenmp
   LD_PIE    :=
   LD_RELRO  :=
   LD_PLATFORM := -lbcrypt -lws2_32
 else
-  CC_OMP    := -fopenmp
-  LD_OMP    := -fopenmp
+  CC_OMP      := -fopenmp
+  # Velo asks for the SIMD half explicitly; Ralph does not.
+  CC_OMP_SIMD := -fopenmp-simd
+  LD_OMP      := -fopenmp
   # shared links with -pie; ralph historically did not. Kept as two knobs
   # so each module reproduces exactly what it linked with before.
   LD_PIE    := -pie

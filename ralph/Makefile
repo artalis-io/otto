@@ -12,8 +12,9 @@ include ../mk/toolchain.mk
 # No standard is pinned on GCC deliberately: Ralph builds in the compiler's
 # default GNU mode. CC_STD_BASELINE is empty there and names C11 explicitly
 # only where the default would be older (MSVC).
-CFLAGS = $(strip $(CC_WARN) $(CC_OPT) $(CC_ARCH) $(CC_FP) $(CC_HARDEN) \
-                 $(CC_OMP) $(CC_STD_BASELINE) $(CC_PORT_DEFS))
+CFLAGS = $(strip $(CC_WARN) $(CC_OPT) $(CC_ARCH) \
+                 $(CC_FP_MODE) $(CC_FP_FASTMATH) $(CC_FP_KEEP_NONFINITE) \
+                 $(CC_HARDEN) $(CC_OMP) $(CC_STD_BASELINE) $(CC_PORT_DEFS))
 
 # Debug build (with sanitizers)
 CFLAGS_DEBUG = $(strip $(CC_WARN) $(CC_DEBUG_OPT) -DDEBUG $(CC_SANITIZE) $(CC_STD_BASELINE) $(CC_PORT_DEFS))
