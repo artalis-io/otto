@@ -5,7 +5,6 @@
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
-#include <unistd.h>
 #ifdef _WIN32
   #define WIN32_LEAN_AND_MEAN
   #include <windows.h>
@@ -13,9 +12,11 @@
   #undef far
   #include <io.h>
 #else
+  #include <unistd.h>
   #include <sys/wait.h>
 #endif
 
+#include "sh_pal.h"
 #include "lp_external_oop.h"
 
 #define OOP_DEFAULT_POLL_MS 10
@@ -23,17 +24,12 @@
 #define OOP_IO_BUF_SIZE 1024
 
 static double oop_now_ms(void) {
-    struct timespec ts;
-    if (clock_gettime(CLOCK_MONOTONIC, &ts) != 0) return 0.0;
-    return (double)ts.tv_sec * 1000.0 + (double)ts.tv_nsec / 1e6;
+    return (double)sh_monotonic_ns() / 1.0e6;
 }
 
 static void oop_sleep_ms(int ms) {
-    struct timespec req;
     if (ms <= 0) return;
-    req.tv_sec = ms / 1000;
-    req.tv_nsec = (long)(ms % 1000) * 1000000L;
-    (void)nanosleep(&req, NULL);
+    sh_sleep_ms((unsigned)ms);
 }
 
 static void oop_result_init(LPExternalOOPRunResult *result) {

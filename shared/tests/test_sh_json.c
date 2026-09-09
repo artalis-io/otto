@@ -1113,7 +1113,7 @@ TEST(write_double_nan)
 
     ShJsonWriter w;
     sh_json_writer_init(&w, test_write_fn, &wb);
-    double nan_val = 0.0 / 0.0;
+    double nan_val = NAN;
     ASSERT_EQ(sh_json_write_double(&w, nan_val), 0);
     ASSERT_STREQ(buf, "null");  /* NaN becomes null */
 }
@@ -1126,7 +1126,7 @@ TEST(write_double_inf)
 
     ShJsonWriter w;
     sh_json_writer_init(&w, test_write_fn, &wb);
-    double inf_val = 1.0 / 0.0;
+    double inf_val = INFINITY;
     ASSERT_EQ(sh_json_write_double(&w, inf_val), 0);
     ASSERT_STREQ(buf, "null");  /* Infinity becomes null */
 }

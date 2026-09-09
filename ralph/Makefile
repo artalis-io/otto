@@ -1,39 +1,26 @@
 # Ralph LP/MIP Solver Makefile
 
+# Ralph has always defaulted to gcc rather than make's built-in cc. Kept as a
+# plain default: a command-line CC=cl still wins, which is how MSVC gets in.
 CC = gcc
 
-# Production build (with hardening)
-CFLAGS = -Wall -Wextra -O3 -march=native -ffast-math -fno-finite-math-only \
-         -fstack-protector-strong -D_FORTIFY_SOURCE=2 -fPIE -fno-common
+# Every compiler difference lives in one place; see mk/toolchain.mk.
+include ../mk/toolchain.mk
 
-# OpenMP SIMD support (portable vectorization)
-# On macOS: brew install libomp && use clang with -Xclang -fopenmp
-# On Linux: gcc has native OpenMP support with -fopenmp
-UNAME_S := $(shell uname -s)
-ifeq ($(UNAME_S),Darwin)
-    # macOS: use Homebrew's libomp with clang
-    OMP_PREFIX := $(shell brew --prefix libomp 2>/dev/null || echo "/opt/homebrew/opt/libomp")
-    CFLAGS += -Xclang -fopenmp -I$(OMP_PREFIX)/include
-    OMP_LDFLAGS = -L$(OMP_PREFIX)/lib -lomp
-else ifneq (,$(findstring MINGW,$(UNAME_S)))
-    # Windows: gcc OpenMP, but -z relro/now are ELF-only and MinGW ld
-    # rejects them outright. bcrypt and ws2_32 come from libshared's
-    # use of sh_pal.
-    CFLAGS += -fopenmp
-    OMP_LDFLAGS = -fopenmp -lbcrypt -lws2_32
-else
-    # Linux: use gcc's native OpenMP with RELRO
-    CFLAGS += -fopenmp
-    OMP_LDFLAGS = -fopenmp -Wl,-z,relro,-z,now
-endif
+# Production build (with hardening).
+#
+# No standard is pinned on GCC deliberately: Ralph builds in the compiler's
+# default GNU mode. CC_STD_BASELINE is empty there and names C11 explicitly
+# only where the default would be older (MSVC).
+CFLAGS = $(strip $(CC_WARN) $(CC_OPT) $(CC_ARCH) $(CC_FP) $(CC_HARDEN) \
+                 $(CC_OMP) $(CC_STD_BASELINE) $(CC_PORT_DEFS))
 
 # Debug build (with sanitizers)
-CFLAGS_DEBUG = -Wall -Wextra -g -O0 -DDEBUG \
-               -fsanitize=address,undefined -fno-omit-frame-pointer
-DEBUG_LDFLAGS = -fsanitize=address,undefined
+CFLAGS_DEBUG = $(strip $(CC_WARN) $(CC_DEBUG_OPT) -DDEBUG $(CC_SANITIZE) $(CC_STD_BASELINE) $(CC_PORT_DEFS))
+DEBUG_LDFLAGS = $(LD_SANITIZE)
 INCLUDES = -I./include -I../shared/include
 SHARED_LIB = ../shared/libshared.a
-LDFLAGS = -lm $(OMP_LDFLAGS)
+LDFLAGS = $(strip $(LD_MATH) $(LD_OMP) $(LD_PLATFORM) $(LD_RELRO))
 
 # Directories
 SRC_DIR = src
@@ -112,7 +99,7 @@ SOURCES = $(SRC_DIR)/sparse.c \
 
 OBJECTS = $(SOURCES:.c=.o)
 DEPS = $(OBJECTS:.o=.d)
-DEPFLAGS = -MMD -MP
+DEPFLAGS = $(CC_DEPFLAGS)
 
 # Library
 LIB_NAME = libralph.a
@@ -415,19 +402,19 @@ $(SHARED_LIB):
 
 $(LIB_NAME): $(OBJECTS)
 	rm -f $@
-	ar rcs $@ $^
+	$(AR_CMD)$@ $^
 
 # Build object files
 $(SRC_DIR)/%.o: $(SRC_DIR)/%.c
-	$(CC) $(CFLAGS) $(INCLUDES) $(DEPFLAGS) -c $< -o $@
+	$(CC) $(CFLAGS) $(INCLUDES) $(DEPFLAGS) -c $< $(OBJ_OUT)$@
 
 # Build optim submodule object files
 $(SRC_DIR)/optim/%.o: $(SRC_DIR)/optim/%.c
-	$(CC) $(CFLAGS) $(INCLUDES) $(DEPFLAGS) -c $< -o $@
+	$(CC) $(CFLAGS) $(INCLUDES) $(DEPFLAGS) -c $< $(OBJ_OUT)$@
 
 # Build test executable
 $(TEST_EXEC): $(TEST_SOURCES) $(LIB_NAME) $(SHARED_LIB)
-	$(CC) $(CFLAGS) $(INCLUDES) $< -L. -lralph -L../shared -lshared $(LDFLAGS) -o $@
+	$(CC) $(CFLAGS) $(INCLUDES) $< $(call link_lib,.,ralph) $(call link_lib,../shared,shared) $(LDFLAGS) $(EXE_OUT)$@
 
 # Debug build (with sanitizers)
 # Run the transport suite under AddressSanitizer + UBSan.
@@ -511,7 +498,7 @@ test-beaconfd: $(BEACONFD_TEST_EXEC) $(BEACONFD_TRACE_TEST_EXEC)
 
 # Build edge case tests
 $(EDGE_TEST_EXEC): $(EDGE_TEST_SOURCES) $(LIB_NAME) $(SHARED_LIB)
-	$(CC) $(CFLAGS) $(INCLUDES) $< -L. -lralph -L../shared -lshared $(LDFLAGS) -o $@
+	$(CC) $(CFLAGS) $(INCLUDES) $< $(call link_lib,.,ralph) $(call link_lib,../shared,shared) $(LDFLAGS) $(EXE_OUT)$@
 
 # Run edge case tests
 test-edge: $(EDGE_TEST_EXEC)
@@ -519,7 +506,7 @@ test-edge: $(EDGE_TEST_EXEC)
 
 # Build LAP tests
 $(LAP_TEST_EXEC): $(LAP_TEST_SOURCES) $(LIB_NAME) $(SHARED_LIB)
-	$(CC) $(CFLAGS) $(INCLUDES) $< -L. -lralph -L../shared -lshared $(LDFLAGS) -o $@
+	$(CC) $(CFLAGS) $(INCLUDES) $< $(call link_lib,.,ralph) $(call link_lib,../shared,shared) $(LDFLAGS) $(EXE_OUT)$@
 
 # Run LAP tests
 test-lap: $(LAP_TEST_EXEC)
@@ -527,7 +514,7 @@ test-lap: $(LAP_TEST_EXEC)
 
 # Build network flow tests
 $(NETFLOW_TEST_EXEC): $(NETFLOW_TEST_SOURCES) $(LIB_NAME) $(SHARED_LIB)
-	$(CC) $(CFLAGS) $(INCLUDES) $< -L. -lralph -L../shared -lshared $(LDFLAGS) -o $@
+	$(CC) $(CFLAGS) $(INCLUDES) $< $(call link_lib,.,ralph) $(call link_lib,../shared,shared) $(LDFLAGS) $(EXE_OUT)$@
 
 # Run network flow tests
 test-netflow: $(NETFLOW_TEST_EXEC)
@@ -535,7 +522,7 @@ test-netflow: $(NETFLOW_TEST_EXEC)
 
 # Build network detection tests
 $(DETECT_TEST_EXEC): $(DETECT_TEST_SOURCES) $(LIB_NAME) $(SHARED_LIB)
-	$(CC) $(CFLAGS) $(INCLUDES) $< -L. -lralph -L../shared -lshared $(LDFLAGS) -o $@
+	$(CC) $(CFLAGS) $(INCLUDES) $< $(call link_lib,.,ralph) $(call link_lib,../shared,shared) $(LDFLAGS) $(EXE_OUT)$@
 
 # Run network detection tests
 test-detect: $(DETECT_TEST_EXEC)
@@ -543,11 +530,11 @@ test-detect: $(DETECT_TEST_EXEC)
 
 # Build optimization module tests
 $(OPTIM_TEST_EXEC): $(OPTIM_TEST_SOURCES) $(LIB_NAME) $(SHARED_LIB)
-	$(CC) $(CFLAGS) $(INCLUDES) $< -L. -lralph -L../shared -lshared $(LDFLAGS) -o $@
+	$(CC) $(CFLAGS) $(INCLUDES) $< $(call link_lib,.,ralph) $(call link_lib,../shared,shared) $(LDFLAGS) $(EXE_OUT)$@
 
 # Build LP format tests
 $(LP_TEST_EXEC): $(LP_TEST_SOURCES) $(LIB_NAME) $(SHARED_LIB)
-	$(CC) $(CFLAGS) $(INCLUDES) $< -L. -lralph -L../shared -lshared $(LDFLAGS) -o $@
+	$(CC) $(CFLAGS) $(INCLUDES) $< $(call link_lib,.,ralph) $(call link_lib,../shared,shared) $(LDFLAGS) $(EXE_OUT)$@
 
 # Run LP format tests
 test-lp: $(LP_TEST_EXEC)
@@ -555,7 +542,7 @@ test-lp: $(LP_TEST_EXEC)
 
 # Build NETLIB MPS parser regression tests
 $(MPS_PARSER_TEST_EXEC): $(MPS_PARSER_TEST_SOURCES) $(LIB_NAME) $(SHARED_LIB)
-	$(CC) $(CFLAGS) $(INCLUDES) $< -L. -lralph -L../shared -lshared $(LDFLAGS) -o $@
+	$(CC) $(CFLAGS) $(INCLUDES) $< $(call link_lib,.,ralph) $(call link_lib,../shared,shared) $(LDFLAGS) $(EXE_OUT)$@
 
 # Run NETLIB MPS parser regression tests
 test-mps-parser: $(MPS_PARSER_TEST_EXEC)
@@ -563,7 +550,7 @@ test-mps-parser: $(MPS_PARSER_TEST_EXEC)
 
 # Build API tests
 $(API_TEST_EXEC): $(API_TEST_SOURCES) $(LIB_NAME) $(SHARED_LIB)
-	$(CC) $(CFLAGS) $(INCLUDES) $< -L. -lralph -L../shared -lshared $(LDFLAGS) -o $@
+	$(CC) $(CFLAGS) $(INCLUDES) $< $(call link_lib,.,ralph) $(call link_lib,../shared,shared) $(LDFLAGS) $(EXE_OUT)$@
 
 # Run API tests
 test-api: $(API_TEST_EXEC)
@@ -571,7 +558,7 @@ test-api: $(API_TEST_EXEC)
 
 # Build transport tests
 $(TRANSPORT_TEST_EXEC): $(TRANSPORT_TEST_SOURCES) $(LIB_NAME) $(SHARED_LIB)
-	$(CC) $(CFLAGS) $(INCLUDES) $< -L. -lralph -L../shared -lshared $(LDFLAGS) -o $@
+	$(CC) $(CFLAGS) $(INCLUDES) $< $(call link_lib,.,ralph) $(call link_lib,../shared,shared) $(LDFLAGS) $(EXE_OUT)$@
 
 # Run transport tests
 test-transport: $(TRANSPORT_TEST_EXEC)
@@ -579,7 +566,7 @@ test-transport: $(TRANSPORT_TEST_EXEC)
 
 # Build Benders tests
 $(BENDERS_TEST_EXEC): $(BENDERS_TEST_SOURCES) $(LIB_NAME) $(SHARED_LIB)
-	$(CC) $(CFLAGS) $(INCLUDES) $< -L. -lralph -L../shared -lshared $(LDFLAGS) -o $@
+	$(CC) $(CFLAGS) $(INCLUDES) $< $(call link_lib,.,ralph) $(call link_lib,../shared,shared) $(LDFLAGS) $(EXE_OUT)$@
 
 # Run Benders tests
 test-benders: $(BENDERS_TEST_EXEC)
@@ -587,7 +574,7 @@ test-benders: $(BENDERS_TEST_EXEC)
 
 # Build Benders debug harness (investigative, not part of main test gate)
 $(BENDERS_DEBUG_TEST_EXEC): $(BENDERS_DEBUG_TEST_SOURCES) $(LIB_NAME) $(SHARED_LIB)
-	$(CC) $(CFLAGS) $(INCLUDES) $< -L. -lralph -L../shared -lshared $(LDFLAGS) -o $@
+	$(CC) $(CFLAGS) $(INCLUDES) $< $(call link_lib,.,ralph) $(call link_lib,../shared,shared) $(LDFLAGS) $(EXE_OUT)$@
 
 # Run Benders debug harness
 test-benders-debug: $(BENDERS_DEBUG_TEST_EXEC)
@@ -608,7 +595,7 @@ test-benders-known-regression: $(BENDERS_WARMSTART_TEST_EXEC) $(BENDERS_MASTER_S
 
 # Build focused Benders warm-start tests
 $(BENDERS_WARMSTART_TEST_EXEC): $(BENDERS_WARMSTART_TEST_SOURCES) $(LIB_NAME) $(SHARED_LIB)
-	$(CC) $(CFLAGS) $(INCLUDES) $< -L. -lralph -L../shared -lshared $(LDFLAGS) -o $@
+	$(CC) $(CFLAGS) $(INCLUDES) $< $(call link_lib,.,ralph) $(call link_lib,../shared,shared) $(LDFLAGS) $(EXE_OUT)$@
 
 # Run focused Benders warm-start tests
 test-benders-warmstart: $(BENDERS_WARMSTART_TEST_EXEC)
@@ -616,7 +603,7 @@ test-benders-warmstart: $(BENDERS_WARMSTART_TEST_EXEC)
 
 # Build focused MIP warm-start tests
 $(MIP_WARMSTART_TEST_EXEC): $(MIP_WARMSTART_TEST_SOURCES) $(LIB_NAME) $(SHARED_LIB)
-	$(CC) $(CFLAGS) $(INCLUDES) $< -L. -lralph -L../shared -lshared $(LDFLAGS) -o $@
+	$(CC) $(CFLAGS) $(INCLUDES) $< $(call link_lib,.,ralph) $(call link_lib,../shared,shared) $(LDFLAGS) $(EXE_OUT)$@
 
 # Run focused MIP warm-start tests
 test-mip-warmstart: $(MIP_WARMSTART_TEST_EXEC)
@@ -624,7 +611,7 @@ test-mip-warmstart: $(MIP_WARMSTART_TEST_EXEC)
 
 # Build focused MIP/LP recovery-contract tests
 $(MIP_LP_RECOVERY_TEST_EXEC): $(MIP_LP_RECOVERY_TEST_SOURCES) $(LIB_NAME) $(SHARED_LIB)
-	$(CC) $(CFLAGS) $(INCLUDES) $< -L. -lralph -L../shared -lshared $(LDFLAGS) -o $@
+	$(CC) $(CFLAGS) $(INCLUDES) $< $(call link_lib,.,ralph) $(call link_lib,../shared,shared) $(LDFLAGS) $(EXE_OUT)$@
 
 # Run focused MIP/LP recovery-contract tests
 test-mip-lp-recovery: $(MIP_LP_RECOVERY_TEST_EXEC)
@@ -632,7 +619,7 @@ test-mip-lp-recovery: $(MIP_LP_RECOVERY_TEST_EXEC)
 
 # Build sparse/partial MIP-start tests
 $(MIP_START_SPARSE_TEST_EXEC): $(MIP_START_SPARSE_TEST_SOURCES) $(LIB_NAME) $(SHARED_LIB)
-	$(CC) $(CFLAGS) $(INCLUDES) $< -L. -lralph -L../shared -lshared $(LDFLAGS) -o $@
+	$(CC) $(CFLAGS) $(INCLUDES) $< $(call link_lib,.,ralph) $(call link_lib,../shared,shared) $(LDFLAGS) $(EXE_OUT)$@
 
 # Run sparse/partial MIP-start tests
 test-mip-start-sparse: $(MIP_START_SPARSE_TEST_EXEC)
@@ -640,7 +627,7 @@ test-mip-start-sparse: $(MIP_START_SPARSE_TEST_EXEC)
 
 # Build MIP-start repair-mode tests
 $(MIP_START_REPAIR_TEST_EXEC): $(MIP_START_REPAIR_TEST_SOURCES) $(LIB_NAME) $(SHARED_LIB)
-	$(CC) $(CFLAGS) $(INCLUDES) $< -L. -lralph -L../shared -lshared $(LDFLAGS) -o $@
+	$(CC) $(CFLAGS) $(INCLUDES) $< $(call link_lib,.,ralph) $(call link_lib,../shared,shared) $(LDFLAGS) $(EXE_OUT)$@
 
 # Run MIP-start repair-mode tests
 test-mip-start-repair: $(MIP_START_REPAIR_TEST_EXEC)
@@ -648,7 +635,7 @@ test-mip-start-repair: $(MIP_START_REPAIR_TEST_EXEC)
 
 # Build MIP regression reproducer test
 $(MIP_BUG_TEST_EXEC): $(MIP_BUG_TEST_SOURCES) $(LIB_NAME) $(SHARED_LIB)
-	$(CC) $(CFLAGS) $(INCLUDES) $< -L. -lralph -L../shared -lshared $(LDFLAGS) -o $@
+	$(CC) $(CFLAGS) $(INCLUDES) $< $(call link_lib,.,ralph) $(call link_lib,../shared,shared) $(LDFLAGS) $(EXE_OUT)$@
 
 # Run MIP regression reproducer test
 test-mip-bug: $(MIP_BUG_TEST_EXEC)
@@ -656,7 +643,7 @@ test-mip-bug: $(MIP_BUG_TEST_EXEC)
 
 # Build standalone SPP context tests
 $(SPP_CONTEXT_TEST_EXEC): $(SPP_CONTEXT_TEST_SOURCES) $(LIB_NAME) $(SHARED_LIB)
-	$(CC) $(CFLAGS) $(INCLUDES) $< -L. -lralph -L../shared -lshared $(LDFLAGS) -o $@
+	$(CC) $(CFLAGS) $(INCLUDES) $< $(call link_lib,.,ralph) $(call link_lib,../shared,shared) $(LDFLAGS) $(EXE_OUT)$@
 
 # Run standalone SPP context tests
 test-spp-context: $(SPP_CONTEXT_TEST_EXEC)
@@ -664,13 +651,13 @@ test-spp-context: $(SPP_CONTEXT_TEST_EXEC)
 
 # Build standalone SPP cut tests
 $(LIFTED_COVER_TEST_EXEC): $(LIFTED_COVER_TEST_SOURCES) $(LIB_NAME) $(SHARED_LIB)
-	$(CC) $(CFLAGS) $(INCLUDES) $< -L. -lralph -L../shared -lshared $(LDFLAGS) -o $@
+	$(CC) $(CFLAGS) $(INCLUDES) $< $(call link_lib,.,ralph) $(call link_lib,../shared,shared) $(LDFLAGS) $(EXE_OUT)$@
 
 test-lifted-cover: $(LIFTED_COVER_TEST_EXEC)
 	./$(LIFTED_COVER_TEST_EXEC)
 
 $(PRESOLVE_DIFF_TEST_EXEC): $(PRESOLVE_DIFF_TEST_SOURCES) $(LIB_NAME) $(SHARED_LIB)
-	$(CC) $(CFLAGS) $(INCLUDES) $< -L. -lralph -L../shared -lshared $(LDFLAGS) -o $@
+	$(CC) $(CFLAGS) $(INCLUDES) $< $(call link_lib,.,ralph) $(call link_lib,../shared,shared) $(LDFLAGS) $(EXE_OUT)$@
 
 # Diagnostic for artalis-io/otto#86. Currently fails on purpose (documents the
 # open defect); NOT part of `make test`.
@@ -678,7 +665,7 @@ test-presolve-differential: $(PRESOLVE_DIFF_TEST_EXEC)
 	./$(PRESOLVE_DIFF_TEST_EXEC)
 
 $(SPP_CUTS_TEST_EXEC): $(SPP_CUTS_TEST_SOURCES) $(LIB_NAME) $(SHARED_LIB)
-	$(CC) $(CFLAGS) $(INCLUDES) $< -L. -lralph -L../shared -lshared $(LDFLAGS) -o $@
+	$(CC) $(CFLAGS) $(INCLUDES) $< $(call link_lib,.,ralph) $(call link_lib,../shared,shared) $(LDFLAGS) $(EXE_OUT)$@
 
 # Run standalone SPP cut tests
 test-spp-cuts: $(SPP_CUTS_TEST_EXEC)
@@ -686,7 +673,7 @@ test-spp-cuts: $(SPP_CUTS_TEST_EXEC)
 
 # Build standalone SPP heuristic tests
 $(SPP_HEURISTIC_TEST_EXEC): $(SPP_HEURISTIC_TEST_SOURCES) $(LIB_NAME) $(SHARED_LIB)
-	$(CC) $(CFLAGS) $(INCLUDES) $< -L. -lralph -L../shared -lshared $(LDFLAGS) -o $@
+	$(CC) $(CFLAGS) $(INCLUDES) $< $(call link_lib,.,ralph) $(call link_lib,../shared,shared) $(LDFLAGS) $(EXE_OUT)$@
 
 # Run standalone SPP heuristic tests
 test-spp-heuristic: $(SPP_HEURISTIC_TEST_EXEC)
@@ -694,7 +681,7 @@ test-spp-heuristic: $(SPP_HEURISTIC_TEST_EXEC)
 
 # Build standalone SPP branching/propagation tests
 $(SPP_BRANCH_TEST_EXEC): $(SPP_BRANCH_TEST_SOURCES) $(LIB_NAME) $(SHARED_LIB)
-	$(CC) $(CFLAGS) $(INCLUDES) $< -L. -lralph -L../shared -lshared $(LDFLAGS) -o $@
+	$(CC) $(CFLAGS) $(INCLUDES) $< $(call link_lib,.,ralph) $(call link_lib,../shared,shared) $(LDFLAGS) $(EXE_OUT)$@
 
 # Run standalone SPP branching/propagation tests
 test-spp-branch: $(SPP_BRANCH_TEST_EXEC)
@@ -702,7 +689,7 @@ test-spp-branch: $(SPP_BRANCH_TEST_EXEC)
 
 # Build Benders initial master-start tests
 $(BENDERS_MASTER_START_TEST_EXEC): $(BENDERS_MASTER_START_TEST_SOURCES) $(LIB_NAME) $(SHARED_LIB)
-	$(CC) $(CFLAGS) $(INCLUDES) $< -L. -lralph -L../shared -lshared $(LDFLAGS) -o $@
+	$(CC) $(CFLAGS) $(INCLUDES) $< $(call link_lib,.,ralph) $(call link_lib,../shared,shared) $(LDFLAGS) $(EXE_OUT)$@
 
 # Run Benders initial master-start tests
 test-benders-master-start: $(BENDERS_MASTER_START_TEST_EXEC)
@@ -710,7 +697,7 @@ test-benders-master-start: $(BENDERS_MASTER_START_TEST_EXEC)
 
 # Build warm-start serialization tests
 $(WARMSTART_SERDE_TEST_EXEC): $(WARMSTART_SERDE_TEST_SOURCES) $(LIB_NAME) $(SHARED_LIB)
-	$(CC) $(CFLAGS) $(INCLUDES) $< -L. -lralph -L../shared -lshared $(LDFLAGS) -o $@
+	$(CC) $(CFLAGS) $(INCLUDES) $< $(call link_lib,.,ralph) $(call link_lib,../shared,shared) $(LDFLAGS) $(EXE_OUT)$@
 
 # Run warm-start serialization tests
 test-warmstart-serde: $(WARMSTART_SERDE_TEST_EXEC)
@@ -718,7 +705,7 @@ test-warmstart-serde: $(WARMSTART_SERDE_TEST_EXEC)
 
 # Build presolve unit tests
 $(PRESOLVE_TEST_EXEC): $(PRESOLVE_TEST_SOURCES) $(LIB_NAME) $(SHARED_LIB)
-	$(CC) $(CFLAGS) $(INCLUDES) $< -L. -lralph -L../shared -lshared $(LDFLAGS) -o $@
+	$(CC) $(CFLAGS) $(INCLUDES) $< $(call link_lib,.,ralph) $(call link_lib,../shared,shared) $(LDFLAGS) $(EXE_OUT)$@
 
 # Run presolve unit tests
 test-presolve: $(PRESOLVE_TEST_EXEC)
@@ -726,19 +713,19 @@ test-presolve: $(PRESOLVE_TEST_EXEC)
 
 # Build beaconfd numerical-regression test
 $(BEACONFD_TEST_EXEC): $(BEACONFD_TEST_SOURCES) $(LIB_NAME) $(SHARED_LIB)
-	$(CC) $(CFLAGS) $(INCLUDES) $< -L. -lralph -L../shared -lshared $(LDFLAGS) -o $@
+	$(CC) $(CFLAGS) $(INCLUDES) $< $(call link_lib,.,ralph) $(call link_lib,../shared,shared) $(LDFLAGS) $(EXE_OUT)$@
 
 # test-beaconfd target is defined above (known regression, not in main gate)
 
 # Build NETLIB regression tests (bandm, blend, lotfi)
 $(BANDM_TEST_EXEC): $(BANDM_TEST_SOURCES) $(LIB_NAME) $(SHARED_LIB)
-	$(CC) $(CFLAGS) $(INCLUDES) $< -L. -lralph -L../shared -lshared $(LDFLAGS) -o $@
+	$(CC) $(CFLAGS) $(INCLUDES) $< $(call link_lib,.,ralph) $(call link_lib,../shared,shared) $(LDFLAGS) $(EXE_OUT)$@
 
 $(BLEND_TEST_EXEC): $(BLEND_TEST_SOURCES) $(LIB_NAME) $(SHARED_LIB)
-	$(CC) $(CFLAGS) $(INCLUDES) $< -L. -lralph -L../shared -lshared $(LDFLAGS) -o $@
+	$(CC) $(CFLAGS) $(INCLUDES) $< $(call link_lib,.,ralph) $(call link_lib,../shared,shared) $(LDFLAGS) $(EXE_OUT)$@
 
 $(LOTFI_TEST_EXEC): $(LOTFI_TEST_SOURCES) $(LIB_NAME) $(SHARED_LIB)
-	$(CC) $(CFLAGS) $(INCLUDES) $< -L. -lralph -L../shared -lshared $(LDFLAGS) -o $@
+	$(CC) $(CFLAGS) $(INCLUDES) $< $(call link_lib,.,ralph) $(call link_lib,../shared,shared) $(LDFLAGS) $(EXE_OUT)$@
 
 # Run NETLIB regression tests individually
 test-bandm: $(BANDM_TEST_EXEC)
@@ -752,7 +739,7 @@ test-lotfi: $(LOTFI_TEST_EXEC)
 
 # Build beaconfd phase-1 trace regression test
 $(BEACONFD_TRACE_TEST_EXEC): $(BEACONFD_TRACE_TEST_SOURCES) $(LIB_NAME) $(SHARED_LIB)
-	$(CC) $(CFLAGS) $(INCLUDES) $< -L. -lralph -L../shared -lshared $(LDFLAGS) -o $@
+	$(CC) $(CFLAGS) $(INCLUDES) $< $(call link_lib,.,ralph) $(call link_lib,../shared,shared) $(LDFLAGS) $(EXE_OUT)$@
 
 # Run beaconfd phase-1 trace regression test
 test-beaconfd-trace: $(BEACONFD_TRACE_TEST_EXEC)
@@ -760,7 +747,7 @@ test-beaconfd-trace: $(BEACONFD_TRACE_TEST_EXEC)
 
 # Build Phase 1 recovery progress ops test
 $(PHASE1_RECOVERY_TEST_EXEC): $(PHASE1_RECOVERY_TEST_SOURCES) $(LIB_NAME) $(SHARED_LIB)
-	$(CC) $(CFLAGS) $(INCLUDES) -I./src $< -L. -lralph -L../shared -lshared $(LDFLAGS) -o $@
+	$(CC) $(CFLAGS) $(INCLUDES) -I./src $< $(call link_lib,.,ralph) $(call link_lib,../shared,shared) $(LDFLAGS) $(EXE_OUT)$@
 
 # Run Phase 1 recovery progress ops test
 test-phase1-recovery: $(PHASE1_RECOVERY_TEST_EXEC)
@@ -768,13 +755,13 @@ test-phase1-recovery: $(PHASE1_RECOVERY_TEST_EXEC)
 
 # Build Phase 1 zone handler tests
 $(PHASE1_ENGINE_TEST_EXEC): $(PHASE1_ENGINE_TEST_SOURCES) $(LIB_NAME) $(SHARED_LIB)
-	$(CC) $(CFLAGS) $(INCLUDES) -I./src $< -L. -lralph -L../shared -lshared $(LDFLAGS) -o $@
+	$(CC) $(CFLAGS) $(INCLUDES) -I./src $< $(call link_lib,.,ralph) $(call link_lib,../shared,shared) $(LDFLAGS) $(EXE_OUT)$@
 
 test-phase1-engine: $(PHASE1_ENGINE_TEST_EXEC)
 	./$(PHASE1_ENGINE_TEST_EXEC)
 
 $(PHASE1_ZONES_TEST_EXEC): $(PHASE1_ZONES_TEST_SOURCES) $(LIB_NAME) $(SHARED_LIB)
-	$(CC) $(CFLAGS) $(INCLUDES) -I./src $< -L. -lralph -L../shared -lshared $(LDFLAGS) -o $@
+	$(CC) $(CFLAGS) $(INCLUDES) -I./src $< $(call link_lib,.,ralph) $(call link_lib,../shared,shared) $(LDFLAGS) $(EXE_OUT)$@
 
 # Run Phase 1 zone handler tests
 test-phase1-zones: $(PHASE1_ZONES_TEST_EXEC)
@@ -782,7 +769,7 @@ test-phase1-zones: $(PHASE1_ZONES_TEST_EXEC)
 
 # Build simplex basis-action policy test
 $(SIMPLEX_POLICY_TEST_EXEC): $(SIMPLEX_POLICY_TEST_SOURCES) $(LIB_NAME) $(SHARED_LIB)
-	$(CC) $(CFLAGS) $(INCLUDES) $< -L. -lralph -L../shared -lshared $(LDFLAGS) -o $@
+	$(CC) $(CFLAGS) $(INCLUDES) $< $(call link_lib,.,ralph) $(call link_lib,../shared,shared) $(LDFLAGS) $(EXE_OUT)$@
 
 # Run simplex basis-action policy test
 test-simplex-policy: $(SIMPLEX_POLICY_TEST_EXEC)
@@ -790,7 +777,7 @@ test-simplex-policy: $(SIMPLEX_POLICY_TEST_EXEC)
 
 # Build LP refactor-policy module test
 $(LP_REFACTOR_POLICY_TEST_EXEC): $(LP_REFACTOR_POLICY_TEST_SOURCES) $(LIB_NAME) $(SHARED_LIB)
-	$(CC) $(CFLAGS) $(INCLUDES) $< -L. -lralph -L../shared -lshared $(LDFLAGS) -o $@
+	$(CC) $(CFLAGS) $(INCLUDES) $< $(call link_lib,.,ralph) $(call link_lib,../shared,shared) $(LDFLAGS) $(EXE_OUT)$@
 
 # Run LP refactor-policy module test
 test-lp-refactor-policy: $(LP_REFACTOR_POLICY_TEST_EXEC)
@@ -798,7 +785,7 @@ test-lp-refactor-policy: $(LP_REFACTOR_POLICY_TEST_EXEC)
 
 # Build LP reinvert-controller module test
 $(LP_REINVERT_CONTROLLER_TEST_EXEC): $(LP_REINVERT_CONTROLLER_TEST_SOURCES) $(LIB_NAME) $(SHARED_LIB)
-	$(CC) $(CFLAGS) $(INCLUDES) $< -L. -lralph -L../shared -lshared $(LDFLAGS) -o $@
+	$(CC) $(CFLAGS) $(INCLUDES) $< $(call link_lib,.,ralph) $(call link_lib,../shared,shared) $(LDFLAGS) $(EXE_OUT)$@
 
 # Run LP reinvert-controller module test
 test-lp-reinvert-controller: $(LP_REINVERT_CONTROLLER_TEST_EXEC)
@@ -806,7 +793,7 @@ test-lp-reinvert-controller: $(LP_REINVERT_CONTROLLER_TEST_EXEC)
 
 # Build LP basis-governor module test
 $(LP_BASIS_GOVERNOR_TEST_EXEC): $(LP_BASIS_GOVERNOR_TEST_SOURCES) $(LIB_NAME) $(SHARED_LIB)
-	$(CC) $(CFLAGS) $(INCLUDES) $< -L. -lralph -L../shared -lshared $(LDFLAGS) -o $@
+	$(CC) $(CFLAGS) $(INCLUDES) $< $(call link_lib,.,ralph) $(call link_lib,../shared,shared) $(LDFLAGS) $(EXE_OUT)$@
 
 # Run LP basis-governor module test
 test-lp-basis-governor: $(LP_BASIS_GOVERNOR_TEST_EXEC)
@@ -814,7 +801,7 @@ test-lp-basis-governor: $(LP_BASIS_GOVERNOR_TEST_EXEC)
 
 # Build LP basis-governor runtime test
 $(LP_BASIS_GOVERNOR_RUNTIME_TEST_EXEC): $(LP_BASIS_GOVERNOR_RUNTIME_TEST_SOURCES) $(LIB_NAME) $(SHARED_LIB)
-	$(CC) $(CFLAGS) $(INCLUDES) $< -L. -lralph -L../shared -lshared $(LDFLAGS) -o $@
+	$(CC) $(CFLAGS) $(INCLUDES) $< $(call link_lib,.,ralph) $(call link_lib,../shared,shared) $(LDFLAGS) $(EXE_OUT)$@
 
 # Run LP basis-governor runtime test
 test-lp-basis-governor-runtime: $(LP_BASIS_GOVERNOR_RUNTIME_TEST_EXEC)
@@ -822,7 +809,7 @@ test-lp-basis-governor-runtime: $(LP_BASIS_GOVERNOR_RUNTIME_TEST_EXEC)
 
 # Build LP determinism tests
 $(LP_DETERMINISM_TEST_EXEC): $(LP_DETERMINISM_TEST_SOURCES) $(LIB_NAME) $(SHARED_LIB)
-	$(CC) $(CFLAGS) $(INCLUDES) $< -L. -lralph -L../shared -lshared $(LDFLAGS) -o $@
+	$(CC) $(CFLAGS) $(INCLUDES) $< $(call link_lib,.,ralph) $(call link_lib,../shared,shared) $(LDFLAGS) $(EXE_OUT)$@
 
 # Run LP determinism tests
 test-lp-determinism: $(LP_DETERMINISM_TEST_EXEC)
@@ -830,7 +817,7 @@ test-lp-determinism: $(LP_DETERMINISM_TEST_EXEC)
 
 # Build LP sensitivity tests
 $(LP_SENSITIVITY_TEST_EXEC): $(LP_SENSITIVITY_TEST_SOURCES) $(LIB_NAME) $(SHARED_LIB)
-	$(CC) $(CFLAGS) $(INCLUDES) $< -L. -lralph -L../shared -lshared $(LDFLAGS) -o $@
+	$(CC) $(CFLAGS) $(INCLUDES) $< $(call link_lib,.,ralph) $(call link_lib,../shared,shared) $(LDFLAGS) $(EXE_OUT)$@
 
 # Run LP sensitivity tests
 test-lp-sensitivity: $(LP_SENSITIVITY_TEST_EXEC)
@@ -838,7 +825,7 @@ test-lp-sensitivity: $(LP_SENSITIVITY_TEST_EXEC)
 
 # Build LP conflict tests
 $(LP_CONFLICT_TEST_EXEC): $(LP_CONFLICT_TEST_SOURCES) $(LIB_NAME) $(SHARED_LIB)
-	$(CC) $(CFLAGS) $(INCLUDES) $< -L. -lralph -L../shared -lshared $(LDFLAGS) -o $@
+	$(CC) $(CFLAGS) $(INCLUDES) $< $(call link_lib,.,ralph) $(call link_lib,../shared,shared) $(LDFLAGS) $(EXE_OUT)$@
 
 # Run LP conflict tests
 test-lp-conflict: $(LP_CONFLICT_TEST_EXEC)
@@ -846,7 +833,7 @@ test-lp-conflict: $(LP_CONFLICT_TEST_EXEC)
 
 # Build LP algorithm API tests
 $(LP_ALGORITHM_API_TEST_EXEC): $(LP_ALGORITHM_API_TEST_SOURCES) $(LIB_NAME) $(SHARED_LIB)
-	$(CC) $(CFLAGS) $(INCLUDES) $< -L. -lralph -L../shared -lshared $(LDFLAGS) -o $@
+	$(CC) $(CFLAGS) $(INCLUDES) $< $(call link_lib,.,ralph) $(call link_lib,../shared,shared) $(LDFLAGS) $(EXE_OUT)$@
 
 # Run LP algorithm API tests
 test-lp-algorithm-api: $(LP_ALGORITHM_API_TEST_EXEC)
@@ -854,7 +841,7 @@ test-lp-algorithm-api: $(LP_ALGORITHM_API_TEST_EXEC)
 
 # Build LP GLPK-compatible policy module tests
 $(LP_POLICY_GLPK_COMPAT_TEST_EXEC): $(LP_POLICY_GLPK_COMPAT_TEST_SOURCES) $(LIB_NAME) $(SHARED_LIB)
-	$(CC) $(CFLAGS) $(INCLUDES) $< -L. -lralph -L../shared -lshared $(LDFLAGS) -o $@
+	$(CC) $(CFLAGS) $(INCLUDES) $< $(call link_lib,.,ralph) $(call link_lib,../shared,shared) $(LDFLAGS) $(EXE_OUT)$@
 
 # Run LP GLPK-compatible policy module tests
 test-lp-policy-glpk-compat: $(LP_POLICY_GLPK_COMPAT_TEST_EXEC)
@@ -862,7 +849,7 @@ test-lp-policy-glpk-compat: $(LP_POLICY_GLPK_COMPAT_TEST_EXEC)
 
 # Build LP GLPK strict-mode gate tests
 $(LP_GLPK_STRICT_TEST_EXEC): $(LP_GLPK_STRICT_TEST_SOURCES) $(LIB_NAME) $(SHARED_LIB)
-	$(CC) $(CFLAGS) $(INCLUDES) $< -L. -lralph -L../shared -lshared $(LDFLAGS) -o $@
+	$(CC) $(CFLAGS) $(INCLUDES) $< $(call link_lib,.,ralph) $(call link_lib,../shared,shared) $(LDFLAGS) $(EXE_OUT)$@
 
 # Run LP GLPK strict-mode gate tests
 test-lp-glpk-strict: $(LP_GLPK_STRICT_TEST_EXEC)
@@ -870,7 +857,7 @@ test-lp-glpk-strict: $(LP_GLPK_STRICT_TEST_EXEC)
 
 # Build LP GLPK strict BFCP dispatch tests
 $(LP_GLPK_STRICT_BFCP_TEST_EXEC): $(LP_GLPK_STRICT_BFCP_TEST_SOURCES) $(LIB_NAME) $(SHARED_LIB)
-	$(CC) $(CFLAGS) $(INCLUDES) $< -L. -lralph -L../shared -lshared $(LDFLAGS) -o $@
+	$(CC) $(CFLAGS) $(INCLUDES) $< $(call link_lib,.,ralph) $(call link_lib,../shared,shared) $(LDFLAGS) $(EXE_OUT)$@
 
 # Run LP GLPK strict BFCP dispatch tests
 test-lp-glpk-strict-bfcp: $(LP_GLPK_STRICT_BFCP_TEST_EXEC)
@@ -878,7 +865,7 @@ test-lp-glpk-strict-bfcp: $(LP_GLPK_STRICT_BFCP_TEST_EXEC)
 
 # Build LP BFCP policy module tests
 $(LP_BFCP_POLICY_TEST_EXEC): $(LP_BFCP_POLICY_TEST_SOURCES) $(LIB_NAME) $(SHARED_LIB)
-	$(CC) $(CFLAGS) $(INCLUDES) $< -L. -lralph -L../shared -lshared $(LDFLAGS) -o $@
+	$(CC) $(CFLAGS) $(INCLUDES) $< $(call link_lib,.,ralph) $(call link_lib,../shared,shared) $(LDFLAGS) $(EXE_OUT)$@
 
 # Run LP BFCP policy module tests
 test-lp-bfcp-policy: $(LP_BFCP_POLICY_TEST_EXEC)
@@ -886,7 +873,7 @@ test-lp-bfcp-policy: $(LP_BFCP_POLICY_TEST_EXEC)
 
 # Build LP dispatch module tests
 $(LP_DISPATCH_TEST_EXEC): $(LP_DISPATCH_TEST_SOURCES) $(LIB_NAME) $(SHARED_LIB)
-	$(CC) $(CFLAGS) $(INCLUDES) $< -L. -lralph -L../shared -lshared $(LDFLAGS) -o $@
+	$(CC) $(CFLAGS) $(INCLUDES) $< $(call link_lib,.,ralph) $(call link_lib,../shared,shared) $(LDFLAGS) $(EXE_OUT)$@
 
 # Run LP dispatch module tests
 test-lp-dispatch: $(LP_DISPATCH_TEST_EXEC)
@@ -894,7 +881,7 @@ test-lp-dispatch: $(LP_DISPATCH_TEST_EXEC)
 
 # Build LP external adapter module tests
 $(LP_EXTERNAL_ADAPTER_TEST_EXEC): $(LP_EXTERNAL_ADAPTER_TEST_SOURCES) $(LIB_NAME) $(SHARED_LIB)
-	$(CC) $(CFLAGS) $(INCLUDES) $< -L. -lralph -L../shared -lshared $(LDFLAGS) -o $@
+	$(CC) $(CFLAGS) $(INCLUDES) $< $(call link_lib,.,ralph) $(call link_lib,../shared,shared) $(LDFLAGS) $(EXE_OUT)$@
 
 # Run LP external adapter module tests
 test-lp-external-adapter: $(LP_EXTERNAL_ADAPTER_TEST_EXEC)
@@ -902,7 +889,7 @@ test-lp-external-adapter: $(LP_EXTERNAL_ADAPTER_TEST_EXEC)
 
 # Build public LP external adapter API tests
 $(LP_EXTERNAL_ADAPTER_API_TEST_EXEC): $(LP_EXTERNAL_ADAPTER_API_TEST_SOURCES) $(LIB_NAME) $(SHARED_LIB)
-	$(CC) $(CFLAGS) $(INCLUDES) $< -L. -lralph -L../shared -lshared $(LDFLAGS) -o $@
+	$(CC) $(CFLAGS) $(INCLUDES) $< $(call link_lib,.,ralph) $(call link_lib,../shared,shared) $(LDFLAGS) $(EXE_OUT)$@
 
 # Run public LP external adapter API tests
 test-lp-external-adapter-api: $(LP_EXTERNAL_ADAPTER_API_TEST_EXEC)
@@ -910,7 +897,7 @@ test-lp-external-adapter-api: $(LP_EXTERNAL_ADAPTER_API_TEST_EXEC)
 
 # Build LP external introspection API tests
 $(LP_EXTERNAL_INTROSPECTION_API_TEST_EXEC): $(LP_EXTERNAL_INTROSPECTION_API_TEST_SOURCES) $(LIB_NAME) $(SHARED_LIB)
-	$(CC) $(CFLAGS) $(INCLUDES) $< -L. -lralph -L../shared -lshared $(LDFLAGS) -o $@
+	$(CC) $(CFLAGS) $(INCLUDES) $< $(call link_lib,.,ralph) $(call link_lib,../shared,shared) $(LDFLAGS) $(EXE_OUT)$@
 
 # Run LP external introspection API tests
 test-lp-external-introspection-api: $(LP_EXTERNAL_INTROSPECTION_API_TEST_EXEC)
@@ -918,7 +905,7 @@ test-lp-external-introspection-api: $(LP_EXTERNAL_INTROSPECTION_API_TEST_EXEC)
 
 # Build LP external failure mapping API tests
 $(LP_EXTERNAL_FAILURE_API_TEST_EXEC): $(LP_EXTERNAL_FAILURE_API_TEST_SOURCES) $(LIB_NAME) $(SHARED_LIB)
-	$(CC) $(CFLAGS) $(INCLUDES) $< -L. -lralph -L../shared -lshared $(LDFLAGS) -o $@
+	$(CC) $(CFLAGS) $(INCLUDES) $< $(call link_lib,.,ralph) $(call link_lib,../shared,shared) $(LDFLAGS) $(EXE_OUT)$@
 
 # Run LP external failure mapping API tests
 test-lp-external-failure-api: $(LP_EXTERNAL_FAILURE_API_TEST_EXEC)
@@ -926,7 +913,7 @@ test-lp-external-failure-api: $(LP_EXTERNAL_FAILURE_API_TEST_EXEC)
 
 # Build LP external generic OOP runner tests
 $(LP_EXTERNAL_OOP_RUNNER_TEST_EXEC): $(LP_EXTERNAL_OOP_RUNNER_TEST_SOURCES) $(LIB_NAME) $(SHARED_LIB)
-	$(CC) $(CFLAGS) $(INCLUDES) $< -L. -lralph -L../shared -lshared $(LDFLAGS) -o $@
+	$(CC) $(CFLAGS) $(INCLUDES) $< $(call link_lib,.,ralph) $(call link_lib,../shared,shared) $(LDFLAGS) $(EXE_OUT)$@
 
 # Run LP external generic OOP runner tests
 test-lp-external-oop-runner: $(LP_EXTERNAL_OOP_RUNNER_TEST_EXEC)
@@ -934,7 +921,7 @@ test-lp-external-oop-runner: $(LP_EXTERNAL_OOP_RUNNER_TEST_EXEC)
 
 # Build LP external GLPK out-of-process adapter tests
 $(LP_EXTERNAL_GLPK_OOP_TEST_EXEC): $(LP_EXTERNAL_GLPK_OOP_TEST_SOURCES) $(LIB_NAME) $(SHARED_LIB)
-	$(CC) $(CFLAGS) $(INCLUDES) $< -L. -lralph -L../shared -lshared $(LDFLAGS) -o $@
+	$(CC) $(CFLAGS) $(INCLUDES) $< $(call link_lib,.,ralph) $(call link_lib,../shared,shared) $(LDFLAGS) $(EXE_OUT)$@
 
 # Run LP external GLPK out-of-process adapter tests
 test-lp-external-glpk-oop: $(LP_EXTERNAL_GLPK_OOP_TEST_EXEC)
@@ -942,7 +929,7 @@ test-lp-external-glpk-oop: $(LP_EXTERNAL_GLPK_OOP_TEST_EXEC)
 
 # Build optional real-GLPK integration test (self-skips when glpsol absent)
 $(LP_EXTERNAL_GLPK_OOP_INTEGRATION_TEST_EXEC): $(LP_EXTERNAL_GLPK_OOP_INTEGRATION_TEST_SOURCES) $(LIB_NAME) $(SHARED_LIB)
-	$(CC) $(CFLAGS) $(INCLUDES) $< -L. -lralph -L../shared -lshared $(LDFLAGS) -o $@
+	$(CC) $(CFLAGS) $(INCLUDES) $< $(call link_lib,.,ralph) $(call link_lib,../shared,shared) $(LDFLAGS) $(EXE_OUT)$@
 
 # Run optional real-GLPK integration test
 test-lp-external-glpk-oop-integration: $(LP_EXTERNAL_GLPK_OOP_INTEGRATION_TEST_EXEC)
@@ -950,19 +937,19 @@ test-lp-external-glpk-oop-integration: $(LP_EXTERNAL_GLPK_OOP_INTEGRATION_TEST_E
 
 # Build LP telemetry solver tests
 $(LP_TELEMETRY_SOLVER_TEST_EXEC): $(LP_TELEMETRY_SOLVER_TEST_SOURCES) $(LIB_NAME) $(SHARED_LIB)
-	$(CC) $(CFLAGS) $(INCLUDES) $< -L. -lralph -L../shared -lshared $(LDFLAGS) -o $@
+	$(CC) $(CFLAGS) $(INCLUDES) $< $(call link_lib,.,ralph) $(call link_lib,../shared,shared) $(LDFLAGS) $(EXE_OUT)$@
 
 # Build LP telemetry LU tests
 $(LP_TELEMETRY_LU_TEST_EXEC): $(LP_TELEMETRY_LU_TEST_SOURCES) $(LIB_NAME) $(SHARED_LIB)
-	$(CC) $(CFLAGS) $(INCLUDES) $< -L. -lralph -L../shared -lshared $(LDFLAGS) -o $@
+	$(CC) $(CFLAGS) $(INCLUDES) $< $(call link_lib,.,ralph) $(call link_lib,../shared,shared) $(LDFLAGS) $(EXE_OUT)$@
 
 # Build LP telemetry runtime gate tests
 $(LP_TELEMETRY_GATE_TEST_EXEC): $(LP_TELEMETRY_GATE_TEST_SOURCES) $(LIB_NAME) $(SHARED_LIB)
-	$(CC) $(CFLAGS) $(INCLUDES) $< -L. -lralph -L../shared -lshared $(LDFLAGS) -o $@
+	$(CC) $(CFLAGS) $(INCLUDES) $< $(call link_lib,.,ralph) $(call link_lib,../shared,shared) $(LDFLAGS) $(EXE_OUT)$@
 
 # Build LP telemetry sparse-LU tests
 $(LP_TELEMETRY_LU_SPARSE_TEST_EXEC): $(LP_TELEMETRY_LU_SPARSE_TEST_SOURCES) $(LIB_NAME) $(SHARED_LIB)
-	$(CC) $(CFLAGS) $(INCLUDES) $< -L. -lralph -L../shared -lshared $(LDFLAGS) -o $@
+	$(CC) $(CFLAGS) $(INCLUDES) $< $(call link_lib,.,ralph) $(call link_lib,../shared,shared) $(LDFLAGS) $(EXE_OUT)$@
 
 # Run LP telemetry solver tests
 test-lp-telemetry-solver: $(LP_TELEMETRY_SOLVER_TEST_EXEC)
@@ -989,7 +976,7 @@ test-lp-telemetry: $(LP_TELEMETRY_TEST_EXECS)
 
 # Build modular LP public API split tests
 $(LP_PUBLIC_API_SPLIT_TEST_EXEC): $(LP_PUBLIC_API_SPLIT_TEST_SOURCES) $(LIB_NAME) $(SHARED_LIB)
-	$(CC) $(CFLAGS) $(INCLUDES) $< -L. -lralph -L../shared -lshared $(LDFLAGS) -o $@
+	$(CC) $(CFLAGS) $(INCLUDES) $< $(call link_lib,.,ralph) $(call link_lib,../shared,shared) $(LDFLAGS) $(EXE_OUT)$@
 
 # Run modular LP public API split tests
 test-lp-public-api-split: $(LP_PUBLIC_API_SPLIT_TEST_EXEC)
@@ -997,7 +984,7 @@ test-lp-public-api-split: $(LP_PUBLIC_API_SPLIT_TEST_EXEC)
 
 # Build modular MIP public API split tests
 $(MIP_PUBLIC_API_SPLIT_TEST_EXEC): $(MIP_PUBLIC_API_SPLIT_TEST_SOURCES) $(LIB_NAME) $(SHARED_LIB)
-	$(CC) $(CFLAGS) $(INCLUDES) $< -L. -lralph -L../shared -lshared $(LDFLAGS) -o $@
+	$(CC) $(CFLAGS) $(INCLUDES) $< $(call link_lib,.,ralph) $(call link_lib,../shared,shared) $(LDFLAGS) $(EXE_OUT)$@
 
 # Run modular MIP public API split tests
 test-mip-public-api-split: $(MIP_PUBLIC_API_SPLIT_TEST_EXEC)
@@ -1005,7 +992,7 @@ test-mip-public-api-split: $(MIP_PUBLIC_API_SPLIT_TEST_EXEC)
 
 # Build structured API error mapping tests
 $(LP_ERROR_API_TEST_EXEC): $(LP_ERROR_API_TEST_SOURCES) $(LIB_NAME) $(SHARED_LIB)
-	$(CC) $(CFLAGS) $(INCLUDES) $< -L. -lralph -L../shared -lshared $(LDFLAGS) -o $@
+	$(CC) $(CFLAGS) $(INCLUDES) $< $(call link_lib,.,ralph) $(call link_lib,../shared,shared) $(LDFLAGS) $(EXE_OUT)$@
 
 # Run structured API error mapping tests
 test-lp-error-api: $(LP_ERROR_API_TEST_EXEC)
@@ -1013,7 +1000,7 @@ test-lp-error-api: $(LP_ERROR_API_TEST_EXEC)
 
 # Build LU Markowitz tests
 $(LU_MARKOWITZ_TEST_EXEC): $(LU_MARKOWITZ_TEST_SOURCES) $(LIB_NAME) $(SHARED_LIB)
-	$(CC) $(CFLAGS) $(INCLUDES) $< -L. -lralph -L../shared -lshared $(LDFLAGS) -o $@
+	$(CC) $(CFLAGS) $(INCLUDES) $< $(call link_lib,.,ralph) $(call link_lib,../shared,shared) $(LDFLAGS) $(EXE_OUT)$@
 
 # Run LU Markowitz tests
 test-lu-markowitz: $(LU_MARKOWITZ_TEST_EXEC)
@@ -1021,7 +1008,7 @@ test-lu-markowitz: $(LU_MARKOWITZ_TEST_EXEC)
 
 # Build dual ratio flip-mode tests
 $(DUAL_RATIO_FLIP_TEST_EXEC): $(DUAL_RATIO_FLIP_TEST_SOURCES) $(LIB_NAME) $(SHARED_LIB)
-	$(CC) $(CFLAGS) $(INCLUDES) $< -L. -lralph -L../shared -lshared $(LDFLAGS) -o $@
+	$(CC) $(CFLAGS) $(INCLUDES) $< $(call link_lib,.,ralph) $(call link_lib,../shared,shared) $(LDFLAGS) $(EXE_OUT)$@
 
 # Run dual ratio flip-mode tests
 test-dual-ratio-flip: $(DUAL_RATIO_FLIP_TEST_EXEC)
@@ -1029,7 +1016,7 @@ test-dual-ratio-flip: $(DUAL_RATIO_FLIP_TEST_EXEC)
 
 # Build LU supernode tests
 $(LU_SUPERNODE_TEST_EXEC): $(LU_SUPERNODE_TEST_SOURCES) $(LIB_NAME) $(SHARED_LIB)
-	$(CC) $(CFLAGS) $(INCLUDES) $< -L. -lralph -L../shared -lshared $(LDFLAGS) -o $@
+	$(CC) $(CFLAGS) $(INCLUDES) $< $(call link_lib,.,ralph) $(call link_lib,../shared,shared) $(LDFLAGS) $(EXE_OUT)$@
 
 # Run LU supernode tests
 test-lu-supernode: $(LU_SUPERNODE_TEST_EXEC)
@@ -1041,7 +1028,7 @@ test-optim: $(OPTIM_TEST_EXEC)
 
 # Build size scaling benchmark
 $(BENCH_SIZES_EXEC): $(BENCH_DIR)/bench_sizes.c $(LIB_NAME) $(SHARED_LIB)
-	$(CC) $(CFLAGS) $(INCLUDES) $< -L. -lralph -L../shared -lshared $(LDFLAGS) -o $@
+	$(CC) $(CFLAGS) $(INCLUDES) $< $(call link_lib,.,ralph) $(call link_lib,../shared,shared) $(LDFLAGS) $(EXE_OUT)$@
 
 # Run size scaling benchmark
 bench: $(BENCH_SIZES_EXEC)
@@ -1049,7 +1036,7 @@ bench: $(BENCH_SIZES_EXEC)
 
 # Build GLPK comparison benchmark (old version)
 $(COMPARE_GLPK_EXEC): $(BENCH_DIR)/compare_glpk.c $(LIB_NAME) $(SHARED_LIB)
-	$(CC) $(CFLAGS) $(INCLUDES) $< -L. -lralph -L../shared -lshared $(LDFLAGS) -o $@
+	$(CC) $(CFLAGS) $(INCLUDES) $< $(call link_lib,.,ralph) $(call link_lib,../shared,shared) $(LDFLAGS) $(EXE_OUT)$@
 
 # Run GLPK comparison (requires glpsol to be installed)
 compare-glpk: $(COMPARE_GLPK_EXEC)
@@ -1057,7 +1044,7 @@ compare-glpk: $(COMPARE_GLPK_EXEC)
 
 # Build Ralph vs GLPK benchmark (GLPK routed through external OOP adapter)
 $(BENCH_VS_GLPK_EXEC): $(BENCH_DIR)/bench_vs_glpk.c $(LIB_NAME) $(SHARED_LIB)
-	$(CC) $(CFLAGS) $(INCLUDES) $< -L. -lralph -L../shared -lshared $(LDFLAGS) -o $@
+	$(CC) $(CFLAGS) $(INCLUDES) $< $(call link_lib,.,ralph) $(call link_lib,../shared,shared) $(LDFLAGS) $(EXE_OUT)$@
 
 # Run Ralph vs GLPK benchmark
 bench-glpk: $(BENCH_VS_GLPK_EXEC)
@@ -1069,7 +1056,7 @@ bench-glpk-quick: $(BENCH_VS_GLPK_EXEC)
 
 # Build MIP benchmark
 $(BENCH_MIP_EXEC): $(BENCH_DIR)/bench_mip.c $(LIB_NAME) $(SHARED_LIB)
-	$(CC) $(CFLAGS) $(INCLUDES) $(GLPK_INCLUDES) $< -L. -lralph -L../shared -lshared $(GLPK_LIBS) $(LDFLAGS) -o $@
+	$(CC) $(CFLAGS) $(INCLUDES) $(GLPK_INCLUDES) $< $(call link_lib,.,ralph) $(call link_lib,../shared,shared) $(GLPK_LIBS) $(LDFLAGS) $(EXE_OUT)$@
 
 # Run MIP benchmark
 bench-mip: $(BENCH_MIP_EXEC)
@@ -1081,7 +1068,7 @@ bench-mip-quick: $(BENCH_MIP_EXEC)
 
 # Build profile benchmark
 $(PROFILE_BENCH_EXEC): $(BENCH_DIR)/profile_bench.c $(LIB_NAME) $(SHARED_LIB)
-	$(CC) $(CFLAGS) $(INCLUDES) $< -L. -lralph -L../shared -lshared $(LDFLAGS) -o $@
+	$(CC) $(CFLAGS) $(INCLUDES) $< $(call link_lib,.,ralph) $(call link_lib,../shared,shared) $(LDFLAGS) $(EXE_OUT)$@
 
 # Run profile benchmark
 profile-bench: $(PROFILE_BENCH_EXEC)
@@ -1089,7 +1076,7 @@ profile-bench: $(PROFILE_BENCH_EXEC)
 
 # Build LAP benchmark
 $(BENCH_LAP_EXEC): $(BENCH_DIR)/bench_lap.c $(LIB_NAME) $(SHARED_LIB)
-	$(CC) $(CFLAGS) $(INCLUDES) $< -L. -lralph -L../shared -lshared $(LDFLAGS) -o $@
+	$(CC) $(CFLAGS) $(INCLUDES) $< $(call link_lib,.,ralph) $(call link_lib,../shared,shared) $(LDFLAGS) $(EXE_OUT)$@
 
 # Run LAP benchmark
 bench-lap: $(BENCH_LAP_EXEC)
@@ -1097,7 +1084,7 @@ bench-lap: $(BENCH_LAP_EXEC)
 
 # Build LAP performance benchmark
 $(BENCH_LAP_PERF_EXEC): $(BENCH_DIR)/bench_lap_perf.c $(LIB_NAME) $(SHARED_LIB)
-	$(CC) $(CFLAGS) $(INCLUDES) $< -L. -lralph -L../shared -lshared $(LDFLAGS) -o $@
+	$(CC) $(CFLAGS) $(INCLUDES) $< $(call link_lib,.,ralph) $(call link_lib,../shared,shared) $(LDFLAGS) $(EXE_OUT)$@
 
 # Run LAP performance benchmark
 bench-lap-perf: $(BENCH_LAP_PERF_EXEC)
@@ -1109,7 +1096,7 @@ bench-lap-perf-quick: $(BENCH_LAP_PERF_EXEC)
 
 # Build network flow benchmark
 $(BENCH_NETFLOW_EXEC): $(BENCH_DIR)/bench_netflow.c $(LIB_NAME) $(SHARED_LIB)
-	$(CC) $(CFLAGS) $(INCLUDES) $< -L. -lralph -L../shared -lshared $(LDFLAGS) -o $@
+	$(CC) $(CFLAGS) $(INCLUDES) $< $(call link_lib,.,ralph) $(call link_lib,../shared,shared) $(LDFLAGS) $(EXE_OUT)$@
 
 # Run network flow benchmark
 bench-netflow: $(BENCH_NETFLOW_EXEC)
@@ -1117,7 +1104,7 @@ bench-netflow: $(BENCH_NETFLOW_EXEC)
 
 # Build ralph-benchmark (NETLIB benchmark tool)
 $(RALPH_BENCHMARK_EXEC): $(BENCH_DIR)/ralph_benchmark.c $(LIB_NAME) $(SHARED_LIB)
-	$(CC) $(CFLAGS) $(INCLUDES) $< -L. -lralph -L../shared -lshared $(LDFLAGS) -o $@
+	$(CC) $(CFLAGS) $(INCLUDES) $< $(call link_lib,.,ralph) $(call link_lib,../shared,shared) $(LDFLAGS) $(EXE_OUT)$@
 
 # Build target alias for ralph-benchmark
 build-ralph-benchmark: $(RALPH_BENCHMARK_EXEC)

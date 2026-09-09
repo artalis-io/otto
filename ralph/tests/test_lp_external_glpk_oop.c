@@ -8,9 +8,15 @@
 #include <stdlib.h>
 #include <string.h>
 #include <math.h>
-#include <unistd.h>
+#ifdef _MSC_VER
+  /* MSVC has no <unistd.h>; <io.h> declares the same POSIX I/O names. */
+  #include <io.h>
+#else
+  #include <unistd.h>
+#endif
 #include <sys/stat.h>
 
+#include "../src/lp_external_oop.h"
 #include "test_tmp.h"
 
 #include "ralph_test_mod_api.h"
@@ -46,16 +52,12 @@ static int tests_passed = 0;
 } while (0)
 
 static int write_mock_script(const char *script_body, char *path, size_t path_size) {
-    int fd;
     FILE *f;
 
     if (!script_body || !path || path_size < 32) return -1;
-    if (!ralph_tmp_path(path, path_size, "ralph_glpk_mock_XXXXXX")) return -1;
-    fd = mkstemp(path);
-    if (fd < 0) return -1;
-    f = fdopen(fd, "w");
+    if (lp_external_oop_make_tempfile("ralph_glpk_mock_", path, path_size) != 0) return -1;
+    f = fopen(path, "w");
     if (!f) {
-        close(fd);
         unlink(path);
         return -1;
     }

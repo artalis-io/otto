@@ -3,7 +3,7 @@
  */
 
 #include "../include/sh_backoff.h"
-#include <sys/time.h>
+#include "sh_pal.h"
 #include <stddef.h>
 
 /* ============================================================================
@@ -37,9 +37,7 @@ static double random_unit(uint64_t *seed)
  */
 static uint64_t get_entropy_seed(void)
 {
-    struct timeval tv;
-    gettimeofday(&tv, NULL);
-    return (uint64_t)tv.tv_sec * 1000000ULL + (uint64_t)tv.tv_usec;
+    return sh_wall_ns() / 1000ull;
 }
 
 /* ============================================================================

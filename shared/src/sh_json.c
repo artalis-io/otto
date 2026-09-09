@@ -7,6 +7,7 @@
 
 #include "sh_json.h"
 #include <string.h>
+#include <math.h>   /* isinf */
 #include <stdlib.h>
 #include <stdio.h>
 #include <ctype.h>
@@ -963,7 +964,7 @@ int sh_json_write_double_fmt(ShJsonWriter *w, double val, int precision) {
     if (val != val) { /* NaN */
         return jw_writes(w, "null");
     }
-    if (val == (1.0 / 0.0) || val == (-1.0 / 0.0)) { /* Inf */
+    if (isinf(val)) { /* Inf */
         return jw_writes(w, "null");
     }
 

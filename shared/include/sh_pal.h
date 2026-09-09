@@ -146,14 +146,30 @@ int sh_thread_join(ShThread *t, void **retval);
  * for durations and deadlines, never wall time. */
 uint64_t sh_monotonic_ms(void);
 
+/* Nanoseconds from the same origin as sh_monotonic_ms(). For callers timing
+ * work too short for a millisecond to resolve; the ms form stays for everyone
+ * else. */
+uint64_t sh_monotonic_ns(void);
+
 /* Milliseconds since the Unix epoch. Subject to clock adjustments; use this
  * for timestamps, never for measuring elapsed time. */
 uint64_t sh_wall_ms(void);
+
+/* Nanoseconds since the Unix epoch. Same caveats as sh_wall_ms(). */
+uint64_t sh_wall_ns(void);
 
 /* Thread-safe calendar conversions (gmtime_r / localtime_r, gmtime_s /
  * localtime_s). Return 0 on success, -1 on failure. */
 int sh_gmtime(int64_t unix_sec, struct tm *out);
 int sh_localtime(int64_t unix_sec, struct tm *out);
+
+/* Whether stderr is attached to a terminal, for deciding on colour output.
+ * Returns 1 if it is, 0 otherwise. */
+int sh_stderr_is_tty(void);
+
+/* Sleep for at least this many milliseconds. Coarser than nanosleep, which is
+ * all any caller here needs -- it is used for poll backoff, not pacing. */
+void sh_sleep_ms(unsigned ms);
 
 /* ============================================================================
  * Process

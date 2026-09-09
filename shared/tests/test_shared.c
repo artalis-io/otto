@@ -2,6 +2,7 @@
  * test_shared.c - Tests for shared library
  */
 
+#include "sh_pal.h"
 #include "shared.h"
 #include "sh_polyline.h"
 #include "sh_circuit.h"
@@ -29,7 +30,12 @@
 #include <math.h>
 #include <stdint.h>
 #include <time.h>
-#include <unistd.h>
+#ifdef _MSC_VER
+  /* MSVC has no <unistd.h>; <io.h> declares the same POSIX I/O names. */
+  #include <io.h>
+#else
+  #include <unistd.h>
+#endif
 
 /* ============================================================================
  * Test Framework
@@ -1147,8 +1153,7 @@ TEST(workqueue_item_expiration)
     ASSERT(sh_workqueue_push(queue, &item) == 1);
 
     /* Wait for item to expire */
-    struct timespec ts = { 0, 10000000 };  /* 10ms */
-    nanosleep(&ts, NULL);
+    sh_sleep_ms(10);  /* 10ms */
 
     /* Pop and check expiration */
     ShWorkItem *popped = sh_workqueue_pop_timeout(queue, 0);
@@ -1428,7 +1433,7 @@ static void *completion_worker_thread(void *arg)
     ShCompletion *comp = (ShCompletion *)arg;
 
     /* Simulate some work */
-    usleep(50000);  /* 50ms */
+    sh_sleep_ms(50);  /* 50ms */
 
     /* Signal completion */
     sh_completion_signal(comp);
@@ -1483,7 +1488,7 @@ static void pool_test_callback(ShWorkItem *item, void *ctx)
     if (!item) return;
 
     /* Simulate some work */
-    usleep(10000);  /* 10ms */
+    sh_sleep_ms(10);  /* 10ms */
 
     /* Increment counter */
     sh_once(&s_pool_test_once, pool_test_mutex_init);
@@ -1592,7 +1597,7 @@ TEST(worker_pool_processes_items)
 
     /* Wait for processing (with timeout) */
     for (int i = 0; i < 100 && s_pool_items_processed < 5; i++) {
-        usleep(20000);  /* 20ms */
+        sh_sleep_ms(20);  /* 20ms */
     }
 
     ASSERT_EQ(s_pool_items_processed, 5);
@@ -2294,8 +2299,7 @@ TEST(circuit_half_open_recovers)
     ASSERT_EQ(sh_circuit_state(cb), SH_CIRCUIT_OPEN);
 
     /* Wait for open duration */
-    struct timespec ts = { 0, 5000000 };  /* 5ms */
-    nanosleep(&ts, NULL);
+    sh_sleep_ms(5);  /* 5ms */
 
     /* Allow should transition to half-open */
     ASSERT_EQ(sh_circuit_allow(cb), 1);
@@ -2322,8 +2326,7 @@ TEST(circuit_half_open_failure_reopens)
     ASSERT_EQ(sh_circuit_state(cb), SH_CIRCUIT_OPEN);
 
     /* Wait and transition to half-open */
-    struct timespec ts = { 0, 5000000 };
-    nanosleep(&ts, NULL);
+    sh_sleep_ms(5);
     sh_circuit_allow(cb);
     ASSERT_EQ(sh_circuit_state(cb), SH_CIRCUIT_HALF_OPEN);
 

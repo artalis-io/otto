@@ -1,23 +1,12 @@
 # Shared Library Makefile
 # Common utilities for OTTO platform
 
-CC ?= gcc
-
-# Platform-specific settings
-UNAME_S := $(shell uname -s)
+# Every compiler difference lives in one place; see mk/toolchain.mk.
+include ../mk/toolchain.mk
 
 # Production build (with hardening)
-# Note: -pie is implicit on macOS, only add on Linux
-CFLAGS = -Wall -Wextra -O3 -std=c11 -D_GNU_SOURCE \
-         -fstack-protector-strong -D_FORTIFY_SOURCE=2 -fPIE -fno-common
-ifeq ($(UNAME_S),Linux)
-    LDFLAGS = -lm -lpthread -pie -Wl,-z,relro,-z,now
-else ifneq (,$(findstring MINGW,$(UNAME_S)))
-    # bcrypt: sh_pal_random_bytes. ws2_32: the StatsD sink in sh_metrics.
-    LDFLAGS = -lm -lpthread -lbcrypt -lws2_32
-else
-    LDFLAGS = -lm -lpthread
-endif
+CFLAGS = $(strip $(CC_WARN) $(CC_OPT) $(CC_STD) $(CC_DEFS) $(CC_PORT_DEFS) $(CC_HARDEN))
+LDFLAGS = $(strip $(LD_MATH) $(LD_THREAD) $(LD_PLATFORM) $(LD_PIE) $(LD_RELRO))
 
 # Include paths
 INCLUDES = -Iinclude -I../vendor/miniz
@@ -26,9 +15,8 @@ INCLUDES = -Iinclude -I../vendor/miniz
 VENDOR_DIR = ../vendor/miniz
 
 # Debug build (with sanitizers)
-DEBUG_CFLAGS = -Wall -Wextra -g -O0 -std=c11 -D_GNU_SOURCE -DDEBUG \
-               -fsanitize=address,undefined -fno-omit-frame-pointer
-DEBUG_LDFLAGS = -fsanitize=address,undefined
+DEBUG_CFLAGS = $(strip $(CC_WARN) $(CC_DEBUG_OPT) $(CC_STD) $(CC_DEFS) $(CC_PORT_DEFS) -DDEBUG $(CC_SANITIZE))
+DEBUG_LDFLAGS = $(LD_SANITIZE)
 
 # Source files (core library - no external dependencies beyond miniz)
 SRCS = src/sh_pal_posix.c \
@@ -92,7 +80,10 @@ MINIZ_OBJS = $(MINIZ_SRCS:.c=.o)
 ALL_OBJS = $(OBJS) $(MINIZ_OBJS)
 
 # Library
-LIB = libshared.a
+# Not LIB: that is MSVC's library search path. make re-exports any variable
+# that also exists in the environment, so defining LIB here would replace the
+# linker's search path with this filename and nothing would link.
+LIB_FILE = libshared.a
 
 # Test binaries
 TEST_BIN = test_shared
@@ -117,45 +108,45 @@ TEST_PDF2STRUC_BIN = test_pdf2struc
 all: lib $(TEST_BIN)
 
 # Build library
-lib: $(LIB)
+lib: $(LIB_FILE)
 
-$(LIB): $(ALL_OBJS)
-	ar rcs $@ $^
+$(LIB_FILE): $(ALL_OBJS)
+	$(AR_CMD)$@ $^
 
 # Compile rules
 src/%.o: src/%.c
-	$(CC) $(CFLAGS) $(INCLUDES) -c $< -o $@
+	$(CC) $(CFLAGS) $(INCLUDES) -c $< $(OBJ_OUT)$@
 
 $(VENDOR_DIR)/%.o: $(VENDOR_DIR)/%.c
-	$(CC) $(CFLAGS) -I$(VENDOR_DIR) -DMINIZ_NO_STDIO -DMINIZ_NO_TIME -c $< -o $@
+	$(CC) $(CFLAGS) -I$(VENDOR_DIR) -DMINIZ_NO_STDIO -DMINIZ_NO_TIME -c $< $(OBJ_OUT)$@
 
 # Test binaries
-$(TEST_BIN): tests/test_shared.c $(LIB)
-	$(CC) $(CFLAGS) $(INCLUDES) $< -L. -lshared $(LDFLAGS) -o $@
+$(TEST_BIN): tests/test_shared.c $(LIB_FILE)
+	$(CC) $(CFLAGS) $(INCLUDES) $< $(call link_lib,.,shared) $(LDFLAGS) $(EXE_OUT)$@
 
-$(TEST_FONT_BIN): tests/test_font.c $(LIB)
-	$(CC) $(CFLAGS) $(INCLUDES) $< -L. -lshared $(LDFLAGS) -o $@
+$(TEST_FONT_BIN): tests/test_font.c $(LIB_FILE)
+	$(CC) $(CFLAGS) $(INCLUDES) $< $(call link_lib,.,shared) $(LDFLAGS) $(EXE_OUT)$@
 
-$(TEST_JSON_BIN): tests/test_sh_json.c $(LIB)
-	$(CC) $(CFLAGS) $(INCLUDES) $< -L. -lshared $(LDFLAGS) -o $@
+$(TEST_JSON_BIN): tests/test_sh_json.c $(LIB_FILE)
+	$(CC) $(CFLAGS) $(INCLUDES) $< $(call link_lib,.,shared) $(LDFLAGS) $(EXE_OUT)$@
 
-$(TEST_XML_BIN): tests/test_xml.c $(LIB)
-	$(CC) $(CFLAGS) $(INCLUDES) $< -L. -lshared $(LDFLAGS) -o $@
+$(TEST_XML_BIN): tests/test_xml.c $(LIB_FILE)
+	$(CC) $(CFLAGS) $(INCLUDES) $< $(call link_lib,.,shared) $(LDFLAGS) $(EXE_OUT)$@
 
-$(TEST_SHA256_BIN): tests/test_sha256.c $(LIB)
-	$(CC) $(CFLAGS) $(INCLUDES) $< -L. -lshared $(LDFLAGS) -o $@
+$(TEST_SHA256_BIN): tests/test_sha256.c $(LIB_FILE)
+	$(CC) $(CFLAGS) $(INCLUDES) $< $(call link_lib,.,shared) $(LDFLAGS) $(EXE_OUT)$@
 
-$(TEST_CSV_BIN): tests/test_csv.c $(LIB)
-	$(CC) $(CFLAGS) $(INCLUDES) $< -L. -lshared $(LDFLAGS) -o $@
+$(TEST_CSV_BIN): tests/test_csv.c $(LIB_FILE)
+	$(CC) $(CFLAGS) $(INCLUDES) $< $(call link_lib,.,shared) $(LDFLAGS) $(EXE_OUT)$@
 
-$(TEST_GEOJSON_BIN): tests/test_geojson.c $(LIB)
-	$(CC) $(CFLAGS) $(INCLUDES) $< -L. -lshared $(LDFLAGS) -o $@
+$(TEST_GEOJSON_BIN): tests/test_geojson.c $(LIB_FILE)
+	$(CC) $(CFLAGS) $(INCLUDES) $< $(call link_lib,.,shared) $(LDFLAGS) $(EXE_OUT)$@
 
-$(TEST_FS_BIN): tests/test_fs.c $(LIB)
-	$(CC) $(CFLAGS) $(INCLUDES) $< -L. -lshared $(LDFLAGS) -o $@
+$(TEST_FS_BIN): tests/test_fs.c $(LIB_FILE)
+	$(CC) $(CFLAGS) $(INCLUDES) $< $(call link_lib,.,shared) $(LDFLAGS) $(EXE_OUT)$@
 
-$(TEST_EOV_BIN): tests/test_eov.c $(LIB)
-	$(CC) $(CFLAGS) $(INCLUDES) $< -L. -lshared $(LDFLAGS) -o $@
+$(TEST_EOV_BIN): tests/test_eov.c $(LIB_FILE)
+	$(CC) $(CFLAGS) $(INCLUDES) $< $(call link_lib,.,shared) $(LDFLAGS) $(EXE_OUT)$@
 
 # Run all tests
 test: $(TEST_BIN) $(TEST_FONT_BIN) $(TEST_JSON_BIN) $(TEST_XML_BIN) $(TEST_CSV_BIN) $(TEST_GEOJSON_BIN) $(TEST_FS_BIN) $(TEST_SHA256_BIN) $(TEST_EOV_BIN)
@@ -199,10 +190,10 @@ test-eov: $(TEST_EOV_BIN)
 
 # PDF2struc library (separate sub-system)
 $(PDF2STRUC_LIB): $(PDF2STRUC_OBJS)
-	ar rcs $@ $^
+	$(AR_CMD)$@ $^
 
-$(TEST_PDF2STRUC_BIN): tests/test_pdf2struc.c $(PDF2STRUC_LIB) $(LIB)
-	$(CC) $(CFLAGS) $(INCLUDES) $< -L. -lsh_pdf2struc -lshared $(LDFLAGS) -o $@
+$(TEST_PDF2STRUC_BIN): tests/test_pdf2struc.c $(PDF2STRUC_LIB) $(LIB_FILE)
+	$(CC) $(CFLAGS) $(INCLUDES) $< -L. -lsh_pdf2struc -lshared $(LDFLAGS) $(EXE_OUT)$@
 
 # Run PDF2struc tests only
 test-pdf2struc: $(TEST_PDF2STRUC_BIN)
@@ -221,8 +212,8 @@ font-compare: $(FONT_COMPARE_BIN)
 	@echo "Run: cd shared && python3 -m http.server 8000"
 	@echo "Then open: http://localhost:8000/tests/compare.html"
 
-$(FONT_COMPARE_BIN): tests/font_compare.c $(LIB)
-	$(CC) $(CFLAGS) $(INCLUDES) $(CARTA_INCLUDES) $< -L. -lshared $(CARTA_LIBS) $(LDFLAGS) -o $@
+$(FONT_COMPARE_BIN): tests/font_compare.c $(LIB_FILE)
+	$(CC) $(CFLAGS) $(INCLUDES) $(CARTA_INCLUDES) $< $(call link_lib,.,shared) $(CARTA_LIBS) $(LDFLAGS) $(EXE_OUT)$@
 	./$(FONT_COMPARE_BIN) tests
 
 # Generate font data from JSON/PNG (requires Python 3)
@@ -246,7 +237,7 @@ generate-font-data:
 TEST_PAL_BIN = test_pal
 
 $(TEST_PAL_BIN): tests/test_pal.c src/sh_pal_posix.c src/sh_pal_windows.c
-	$(CC) $(CFLAGS) $(INCLUDES) $^ $(LDFLAGS) -o $@
+	$(CC) $(CFLAGS) $(INCLUDES) $^ $(LDFLAGS) $(EXE_OUT)$@
 
 test-pal: $(TEST_PAL_BIN)
 	./$(TEST_PAL_BIN)
@@ -261,7 +252,7 @@ debug: clean all
 
 # Clean
 clean:
-	rm -f $(OBJS) $(MINIZ_OBJS) $(LIB) $(TEST_BIN) $(TEST_FONT_BIN) $(TEST_JSON_BIN) $(TEST_XML_BIN) $(TEST_CSV_BIN) $(TEST_GEOJSON_BIN) $(TEST_FS_BIN) $(TEST_SHA256_BIN) $(TEST_EOV_BIN) $(FONT_COMPARE_BIN)
+	rm -f $(OBJS) $(MINIZ_OBJS) $(LIB_FILE) $(TEST_BIN) $(TEST_FONT_BIN) $(TEST_JSON_BIN) $(TEST_XML_BIN) $(TEST_CSV_BIN) $(TEST_GEOJSON_BIN) $(TEST_FS_BIN) $(TEST_SHA256_BIN) $(TEST_EOV_BIN) $(FONT_COMPARE_BIN)
 	rm -f $(PDF2STRUC_OBJS) $(PDF2STRUC_LIB) $(TEST_PDF2STRUC_BIN)
 	rm -f tests/soft_*.png tests/compare.html
 
