@@ -20,12 +20,19 @@
 #include <time.h>
 #include <sys/time.h>
 #include <sys/stat.h>
-#include <sys/wait.h>
 #include <signal.h>
 #include <dirent.h>
 #include <unistd.h>
 #include <errno.h>
 #include <ctype.h>
+#ifdef _WIN32
+  #define WIN32_LEAN_AND_MEAN
+  #include <windows.h>
+  #undef near
+  #undef far
+#else
+  #include <sys/wait.h>
+#endif
 
 #include "ralph_test_mod_api.h"
 #include "lp.h"
@@ -39,6 +46,13 @@ extern SimplexSolver* ralph_get_lp_solver(const RalphModel *model);
  * Constants and Configuration
  * ============================================================================ */
 
+/* windows.h defines MAX_PATH as 260. This file wants 4096 and has used it
+ * everywhere since long before it compiled on Windows, so drop the platform
+ * definition rather than the file's. Safe here: the Windows headers are fully
+ * included above, so nothing of theirs still expands it. */
+#ifdef MAX_PATH
+  #undef MAX_PATH
+#endif
 #define MAX_PATH 4096
 #define MAX_LINE 4096
 #define MAX_PROBLEMS 200
@@ -5378,6 +5392,66 @@ typedef struct {
     double time_ms;
 } TestResult;
 
+/* Everything solve_with_ralph() needs for one case.
+ *
+ * On POSIX the child inherits these by virtue of fork(). Windows has no fork,
+ * so the same fields are written to a temp file and read back by a re-executed
+ * copy of this binary. Holding them in one plain struct is what lets both
+ * platforms share the single call site below. */
+typedef struct {
+    char path[1024];
+    int timeout_sec;
+    int method, pricing, phase1_pricing;
+    int glpk_smcp_ratio, glpk_smcp_flip, glpk_smcp_shift;
+    int glpk_bfcp_backend, glpk_bfcp_update_limit;
+    int dual_steepest_edge, lu_supernode;
+    int lp_basis_governor_mode, lp_reinvert_controller_mode;
+    int random_seed, external_glpk_oop;
+    int crash, trace_phase1;
+} TestJob;
+
+/* The solve both platforms run inside the isolated child. */
+static TestResult test_run_job(const TestJob *job) {
+    int num_vars = 0, num_cons = 0, nnz = 0, is_mip = 0;
+    SolveResult result = solve_with_ralph(job->path, (double)job->timeout_sec,
+                                           job->method, job->pricing,
+                                           job->phase1_pricing,
+                                           job->glpk_smcp_ratio, job->glpk_smcp_flip,
+                                           job->glpk_bfcp_backend,
+                                           job->glpk_bfcp_update_limit,
+                                           job->dual_steepest_edge,
+                                           job->lu_supernode,
+                                           job->lp_basis_governor_mode,
+                                           job->lp_reinvert_controller_mode,
+                                           job->random_seed,
+                                           job->external_glpk_oop,
+                                           job->glpk_smcp_shift,
+                                           0,
+                                           -1,
+                                           job->crash,
+                                           job->trace_phase1,
+                                           0,
+                                           &num_vars, &num_cons, &nnz,
+                                           &is_mip);
+
+    TestResult tr = {
+        .status = result.status,
+        .objective = result.objective,
+        .time_ms = result.time_ms
+    };
+    free(result.solution);
+    return tr;
+}
+
+/* Run one case in a child process under a hard wall-clock timeout, so that a
+ * hang or a crash costs one problem rather than the whole run.
+ *
+ * Returns 0 with *tr filled, 1 if the child hit the timeout, -1 if it could
+ * not be started at all. */
+static int test_run_isolated(const TestJob *job, TestResult *tr);
+
+#ifndef _WIN32
+
 /* SIGALRM handler for hard timeout in child process */
 static volatile sig_atomic_t test_alarm_fired = 0;
 static void test_alarm_handler(int sig) {
@@ -5385,6 +5459,196 @@ static void test_alarm_handler(int sig) {
     test_alarm_fired = 1;
     _exit(124);  /* Convention: 124 = timeout */
 }
+
+static int test_run_isolated(const TestJob *job, TestResult *tr) {
+    int pipefd[2];
+    if (pipe(pipefd) < 0) return -1;
+
+    pid_t pid = fork();
+    if (pid < 0) {
+        close(pipefd[0]);
+        close(pipefd[1]);
+        return -1;
+    }
+
+    if (pid == 0) {
+        /* Child process: solve with hard alarm timeout */
+        close(pipefd[0]);
+
+        signal(SIGALRM, test_alarm_handler);
+        alarm((unsigned)job->timeout_sec);
+
+        TestResult child = test_run_job(job);
+
+        /* Write result back to parent via pipe */
+        (void)!write(pipefd[1], &child, sizeof(child));
+        close(pipefd[1]);
+        _exit(child.status == 0 ? 0 : 1);
+    }
+
+    /* Parent process: wait for the child to finish or be killed by the alarm */
+    close(pipefd[1]);
+
+    int wstatus;
+    double start = get_time_ms();
+    waitpid(pid, &wstatus, 0);
+    double elapsed = get_time_ms() - start;
+
+    TestResult buf;
+    ssize_t n = read(pipefd[0], &buf, sizeof(buf));
+    close(pipefd[0]);
+
+    if (WIFSIGNALED(wstatus) || (WIFEXITED(wstatus) && WEXITSTATUS(wstatus) == 124))
+        return 1;
+
+    if (n == (ssize_t)sizeof(buf)) {
+        *tr = buf;
+    } else {
+        tr->status = 3;
+        tr->objective = 0.0;
+        tr->time_ms = elapsed;
+    }
+    return 0;
+}
+
+#else /* _WIN32 */
+
+/* Windows has no fork(), so the isolation the POSIX path gets for free has to
+ * be built out of what the platform does offer.
+ *
+ * The parent writes the job to a temp file, re-executes this same binary with
+ * --test-child, and waits on the process handle with a timeout. TerminateProcess
+ * stands in for SIGALRM, and the exit-code convention (124) is preserved so both
+ * paths report a timeout identically. The child writes its TestResult to a
+ * second temp file -- a file rather than a pipe because the result is one
+ * fixed-size struct written once as the child exits, so an anonymous pipe would
+ * buy nothing here but inherited-handle plumbing.
+ */
+#define TEST_CHILD_FLAG "--test-child"
+
+static int test_child_main(const char *job_path, const char *result_path) {
+    TestJob job;
+    FILE *f = fopen(job_path, "rb");
+    if (!f) return 3;
+    size_t n = fread(&job, 1, sizeof(job), f);
+    fclose(f);
+    if (n != sizeof(job)) return 3;
+    job.path[sizeof(job.path) - 1] = '\0';
+
+    TestResult tr = test_run_job(&job);
+
+    f = fopen(result_path, "wb");
+    if (f) {
+        (void)fwrite(&tr, 1, sizeof(tr), f);
+        fclose(f);
+    }
+    return tr.status == 0 ? 0 : 1;
+}
+
+/* GetTempFileName also creates the file, so the path it returns is already ours. */
+static int test_win_tempfile(char *out, size_t out_size) {
+    char dir[MAX_PATH];
+    char name[MAX_PATH];
+
+    if (GetTempPathA((DWORD)sizeof(dir), dir) == 0) return -1;
+    if (GetTempFileNameA(dir, "rbm", 0, name) == 0) return -1;
+    if (strlen(name) >= out_size) {
+        (void)DeleteFileA(name);
+        return -1;
+    }
+    snprintf(out, out_size, "%s", name);
+    return 0;
+}
+
+static int test_run_isolated(const TestJob *job, TestResult *tr) {
+    char exe[MAX_PATH];
+    char job_path[MAX_PATH];
+    char res_path[MAX_PATH];
+    char cmd[4 * MAX_PATH];
+    STARTUPINFOA si;
+    PROCESS_INFORMATION pi;
+    FILE *f;
+    DWORD waited;
+    DWORD code = 0;
+    DWORD wait_ms;
+    double start, elapsed;
+    int timed_out = 0;
+    int failed = 0;
+
+    if (GetModuleFileNameA(NULL, exe, (DWORD)sizeof(exe)) == 0) return -1;
+    if (test_win_tempfile(job_path, sizeof(job_path)) != 0) return -1;
+    if (test_win_tempfile(res_path, sizeof(res_path)) != 0) {
+        (void)DeleteFileA(job_path);
+        return -1;
+    }
+
+    f = fopen(job_path, "wb");
+    if (!f || fwrite(job, 1, sizeof(*job), f) != sizeof(*job)) {
+        if (f) fclose(f);
+        (void)DeleteFileA(job_path);
+        (void)DeleteFileA(res_path);
+        return -1;
+    }
+    fclose(f);
+
+    snprintf(cmd, sizeof(cmd), "\"%s\" " TEST_CHILD_FLAG " \"%s\" \"%s\"",
+             exe, job_path, res_path);
+
+    memset(&si, 0, sizeof(si));
+    si.cb = sizeof(si);
+    memset(&pi, 0, sizeof(pi));
+
+    if (!CreateProcessA(NULL, cmd, NULL, NULL, FALSE,
+                        CREATE_NO_WINDOW, NULL, NULL, &si, &pi)) {
+        (void)DeleteFileA(job_path);
+        (void)DeleteFileA(res_path);
+        return -1;
+    }
+
+    /* One second of slack: the solver enforces the same cap internally and
+     * should stop first. This is only the backstop for when it does not. */
+    wait_ms = (DWORD)(job->timeout_sec + 1) * 1000u;
+    start = get_time_ms();
+    waited = WaitForSingleObject(pi.hProcess, wait_ms);
+    if (waited == WAIT_TIMEOUT) {
+        (void)TerminateProcess(pi.hProcess, 124);
+        (void)WaitForSingleObject(pi.hProcess, INFINITE);
+        timed_out = 1;
+    } else if (waited != WAIT_OBJECT_0) {
+        failed = 1;
+    } else if (GetExitCodeProcess(pi.hProcess, &code) && code == 124) {
+        timed_out = 1;
+    }
+    elapsed = get_time_ms() - start;
+
+    CloseHandle(pi.hThread);
+    CloseHandle(pi.hProcess);
+
+    if (!failed && !timed_out) {
+        TestResult buf;
+        size_t n = 0;
+        f = fopen(res_path, "rb");
+        if (f) {
+            n = fread(&buf, 1, sizeof(buf), f);
+            fclose(f);
+        }
+        if (n == sizeof(buf)) {
+            *tr = buf;
+        } else {
+            tr->status = 3;
+            tr->objective = 0.0;
+            tr->time_ms = elapsed;
+        }
+    }
+
+    (void)DeleteFileA(job_path);
+    (void)DeleteFileA(res_path);
+
+    if (failed) return -1;
+    return timed_out ? 1 : 0;
+}
+
+#endif /* _WIN32 */
 
 /* Solve a single problem in a child process with hard timeout.
  * Returns: 0=pass, 1=fail, 2=error, 3=skip(timeout), 4=skip(other) */
@@ -5402,85 +5666,41 @@ static int test_solve_one(const char *path, const char *name,
                            int random_seed, int external_glpk_oop,
                            int crash,
                            int trace_phase1) {
-    /* Use a pipe to pass results from child to parent */
-    int pipefd[2];
-    if (pipe(pipefd) < 0) {
-        fprintf(stderr, "  ERROR %-12s  (pipe failed)\n", name);
+    TestJob job;
+    memset(&job, 0, sizeof(job));
+    snprintf(job.path, sizeof(job.path), "%s", path);
+    job.timeout_sec = timeout_sec;
+    job.method = method;
+    job.pricing = pricing;
+    job.phase1_pricing = phase1_pricing;
+    job.glpk_smcp_ratio = glpk_smcp_ratio;
+    job.glpk_smcp_flip = glpk_smcp_flip;
+    job.glpk_smcp_shift = glpk_smcp_shift;
+    job.glpk_bfcp_backend = glpk_bfcp_backend;
+    job.glpk_bfcp_update_limit = glpk_bfcp_update_limit;
+    job.dual_steepest_edge = dual_steepest_edge;
+    job.lu_supernode = lu_supernode;
+    job.lp_basis_governor_mode = lp_basis_governor_mode;
+    job.lp_reinvert_controller_mode = lp_reinvert_controller_mode;
+    job.random_seed = random_seed;
+    job.external_glpk_oop = external_glpk_oop;
+    job.crash = crash;
+    job.trace_phase1 = trace_phase1;
+
+    TestResult tr = {.status = 3, .objective = 0.0, .time_ms = 0.0};
+    int rc = test_run_isolated(&job, &tr);
+
+    if (rc < 0) {
+        fprintf(stderr, "  ERROR %-12s  (could not start child)\n", name);
         return 2;
     }
 
-    pid_t pid = fork();
-    if (pid < 0) {
-        close(pipefd[0]);
-        close(pipefd[1]);
-        fprintf(stderr, "  ERROR %-12s  (fork failed)\n", name);
-        return 2;
-    }
-
-    if (pid == 0) {
-        /* Child process: solve with hard alarm timeout */
-        close(pipefd[0]);
-
-        signal(SIGALRM, test_alarm_handler);
-        alarm((unsigned)timeout_sec);
-
-        int num_vars = 0, num_cons = 0, nnz = 0, is_mip = 0;
-        SolveResult result = solve_with_ralph(path, (double)timeout_sec,
-                                               method, pricing,
-                                               phase1_pricing,
-                                               glpk_smcp_ratio, glpk_smcp_flip,
-                                               glpk_bfcp_backend,
-                                               glpk_bfcp_update_limit,
-                                               dual_steepest_edge,
-                                               lu_supernode,
-                                               lp_basis_governor_mode,
-                                               lp_reinvert_controller_mode,
-                                               random_seed,
-                                               external_glpk_oop,
-                                               glpk_smcp_shift,
-                                               0,
-                                               -1,
-                                               crash,
-                                               trace_phase1,
-                                               0,
-                                               &num_vars, &num_cons, &nnz,
-                                               &is_mip);
-
-        TestResult tr = {
-            .status = result.status,
-            .objective = result.objective,
-            .time_ms = result.time_ms
-        };
-
-        /* Write result back to parent via pipe */
-        (void)!write(pipefd[1], &tr, sizeof(tr));
-        close(pipefd[1]);
-        free(result.solution);
-        _exit(result.status == 0 ? 0 : 1);
-    }
-
-    /* Parent process: wait with timeout */
-    close(pipefd[1]);
-
-    int wstatus;
-    double start = get_time_ms();
-
-    /* Wait for child (it will either finish or get killed by alarm) */
-    waitpid(pid, &wstatus, 0);
-    double elapsed = get_time_ms() - start;
-
-    /* Read result from pipe */
-    TestResult tr = {.status = 3, .objective = 0.0, .time_ms = elapsed};
-    ssize_t n = read(pipefd[0], &tr, sizeof(tr));
-    close(pipefd[0]);
-
-    /* Check if child was killed or timed out */
-    if (WIFSIGNALED(wstatus) || (WIFEXITED(wstatus) && WEXITSTATUS(wstatus) == 124)) {
+    if (rc == 1) {
         fprintf(stderr, "  SKIP  %-12s  (timeout after %ds)\n", name, timeout_sec);
         return 3;
     }
 
-    if (n != sizeof(tr) || tr.status != 0) {
+    if (tr.status != 0) {
         fprintf(stderr, "  ERROR %-12s  (status=%d after %.1fms)\n",
                 name, tr.status, tr.time_ms);
         return 2;
@@ -5924,6 +6144,14 @@ static int parse_args(int argc, char **argv, Options *opts) {
 
 int main(int argc, char **argv) {
     Options opts;
+
+#ifdef _WIN32
+    /* Re-executed by test_run_isolated(). Handled before any normal argument
+     * parsing: this is an internal calling convention, not a user-facing flag. */
+    if (argc == 4 && strcmp(argv[1], TEST_CHILD_FLAG) == 0) {
+        return test_child_main(argv[2], argv[3]);
+    }
+#endif
 
     if (parse_args(argc, argv, &opts) != 0) {
         return 1;
