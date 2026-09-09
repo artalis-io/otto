@@ -397,6 +397,47 @@ void test_reject_non_network_inequality(void) {
     lp_model_free(model);
 }
 
+void test_reject_non_network_negative_lb(void) {
+    printf("\n=== Test: Reject Non-Network (negative lower bound) ===\n");
+
+    LPModel *model = lp_model_create();
+    model->obj_sense = 1;
+
+    /* Valid network incidence (each var in exactly 2 rows, coefs +/-1, all
+       equality rows) -- but x0 has a negative lower bound. The network-simplex
+       dispatch would clamp that bound to 0 and solve a different feasible
+       region, so detection must reject it and fall back to the simplex. */
+    lp_model_add_var(model, -5.0, 100.0, 1.0, 'C');  /* x0: lb = -5 */
+    lp_model_add_var(model, 0.0, 100.0, 2.0, 'C');
+    lp_model_add_var(model, 0.0, 100.0, 3.0, 'C');
+    lp_model_add_var(model, 0.0, 100.0, 4.0, 'C');
+
+    int idx0[] = {0, 1};
+    double coef0[] = {1.0, 1.0};
+    lp_model_add_constraint(model, 2, idx0, coef0, 'E', 100.0);
+
+    int idx1[] = {0, 2};
+    double coef1[] = {-1.0, 1.0};
+    lp_model_add_constraint(model, 2, idx1, coef1, 'E', 0.0);
+
+    int idx2[] = {1, 3};
+    double coef2[] = {-1.0, 1.0};
+    lp_model_add_constraint(model, 2, idx2, coef2, 'E', 0.0);
+
+    int idx3[] = {2, 3};
+    double coef3[] = {-1.0, -1.0};
+    lp_model_add_constraint(model, 2, idx3, coef3, 'E', -100.0);
+
+    lp_model_finalize(model);
+
+    NetworkSignature sig;
+    int detected = detect_network(model, &sig);
+
+    ASSERT(detected == 0, "Non-network (negative lower bound) rejected");
+
+    lp_model_free(model);
+}
+
 /* ============================================================================
  * Test: Solve Network via Detection
  * ============================================================================ */
@@ -2415,6 +2456,7 @@ int main(void) {
     test_reject_non_network_coef();
     test_reject_non_network_count();
     test_reject_non_network_inequality();
+    test_reject_non_network_negative_lb();
 
     /* Network solve tests */
     test_solve_via_detection();
