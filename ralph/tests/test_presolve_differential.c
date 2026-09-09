@@ -16,9 +16,17 @@
  * presolve off) used to report INFEASIBLE for feasible LPs with a nonzero lower
  * bound -- a <= row violated at the all-vars-at-lower-bounds starting point had
  * no artificial for phase 1 to drive out. With that fixed, presolve on and off
- * must agree. Uses FINITE bounds so the comparison is unambiguous (the
- * unbounded / 1e30-infinity-sentinel edge cases are a separate concern and are
- * excluded here). Part of `make -C ralph test`.
+ * must agree.
+ *
+ * It also covers the infinite-upper-bound cases (some variables get a +inf upper
+ * bound), which guards two follow-on fixes:
+ *   - artalis-io/otto#94: the ratio test used to treat a variable's 1e30 sentinel
+ *     bound as a finite blocking constraint and cap unbounded rays -> spurious
+ *     OPTIMAL instead of UNBOUNDED.
+ *   - artalis-io/otto#96: the base simplex used to report UNBOUNDED for infeasible
+ *     LPs whose infeasibility comes from an equality row forcing a variable
+ *     outside its bounds (the equality artificial started below its lower bound).
+ * Part of `make -C ralph test`.
  */
 
 #include <stdio.h>
@@ -54,10 +62,12 @@ static void gen_spec(Spec *s) {
     for (int j = 0; j < s->n; j++) {
         int t = ri(0, 9);
         s->type[j] = (t < 7) ? 'C' : (t < 9 ? 'I' : 'B');
-        /* Nonzero lower bounds (positive and negative) exercise the #86 path;
-           finite upper bounds keep the on/off comparison unambiguous. */
+        /* Nonzero lower bounds (positive and negative) exercise the #86 path.
+           Some variables get a +inf upper bound to exercise the unbounded /
+           1e30-sentinel (#94) and infeasible-equality (#96) paths. */
         s->lb[j] = (ri(0, 2) == 0) ? rd(-2, 2) : 0.0;
         if (s->type[j] == 'B') { s->lb[j] = 0.0; s->ub[j] = 1.0; }
+        else if (ri(0, 3) == 0) s->ub[j] = RALPH_LP_INFINITY;
         else s->ub[j] = s->lb[j] + rd(1, 6);
         /* Occasionally fix a variable (lb == ub) to exercise fixed-var removal. */
         if (ri(0, 8) == 0) { s->ub[j] = s->lb[j]; s->type[j] = 'C'; }

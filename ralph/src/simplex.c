@@ -776,17 +776,30 @@ static SimplexTableau* tableau_create_ex(LPModel *model, int force_two_phase, in
 
             aux_idx += 2;
         } else {
-            /* = : add artificial with coef +1 (basic) */
-            triplets_add(trips, i, aux_idx, 1.0);
+            /* = : add an artificial (always basic). Choose its coefficient sign
+             * so the artificial starts non-negative. Its initial value is
+             * (rhs - activity) / coef; with a fixed +1 coefficient a row whose
+             * structural activity at the starting point exceeds rhs gives the
+             * artificial a negative start (below its own lower bound of 0), and
+             * the phase-1 objective (minimize +1*a) then drives it further from
+             * 0 -- so the infeasibility is never registered and the solve can
+             * fall through to a bogus UNBOUNDED (artalis-io/otto#96). Using
+             * coef -1 in that case makes it start at activity - rhs > 0 so
+             * phase 1 can drive it out or prove infeasibility. Mirrors the
+             * 'L'/'G' branches; the artificial count is unchanged either way,
+             * so the Pass 2 sizing decision still holds. */
+            double rhs = fabs(model->b[i]);
+            double coef = (ax_initial[i] > rhs + RALPH_FEAS_TOL) ? -1.0 : 1.0;
+            triplets_add(trips, i, aux_idx, coef);
             tab->c_ext[aux_idx] = artificial_cost;
             tab->lb_ext[aux_idx] = 0.0;
             tab->ub_ext[aux_idx] = RALPH_INFINITY;
             basic_var_for_row[i] = aux_idx;
             tab->artificial_vars[art_idx++] = aux_idx;
 
-            /* Record mapping: artificial for row i with coefficient +1 */
+            /* Record mapping: artificial for row i with the chosen coefficient */
             tab->aux_row[aux_map_idx] = i;
-            tab->aux_coef[aux_map_idx] = 1.0;
+            tab->aux_coef[aux_map_idx] = coef;
             aux_map_idx++;
 
             aux_idx++;
