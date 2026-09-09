@@ -4,6 +4,7 @@
  * Zero behavior change — pure code motion from simplex.c (R3.9).
  */
 
+#include "sh_attr.h"
 #include "simplex_phase1_trace.h"
 #include "simplex_internal.h"
 #include "simplex_phase1_recovery.h"
@@ -113,7 +114,7 @@ void phase1_stagnation_window_begin(SimplexSolver *solver,
         solver->telemetry.perf_phase1_recompute_after_perturb;
 }
 
-__attribute__((noinline, unused)) int phase1_stagnation_escape_should_trigger(
+SH_NOINLINE SH_UNUSED int phase1_stagnation_escape_should_trigger(
     SimplexSolver *solver,
     const SimplexTableau *tab,
     int iter) {

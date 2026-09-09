@@ -370,3 +370,131 @@ the `Method not allowed` shape, and why Carta no longer needs N event loops.
 All six `main.c` files plus `sh_httpserver.c` and `sh_httpasync.c` compile clean
 under `-Wall -Wextra`, and every server has a gating CI suite (Surge 11, Ralph 14,
 FuelWise 20, Velo 26, Carta 19, Locus 19).
+
+## MSVC support: shared and ralph (reference implementation)
+
+`sh_pal` removed the pthread dependency above the PAL, which is what made MSVC
+reachable. This pass makes it real for `shared` and `ralph`, and establishes the
+pattern the remaining six libraries adopt without redesign.
+
+    make            GCC or Clang, unchanged
+    make CC=cl      MSVC, from a Visual Studio Developer shell
+
+### Why a toolchain layer and not CMake
+
+The existing Make build is the build graph; a second one would drift from it.
+`mk/toolchain.mk` is the only file that knows a compiler exists. Module Makefiles
+include it and compose normalized variables (`CC_WARN`, `CC_OPT`, `CC_FP`,
+`CC_OMP`, `OBJ_OUT`, `AR_CMD`, `link_lib`, ...). There is no `ifeq ($(CC),cl)`
+anywhere else in the tree.
+
+The GNU branch reproduces what the module Makefiles previously spelled inline,
+verified by diffing `make -n` before and after: **387 command lines, byte-identical**
+across `shared lib`, `shared test`, `ralph lib` and `ralph test`.
+
+### Flags that were deliberately not translated
+
+| GCC | MSVC | why |
+|---|---|---|
+| `-march=native` | *(nothing)* | `/arch:AVX2` is a hard floor, not "this machine" — it produces binaries the target may not run |
+| `-fopenmp` | *(nothing)* | 29 of Ralph's 33 pragmas are `omp simd` (OpenMP 4.0). MSVC's `/openmp` is 2.0 and has no `simd`; `/openmp:llvm` rejects a loop index declared in the for-init in C. With OpenMP off MSVC ignores the pragmas silently — zero warnings, identical results — and auto-vectorises under `/O2`. The three real `parallel` constructs in `lap.c` degrade to serial, which is a defined OpenMP property already covered by Ralph's "parallel disabled" tests |
+| `-D_FORTIFY_SOURCE=2`, `-fPIE` | `/GS /guard:cf` | no `_FORTIFY_SOURCE` equivalent; ASLR is already the linker default |
+| `-MMD -MP` | *(nothing)* | `/showIncludes` emits a different format needing a parser. MSVC builds do not track headers; `make clean` after a header change, and CI always builds clean |
+
+### Floating point: `/fp:precise`, on evidence
+
+GCC builds Ralph with `-ffast-math -fno-finite-math-only`: aggressive FP, NaN and
+Inf still honoured. `/fp:fast` has no such carve-out — it assumes NaN and Inf do
+not occur, which in a simplex is exactly the assumption that fails.
+
+Both modes were built and the full Ralph suite run under each. **Both pass with
+zero failures**, so pass/fail alone would have said "either is fine". It is not:
+
+**1. `/fp:fast` breaks the non-finite parameter tests.** Seven
+`warning C4756: overflow in constant arithmetic` appear under `/fp:fast` and
+none under `/fp:precise`. Every site is an `INFINITY` argument in a test
+asserting the solver *rejects* a non-finite parameter — `test_lp_algorithm_api.c`,
+`test_lp_policy_glpk_compat.c`, `test_lp_bfcp_policy.c`. That is precisely the
+guarantee `-fno-finite-math-only` exists to preserve, being lost.
+
+**2. The simplex takes a different path.** Iteration counts diverge on six solves:
+
+    273 -> 261      118 -> 114
+     80 ->  83      134 -> 128
+     75 ->  76
+
+**3. A NETLIB objective changes.** lotfi:
+
+    /fp:precise   -25.2647061510   (rel_err 3.53e-09)
+    /fp:fast      -25.2647060619   (rel_err 7.94e-13)
+
+`/fp:fast` happens to land closer to the reference here, which is exactly why
+this is not a reason to choose it: the value moved, and nothing guarantees the
+next problem moves the same direction.
+
+Whole-suite wall clock was 26.4s (precise) vs 24.4s (fast), but that includes
+compilation and is not a controlled benchmark — no performance claim is made.
+
+Per the criteria set for this work, meaningful numerical divergence or weakened
+robustness means `/fp:precise`, and both are present. `FP_MODE=fast` remains
+available (`make CC=cl FP_MODE=fast`) so the comparison can be repeated; the
+default is `precise` and the choice lives in `mk/toolchain.mk`.
+
+### Portability fixes, made in the shared layer
+
+Fixed once in `shared`, so the other six libraries inherit them:
+
+- **PAL clocks.** `sh_monotonic_ns()` and `sh_wall_ns()` added alongside the
+  millisecond forms. Seven files had their own `gettimeofday`/`clock_gettime`
+  helpers; all now route through the PAL with no precision loss.
+- **PAL misc.** `sh_stderr_is_tty()` (was `isatty(STDERR_FILENO)`) and
+  `sh_sleep_ms()` (was `nanosleep`).
+- **`sh_attr.h`.** `SH_UNUSED` / `SH_NOINLINE`, following the shape `lp_log.h`
+  already used for its printf attribute.
+- **`sh_json.c`** tested for infinity with `val == (1.0 / 0.0)`. MSVC rejects the
+  constant division outright; `isinf()` is what it meant.
+- **`lap.c`'s `GET_COST_CALLBACK`** was a GNU statement expression. It is now a
+  `static inline` function, which is what the macro was emulating; the macro name
+  is kept so no call site changed.
+- Two dead `#include <unistd.h>` deleted (`sh_args.c`, `sh_dist.c` used nothing
+  from it).
+
+`strcasecmp`, `strncasecmp` and `strtok_r` are renamed to their MSVC spellings
+by `/D` flags in `mk/toolchain.mk` rather than by an `#include` in each of the
+seven files that call them — a build concern kept in the build layer, and the
+sources stay POSIX-spelled. Without it MSVC treats them as implicit declarations
+returning `int`, which truncates `strtok_r`'s pointer on a 64-bit build.
+
+### The trap worth remembering
+
+`shared/Makefile` defined `LIB = libshared.a`. `LIB` is also MSVC's library
+search path, and **make re-exports any variable that also exists in the
+environment** — so every recipe ran with the linker's search path replaced by a
+filename, and nothing linked. Renamed to `LIB_FILE`. `mk/toolchain.mk` carries a
+caution: never name a make variable `LIB`, `INCLUDE`, `LINK` or `CL`.
+
+### Verified
+
+| | GCC (UCRT64) | MSVC 19.44 |
+|---|---|---|
+| `shared` build + full suite | pass | pass |
+| `ralph` build + full suite | pass | pass |
+| failures | 0 | 0 |
+| `make -n` command lines | byte-identical to before | — |
+
+The two out-of-process suites SKIP under MSVC exactly as they already do on
+MinGW: `lp_external_oop_run()` has no Windows implementation, which is a feature
+port tracked separately.
+
+### Not in this pass
+
+- Velo, Carta, Locus, Surge, FuelWise, Arbor. Nothing here blocks them; they
+  include `mk/toolchain.mk` and consume the same variables.
+- **Velo needs a real decision, not a shim:** `vl_graph.c` and `vl_pbf.c` use
+  `mmap` for continental-scale graph loading. `CreateFileMapping`/`MapViewOfFile`
+  is a PAL design change, not a header swap.
+- `ralph-benchmark` (the NETLIB harness) uses `dirent.h` to enumerate problems,
+  so `test-netlib` does not yet run under MSVC. It is not part of `make test`.
+- The API servers, which need Keel to build under MSVC first. Keel is
+  MinGW-targeted (`CC = cc`, no CMake/sln, `_MSC_VER` nowhere in its own source)
+  and is a submodule, so that is upstream work.

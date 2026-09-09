@@ -186,11 +186,46 @@ uint64_t sh_monotonic_ms(void)
     }
 }
 
+uint64_t sh_monotonic_ns(void)
+{
+    struct timespec ts;
+#if defined(CLOCK_MONOTONIC)
+    if (clock_gettime(CLOCK_MONOTONIC, &ts) == 0) {
+        return (uint64_t)ts.tv_sec * 1000000000ull + (uint64_t)ts.tv_nsec;
+    }
+#endif
+    {
+        struct timeval tv;
+        if (gettimeofday(&tv, NULL) != 0) return 0;
+        return (uint64_t)tv.tv_sec * 1000000000ull + (uint64_t)tv.tv_usec * 1000ull;
+    }
+}
+
 uint64_t sh_wall_ms(void)
 {
     struct timeval tv;
     if (gettimeofday(&tv, NULL) != 0) return 0;
     return (uint64_t)tv.tv_sec * 1000ull + (uint64_t)tv.tv_usec / 1000ull;
+}
+
+uint64_t sh_wall_ns(void)
+{
+    struct timeval tv;
+    if (gettimeofday(&tv, NULL) != 0) return 0;
+    return (uint64_t)tv.tv_sec * 1000000000ull + (uint64_t)tv.tv_usec * 1000ull;
+}
+
+int sh_stderr_is_tty(void)
+{
+    return isatty(STDERR_FILENO) ? 1 : 0;
+}
+
+void sh_sleep_ms(unsigned ms)
+{
+    struct timespec req;
+    req.tv_sec  = (time_t)(ms / 1000u);
+    req.tv_nsec = (long)(ms % 1000u) * 1000000L;
+    (void)nanosleep(&req, NULL);
 }
 
 int sh_gmtime(int64_t unix_sec, struct tm *out)

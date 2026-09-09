@@ -228,9 +228,7 @@ int sh_trace_format_header(char *buf, size_t len) {
  * ============================================================================ */
 
 static double get_monotonic_time(void) {
-    struct timespec ts;
-    clock_gettime(CLOCK_MONOTONIC, &ts);
-    return ts.tv_sec + ts.tv_nsec / 1e9;
+    return (double)sh_monotonic_ns() / 1.0e9;
 }
 
 static void generate_span_id(char *buf) {

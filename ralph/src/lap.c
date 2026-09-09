@@ -2228,12 +2228,17 @@ RalphLapStatus ralph_lap_solve_lp(
  * Helper macro to get cost with objective handling.
  * For maximize, we negate non-infinite costs.
  */
+static inline double lap_cost_via_callback(int i, int j,
+                                           RalphLapCostFn cost_fn,
+                                           void *user_data,
+                                           int is_maximize) {
+    double c = cost_fn(i, j, user_data);
+    if (is_infinite(c)) return RALPH_LAP_INFINITY;
+    return is_maximize ? -c : c;
+}
+
 #define GET_COST_CALLBACK(i, j, cost_fn, user_data, is_maximize) \
-    ({ \
-        double _c = (cost_fn)((i), (j), (user_data)); \
-        (is_infinite(_c)) ? RALPH_LAP_INFINITY : \
-        ((is_maximize) ? -_c : _c); \
-    })
+    lap_cost_via_callback((i), (j), (cost_fn), (user_data), (is_maximize))
 
 /*
  * Internal callback-based JVC solver.

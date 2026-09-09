@@ -6,7 +6,7 @@
 #include "sh_pal.h"
 #include <stdlib.h>
 #include <string.h>
-#include <sys/time.h>
+#include "sh_pal.h"
 
 /* ============================================================================
  * Internal Types
@@ -32,9 +32,7 @@ struct ShCircuitBreaker {
 
 static double get_time_ms(void)
 {
-    struct timeval tv;
-    gettimeofday(&tv, NULL);
-    return (double)tv.tv_sec * 1000.0 + (double)tv.tv_usec / 1000.0;
+    return (double)sh_wall_ns() / 1.0e6;
 }
 
 /* ============================================================================

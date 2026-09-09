@@ -5,7 +5,17 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <unistd.h>
+#ifdef _MSC_VER
+  /* MSVC has no <unistd.h>; <io.h> declares the same POSIX I/O names. */
+  #include <io.h>
+#else
+  #include <unistd.h>
+#endif
+
+/* access() mode bits; MSVC spells the existence check as a bare 0. */
+#ifndef F_OK
+  #define F_OK 0
+#endif
 #include <sys/stat.h>
 
 #include "test_tmp.h"
@@ -34,16 +44,12 @@ static int tests_passed = 0;
 } while (0)
 
 static int write_script(const char *body, char *path, size_t path_size) {
-    int fd;
     FILE *f;
     if (!body || !path || path_size < 32) return -1;
 
-    if (!ralph_tmp_path(path, path_size, "ralph_oop_runner_XXXXXX")) return -1;
-    fd = mkstemp(path);
-    if (fd < 0) return -1;
-    f = fdopen(fd, "w");
+    if (lp_external_oop_make_tempfile("ralph_oop_runner_", path, path_size) != 0) return -1;
+    f = fopen(path, "w");
     if (!f) {
-        close(fd);
         unlink(path);
         return -1;
     }

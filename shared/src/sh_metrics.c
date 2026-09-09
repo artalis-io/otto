@@ -485,16 +485,12 @@ void sh_metrics_histogram_observe(const char *name, double value, ...) {
 
 ShMetricsTimer sh_metrics_timer_start(void) {
     ShMetricsTimer timer;
-    struct timespec ts;
-    clock_gettime(CLOCK_MONOTONIC, &ts);
-    timer.start = ts.tv_sec + ts.tv_nsec / 1e9;
+    timer.start = (double)sh_monotonic_ns() / 1.0e9;
     return timer;
 }
 
 void sh_metrics_timer_observe(ShMetricsTimer timer, const char *name, ...) {
-    struct timespec ts;
-    clock_gettime(CLOCK_MONOTONIC, &ts);
-    double now = ts.tv_sec + ts.tv_nsec / 1e9;
+    double now = (double)sh_monotonic_ns() / 1.0e9;
     double duration_ms = (now - timer.start) * 1000;
 
     va_list args;

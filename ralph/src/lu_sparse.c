@@ -13,6 +13,7 @@
 #include <stdio.h>
 #include <math.h>
 #include <limits.h>
+#include "sh_attr.h"
 #include "lp.h"
 #include "lp_log.h"
 #include "lp_policy_glpk_compat.h"
@@ -5036,7 +5037,7 @@ int lu_factorize_sparse_strict_dispatch(LUFactorization *lu, const SparseMatrix 
 }
 
 /* Suppress unused function warnings for old code (referenced in lu_factorize_sparse_efficient) */
-__attribute__((unused))
+SH_UNUSED
 static void lu_sparse_suppress_warnings_(void) {
     (void)analyze_lp_basis;
     (void)free_lp_basis_structure;

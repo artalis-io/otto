@@ -15,6 +15,8 @@
 #define NOMINMAX
 #include <windows.h>
 #include <bcrypt.h>
+#include <io.h>      /* _isatty, _fileno */
+#include <stdio.h>
 
 /* windows.h leaves these behind for 16-bit compatibility and they break any
  * code with a variable of the same name. Nothing below needs them. */
@@ -294,6 +296,19 @@ uint64_t sh_monotonic_ms(void)
     return (uint64_t)((now.QuadPart * 1000LL) / freq.QuadPart);
 }
 
+uint64_t sh_monotonic_ns(void)
+{
+    LARGE_INTEGER freq, now;
+    uint64_t whole, rest;
+    if (!QueryPerformanceFrequency(&freq) || freq.QuadPart == 0) return 0;
+    if (!QueryPerformanceCounter(&now)) return 0;
+    /* Split the division: ticks * 1000000000 overflows 64 bits within days
+     * on a 10 MHz timer, which is the usual QPC frequency here. */
+    whole = (uint64_t)(now.QuadPart / freq.QuadPart);
+    rest  = (uint64_t)(now.QuadPart % freq.QuadPart);
+    return whole * 1000000000ull + (rest * 1000000000ull) / (uint64_t)freq.QuadPart;
+}
+
 uint64_t sh_wall_ms(void)
 {
     FILETIME ft;
@@ -303,6 +318,28 @@ uint64_t sh_wall_ms(void)
     u.HighPart = ft.dwHighDateTime;
     /* FILETIME counts 100ns ticks from 1601-01-01; shift to the Unix epoch. */
     return (uint64_t)((u.QuadPart - 116444736000000000ull) / 10000ull);
+}
+
+uint64_t sh_wall_ns(void)
+{
+    FILETIME ft;
+    ULARGE_INTEGER u;
+    GetSystemTimeAsFileTime(&ft);
+    u.LowPart = ft.dwLowDateTime;
+    u.HighPart = ft.dwHighDateTime;
+    /* 100ns FILETIME ticks scale up exactly; the resolution of the underlying
+     * clock is coarser than that, but the unit is honest. */
+    return (uint64_t)((u.QuadPart - 116444736000000000ull) * 100ull);
+}
+
+int sh_stderr_is_tty(void)
+{
+    return _isatty(_fileno(stderr)) ? 1 : 0;
+}
+
+void sh_sleep_ms(unsigned ms)
+{
+    Sleep((DWORD)ms);
 }
 
 int sh_gmtime(int64_t unix_sec, struct tm *out)

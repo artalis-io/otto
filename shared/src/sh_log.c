@@ -10,7 +10,6 @@
 #include <string.h>
 #include "sh_pal.h"
 #include <time.h>
-#include <unistd.h>
 #include <stdarg.h>
 
 /* ============================================================================
@@ -160,7 +159,7 @@ void sh_log_init(const ShLogConfig *config) {
 
     /* Auto-detect color if not explicitly set */
     if (s_config.color < 0) {
-        s_config.color = isatty(STDERR_FILENO) ? 1 : 0;
+        s_config.color = sh_stderr_is_tty();
     }
 
     s_initialized = 1;

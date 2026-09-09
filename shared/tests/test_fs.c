@@ -7,7 +7,19 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
-#include <unistd.h>
+#ifdef _MSC_VER
+  /* MSVC has no <unistd.h>; <io.h> declares the same POSIX I/O names. */
+  #include <io.h>
+#else
+  #include <unistd.h>
+#endif
+#ifdef _MSC_VER
+  #include <direct.h>   /* rmdir */
+  /* POSIX classification macros; MSVC ships only the raw _S_IF* bits. */
+  #ifndef S_ISDIR
+    #define S_ISDIR(m) (((m) & _S_IFDIR) != 0)
+  #endif
+#endif
 #include <errno.h>
 
 /* ============================================================================
