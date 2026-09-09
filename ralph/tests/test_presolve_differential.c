@@ -12,13 +12,13 @@
  * rows, tight bounds), solve each twice (presolve=0 and presolve=1), and flag
  * any mismatch in status or objective. A mismatch is a concrete counterexample.
  *
- * STATUS: this test currently FAILS. It documents an open, confirmed defect --
- * the base simplex (default path, presolve off) reports INFEASIBLE for feasible
- * LPs with a negative lower bound; presolve masks it by shifting bounds to 0.
- * See artalis-io/otto#86 for the diagnosis and minimal repro. It is therefore a
- * NON-GATING diagnostic target (test-presolve-differential), deliberately kept
- * out of `make -C ralph test`. Promote it into the gating suite once #86 is
- * fixed and it passes.
+ * This guards the fix for artalis-io/otto#86: the base simplex (default path,
+ * presolve off) used to report INFEASIBLE for feasible LPs with a nonzero lower
+ * bound -- a <= row violated at the all-vars-at-lower-bounds starting point had
+ * no artificial for phase 1 to drive out. With that fixed, presolve on and off
+ * must agree. Uses FINITE bounds so the comparison is unambiguous (the
+ * unbounded / 1e30-infinity-sentinel edge cases are a separate concern and are
+ * excluded here). Part of `make -C ralph test`.
  */
 
 #include <stdio.h>
@@ -54,10 +54,11 @@ static void gen_spec(Spec *s) {
     for (int j = 0; j < s->n; j++) {
         int t = ri(0, 9);
         s->type[j] = (t < 7) ? 'C' : (t < 9 ? 'I' : 'B');
-        s->lb[j] = (ri(0, 3) == 0) ? rd(-2, 0) : 0.0;
+        /* Nonzero lower bounds (positive and negative) exercise the #86 path;
+           finite upper bounds keep the on/off comparison unambiguous. */
+        s->lb[j] = (ri(0, 2) == 0) ? rd(-2, 2) : 0.0;
         if (s->type[j] == 'B') { s->lb[j] = 0.0; s->ub[j] = 1.0; }
-        else s->ub[j] = (ri(0, 2) == 0) ? RALPH_LP_INFINITY : rd(1, 5);
-        if (s->ub[j] < s->lb[j]) s->ub[j] = s->lb[j] + 1;
+        else s->ub[j] = s->lb[j] + rd(1, 6);
         /* Occasionally fix a variable (lb == ub) to exercise fixed-var removal. */
         if (ri(0, 8) == 0) { s->ub[j] = s->lb[j]; s->type[j] = 'C'; }
         s->obj[j] = rd(-5, 5);

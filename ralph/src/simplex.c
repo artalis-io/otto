@@ -492,8 +492,9 @@ static SimplexTableau* tableau_create_ex(LPModel *model, int force_two_phase, in
     int num_aux_vars = 0;  /* Count slack + surplus + artificial */
     int num_artificial = 0;  /* Count artificial variables only */
     int num_equalities = 0;  /* Count equality constraints */
+
+    /* Pass 1: row sign normalization (make RHS >= 0). */
     for (int i = 0; i < model->num_cons; i++) {
-        /* Normalize so RHS >= 0 */
         if (model->b[i] < 0) {
             norm_sign[i] = -1.0;
             if (model->sense[i] == 'L') {
@@ -507,13 +508,50 @@ static SimplexTableau* tableau_create_ex(LPModel *model, int force_two_phase, in
             norm_sign[i] = 1.0;
             norm_sense[i] = model->sense[i];
         }
+    }
 
-        /* Count auxiliary variables needed */
+    /*
+     * Initial row activity at the starting point (nonbasic structural vars at
+     * their lower bounds; free vars at 0). Needed BEFORE sizing: a <= row whose
+     * activity already exceeds its normalized RHS starts with an infeasible
+     * slack and must get an artificial, exactly like a violated >= row --
+     * otherwise phase 1 has nothing to drive out and wrongly reports the LP
+     * infeasible. This only arises with a nonzero lower bound (with all lb = 0
+     * the activity is 0 <= a non-negative RHS, so the slack is always feasible).
+     */
+    double *ax_size = NULL;
+    if (!dual_mode) {
+        ax_size = (double*)calloc(model->num_cons, sizeof(double));
+        if (!ax_size) {
+            free(norm_sense);
+            free(norm_sign);
+            tableau_free(tab);
+            return NULL;
+        }
+        for (int j = 0; j < model->num_vars; j++) {
+            int is_free_j = (model->lb[j] <= -0.5 * RALPH_INFINITY &&
+                             model->ub[j] >= 0.5 * RALPH_INFINITY);
+            double xj0 = is_free_j ? 0.0 : model->lb[j];
+            if (xj0 == 0.0) continue;
+            for (int p = model->A->colptr[j]; p < model->A->colptr[j + 1]; p++) {
+                int row = model->A->rowidx[p];
+                ax_size[row] += model->A->values[p] * norm_sign[row] * xj0;
+            }
+        }
+    }
+
+    /* Pass 2: count auxiliary and artificial variables. */
+    for (int i = 0; i < model->num_cons; i++) {
         if (dual_mode) {
             /* Dual mode: one auxiliary per constraint, no artificials */
             num_aux_vars += 1;
         } else if (norm_sense[i] == 'L') {
-            num_aux_vars += 1;  /* slack only */
+            if (ax_size[i] > fabs(model->b[i]) + RALPH_FEAS_TOL) {
+                num_aux_vars += 2;    /* slack + artificial (violated at start) */
+                num_artificial += 1;
+            } else {
+                num_aux_vars += 1;    /* slack only */
+            }
         } else if (norm_sense[i] == 'G') {
             num_aux_vars += 2;  /* surplus + artificial */
             num_artificial += 1;  /* artificial for >= */
@@ -523,6 +561,7 @@ static SimplexTableau* tableau_create_ex(LPModel *model, int force_two_phase, in
             num_equalities += 1;
         }
     }
+    free(ax_size);
 
     tab->num_structural_ext = model->num_vars + num_free_splits;
     tab->n = tab->num_structural_ext + num_aux_vars;
@@ -656,19 +695,44 @@ static SimplexTableau* tableau_create_ex(LPModel *model, int force_two_phase, in
             aux_map_idx++;
             aux_idx++;
         } else if (norm_sense[i] == 'L') {
-            /* <= : add slack with coef +1, slack is basic */
-            triplets_add(trips, i, aux_idx, 1.0);
-            tab->c_ext[aux_idx] = 0.0;
-            tab->lb_ext[aux_idx] = 0.0;
-            tab->ub_ext[aux_idx] = RALPH_INFINITY;
-            basic_var_for_row[i] = aux_idx;
+            /* <= : add slack with coef +1 */
+            double rhs = fabs(model->b[i]);
+            int slack_idx = aux_idx;
+
+            triplets_add(trips, i, slack_idx, 1.0);
+            tab->c_ext[slack_idx] = 0.0;
+            tab->lb_ext[slack_idx] = 0.0;
+            tab->ub_ext[slack_idx] = RALPH_INFINITY;
 
             /* Record mapping: slack for row i with coefficient +1 */
             tab->aux_row[aux_map_idx] = i;
             tab->aux_coef[aux_map_idx] = 1.0;
             aux_map_idx++;
 
-            aux_idx++;
+            if (ax_initial[i] > rhs + RALPH_FEAS_TOL) {
+                /* Violated at the initial point (a variable's nonzero lower
+                 * bound pushes activity above rhs): the slack would start
+                 * negative, so add an artificial with coef -1 and make IT basic
+                 * so phase 1 can drive the infeasibility out. Mirrors the >=
+                 * branch (this must match the Pass 2 sizing decision exactly). */
+                int artificial_idx = aux_idx + 1;
+                triplets_add(trips, i, artificial_idx, -1.0);
+                tab->c_ext[artificial_idx] = artificial_cost;
+                tab->lb_ext[artificial_idx] = 0.0;
+                tab->ub_ext[artificial_idx] = RALPH_INFINITY;
+                tab->artificial_vars[art_idx++] = artificial_idx;
+
+                tab->aux_row[aux_map_idx] = i;
+                tab->aux_coef[aux_map_idx] = -1.0;
+                aux_map_idx++;
+
+                basic_var_for_row[i] = artificial_idx;
+                aux_idx += 2;
+            } else {
+                /* Slack starts feasible: slack basic, no artificial. */
+                basic_var_for_row[i] = slack_idx;
+                aux_idx++;
+            }
         } else if (norm_sense[i] == 'G') {
             /* >= : add surplus with coef -1, then artificial with coef +1 */
             double rhs = fabs(model->b[i]);
