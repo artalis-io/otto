@@ -56,6 +56,29 @@ make test
 ./scripts/data-download-osm.sh monaco    # ~1MB (for testing)
 ```
 
+### Windows (MSYS2 / UCRT64)
+
+Build with `mingw32-make`, **not** `make`:
+
+```bash
+pacman -S mingw-w64-ucrt-x86_64-gcc mingw-w64-ucrt-x86_64-make
+mingw32-make all
+mingw32-make test
+```
+
+MSYS2's `/usr/bin/make` clears `TMPDIR`, `TMP` and `TEMP` from the recipe
+environment. GCC then falls back to `C:\WINDOWS`, cannot write there, and the
+build dies on the first source file:
+
+```
+Cannot create temporary file in C:\WINDOWS\: Permission denied
+make[1]: *** [Makefile:127: src/sh_pal_posix.o] Error 127
+```
+
+That is the environment, not the tree. Exporting the variables does not help,
+because make strips them; `mingw32-make` passes them through. CI does not hit
+this because `msys2/setup-msys2` provides a shell that sets them itself.
+
 ### Docker (Production)
 
 ```bash
@@ -298,6 +321,7 @@ See [docs/internals/security-model.md](docs/internals/security-model.md) for the
 ## Requirements
 
 - **Build:** GCC/Clang (C11), GNU Make
+- **Windows:** MSYS2 UCRT64 (`mingw32-make`, see [Windows](#windows-msys2--ucrt64))
 - **WASM:** Emscripten (optional)
 - **UI:** Node.js 20+ (optional)
 - **Maps:** OSM PBF files from [Geofabrik](https://download.geofabrik.de/)
