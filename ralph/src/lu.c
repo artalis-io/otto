@@ -2588,6 +2588,12 @@ LUFailureReason lu_update(LUFactorization *lu, int leaving_pos, const double *en
 
     int m = lu->m;
 
+    /* Defensive: leaving_pos indexes col_perm_inv (size m). Both callers pass a
+     * basis position in [0, m) by construction, but guard rather than trust. */
+    if (leaving_pos < 0 || leaving_pos >= m) {
+        return LU_FAIL_BAD_INPUT;
+    }
+
     /* Convert leaving_pos to step coordinates */
     int step_pos = lu->col_perm_inv[leaving_pos];
 

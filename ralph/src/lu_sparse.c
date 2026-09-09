@@ -3866,9 +3866,17 @@ static int lu_numeric_factorize(LUFactorization *lu, const SparseMatrix *B,
     }
 
     /* Use pre-allocated COO arrays, grow if needed */
-    int coo_needed = m * k + m;  /* Structural entries + identity diagonals */
-    if (coo_needed > lu->coo_capacity) {
-        int new_cap = coo_needed * 2;
+    /* Structural entries + identity diagonals. size_t math: m*k overflows int
+     * for m,k in the tens of thousands (an O(m^2) dense allocation fails first
+     * in practice, but keep the arithmetic well-defined and bounded to the int
+     * coo_capacity field). */
+    size_t coo_needed = (size_t)m * (size_t)k + (size_t)m;
+    if (coo_needed > (size_t)lu->coo_capacity) {
+        size_t want = coo_needed * 2u;
+        if (want > (size_t)INT_MAX) {
+            NUMERIC_RETURN(-1);
+        }
+        int new_cap = (int)want;
         SAFE_FREE(lu->coo_L_row); SAFE_FREE(lu->coo_L_col); SAFE_FREE(lu->coo_L_val);
         SAFE_FREE(lu->coo_U_row); SAFE_FREE(lu->coo_U_col); SAFE_FREE(lu->coo_U_val);
         lu->coo_L_row = (int*)calloc(new_cap, sizeof(int));
