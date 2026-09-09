@@ -20,7 +20,7 @@ CFLAGS_DEBUG = $(strip $(CC_WARN) $(CC_DEBUG_OPT) -DDEBUG $(CC_SANITIZE) $(CC_ST
 DEBUG_LDFLAGS = $(LD_SANITIZE)
 INCLUDES = -I./include -I../shared/include
 SHARED_LIB = ../shared/libshared.a
-LDFLAGS = $(strip $(LD_MATH) $(LD_OMP) $(LD_PLATFORM) $(LD_RELRO))
+LDFLAGS = $(strip $(LD_MATH) $(LD_OMP) $(LD_PLATFORM) $(LD_RELRO) $(LD_STACK))
 
 # Directories
 SRC_DIR = src
@@ -402,6 +402,7 @@ $(SHARED_LIB):
 
 $(LIB_NAME): $(OBJECTS)
 	rm -f $@
+	@rm -f *.obj *.pdb *.ilk *.exp 2>/dev/null || true
 	$(AR_CMD)$@ $^
 
 # Build object files

@@ -232,6 +232,44 @@ int sh_pal_random_bytes(void *buf, size_t len);
 int sh_pal_mkdir(const char *path);
 
 /*
+ * Directory iteration.
+ *
+ * POSIX has opendir/readdir; Windows has FindFirstFile, which needs a wildcard
+ * appended to the path and reports the first entry from the open call. That is
+ * enough of a shape difference that callers cannot paper over it, so it lives
+ * here alongside sh_pal_mkdir.
+ *
+ * Semantics follow readdir: entries arrive in no particular order and "." and
+ * ".." are included, because every caller already filters them and inventing a
+ * different rule here would surprise the POSIX side.
+ *
+ *     ShPalDir *d = sh_pal_dir_open(path);
+ *     ShPalDirEntry e;
+ *     while (sh_pal_dir_next(d, &e)) { ... e.name ... }
+ *     sh_pal_dir_close(d);
+ */
+/* Whether the path exists and is a directory. POSIX spells the test S_ISDIR,
+ * which MSVC does not define at all; Windows has a file-attribute bit instead. */
+int sh_pal_is_dir(const char *path);
+
+typedef struct ShPalDir ShPalDir;
+
+typedef struct {
+    /* Entry name only, never a path. Valid until the next call on this ShPalDir. */
+    const char *name;
+    int is_dir;
+} ShPalDirEntry;
+
+/* Returns NULL if the directory cannot be opened. */
+ShPalDir *sh_pal_dir_open(const char *path);
+
+/* Returns 1 and fills *out for each entry, 0 once the directory is exhausted. */
+int sh_pal_dir_next(ShPalDir *dir, ShPalDirEntry *out);
+
+/* Safe on NULL. */
+void sh_pal_dir_close(ShPalDir *dir);
+
+/*
  * Write this process's temporary directory into `buf`, with no trailing
  * separator.
  *
