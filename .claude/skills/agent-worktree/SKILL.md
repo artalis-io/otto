@@ -87,13 +87,16 @@ git commit -m "$(cat <<'EOF'
 <type>(<scope>): <subject>
 
 <body>
-
-Co-Authored-By: Claude <noreply@anthropic.com>
 EOF
 )"
 ```
 
 **Commit types:** `feat`, `fix`, `refactor`, `docs`, `test`, `chore`
+
+**Attribution:** do not add `Co-Authored-By: Claude`, `Claude-Session:`, or a
+"Generated with Claude Code" line to commits or PR descriptions in this repo.
+`.claude/settings.json` turns the automatic trailers off; leave them off when
+writing a message by hand too.
 
 ### 5. Sync with Main (If Needed)
 
@@ -117,8 +120,6 @@ gh pr create --title "<type>(<scope>): <subject>" --body "$(cat <<'EOF'
 ## Test plan
 - [ ] `make test` passes
 - [ ] Manual verification done
-
-🤖 Generated with [Claude Code](https://claude.com/claude-code)
 EOF
 )"
 ```
@@ -241,9 +242,7 @@ git worktree add "../otto-agent-${AGENT_ID}" -b "feature/${AGENT_ID}-velo-cache"
 cd "../otto-agent-${AGENT_ID}"
 # ... implement feature ...
 git add velo/src/vl_cache.c velo/include/vl_cache.h
-git commit -m "feat(velo): add LRU route caching
-
-Co-Authored-By: Claude <noreply@anthropic.com>"
+git commit -m "feat(velo): add LRU route caching"
 
 # 3. Push and create PR
 git push -u origin "feature/${AGENT_ID}-velo-cache"
