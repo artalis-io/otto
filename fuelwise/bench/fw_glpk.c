@@ -12,7 +12,16 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <unistd.h>
+#ifdef _MSC_VER
+  #include <io.h>
+  /* Windows has no execute bit, so _access has no X_OK: existence is the
+   * closest honest answer, and the paths probed here are POSIX ones anyway. */
+  #ifndef X_OK
+    #define X_OK 0
+  #endif
+#else
+  #include <unistd.h>
+#endif
 #include <math.h>
 #include <time.h>
 
@@ -32,9 +41,7 @@ typedef struct {
 
 static double get_time_ms(void)
 {
-    struct timespec ts;
-    clock_gettime(CLOCK_MONOTONIC, &ts);
-    return ts.tv_sec * 1000.0 + ts.tv_nsec / 1000000.0;
+    return (double)sh_monotonic_ns() / 1.0e6;
 }
 
 static const char *fw_glpsol_path(void)
@@ -70,14 +77,8 @@ int fw_glpk_solve(const FWRefuelProblem *problem, FWGlpkResult *result)
     /* Create temp files for LP and solution. The directory comes from the
      * PAL rather than a literal "/tmp": under MSYS2 this is a native Windows
      * binary, so "/tmp/x" would mean "C:\\tmp\\x". */
-    char temp_dir[260];
     char base_path[320];
-    if (sh_pal_temp_dir(temp_dir, sizeof(temp_dir)) != 0) return -1;
-    snprintf(base_path, sizeof(base_path), "%s/fw_bench_XXXXXX", temp_dir);
-
-    int fd = mkstemp(base_path);
-    if (fd < 0) return -1;
-    close(fd);
+    if (sh_pal_make_tempfile("fw_bench_", base_path, sizeof(base_path)) != 0) return -1;
     unlink(base_path);  /* We just need the unique name */
 
     char lp_path[328];

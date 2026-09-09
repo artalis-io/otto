@@ -113,6 +113,10 @@ CC_PORT_DEFS := /D_USE_MATH_DEFINES /D_CRT_SECURE_NO_WARNINGS /D_CRT_NONSTDC_NO_
 # which truncates strtok_r's pointer on a 64-bit build -- a crash, not a warning.
 CC_PORT_DEFS += /Dstrcasecmp=_stricmp /Dstrncasecmp=_strnicmp /Dstrtok_r=strtok_s
 
+# popen/pclose are the same functions under MSVC, spelled with a leading
+# underscore because they are not ISO C.
+CC_PORT_DEFS += /Dpopen=_popen /Dpclose=_pclose
+
 # /GS is MSVC's stack cookie (the -fstack-protector-strong analogue) and
 # /guard:cf its control-flow guard. There is no _FORTIFY_SOURCE equivalent and
 # ASLR (/DYNAMICBASE) is already the linker default, so -fPIE has no counterpart

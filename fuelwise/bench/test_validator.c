@@ -18,7 +18,11 @@
 #include <string.h>
 #include <math.h>
 #include <time.h>
-#include <unistd.h>
+#ifdef _MSC_VER
+  #include <io.h>   /* close, unlink */
+#else
+  #include <unistd.h>
+#endif
 
 static int tests_run = 0;
 static int tests_passed = 0;
@@ -423,19 +427,10 @@ void test_raw_milp100_seed43_cut_presolve_characterization(void)
     ASSERT(fw_bench_generate(&cfg, &instance) == 0, "Generated raw MILP100 seed=43 instance");
 
     /* Via the PAL, not a literal "/tmp" -- see fw_glpk.c. */
-    char temp_dir[260];
     char base_path[320];
-    ASSERT(sh_pal_temp_dir(temp_dir, sizeof(temp_dir)) == 0,
-           "Resolved the platform temp directory");
-    snprintf(base_path, sizeof(base_path),
-             "%s/fw_validator_raw_mip100_XXXXXX", temp_dir);
-
-    int fd = mkstemp(base_path);
-    ASSERT(fd >= 0, "Created temp path for raw LP export");
-    if (fd >= 0) {
-        close(fd);
-        unlink(base_path);
-    }
+    ASSERT(sh_pal_make_tempfile("fw_validator_raw_mip100_", base_path, sizeof(base_path)) == 0,
+           "Created temp path for raw LP export");
+    unlink(base_path);
 
     char lp_path[328];
     snprintf(lp_path, sizeof(lp_path), "%s.lp", base_path);
@@ -1492,14 +1487,11 @@ void test_stress_many_stations(void)
     memset(&solution, 0, sizeof(solution));
 
     /* Time the solve */
-    struct timespec start, end;
-    clock_gettime(CLOCK_MONOTONIC, &start);
+    uint64_t start_ns = sh_monotonic_ns();
 
     int rc = fw_solve_refuel_lp(&problem, &solution);
 
-    clock_gettime(CLOCK_MONOTONIC, &end);
-    double elapsed_ms = (end.tv_sec - start.tv_sec) * 1000.0 +
-                        (end.tv_nsec - start.tv_nsec) / 1000000.0;
+    double elapsed_ms = (double)(sh_monotonic_ns() - start_ns) / 1.0e6;
 
     printf("  Stations: %d\n", num_stations);
     printf("  Solve time: %.2f ms\n", elapsed_ms);

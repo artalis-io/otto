@@ -412,6 +412,24 @@ int sh_pal_mkdir(const char *path)
     return GetLastError() == ERROR_ALREADY_EXISTS ? 0 : -1;
 }
 
+int sh_pal_make_tempfile(const char *prefix, char *path, size_t path_size)
+{
+    char dir[MAX_PATH];
+    char name[MAX_PATH];
+
+    if (!prefix || !path || path_size < 32) return -1;
+    if (GetTempPathA((DWORD)sizeof(dir), dir) == 0) return -1;
+    /* GetTempFileName creates the file, so the result matches mkstemp's:
+     * the path exists and is ours. It uses at most three prefix characters. */
+    if (GetTempFileNameA(dir, prefix, 0, name) == 0) return -1;
+    if (strlen(name) >= path_size) {
+        (void)DeleteFileA(name);
+        return -1;
+    }
+    snprintf(path, path_size, "%s", name);
+    return 0;
+}
+
 int sh_pal_is_dir(const char *path)
 {
     DWORD attr;

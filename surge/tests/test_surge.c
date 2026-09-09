@@ -10456,7 +10456,7 @@ static void test_time_bracket_api(void) {
     /* location_count 0 → error */
     assert(sg_set_travel_time_bracket(ctx, 0.0, 0, dist, dur) != SG_STATUS_OK);
     /* Non-finite start_time → error */
-    assert(sg_set_travel_time_bracket(ctx, 1.0/0.0, 2, NULL, dur) != SG_STATUS_OK);
+    assert(sg_set_travel_time_bracket(ctx, INFINITY, 2, NULL, dur) != SG_STATUS_OK);
     /* Valid */
     assert(sg_set_travel_time_bracket(ctx, 0.0, 2, NULL, dur) == SG_STATUS_OK);
     /* Duplicate start_time → error */

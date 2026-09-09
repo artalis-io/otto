@@ -1,34 +1,16 @@
 # Carta Makefile
 # Zero-dependency map tile generator
 
-CC ?= gcc
+# Every compiler difference lives in one place; see mk/toolchain.mk.
+include ../mk/toolchain.mk
 
-# Optimization flags
-SIMD_FLAGS = -march=native -ftree-vectorize -ffast-math
-
-# Platform-specific RELRO (Linux only)
-UNAME_S := $(shell uname -s)
-ifeq ($(UNAME_S),Linux)
-    RELRO_FLAGS = -Wl,-z,relro,-z,now
-else
-    RELRO_FLAGS =
-endif
 
 # Production build (with hardening)
 # Note: -pie is implicit on macOS, only add on Linux
-CFLAGS = -Wall -Wextra -O3 -std=c11 -D_GNU_SOURCE -DNDEBUG $(SIMD_FLAGS) \
-         -fstack-protector-strong -D_FORTIFY_SOURCE=2 -fPIE -fno-common
-ifeq ($(UNAME_S),Linux)
-    LDFLAGS = -lm -pie $(RELRO_FLAGS)
-else
-    LDFLAGS = -lm
-endif
-
-# libshared now reaches the platform through sh_pal: bcrypt supplies
-# sh_pal_random_bytes, ws2_32 the StatsD sink in sh_metrics.
-ifneq (,$(findstring MINGW,$(UNAME_S)))
-    LDFLAGS += -lbcrypt -lws2_32
-endif
+CFLAGS = $(strip $(CC_WARN) $(CC_OPT) $(CC_STD) $(CC_DEFS) $(CC_PORT_DEFS) -DNDEBUG \
+                 $(CC_ARCH) $(CC_VECTORIZE) $(CC_FP_MODE) $(CC_FP_FASTMATH) \
+                 $(CC_HARDEN))
+LDFLAGS = $(strip $(LD_MATH) $(LD_PLATFORM) $(LD_PIE) $(LD_RELRO) $(LD_STACK))
 
 # Include paths
 INCLUDES = -Iinclude -I../shared/include -I../vendor/miniz
@@ -75,7 +57,9 @@ MINIZ_OBJS = $(MINIZ_SRCS:.c=.o)
 ALL_OBJS = $(CORE_OBJS) $(MINIZ_OBJS)
 
 # Library
-LIB = libcarta.a
+# Not LIB: that is MSVC's library search path, and make re-exports any
+# variable that also exists in the environment. See mk/toolchain.mk.
+LIB_FILE = libcarta.a
 
 # Test binaries
 TEST_BIN = test_carta
@@ -100,43 +84,43 @@ WASM_OUT = carta.js
 all: lib $(TEST_BIN)
 
 # Build library
-lib: $(LIB)
+lib: $(LIB_FILE)
 
-$(LIB): $(ALL_OBJS) $(SHARED_DIR)/libshared.a
+$(LIB_FILE): $(ALL_OBJS) $(SHARED_DIR)/libshared.a
 	ar rcs $@ $(ALL_OBJS)
 
 # Compile rules
 src/%.o: src/%.c
-	$(CC) $(CFLAGS) $(INCLUDES) -c $< -o $@
+	$(CC) $(CFLAGS) $(INCLUDES) -c $< $(OBJ_OUT)$@
 
 # Build shared library first
 $(SHARED_DIR)/libshared.a:
 	$(MAKE) -C $(SHARED_DIR) lib
 
 # Test binary
-$(TEST_BIN): tests/test_carta.c $(LIB) $(SHARED_DIR)/libshared.a
-	$(CC) $(CFLAGS) $(INCLUDES) $< -L. -lcarta -L$(SHARED_DIR) -lshared $(LDFLAGS) -o $@
+$(TEST_BIN): tests/test_carta.c $(LIB_FILE) $(SHARED_DIR)/libshared.a
+	$(CC) $(CFLAGS) $(INCLUDES) $< $(call link_lib,.,carta) $(call link_lib,$(SHARED_DIR),shared) $(LDFLAGS) $(EXE_OUT)$@
 
 # CLI tool
-$(CLI_BIN): src/cli.c $(LIB) $(SHARED_DIR)/libshared.a
-	$(CC) $(CFLAGS) $(INCLUDES) $< -L. -lcarta -L$(SHARED_DIR) -lshared $(LDFLAGS) -o $@
+$(CLI_BIN): src/cli.c $(LIB_FILE) $(SHARED_DIR)/libshared.a
+	$(CC) $(CFLAGS) $(INCLUDES) $< $(call link_lib,.,carta) $(call link_lib,$(SHARED_DIR),shared) $(LDFLAGS) $(EXE_OUT)$@
 
 cli: $(CLI_BIN)
 
 # Comparison tool (requires libcurl)
-$(COMPARE_BIN): tools/carta_compare.c $(LIB) $(SHARED_DIR)/libshared.a
-	$(CC) $(CFLAGS) $(INCLUDES) $< -L. -lcarta -L$(SHARED_DIR) -lshared -lcurl $(LDFLAGS) -o $@
+$(COMPARE_BIN): tools/carta_compare.c $(LIB_FILE) $(SHARED_DIR)/libshared.a
+	$(CC) $(CFLAGS) $(INCLUDES) $< $(call link_lib,.,carta) $(call link_lib,$(SHARED_DIR),shared) -lcurl $(LDFLAGS) $(EXE_OUT)$@
 
 compare: $(COMPARE_BIN)
 
 # Metatile test binary
-$(TEST_METATILE_BIN): tests/test_metatile.c $(LIB) $(SHARED_DIR)/libshared.a
-	$(CC) $(CFLAGS) $(INCLUDES) $< -L. -lcarta -L$(SHARED_DIR) -lshared $(LDFLAGS) -o $@
+$(TEST_METATILE_BIN): tests/test_metatile.c $(LIB_FILE) $(SHARED_DIR)/libshared.a
+	$(CC) $(CFLAGS) $(INCLUDES) $< $(call link_lib,.,carta) $(call link_lib,$(SHARED_DIR),shared) $(LDFLAGS) $(EXE_OUT)$@
 
 # Transport invariant: ct_api_handle driven by sh_transport_direct with no
 # transport library on the include path. See docs/roadmaps/transport.md.
-$(TEST_TRANSPORT_BIN): tests/test_transport_direct.c $(LIB) $(SHARED_DIR)/libshared.a
-	$(CC) $(CFLAGS) $(INCLUDES) $< -L. -lcarta -L$(SHARED_DIR) -lshared $(LDFLAGS) -o $@
+$(TEST_TRANSPORT_BIN): tests/test_transport_direct.c $(LIB_FILE) $(SHARED_DIR)/libshared.a
+	$(CC) $(CFLAGS) $(INCLUDES) $< $(call link_lib,.,carta) $(call link_lib,$(SHARED_DIR),shared) $(LDFLAGS) $(EXE_OUT)$@
 
 test-transport: $(TEST_TRANSPORT_BIN)
 	./$(TEST_TRANSPORT_BIN)
@@ -148,8 +132,8 @@ test: $(TEST_BIN) $(TEST_METATILE_BIN) $(TEST_TRANSPORT_BIN)
 	./$(TEST_TRANSPORT_BIN)
 
 # Benchmarks
-$(BENCH_BIN): benchmarks/bench_carta.c $(LIB) $(SHARED_DIR)/libshared.a
-	$(CC) $(CFLAGS) $(INCLUDES) $< -L. -lcarta -L$(SHARED_DIR) -lshared $(LDFLAGS) -o $@
+$(BENCH_BIN): benchmarks/bench_carta.c $(LIB_FILE) $(SHARED_DIR)/libshared.a
+	$(CC) $(CFLAGS) $(INCLUDES) $< $(call link_lib,.,carta) $(call link_lib,$(SHARED_DIR),shared) $(LDFLAGS) $(EXE_OUT)$@
 
 bench: $(BENCH_BIN)
 	./$(BENCH_BIN)
@@ -180,7 +164,7 @@ fuzz-lib:
 
 $(FUZZ_BIN): $(FUZZ_SRCS) fuzz-lib
 	$(FUZZ_CC) $(FUZZ_CFLAGS) $(INCLUDES) $(FUZZ_SRCS) \
-		-L. -lcarta_fuzz -L$(SHARED_DIR) -lshared $(LDFLAGS) -o $@
+		$(call link_lib,.,carta_fuzz) $(call link_lib,$(SHARED_DIR),shared) $(LDFLAGS) $(EXE_OUT)$@
 	@echo ""
 	@echo "Fuzzer built successfully. Run with:"
 	@echo "  ./$(FUZZ_BIN) tests/fuzz/corpus/ -max_len=1000000"
@@ -190,7 +174,7 @@ $(FUZZ_BIN): $(FUZZ_SRCS) fuzz-lib
 
 # Clean
 clean:
-	rm -f $(CORE_OBJS) $(LIB) libcarta_fuzz.a
+	rm -f $(CORE_OBJS) $(LIB_FILE) libcarta_fuzz.a
 	rm -f $(TEST_BIN) $(TEST_METATILE_BIN) $(TEST_TRANSPORT_BIN) $(CLI_BIN) $(COMPARE_BIN) $(BENCH_BIN) $(FUZZ_BIN)
 	rm -f $(WASM_OUT) carta.wasm
 

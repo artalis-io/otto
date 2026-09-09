@@ -1,34 +1,16 @@
 # Locus Makefile
 # Zero-dependency geocoding library
 
-CC ?= gcc
+# Every compiler difference lives in one place; see mk/toolchain.mk.
+include ../mk/toolchain.mk
 
-# Optimization flags
-SIMD_FLAGS = -march=native -ftree-vectorize -ffast-math
-
-# Platform-specific RELRO (Linux only)
-UNAME_S := $(shell uname -s)
-ifeq ($(UNAME_S),Linux)
-    RELRO_FLAGS = -Wl,-z,relro,-z,now
-else
-    RELRO_FLAGS =
-endif
 
 # Production build (with hardening)
 # Note: -pie is implicit on macOS, only add on Linux
-CFLAGS = -Wall -Wextra -O3 -std=c11 -D_GNU_SOURCE $(SIMD_FLAGS) \
-         -fstack-protector-strong -D_FORTIFY_SOURCE=2 -fPIE -fno-common
-ifeq ($(UNAME_S),Linux)
-    LDFLAGS = -lm -pie $(RELRO_FLAGS)
-else
-    LDFLAGS = -lm
-endif
-
-# libshared now reaches the platform through sh_pal: bcrypt supplies
-# sh_pal_random_bytes, ws2_32 the StatsD sink in sh_metrics.
-ifneq (,$(findstring MINGW,$(UNAME_S)))
-    LDFLAGS += -lbcrypt -lws2_32
-endif
+CFLAGS = $(strip $(CC_WARN) $(CC_OPT) $(CC_STD) $(CC_DEFS) $(CC_PORT_DEFS) \
+                 $(CC_ARCH) $(CC_VECTORIZE) $(CC_FP_MODE) $(CC_FP_FASTMATH) \
+                 $(CC_HARDEN))
+LDFLAGS = $(strip $(LD_MATH) $(LD_PLATFORM) $(LD_PIE) $(LD_RELRO) $(LD_STACK))
 
 # Include paths
 INCLUDES = -Iinclude -I../shared/include -I../vendor/miniz
@@ -58,7 +40,9 @@ CORE_SRCS = src/locus.c \
 CORE_OBJS = $(CORE_SRCS:.c=.o)
 
 # Library
-LIB = liblocus.a
+# Not LIB: that is MSVC's library search path, and make re-exports any
+# variable that also exists in the environment. See mk/toolchain.mk.
+LIB_FILE = liblocus.a
 
 # Test binary
 TEST_BIN = test_locus
@@ -76,27 +60,27 @@ WASM_OUT = locus.js
 all: lib $(TEST_BIN)
 
 # Build library
-lib: $(LIB)
+lib: $(LIB_FILE)
 
-$(LIB): $(CORE_OBJS) $(SHARED_DIR)/libshared.a
+$(LIB_FILE): $(CORE_OBJS) $(SHARED_DIR)/libshared.a
 	ar rcs $@ $(CORE_OBJS)
 
 # Compile rules
 src/%.o: src/%.c
-	$(CC) $(CFLAGS) $(INCLUDES) -c $< -o $@
+	$(CC) $(CFLAGS) $(INCLUDES) -c $< $(OBJ_OUT)$@
 
 # Build shared library first
 $(SHARED_DIR)/libshared.a:
 	$(MAKE) -C $(SHARED_DIR) lib
 
 # Test binary
-$(TEST_BIN): tests/test_locus.c $(LIB) $(SHARED_DIR)/libshared.a
-	$(CC) $(CFLAGS) $(INCLUDES) $< -L. -llocus -L$(SHARED_DIR) -lshared $(LDFLAGS) -o $@
+$(TEST_BIN): tests/test_locus.c $(LIB_FILE) $(SHARED_DIR)/libshared.a
+	$(CC) $(CFLAGS) $(INCLUDES) $< $(call link_lib,.,locus) $(call link_lib,$(SHARED_DIR),shared) $(LDFLAGS) $(EXE_OUT)$@
 
 # Transport invariant: lc_api_handle driven by sh_transport_direct with no
 # transport library on the include path. See docs/roadmaps/transport.md.
-$(TEST_TRANSPORT_BIN): tests/test_transport_direct.c $(LIB) $(SHARED_DIR)/libshared.a
-	$(CC) $(CFLAGS) $(INCLUDES) $< -L. -llocus -L$(SHARED_DIR) -lshared $(LDFLAGS) -o $@
+$(TEST_TRANSPORT_BIN): tests/test_transport_direct.c $(LIB_FILE) $(SHARED_DIR)/libshared.a
+	$(CC) $(CFLAGS) $(INCLUDES) $< $(call link_lib,.,locus) $(call link_lib,$(SHARED_DIR),shared) $(LDFLAGS) $(EXE_OUT)$@
 
 test-transport: $(TEST_TRANSPORT_BIN)
 	./$(TEST_TRANSPORT_BIN)
@@ -107,8 +91,8 @@ test: $(TEST_BIN) $(TEST_TRANSPORT_BIN)
 	./$(TEST_TRANSPORT_BIN)
 
 # Benchmarks
-$(BENCH_BIN): benchmarks/bench_locus.c $(LIB) $(SHARED_DIR)/libshared.a
-	$(CC) $(CFLAGS) $(INCLUDES) $< -L. -llocus -L$(SHARED_DIR) -lshared $(LDFLAGS) -o $@
+$(BENCH_BIN): benchmarks/bench_locus.c $(LIB_FILE) $(SHARED_DIR)/libshared.a
+	$(CC) $(CFLAGS) $(INCLUDES) $< $(call link_lib,.,locus) $(call link_lib,$(SHARED_DIR),shared) $(LDFLAGS) $(EXE_OUT)$@
 
 bench: $(BENCH_BIN)
 	./$(BENCH_BIN)
@@ -124,7 +108,7 @@ wasm:
 
 # Clean
 clean:
-	rm -f $(CORE_OBJS) $(LIB)
+	rm -f $(CORE_OBJS) $(LIB_FILE)
 	rm -f $(TEST_BIN) $(TEST_TRANSPORT_BIN) $(BENCH_BIN)
 	rm -f $(WASM_OUT) locus.wasm
 

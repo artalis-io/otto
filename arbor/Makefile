@@ -1,31 +1,14 @@
 # Arbor Makefile
 # Reusable optimization/search framework (ALNS core first)
 
-CC ?= gcc
+# Every compiler difference lives in one place; see mk/toolchain.mk.
+include ../mk/toolchain.mk
 
-# Platform-specific RELRO (Linux only)
-UNAME_S := $(shell uname -s)
-ifeq ($(UNAME_S),Linux)
-    RELRO_FLAGS = -Wl,-z,relro,-z,now
-else
-    RELRO_FLAGS =
-endif
 
 # Production build (with hardening)
 # Note: -pie is implicit on macOS, only add on Linux
-CFLAGS = -Wall -Wextra -O3 -std=c11 -D_GNU_SOURCE \
-         -fstack-protector-strong -D_FORTIFY_SOURCE=2 -fPIE -fno-common
-ifeq ($(UNAME_S),Linux)
-    LDFLAGS = -lm -pie $(RELRO_FLAGS)
-else
-    LDFLAGS = -lm
-endif
-
-# libshared reaches the platform through sh_pal: bcrypt supplies
-# sh_pal_random_bytes, ws2_32 the StatsD sink in sh_metrics.
-ifneq (,$(findstring MINGW,$(UNAME_S)))
-    LDFLAGS += -lbcrypt -lws2_32
-endif
+CFLAGS = $(strip $(CC_WARN) $(CC_OPT) $(CC_STD) $(CC_DEFS) $(CC_PORT_DEFS) $(CC_HARDEN))
+LDFLAGS = $(strip $(LD_MATH) $(LD_PLATFORM) $(LD_PIE) $(LD_RELRO) $(LD_STACK))
 
 INCLUDES = -Iinclude -I../shared/include
 
@@ -40,7 +23,9 @@ SRCS = src/arbor.c \
 
 OBJS = $(SRCS:.c=.o)
 
-LIB = libarbor.a
+# Not LIB: that is MSVC's library search path, and make re-exports any
+# variable that also exists in the environment. See mk/toolchain.mk.
+LIB_FILE = libarbor.a
 TEST_BIN = test_arbor
 TEST_OP_BIN = test_ar_operators
 
@@ -48,19 +33,19 @@ TEST_OP_BIN = test_ar_operators
 
 all: lib $(TEST_BIN) $(TEST_OP_BIN)
 
-lib: $(LIB)
+lib: $(LIB_FILE)
 
-$(LIB): $(OBJS)
-	ar rcs $@ $^
+$(LIB_FILE): $(OBJS)
+	$(AR_CMD)$@ $^
 
 src/%.o: src/%.c
-	$(CC) $(CFLAGS) $(INCLUDES) -c $< -o $@
+	$(CC) $(CFLAGS) $(INCLUDES) -c $< $(OBJ_OUT)$@
 
-$(TEST_BIN): tests/test_arbor.c $(LIB) ../shared/libshared.a
-	$(CC) $(CFLAGS) $(INCLUDES) $< -L. -larbor -L../shared -lshared $(LDFLAGS) -o $@
+$(TEST_BIN): tests/test_arbor.c $(LIB_FILE) ../shared/libshared.a
+	$(CC) $(CFLAGS) $(INCLUDES) $< $(call link_lib,.,arbor) $(call link_lib,../shared,shared) $(LDFLAGS) $(EXE_OUT)$@
 
-$(TEST_OP_BIN): tests/test_ar_operators.c $(LIB) ../shared/libshared.a
-	$(CC) $(CFLAGS) $(INCLUDES) $< -L. -larbor -L../shared -lshared $(LDFLAGS) -o $@
+$(TEST_OP_BIN): tests/test_ar_operators.c $(LIB_FILE) ../shared/libshared.a
+	$(CC) $(CFLAGS) $(INCLUDES) $< $(call link_lib,.,arbor) $(call link_lib,../shared,shared) $(LDFLAGS) $(EXE_OUT)$@
 
 ../shared/libshared.a:
 	$(MAKE) -C ../shared lib
@@ -80,7 +65,7 @@ debug: LDFLAGS = -lm $(DEBUG_LDFLAGS)
 debug: clean all
 
 clean:
-	rm -f $(OBJS) $(LIB) $(TEST_BIN) $(TEST_OP_BIN)
+	rm -f $(OBJS) $(LIB_FILE) $(TEST_BIN) $(TEST_OP_BIN)
 
 help:
 	@echo "Arbor Build System"

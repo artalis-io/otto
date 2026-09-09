@@ -10,6 +10,7 @@
 #include <string.h>
 #include <math.h>
 #include <time.h>
+#include "sh_pal.h"
 #include "fuelwise.h"
 #include "fw_consumption.h"
 #include "sh_units.h"
@@ -1037,13 +1038,12 @@ void test_mip_hint_components(void)
         fw_set_mip_hint_flags(configs[c].flags);
 
         FWRefuelSolution solution;
-        struct timespec t0, t1;
-        clock_gettime(CLOCK_MONOTONIC, &t0);
+        double t0_s, t1_s;
+        t0_s = (double)sh_monotonic_ns() / 1.0e9;
         int ret = fw_solve_refuel_milp(&problem, &solution);
-        clock_gettime(CLOCK_MONOTONIC, &t1);
+        t1_s = (double)sh_monotonic_ns() / 1.0e9;
 
-        double ms = (t1.tv_sec - t0.tv_sec) * 1000.0 +
-                     (t1.tv_nsec - t0.tv_nsec) / 1e6;
+        double ms = (t1_s - t0_s) * 1000.0;
 
         if (ret == 0 && solution.status == FW_STATUS_OPTIMAL) {
             printf("  %-25s  cost=$%.2f  stops=%d  time=%.1fms\n",

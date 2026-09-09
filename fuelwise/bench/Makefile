@@ -1,32 +1,18 @@
 # FuelWise Benchmark Makefile
 
-CC ?= gcc
-CFLAGS = -Wall -Wextra -O3 -std=c11 -D_GNU_SOURCE
+# Every compiler difference lives in one place; see mk/toolchain.mk.
+include ../../mk/toolchain.mk
+
+CFLAGS = $(strip $(CC_WARN) $(CC_OPT) $(CC_STD) $(CC_DEFS) $(CC_PORT_DEFS))
 
 # Include paths
 INCLUDES = -I../include -I../../shared/include -I../../ralph/include
 
-# OpenMP flags - platform-specific
-UNAME_S := $(shell uname -s)
-ifeq ($(UNAME_S),Darwin)
-    # macOS with Homebrew
-    OMP_LDFLAGS = -L/opt/homebrew/opt/libomp/lib -lomp
-else
-    # Linux - GCC handles OpenMP natively
-    OMP_LDFLAGS = -fopenmp
-endif
-
-# Library paths (order matters: fuelwise -> ralph -> shared)
-LDFLAGS = -L.. -L../../shared -L../../ralph -lfuelwise -lralph -lshared -lm -lpthread $(OMP_LDFLAGS)
-
-# libshared reaches the platform through sh_pal: bcrypt supplies
-# sh_pal_random_bytes, ws2_32 the StatsD sink in sh_metrics. The same two
-# lines are in fuelwise/Makefile -- this Makefile links its own binaries and
-# so needs them too, which only surfaced once Windows CI ran `make -C
-# fuelwise test` rather than just `test-transport`.
-ifneq (,$(findstring MINGW,$(UNAME_S)))
-    LDFLAGS += -lbcrypt -lws2_32
-endif
+# Library order matters: fuelwise -> ralph -> shared. link_lib spells each the
+# way the compiler in use expects; MSVC has no -L/-l and takes the archive.
+LDFLAGS = $(strip $(call link_lib,..,fuelwise) $(call link_lib,../../ralph,ralph) \
+                  $(call link_lib,../../shared,shared) \
+                  $(LD_MATH) $(LD_THREAD) $(LD_OMP) $(LD_PLATFORM) $(LD_STACK))
 
 # Source files
 SRCS = main.c fw_bench.c fw_gen.c fw_validate.c fw_glpk.c
@@ -54,16 +40,16 @@ RALPH_DIR = ../../ralph
 all: $(TARGET)
 
 $(TARGET): $(OBJS) ../libfuelwise.a ../../shared/libshared.a ../../ralph/libralph.a
-	$(CC) $(CFLAGS) $(OBJS) $(LDFLAGS) -o $@
+	$(CC) $(CFLAGS) $(OBJS) $(LDFLAGS) $(EXE_OUT)$@
 
 $(TEST_VALIDATOR): $(TEST_VALIDATOR_OBJS) ../libfuelwise.a ../../shared/libshared.a ../../ralph/libralph.a
-	$(CC) $(CFLAGS) $(TEST_VALIDATOR_OBJS) $(LDFLAGS) -o $@
+	$(CC) $(CFLAGS) $(TEST_VALIDATOR_OBJS) $(LDFLAGS) $(EXE_OUT)$@
 
 $(GATE_TARGET): $(GATE_OBJS) ../libfuelwise.a ../../shared/libshared.a ../../ralph/libralph.a
-	$(CC) $(CFLAGS) $(GATE_OBJS) $(LDFLAGS) -o $@
+	$(CC) $(CFLAGS) $(GATE_OBJS) $(LDFLAGS) $(EXE_OUT)$@
 
 %.o: %.c fw_bench.h
-	$(CC) $(CFLAGS) $(INCLUDES) -c $< -o $@
+	$(CC) $(CFLAGS) $(INCLUDES) -c $< $(OBJ_OUT)$@
 
 # Dependencies
 fw_bench.o: fw_bench.c fw_bench.h

@@ -5,7 +5,7 @@
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
-#include <sys/time.h>
+#include "sh_pal.h"
 
 #include "sh_dist.h"
 
@@ -57,9 +57,7 @@ struct ARALNSContext {
 };
 
 static double ar_now_seconds(void) {
-    struct timeval tv;
-    gettimeofday(&tv, NULL);
-    return (double)tv.tv_sec + ((double)tv.tv_usec / 1000000.0);
+    return (double)sh_monotonic_ns() / 1.0e9;
 }
 
 static void ar_copy_name(char dst[32], const char *src) {

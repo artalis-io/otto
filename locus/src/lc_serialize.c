@@ -45,6 +45,7 @@
  * [Geometry Points] - int32 lat_e7, lon_e7 pairs
  */
 
+#include "sh_attr.h"
 #include "lc_serialize.h"
 #include "lc_mmap.h"
 #include "lc_normalize.h"
@@ -54,7 +55,11 @@
 #include <string.h>
 #include "sh_pal.h"
 #include <fcntl.h>
-#include <unistd.h>
+#ifdef _MSC_VER
+  #include <io.h>   /* close, read */
+#else
+  #include <unistd.h>
+#endif
 #include <sys/stat.h>
 #include <math.h>
 
@@ -65,7 +70,13 @@
  * Binary Format Structures (v3 - for backwards compatibility)
  * ============================================================================ */
 
-typedef struct __attribute__((packed)) {
+/* On-disk index layout; see lc_mmap.h for the same treatment and why.
+ * MSVC packs by pragma, GNU by attribute; SH_PACKED is empty on MSVC. */
+#if defined(_MSC_VER)
+  #pragma pack(push, 1)
+#endif
+
+typedef struct SH_PACKED {
     uint32_t magic;
     uint32_t version;
     uint32_t entity_count;
@@ -82,7 +93,7 @@ typedef struct __attribute__((packed)) {
     uint32_t _padding[2];  /* Align to 64 bytes */
 } LCBinaryHeaderV3;
 
-typedef struct __attribute__((packed)) {
+typedef struct SH_PACKED {
     uint64_t entities_offset;
     uint64_t alt_names_offset;
     uint64_t string_pool_offset;
@@ -93,7 +104,7 @@ typedef struct __attribute__((packed)) {
     uint64_t _padding;  /* Align to 64 bytes */
 } LCSectionOffsetsV3;
 
-typedef struct __attribute__((packed)) {
+typedef struct SH_PACKED {
     uint64_t osm_id;
     uint8_t type;
     uint8_t fclass;
@@ -115,7 +126,7 @@ typedef struct __attribute__((packed)) {
 } LCBinaryEntityV3;
 
 /* Serialized trie node - fixed 160 bytes */
-typedef struct __attribute__((packed)) {
+typedef struct SH_PACKED {
     uint32_t children[LC_TRIE_ALPHABET_SIZE];  /* Child node indices, NULL_OFFSET if none */
     uint32_t entity_offset;   /* Offset into trie entity array */
     uint16_t entity_count;    /* Number of entities at this node */
@@ -876,6 +887,10 @@ typedef struct {
     MmapTrie trie;
     MmapGrid grid;
 } LCMmapContextV3;
+
+#if defined(_MSC_VER)
+  #pragma pack(pop)
+#endif
 
 /* ============================================================================
  * Load Index via mmap (v4 - zero-copy)

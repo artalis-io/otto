@@ -6,6 +6,7 @@
  * Copyright (c) 2024-2026. All rights reserved.
  */
 
+#include "sh_pal.h"
 #include "fw_bench.h"
 #include "fuelwise.h"
 #include "sh_units.h"
@@ -29,9 +30,7 @@ int fw_glpk_solve(const FWRefuelProblem *problem, FWGlpkResult *result);
 
 static double get_time_ms(void)
 {
-    struct timespec ts;
-    clock_gettime(CLOCK_MONOTONIC, &ts);
-    return ts.tv_sec * 1000.0 + ts.tv_nsec / 1000000.0;
+    return (double)sh_monotonic_ns() / 1.0e6;
 }
 
 int fw_bench_get_config(const char *scenario, uint64_t seed, FWBenchConfig *out)
