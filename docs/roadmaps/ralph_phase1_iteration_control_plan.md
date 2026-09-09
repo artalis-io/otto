@@ -2,7 +2,7 @@
 
 Status: In progress  
 Owner: Ralph LP  
-Reference baseline: `febbecd` (NETLIB gate timeout hygiene)
+Reference baseline: `dbeb229` (NETLIB gate timeout hygiene)
 
 ## Goal
 
@@ -144,7 +144,7 @@ Reduce Phase-1 wall time on degenerate NETLIB outliers by cutting unnecessary fu
       - artifact: `/tmp/netlib-regression-gate-20260226-215057`
     - `make -C ralph test-netlib-gate` PASS
       - artifact: `/tmp/netlib-regression-gate-20260226-215111`
-- [ ] 2026-02-27: P1-F validation run on `64c154c` (blocked by required-pass regression).
+- [ ] 2026-02-27: P1-F validation run on `02f05c2` (blocked by required-pass regression).
   - Validation:
     - `make -C ralph test-lp-telemetry-solver` PASS (`156/156`)
     - `make -C ralph test-simplex-policy` PASS (`54/54`)

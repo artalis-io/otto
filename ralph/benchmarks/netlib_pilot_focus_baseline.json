@@ -1,5 +1,5 @@
 {
-  "source_commit": "0b185e2",
+  "source_commit": "56c5f44",
   "description": "Pilot-family focus diagnostics baseline (non-gating).",
   "defaults": {
     "hard_cap_sec": 20,

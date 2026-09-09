@@ -2241,7 +2241,7 @@ sub-route by concatenating prefix[start] with suffix[end].
 
 **Files:** `sg_concat.c` (`sg_route_build_cap_segments()`), `sg_internal.h` (`SGCapSegment`).
 
-**Phase S17.2: Timing Prefix/Suffix ✅ COMPLETE (commit fad7453)**
+**Phase S17.2: Timing Prefix/Suffix ✅ COMPLETE (commit 5d37600)**
 
 Per-vehicle timing prefix/suffix arrays using `SGSegSummary` (distance, duration,
 earliest_start, latest_start, time_warp, wait_time, first/last location). Built at the
@@ -3053,7 +3053,7 @@ R2_4 improved dramatically: +54.4% → +22.3% (nearly halved). RC2_4: +21.6% →
 Vehicle match improved from 28 to 33 instances, with C2 gaining 3 and RC2 gaining 2
 (partially offset by C1 losing 2 from construction variance).
 
-**Runtime issue (fixed in b3905e2):** Several instances exceeded the 60s time limit
+**Runtime issue (fixed in 187ee8a):** Several instances exceeded the 60s time limit
 dramatically (c2_4_8: 4221s, c2_4_5: 3573s, c2_4_1: 3501s, r1_4_1: 2634s). Root cause:
 ejection chain budget checks were coarse-grained. Fixed by adding `SGBudgetProbe`
 amortized clock checks (every 64 ticks) inside all inner loops and the recursive
@@ -3119,7 +3119,7 @@ Root causes at 400+:
 |-------|--------|------------|
 | Poor construction quality | Solomon I1 produces too many vehicles (48 vs BKS 40 on C1_4_1) | ✅ CFRS heuristics (Phase S16) — 55% vehicle match with population at 400 |
 | Low iterations/sec | Destroy-repair cycle is O(n) per iteration; fewer iterations in budget | ✅ O(1) concat pre-filter (Phase S17.3) — 99%+ skip rate in intensify |
-| Ejection chain timeout | ~~Coarse-grained budget check~~ | ✅ Fixed: SGBudgetProbe amortized checks in all inner loops + recursive ejection entry (commit b3905e2) |
+| Ejection chain timeout | ~~Coarse-grained budget check~~ | ✅ Fixed: SGBudgetProbe amortized checks in all inner loops + recursive ejection entry (commit 187ee8a) |
 | Vehicles-first objective | Most of 60s spent on vehicle elimination, not distance | Needs more total budget (profile matrix BEST gives 600s for LARGE) |
 | Limited operator set | 8 destroy + greedy/regret repair | More operators: SISR, route-level destroy, LNS with backtracking |
 
@@ -3151,7 +3151,7 @@ a design limitation — it's a matter of additive improvements on top of a sound
   each scale point can be independently optimized. Most solvers use one-size-fits-all.
 
 The gap from +12.9% to <10% at 400 customers requires: (1) ~~fixing ejection chain
-timeouts~~ ✅ done (commit b3905e2), (2) ~~per-cell tuning of the profile matrix for
+timeouts~~ ✅ done (commit 187ee8a), (2) ~~per-cell tuning of the profile matrix for
 LARGE scale~~ ✅ done (S22, brought +33.3%→+12.9%), (3) more time budget — the BEST
 profile gives 600s and NEAR_OPTIMAL gives 120s, (4) operator improvements for R1-class
 random instances that plateau early. At 300s, rc1_4_1 already drops to +6.6% distance.
@@ -3482,9 +3482,9 @@ Greedy (regret_k=1): (1) lowest first_score, (2) lowest request_id.
 | `src/sg_repair.c` | `sg_repair_fill_heap` (~100 lines), rename existing to `_linear`, wrappers |
 | `tests/test_surge.c` | 8 tests for heap repair correctness |
 
-**Benchmark results (GH-400, 60s, population, commit c26ff30):**
+**Benchmark results (GH-400, 60s, population, commit c77c0d5):**
 
-| Metric | Before S19 (b3905e2) | After S19 (c26ff30) | Delta |
+| Metric | Before S19 (187ee8a) | After S19 (c77c0d5) | Delta |
 |--------|---------------------|---------------------|-------|
 | Vehicle match | 27/60 (45%) | 33/60 (55%) | +6 instances |
 | Avg vehicle gap | — | +0.63 | — |
@@ -3567,7 +3567,7 @@ no way to independently reposition pickup/delivery stops within or across routes
 | `src/sg_concat.c` | `sg_concat_eval_2opt_intra` (~100 lines) |
 | `tests/test_surge.c` | 12 new tests (433 total) |
 
-**Benchmark results (GH-400, 60s, population, commit b132790):**
+**Benchmark results (GH-400, 60s, population, commit 9cb34d2):**
 
 | Metric | S19 baseline | S20 | Delta |
 |--------|-------------|-----|-------|
@@ -3782,7 +3782,7 @@ this should materially close the distance gap at 60s.
 
 #### Implementation (Completed)
 
-Commit `4eb0730`. 441/441 tests pass (433 existing + 8 new cache tests).
+Commit `7c53c32`. 441/441 tests pass (433 existing + 8 new cache tests).
 
 Key design change from sketch: generation counters live in **`SGRouteSolution.route_generation[v]`**
 (not the cache), enabling cross-iteration persistence via arena memcpy. Added `penalty_gen`
@@ -3938,7 +3938,7 @@ same time budget compared to pre-S19 baseline.
 
 ### Phase S24: Instance-Adaptive Construction ✅
 
-**Completed: 2026-03-08. Commit `6e04c64`.**
+**Completed: 2026-03-08. Commit `2faa319`.**
 
 Instance feature extraction drives construction strategy ordering, with improved lower
 bounds, cluster TW validation, and post-construction route merging.
