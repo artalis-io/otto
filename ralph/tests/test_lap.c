@@ -12,6 +12,7 @@
 #include <string.h>
 #include <math.h>
 #include <time.h>
+#include "sh_time.h"
 #include "lap.h"
 #include "detect.h"
 #include "ralph_test_mod_api.h"
@@ -41,6 +42,27 @@ static int tests_passed = 0;
         printf("  FAIL: %s (%.6f != %.6f)\n", msg, (double)(a), (double)(b)); \
     } \
 } while(0)
+
+/* ============================================================================
+ * Benchmark timing
+ *
+ * The ratio assertions below used clock(), which is far too coarse for them:
+ * on MinGW CLOCKS_PER_SEC is 1000 and the underlying tick is 15.6 ms, so an arm
+ * that runs in a millisecond measures as 0.000 ms and the ratio taken from it
+ * is a division by zero. sh_monotonic_seconds() resolves to 100 ns on both
+ * platforms.
+ *
+ * Resolution alone is not enough: a fast enough machine still finishes an arm
+ * inside the noise. Each benchmark grows its iteration count until the baseline
+ * arm clears BENCH_MIN_MS, so the ratio is always taken between two numbers
+ * large enough to mean something.
+ * ============================================================================ */
+static double bench_now_ms(void) {
+    return sh_monotonic_seconds() * 1000.0;
+}
+
+#define BENCH_MIN_MS   20.0
+#define BENCH_MAX_REPS 64
 
 /* ============================================================================
  * Test helper: print assignment
@@ -422,23 +444,21 @@ static void test_20x20(void) {
     int *lp_sol = malloc(n * sizeof(int));
     double jvc_cost, lp_cost;
 
-    clock_t start = clock();
+    double start = bench_now_ms();
     RalphLapStatus status = ralph_lap_solve(n, cost, RALPH_LAP_MINIMIZE,
                                             jvc_sol, NULL, NULL, NULL, &jvc_cost);
-    clock_t jvc_time = clock() - start;
+    double jvc_time = bench_now_ms() - start;
     ASSERT(status == RALPH_LAP_SUCCESS, "JVC solver succeeded");
 
-    start = clock();
+    start = bench_now_ms();
     status = ralph_lap_solve_lp(n, cost, RALPH_LAP_MINIMIZE, lp_sol, &lp_cost);
-    clock_t lp_time = clock() - start;
+    double lp_time = bench_now_ms() - start;
     ASSERT(status == RALPH_LAP_SUCCESS, "LP solver succeeded");
 
     ASSERT_NEAR(jvc_cost, lp_cost, TOLERANCE, "JVC and LP costs match");
     ASSERT(ralph_lap_verify(n, cost, jvc_sol, NULL), "Valid permutation");
 
-    printf("  JVC time: %.4f ms, LP time: %.4f ms\n",
-           (double)jvc_time / CLOCKS_PER_SEC * 1000,
-           (double)lp_time / CLOCKS_PER_SEC * 1000);
+    printf("  JVC time: %.4f ms, LP time: %.4f ms\n", jvc_time, lp_time);
 
     free(cost);
     free(jvc_sol);
@@ -589,16 +609,15 @@ static void test_50x50(void) {
     int *row_sol = malloc(n * sizeof(int));
     double total_cost;
 
-    clock_t start = clock();
+    double start = bench_now_ms();
     RalphLapStatus status = ralph_lap_solve(n, cost, RALPH_LAP_MINIMIZE,
                                             row_sol, NULL, NULL, NULL, &total_cost);
-    clock_t elapsed = clock() - start;
+    double elapsed = bench_now_ms() - start;
 
     ASSERT(status == RALPH_LAP_SUCCESS, "JVC solver succeeded");
     ASSERT(ralph_lap_verify(n, cost, row_sol, NULL), "Valid permutation");
 
-    printf("  JVC time: %.2f ms, cost: %.2f\n",
-           (double)elapsed / CLOCKS_PER_SEC * 1000, total_cost);
+    printf("  JVC time: %.2f ms, cost: %.2f\n", elapsed, total_cost);
 
     free(cost);
     free(row_sol);
@@ -1207,35 +1226,43 @@ static void test_workspace_repeated(void) {
     int num_solves = 20;
     double *cost = malloc(n * n * sizeof(double));
     int *row_sol = malloc(n * sizeof(int));
-
-    /* Time without workspace */
-    clock_t start1 = clock();
-    for (int s = 0; s < num_solves; s++) {
-        srand(2000 + s);
-        for (int i = 0; i < n * n; i++) {
-            cost[i] = (rand() % 1000) / 10.0;
-        }
-        ralph_lap_solve(n, cost, RALPH_LAP_MINIMIZE, row_sol, NULL, NULL, NULL, NULL);
-    }
-    double time_no_ws = (double)(clock() - start1) / CLOCKS_PER_SEC;
-
-    /* Time with workspace */
     RalphLapWorkspace *ws = ralph_lap_workspace_create(n);
-    clock_t start2 = clock();
-    for (int s = 0; s < num_solves; s++) {
-        srand(2000 + s);
-        for (int i = 0; i < n * n; i++) {
-            cost[i] = (rand() % 1000) / 10.0;
+
+    double time_no_ws = 0.0, time_ws = 0.0;
+
+    for (int reps = 1; ; reps *= 2) {
+        num_solves = 20 * reps;
+
+        /* Time without workspace */
+        double start1 = bench_now_ms();
+        for (int s = 0; s < num_solves; s++) {
+            srand(2000 + s);
+            for (int i = 0; i < n * n; i++) {
+                cost[i] = (rand() % 1000) / 10.0;
+            }
+            ralph_lap_solve(n, cost, RALPH_LAP_MINIMIZE, row_sol, NULL, NULL, NULL, NULL);
         }
-        ralph_lap_solve_with_workspace(n, cost, RALPH_LAP_MINIMIZE, row_sol, NULL, NULL, NULL, NULL, ws);
+        time_no_ws = bench_now_ms() - start1;
+
+        /* Time with workspace */
+        double start2 = bench_now_ms();
+        for (int s = 0; s < num_solves; s++) {
+            srand(2000 + s);
+            for (int i = 0; i < n * n; i++) {
+                cost[i] = (rand() % 1000) / 10.0;
+            }
+            ralph_lap_solve_with_workspace(n, cost, RALPH_LAP_MINIMIZE, row_sol, NULL, NULL, NULL, NULL, ws);
+        }
+        time_ws = bench_now_ms() - start2;
+
+        if (time_no_ws >= BENCH_MIN_MS || reps >= BENCH_MAX_REPS) break;
     }
-    double time_ws = (double)(clock() - start2) / CLOCKS_PER_SEC;
 
     ralph_lap_workspace_free(ws);
 
     printf("  %d solves of %dx%d:\n", num_solves, n, n);
-    printf("    Without workspace: %.3f ms\n", time_no_ws * 1000);
-    printf("    With workspace:    %.3f ms\n", time_ws * 1000);
+    printf("    Without workspace: %.3f ms\n", time_no_ws);
+    printf("    With workspace:    %.3f ms\n", time_ws);
     printf("    Speedup: %.2fx\n", time_no_ws / time_ws);
 
     ASSERT(time_ws <= time_no_ws * 1.1, "Workspace is not slower than allocating each time");
@@ -1585,44 +1612,50 @@ static void test_warm_start_performance(void) {
     double *cost = malloc(n * n * sizeof(double));
     int *row_sol = malloc(n * sizeof(int));
 
-    /* Generate base problem */
-    srand(888);
-    for (int i = 0; i < n * n; i++) {
-        cost[i] = (rand() % 100) + 1;
-    }
-
     RalphLapWorkspace *ws = ralph_lap_workspace_create(n);
 
-    /* Measure cold start time */
-    clock_t cold_start = clock();
-    for (int p = 0; p < num_problems; p++) {
-        /* Small perturbation */
-        for (int i = 0; i < 5; i++) {
-            int idx = rand() % (n * n);
-            cost[idx] = (rand() % 100) + 1;
-        }
-        ralph_lap_solve(n, cost, RALPH_LAP_MINIMIZE, row_sol, NULL, NULL, NULL, NULL);
-    }
-    double cold_time = (double)(clock() - cold_start) / CLOCKS_PER_SEC * 1000;
+    double cold_time = 0.0, warm_time = 0.0;
 
-    /* Reset problem */
-    srand(888);
-    for (int i = 0; i < n * n; i++) {
-        cost[i] = (rand() % 100) + 1;
-    }
-    ralph_lap_warm_start_clear(ws);
+    for (int reps = 1; ; reps *= 2) {
+        num_problems = 10 * reps;
 
-    /* Measure warm start time */
-    clock_t warm_start = clock();
-    for (int p = 0; p < num_problems; p++) {
-        /* Same perturbations */
-        for (int i = 0; i < 5; i++) {
-            int idx = rand() % (n * n);
-            cost[idx] = (rand() % 100) + 1;
+        /* Generate base problem, then measure cold start time */
+        srand(888);
+        for (int i = 0; i < n * n; i++) {
+            cost[i] = (rand() % 100) + 1;
         }
-        ralph_lap_solve_warm(n, cost, RALPH_LAP_MINIMIZE, row_sol, NULL, NULL, NULL, NULL, ws, 1);
+        double cold_start = bench_now_ms();
+        for (int p = 0; p < num_problems; p++) {
+            /* Small perturbation */
+            for (int i = 0; i < 5; i++) {
+                int idx = rand() % (n * n);
+                cost[idx] = (rand() % 100) + 1;
+            }
+            ralph_lap_solve(n, cost, RALPH_LAP_MINIMIZE, row_sol, NULL, NULL, NULL, NULL);
+        }
+        cold_time = bench_now_ms() - cold_start;
+
+        /* Reset problem: same seed, so the warm arm sees the same perturbations */
+        srand(888);
+        for (int i = 0; i < n * n; i++) {
+            cost[i] = (rand() % 100) + 1;
+        }
+        ralph_lap_warm_start_clear(ws);
+
+        /* Measure warm start time */
+        double warm_start = bench_now_ms();
+        for (int p = 0; p < num_problems; p++) {
+            /* Same perturbations */
+            for (int i = 0; i < 5; i++) {
+                int idx = rand() % (n * n);
+                cost[idx] = (rand() % 100) + 1;
+            }
+            ralph_lap_solve_warm(n, cost, RALPH_LAP_MINIMIZE, row_sol, NULL, NULL, NULL, NULL, ws, 1);
+        }
+        warm_time = bench_now_ms() - warm_start;
+
+        if (cold_time >= BENCH_MIN_MS || reps >= BENCH_MAX_REPS) break;
     }
-    double warm_time = (double)(clock() - warm_start) / CLOCKS_PER_SEC * 1000;
 
     printf("  %d problems of size %dx%d with small perturbations:\n", num_problems, n, n);
     printf("    Cold start: %.3f ms total\n", cold_time);
@@ -1994,24 +2027,32 @@ static void test_callback_performance(void) {
     int *row_sol = malloc(n * sizeof(int));
     double total_cost;
     int num_trials = 10;
+    double dense_total = 0.0, callback_total = 0.0;
 
-    /* Benchmark dense solver */
-    clock_t start = clock();
-    for (int t = 0; t < num_trials; t++) {
-        ralph_lap_solve(n, cost, RALPH_LAP_MINIMIZE,
-                         row_sol, NULL, NULL, NULL, &total_cost);
-    }
-    clock_t end = clock();
-    double dense_time = (double)(end - start) / CLOCKS_PER_SEC * 1000 / num_trials;
+    for (int reps = 1; ; reps *= 2) {
+        num_trials = 10 * reps;
 
-    /* Benchmark callback solver */
-    start = clock();
-    for (int t = 0; t < num_trials; t++) {
-        ralph_lap_solve_callback(n, dense_cost_callback, &ctx, RALPH_LAP_MINIMIZE,
-                                  row_sol, NULL, NULL, NULL, &total_cost);
+        /* Benchmark dense solver */
+        double start = bench_now_ms();
+        for (int t = 0; t < num_trials; t++) {
+            ralph_lap_solve(n, cost, RALPH_LAP_MINIMIZE,
+                             row_sol, NULL, NULL, NULL, &total_cost);
+        }
+        dense_total = bench_now_ms() - start;
+
+        /* Benchmark callback solver */
+        start = bench_now_ms();
+        for (int t = 0; t < num_trials; t++) {
+            ralph_lap_solve_callback(n, dense_cost_callback, &ctx, RALPH_LAP_MINIMIZE,
+                                      row_sol, NULL, NULL, NULL, &total_cost);
+        }
+        callback_total = bench_now_ms() - start;
+
+        if (dense_total >= BENCH_MIN_MS || reps >= BENCH_MAX_REPS) break;
     }
-    end = clock();
-    double callback_time = (double)(end - start) / CLOCKS_PER_SEC * 1000 / num_trials;
+
+    double dense_time = dense_total / num_trials;
+    double callback_time = callback_total / num_trials;
 
     printf("  n=%d:\n", n);
     printf("    Dense:    %.3f ms\n", dense_time);

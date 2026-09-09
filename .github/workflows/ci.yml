@@ -369,6 +369,17 @@ jobs:
       - name: Build and test Ralph
         run: make -C ralph test
 
+      # test-lap is not part of `make -C ralph test` -- the Linux matrix runs it
+      # as its own entry, and Windows never did. It belongs here more than
+      # anywhere: three of its cases compare two timed arms, and this is the
+      # platform with the coarsest clock. That gap was real. The suite measured
+      # with clock(), whose tick is 15.6 ms here, so arms that run in about a
+      # millisecond both read 0.000 ms and the ratios between them came out as
+      # 0.00x and inf. It now measures with sh_monotonic_seconds() and scales
+      # each benchmark until its baseline is worth dividing by.
+      - name: Build and test Ralph LAP
+        run: make -C ralph test-lap
+
       # fuelwise and surge were missing here, and that is exactly why #63 shipped
       # a fuelwise link that had never been tried on Windows. Surge's own LDFLAGS
       # had the same hole, found the moment this step existed.
