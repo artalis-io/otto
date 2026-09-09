@@ -101,10 +101,16 @@ int ratio_test_bland(SimplexTableau *tab, int entering, int *leaving, double *th
 
         if (tab->phase == 1 && abs_dk > RALPH_ZERO_TOL) ftran_nnz++;
         double ratio = RALPH_INFINITY;
+        /* A sentinel-infinite bound cannot block movement: leaving it finite
+         * would let the ratio test cap an unbounded ray at ~1e30 and report a
+         * spurious OPTIMAL (artalis-io/otto#86 sibling). Mirrors the entering
+         * variable's guard in entering_bound_flip_distance(). */
         if (dk > pivot_tol) {
-            ratio = (xj - tab->lb_ext[j]) / dk;
+            if (tab->lb_ext[j] > -RALPH_INFINITY / 2.0)
+                ratio = (xj - tab->lb_ext[j]) / dk;
         } else if (dk < -pivot_tol) {
-            ratio = (tab->ub_ext[j] - xj) / (-dk);
+            if (tab->ub_ext[j] < RALPH_INFINITY / 2.0)
+                ratio = (tab->ub_ext[j] - xj) / (-dk);
         }
 
         if (ratio < *theta - RALPH_FEAS_TOL) {
@@ -205,10 +211,13 @@ int ratio_test_standard(SimplexTableau *tab, int entering, int *leaving, double 
 
         if (tab->phase == 1 && abs_dk > RALPH_ZERO_TOL) ftran_nnz++;
         double ratio = RALPH_INFINITY;
+        /* Sentinel-infinite bounds are non-blocking (see ratio_test_bland). */
         if (dk > pivot_tol) {
-            ratio = (xj - tab->lb_ext[j]) / dk;
+            if (tab->lb_ext[j] > -RALPH_INFINITY / 2.0)
+                ratio = (xj - tab->lb_ext[j]) / dk;
         } else if (dk < -pivot_tol) {
-            ratio = (tab->ub_ext[j] - xj) / (-dk);
+            if (tab->ub_ext[j] < RALPH_INFINITY / 2.0)
+                ratio = (tab->ub_ext[j] - xj) / (-dk);
         }
 
         if (ratio < *theta - RALPH_FEAS_TOL) {
@@ -368,11 +377,13 @@ int ratio_test_harris(SimplexTableau *tab, int entering, int *leaving, double *t
 
         if (dk > 0) {
             /* Variable will decrease toward lower bound */
+            if (lb[j] <= -RALPH_INFINITY / 2.0) continue;  /* -inf: non-blocking */
             double slack = xj - lb[j];
             ratio_harris = (slack + RALPH_FEAS_TOL) / dk;
             ratio_exact = slack / dk;
         } else {
             /* Variable will increase toward upper bound (dk < 0) */
+            if (ub[j] >= RALPH_INFINITY / 2.0) continue;  /* +inf: non-blocking */
             double slack = ub[j] - xj;
             ratio_harris = (slack + RALPH_FEAS_TOL) / (-dk);
             ratio_exact = slack / (-dk);
@@ -430,8 +441,10 @@ int ratio_test_harris(SimplexTableau *tab, int entering, int *leaving, double *t
             double ratio_exact;
 
             if (dk > 0) {
+                if (lb[j] <= -RALPH_INFINITY / 2.0) continue;  /* -inf: non-blocking */
                 ratio_exact = (xj - lb[j]) / dk;
             } else {
+                if (ub[j] >= RALPH_INFINITY / 2.0) continue;  /* +inf: non-blocking */
                 ratio_exact = (ub[j] - xj) / (-dk);
             }
 
@@ -522,11 +535,14 @@ int ratio_test_harris_excluding_current(SimplexTableau *tab, int entering,
 
         double ratio_harris;
         double ratio_exact;
+        /* Sentinel-infinite bounds are non-blocking (see ratio_test_bland). */
         if (dk > 0) {
+            if (tab->lb_ext[j] <= -RALPH_INFINITY / 2.0) continue;
             double slack = xj - tab->lb_ext[j];
             ratio_harris = (slack + RALPH_FEAS_TOL) / dk;
             ratio_exact = slack / dk;
         } else {
+            if (tab->ub_ext[j] >= RALPH_INFINITY / 2.0) continue;
             double slack = tab->ub_ext[j] - xj;
             ratio_harris = (slack + RALPH_FEAS_TOL) / (-dk);
             ratio_exact = slack / (-dk);
