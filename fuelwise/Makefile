@@ -1,38 +1,27 @@
 # FuelWise - Truck Refueling Optimization Library
 # Makefile
 
+# FuelWise has always defaulted to gcc rather than make's built-in cc. A
+# command-line CC=cl still wins, which is how MSVC gets in.
 CC = gcc
 
-# Platform-specific RELRO (Linux only)
-UNAME_S := $(shell uname -s)
-ifeq ($(UNAME_S),Linux)
-    RELRO_FLAGS = -Wl,-z,relro,-z,now
-else
-    RELRO_FLAGS =
-endif
+# Every compiler difference lives in one place; see mk/toolchain.mk.
+include ../mk/toolchain.mk
+
 
 # Production build (with hardening)
 # Note: -pie is implicit on macOS, only add on Linux
-CFLAGS = -Wall -Wextra -O3 -march=native -ffast-math -fno-finite-math-only \
-         -fstack-protector-strong -D_FORTIFY_SOURCE=2 -fPIE -fno-common
+# No standard pinned on GCC: FuelWise builds in the default GNU mode, like Ralph.
+CFLAGS = $(strip $(CC_WARN) $(CC_OPT) $(CC_ARCH) \
+                 $(CC_FP_MODE) $(CC_FP_FASTMATH) $(CC_FP_KEEP_NONFINITE) \
+                 $(CC_HARDEN) $(CC_STD_BASELINE) $(CC_PORT_DEFS))
 
 # Debug build (with sanitizers)
-CFLAGS_DEBUG = -Wall -Wextra -g -O0 -DDEBUG \
-               -fsanitize=address,undefined -fno-omit-frame-pointer
-DEBUG_LDFLAGS = -fsanitize=address,undefined
+CFLAGS_DEBUG = $(strip $(CC_WARN) $(CC_DEBUG_OPT) -DDEBUG $(CC_SANITIZE) $(CC_STD_BASELINE))
+DEBUG_LDFLAGS = $(LD_SANITIZE)
 
 INCLUDES = -I./include -I../ralph/include -I../shared/include
-ifeq ($(UNAME_S),Linux)
-    LDFLAGS = -lm -pie $(RELRO_FLAGS)
-else
-    LDFLAGS = -lm
-endif
-
-# libshared now reaches the platform through sh_pal: bcrypt supplies
-# sh_pal_random_bytes, ws2_32 the StatsD sink in sh_metrics.
-ifneq (,$(findstring MINGW,$(UNAME_S)))
-    LDFLAGS += -lbcrypt -lws2_32
-endif
+LDFLAGS = $(strip $(LD_MATH) $(LD_PLATFORM) $(LD_PIE) $(LD_RELRO) $(LD_STACK))
 
 # Shared library (required by Ralph)
 SHARED_DIR = ../shared
@@ -43,7 +32,7 @@ UNAME_S := $(shell uname -s)
 ifeq ($(UNAME_S),Darwin)
     # macOS with Homebrew libomp
     OPENMP_CFLAGS = -Xclang -fopenmp
-    OPENMP_LDFLAGS = -L/opt/homebrew/opt/libomp/lib -lomp
+    OPENMP_LDFLAGS = $(call link_lib,/opt/homebrew/opt/libomp/lib,omp)
 else
     # Linux - native GCC OpenMP
     OPENMP_CFLAGS = -fopenmp
@@ -98,15 +87,15 @@ ralph: shared
 	$(MAKE) -C $(RALPH_DIR) lib
 
 $(LIB_NAME): $(OBJECTS)
-	ar rcs $@ $^
+	$(AR_CMD)$@ $^
 
 # Build object files
 $(SRC_DIR)/%.o: $(SRC_DIR)/%.c
-	$(CC) $(CFLAGS) $(INCLUDES) -c $< -o $@
+	$(CC) $(CFLAGS) $(INCLUDES) -c $< $(OBJ_OUT)$@
 
 # Build test executable
 $(TEST_EXEC): $(TEST_SOURCES) $(LIB_NAME) $(RALPH_LIB) $(SHARED_LIB)
-	$(CC) $(CFLAGS) $(INCLUDES) $< -L. -lfuelwise -L$(RALPH_DIR) -lralph -L$(SHARED_DIR) -lshared $(LDFLAGS) -o $@
+	$(CC) $(CFLAGS) $(INCLUDES) $< $(call link_lib,.,fuelwise) $(call link_lib,$(RALPH_DIR),ralph) $(call link_lib,$(SHARED_DIR),shared) $(LDFLAGS) $(EXE_OUT)$@
 
 # Debug build (with sanitizers)
 debug: CFLAGS = $(CFLAGS_DEBUG)
@@ -118,7 +107,7 @@ test: test-transport test-regression
 
 # Build transport tests
 $(TRANSPORT_TEST_EXEC): $(TRANSPORT_TEST_SOURCES) $(LIB_NAME) $(SHARED_LIB)
-	$(CC) $(CFLAGS) $(INCLUDES) $< -L. -lfuelwise -L$(RALPH_DIR) -lralph -L$(SHARED_DIR) -lshared $(LDFLAGS) -o $@
+	$(CC) $(CFLAGS) $(INCLUDES) $< $(call link_lib,.,fuelwise) $(call link_lib,$(RALPH_DIR),ralph) $(call link_lib,$(SHARED_DIR),shared) $(LDFLAGS) $(EXE_OUT)$@
 
 # Run transport tests
 # shared/ralph are phony, and $(SHARED_LIB)/$(RALPH_LIB) have no rule here --

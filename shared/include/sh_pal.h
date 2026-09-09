@@ -252,6 +252,18 @@ int sh_pal_mkdir(const char *path);
  * which MSVC does not define at all; Windows has a file-attribute bit instead. */
 int sh_pal_is_dir(const char *path);
 
+/*
+ * Create a uniquely-named file in the platform temp directory.
+ *
+ * Fills `path` with its full name. The file exists and is ours on return, as
+ * mkstemp guarantees; unlike mkstemp it is closed, because every caller here
+ * wanted a path rather than a descriptor and closing one to get the other is
+ * the dance this replaces.
+ *
+ * `prefix` seeds the name. Returns 0 on success, -1 on failure.
+ */
+int sh_pal_make_tempfile(const char *prefix, char *path, size_t path_size);
+
 typedef struct ShPalDir ShPalDir;
 
 typedef struct {

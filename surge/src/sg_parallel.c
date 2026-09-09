@@ -7,7 +7,6 @@
 #include "sh_dist.h"
 #include "sh_pal.h"
 
-#include <unistd.h>
 
 /* Population pool constants */
 #define SG_POP_DEFAULT_POOL_SIZE   25  /* S27b: enlarged from 6 for BPD diversity */

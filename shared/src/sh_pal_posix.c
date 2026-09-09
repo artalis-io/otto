@@ -320,6 +320,22 @@ int sh_pal_mkdir(const char *path)
     return errno == EEXIST ? 0 : -1;
 }
 
+int sh_pal_make_tempfile(const char *prefix, char *path, size_t path_size)
+{
+    char dir[1024];
+    int fd;
+
+    if (!prefix || !path || path_size < 32) return -1;
+    if (sh_pal_temp_dir(dir, sizeof(dir)) != 0) return -1;
+    if ((size_t)snprintf(path, path_size, "%s/%sXXXXXX", dir, prefix) >= path_size)
+        return -1;
+
+    fd = mkstemp(path);
+    if (fd < 0) return -1;
+    close(fd);
+    return 0;
+}
+
 int sh_pal_is_dir(const char *path)
 {
     struct stat st;

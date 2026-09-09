@@ -62,13 +62,13 @@
  * [Boundary R-Tree Leaf Indices] - u32 array
  */
 
+#include "sh_attr.h"
 #include "ct_serialize.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include "sh_pal.h"
 #include <fcntl.h>
-#include <unistd.h>
 #include <sys/stat.h>
 
 #define NULL_OFFSET 0xFFFFFFFF
@@ -77,7 +77,15 @@
  * Binary Format Structures
  * ============================================================================ */
 
-typedef struct __attribute__((packed)) {
+/* On-disk tile-index layout. MSVC has no packing attribute, so the region is
+ * bracketed by #pragma pack and SH_PACKED is empty there; on GNU the attribute
+ * does the work. Layout equivalence is checked by the same probe used for
+ * locus -- see docs/roadmaps/infrastructure.md. */
+#if defined(_MSC_VER)
+  #pragma pack(push, 1)
+#endif
+
+typedef struct SH_PACKED {
     uint32_t magic;
     uint32_t version;
     uint32_t num_ways;
@@ -105,7 +113,7 @@ typedef struct __attribute__((packed)) {
     double max_lon;
 } CTBinaryHeader;
 
-typedef struct __attribute__((packed)) {
+typedef struct SH_PACKED {
     uint64_t ways_offset;
     uint64_t coords_offset;
     uint64_t string_pool_offset;
@@ -125,7 +133,7 @@ typedef struct __attribute__((packed)) {
 } CTSectionOffsets;
 
 /* Way record - 32 bytes */
-typedef struct __attribute__((packed)) {
+typedef struct SH_PACKED {
     int64_t id;
     uint32_t coord_offset;     /* Offset into coords array */
     uint16_t num_coords;
@@ -140,13 +148,13 @@ typedef struct __attribute__((packed)) {
 } CTBinaryWay;
 
 /* Coordinate - 8 bytes */
-typedef struct __attribute__((packed)) {
+typedef struct SH_PACKED {
     int32_t lat_e7;
     int32_t lon_e7;
 } CTBinaryCoord;
 
 /* Labeled point - 32 bytes */
-typedef struct __attribute__((packed)) {
+typedef struct SH_PACKED {
     int64_t id;
     int32_t lat_e7;
     int32_t lon_e7;
@@ -159,7 +167,7 @@ typedef struct __attribute__((packed)) {
 } CTBinaryLabeledPoint;
 
 /* Multipolygon record - 40 bytes */
-typedef struct __attribute__((packed)) {
+typedef struct SH_PACKED {
     uint32_t ring_offset;      /* Offset into rings array */
     uint16_t num_rings;
     uint8_t feature_class;
@@ -174,7 +182,7 @@ typedef struct __attribute__((packed)) {
 } CTBinaryMultipolygon;
 
 /* Multipolygon ring - 12 bytes */
-typedef struct __attribute__((packed)) {
+typedef struct SH_PACKED {
     uint32_t coord_offset;     /* Offset into mp_coords array */
     uint32_t num_coords;
     uint8_t is_outer;
@@ -182,7 +190,7 @@ typedef struct __attribute__((packed)) {
 } CTBinaryRing;
 
 /* Boundary record - 32 bytes */
-typedef struct __attribute__((packed)) {
+typedef struct SH_PACKED {
     int64_t relation_id;
     uint32_t coord_offset;     /* Offset into boundary coords array */
     uint32_t num_coords;
@@ -192,6 +200,10 @@ typedef struct __attribute__((packed)) {
     uint8_t _padding[2];
     float length_m;
 } CTBinaryBoundary;
+
+#if defined(_MSC_VER)
+  #pragma pack(pop)
+#endif
 
 /* ============================================================================
  * String Pool

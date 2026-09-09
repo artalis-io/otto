@@ -588,3 +588,80 @@ mmap branch, and the before/after comparison above is against the Windows one.
 The Linux matrix is what exercises the new unified path on the side that used to
 mmap. No velo test covers `vl_pbf_parse_file` at all, which is how the split
 survived this long.
+
+### MSVC: the remaining five modules
+
+Carta, Locus, Surge, FuelWise and Arbor join shared, ralph and velo. All eight
+libraries and their full suites now build and pass under both GCC and MSVC.
+
+The Makefile wiring was the known part. Four things were not.
+
+**sh_time.h could not be included by MSVC at all.** It called clock_gettime,
+which is POSIX-only, so every translation unit that reached it failed. That was
+19 of surge's 20 failures -- surge/src/sg_time_budget.h includes it -- and it
+also meant ralph's LAP suite had never compiled with MSVC. The claim in the
+first MSVC change that "ralph's suites pass" was true of `make -C ralph test`
+and not of test-lap, which is a separate target and was not in that run. The
+header now delegates to sh_monotonic_ns() like everything else.
+
+**Packed structs describe on-disk formats.** locus/include/lc_mmap.h,
+locus/src/lc_serialize.c and carta/src/ct_serialize.c use
+__attribute__((packed)) -- 19 structs between them -- for index and tile layouts
+that are written to disk and mapped back. MSVC has no such attribute and packs
+with #pragma pack instead. A macro cannot emit a pragma pair, so SH_PACKED (in
+sh_attr.h) carries the attribute on GNU and is empty on MSVC, where each header
+brackets its own region.
+
+Layout equivalence was verified rather than assumed: sizeof and offsetof for
+every packed struct, printed and diffed three ways -- GCC before the change,
+GCC after, and MSVC. All identical. Getting this wrong would not fail a build;
+it would misread every index written by the other compiler.
+
+**The LIB trap hit four more modules,** exactly as predicted: carta, locus,
+surge and arbor each defined LIB = lib<module>.a, and each failed to link with
+an error naming bcrypt.lib. All renamed to LIB_FILE.
+
+**Link lines are spelled four different ways.** A regex tuned to
+`-L../shared -lshared` misses `-L$(SHARED_DIR) -lshared`, because the character
+class excluded the closing parenthesis of the variable. That produced 32
+unresolved protobuf symbols that were plainly in the archive. Every module now
+uses $(call link_lib,<dir>,<name>) and no raw -L/-l pair remains in the eight.
+
+Smaller items, each fixed at the shared layer rather than per module:
+
+- `sh_pal_make_tempfile()` -- mkstemp came up for the third time (ralph's tests,
+  then two in fuelwise/bench). The PAL already had sh_pal_temp_dir; this is its
+  counterpart, and it closes the descriptor because every caller wanted a path.
+- `popen`/`pclose` renames joined strcasecmp and friends in the toolchain.
+- `X_OK` -- Windows has no execute bit; the one probe is for a Homebrew path,
+  so existence is the honest fallback.
+- Three more `1.0/0.0` and `0.0/0.0` infinity idioms, and four dead or
+  guardable POSIX includes.
+- arbor's ar_now_seconds() moved from gettimeofday to the PAL monotonic clock.
+  Every use is an elapsed-time delta, so this is strictly more correct than the
+  wall clock it replaced.
+
+fuelwise/bench has its own Makefile which `make -C fuelwise test` invokes, and
+it needed the same wiring. Its LDFLAGS group all the -L flags before all the -l
+flags; link_lib pairs them instead, which changes the spelling on GCC but not
+the search order or the library order that matters.
+
+### Verified
+
+| | GCC (UCRT64 16.2.0) | MSVC 19.44 |
+|---|---|---|
+| shared, arbor, ralph, velo | pass | pass |
+| carta, locus, surge, fuelwise | pass | pass |
+| failures | 0 | 0 |
+
+GCC command lines are unchanged for all five newly wired modules, compared as
+whitespace-normalised sets before and after.
+
+### What is left
+
+- The API servers, which need Keel to support MSVC. Keel is MinGW-targeted and
+  is a submodule, so that is upstream work.
+- ralph-benchmark's bore3d case still times out under MSVC where GCC solves it
+  in 14.9 ms, in both floating-point modes. Unexplained.
+- api/, wasm/ and clayshards/ Makefiles are unwired. None is on a library
+  `test` path.

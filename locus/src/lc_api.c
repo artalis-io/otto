@@ -13,7 +13,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <math.h>
-#include <sys/time.h>
+#include "sh_pal.h"
 
 /* ============================================================================
  * API Context
@@ -156,12 +156,10 @@ char *lc_api_search(LCAPIContext *ctx,
     opts.limit = (size_t)limit;
 
     LCSearchResult result;
-    struct timeval start, end;
-    gettimeofday(&start, NULL);
+    /* Monotonic: this measures how long the search took, not when it ran. */
+    uint64_t start_ns = sh_monotonic_ns();
     LCStatus status = lc_search(ctx->index, query, &opts, &result);
-    gettimeofday(&end, NULL);
-    double took_ms = (end.tv_sec - start.tv_sec) * 1000.0 +
-                     (end.tv_usec - start.tv_usec) / 1000.0;
+    double took_ms = (double)(sh_monotonic_ns() - start_ns) / 1.0e6;
 
     if (status != LC_OK) {
         if (status_code) *status_code = 500;

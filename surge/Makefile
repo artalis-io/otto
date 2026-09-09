@@ -1,38 +1,22 @@
 # Surge Makefile
 # Rich VRPTW/PDPTW solver built on Arbor
 
-CC ?= gcc
+# Every compiler difference lives in one place; see mk/toolchain.mk.
+include ../mk/toolchain.mk
 
-# Platform-specific RELRO (Linux only)
-UNAME_S := $(shell uname -s)
-ifeq ($(UNAME_S),Linux)
-    RELRO_FLAGS = -Wl,-z,relro,-z,now
-else
-    RELRO_FLAGS =
-endif
 
 # Production build (with hardening)
 # Note: -pie is implicit on macOS, only add on Linux
-CFLAGS = -Wall -Wextra -O3 -std=c11 -D_GNU_SOURCE -DSG_HAS_THREADS \
-         -fstack-protector-strong -D_FORTIFY_SOURCE=2 -fPIE -fno-common
-ifeq ($(UNAME_S),Linux)
-    LDFLAGS = -lm -lpthread -pie $(RELRO_FLAGS)
-else
-    LDFLAGS = -lm -lpthread
-endif
-
-# libshared reaches the platform through sh_pal: bcrypt supplies
-# sh_pal_random_bytes, ws2_32 the StatsD sink in sh_metrics.
-ifneq (,$(findstring MINGW,$(UNAME_S)))
-    LDFLAGS += -lbcrypt -lws2_32
-endif
+CFLAGS = $(strip $(CC_WARN) $(CC_OPT) $(CC_STD) $(CC_DEFS) $(CC_PORT_DEFS) \
+                 -DSG_HAS_THREADS $(CC_HARDEN))
+LDFLAGS = $(strip $(LD_MATH) $(LD_THREAD) $(LD_PLATFORM) $(LD_PIE) $(LD_RELRO) $(LD_STACK))
 
 INCLUDES = -Iinclude -I../arbor/include -I../shared/include
 
 # Debug build (with sanitizers)
-DEBUG_CFLAGS = -Wall -Wextra -g -O0 -std=c11 -D_GNU_SOURCE -DSG_HAS_THREADS -DDEBUG \
-               -fsanitize=address,undefined -fno-omit-frame-pointer
-DEBUG_LDFLAGS = -fsanitize=address,undefined
+DEBUG_CFLAGS = $(strip $(CC_WARN) $(CC_DEBUG_OPT) $(CC_STD) $(CC_DEFS) $(CC_PORT_DEFS) \
+                      -DSG_HAS_THREADS -DDEBUG $(CC_SANITIZE))
+DEBUG_LDFLAGS = $(LD_SANITIZE)
 
 SRCS = src/sg_context.c src/sg_solution.c src/sg_cost.c src/sg_feasibility.c \
        src/sg_construct.c src/sg_construct_cfrs.c src/sg_destroy.c src/sg_repair.c \
@@ -41,7 +25,9 @@ SRCS = src/sg_context.c src/sg_solution.c src/sg_cost.c src/sg_feasibility.c \
        src/sg_neighbor.c src/sg_profile_matrix.c src/sg_concat.c
 OBJS = $(SRCS:.c=.o)
 
-LIB = libsurge.a
+# Not LIB: that is MSVC's library search path, and make re-exports any
+# variable that also exists in the environment. See mk/toolchain.mk.
+LIB_FILE = libsurge.a
 TEST_BIN = test_surge
 # Transport abstraction leak detector -- builds with no transport library on
 # the include path. See docs/roadmaps/transport.md.
@@ -87,45 +73,45 @@ TSAN_LDFLAGS = -fsanitize=thread
 
 all: lib $(TEST_BIN)
 
-lib: $(LIB)
+lib: $(LIB_FILE)
 
-$(LIB): $(OBJS) ../arbor/libarbor.a ../shared/libshared.a
+$(LIB_FILE): $(OBJS) ../arbor/libarbor.a ../shared/libshared.a
 	ar rcs $@ $(OBJS)
 
 src/%.o: src/%.c
-	$(CC) $(CFLAGS) $(INCLUDES) -c $< -o $@
+	$(CC) $(CFLAGS) $(INCLUDES) -c $< $(OBJ_OUT)$@
 
-$(TEST_BIN): tests/test_surge.c $(LIB) ../arbor/libarbor.a ../shared/libshared.a
-	$(CC) $(CFLAGS) $(INCLUDES) $< -L. -lsurge -L../arbor -larbor -L../shared -lshared $(LDFLAGS) -o $@
+$(TEST_BIN): tests/test_surge.c $(LIB_FILE) ../arbor/libarbor.a ../shared/libshared.a
+	$(CC) $(CFLAGS) $(INCLUDES) $< $(call link_lib,.,surge) $(call link_lib,../arbor,arbor) $(call link_lib,../shared,shared) $(LDFLAGS) $(EXE_OUT)$@
 
-$(TRANSPORT_TEST_BIN): tests/test_transport_direct.c $(LIB) ../arbor/libarbor.a ../shared/libshared.a
-	$(CC) $(CFLAGS) $(INCLUDES) $< -L. -lsurge -L../arbor -larbor -L../shared -lshared $(LDFLAGS) -o $@
+$(TRANSPORT_TEST_BIN): tests/test_transport_direct.c $(LIB_FILE) ../arbor/libarbor.a ../shared/libshared.a
+	$(CC) $(CFLAGS) $(INCLUDES) $< $(call link_lib,.,surge) $(call link_lib,../arbor,arbor) $(call link_lib,../shared,shared) $(LDFLAGS) $(EXE_OUT)$@
 
 test-transport: $(TRANSPORT_TEST_BIN)
 	./$(TRANSPORT_TEST_BIN)
 
 $(TEST_TB_BIN): tests/test_time_budget.c src/sg_time_budget.c src/sg_time_budget.h
-	$(CC) $(CFLAGS) -Isrc -I../shared/include tests/test_time_budget.c src/sg_time_budget.c $(LDFLAGS) -o $@
+	$(CC) $(CFLAGS) -Isrc -I../shared/include tests/test_time_budget.c src/sg_time_budget.c $(LDFLAGS) $(EXE_OUT)$@
 
-$(TEST_NB_BIN): tests/test_neighbor.c $(LIB) ../arbor/libarbor.a ../shared/libshared.a
-	$(CC) $(CFLAGS) $(INCLUDES) $< -L. -lsurge -L../arbor -larbor -L../shared -lshared $(LDFLAGS) -o $@
+$(TEST_NB_BIN): tests/test_neighbor.c $(LIB_FILE) ../arbor/libarbor.a ../shared/libshared.a
+	$(CC) $(CFLAGS) $(INCLUDES) $< $(call link_lib,.,surge) $(call link_lib,../arbor,arbor) $(call link_lib,../shared,shared) $(LDFLAGS) $(EXE_OUT)$@
 
-$(TEST_PM_BIN): tests/test_profile_matrix.c $(LIB) ../arbor/libarbor.a ../shared/libshared.a
-	$(CC) $(CFLAGS) $(INCLUDES) $< -L. -lsurge -L../arbor -larbor -L../shared -lshared $(LDFLAGS) -o $@
+$(TEST_PM_BIN): tests/test_profile_matrix.c $(LIB_FILE) ../arbor/libarbor.a ../shared/libshared.a
+	$(CC) $(CFLAGS) $(INCLUDES) $< $(call link_lib,.,surge) $(call link_lib,../arbor,arbor) $(call link_lib,../shared,shared) $(LDFLAGS) $(EXE_OUT)$@
 
 BENCH_INCLUDES = $(INCLUDES) -Ibenchmarks
 
-$(BENCH_SOL_BIN): benchmarks/bench_solomon.c benchmarks/sg_bench_utils.h $(LIB) ../arbor/libarbor.a ../shared/libshared.a
-	$(CC) $(CFLAGS) $(BENCH_INCLUDES) $< -L. -lsurge -L../arbor -larbor -L../shared -lshared $(LDFLAGS) -o $@
+$(BENCH_SOL_BIN): benchmarks/bench_solomon.c benchmarks/sg_bench_utils.h $(LIB_FILE) ../arbor/libarbor.a ../shared/libshared.a
+	$(CC) $(CFLAGS) $(BENCH_INCLUDES) $< $(call link_lib,.,surge) $(call link_lib,../arbor,arbor) $(call link_lib,../shared,shared) $(LDFLAGS) $(EXE_OUT)$@
 
-$(BENCH_PD_BIN): benchmarks/bench_li_lim.c benchmarks/sg_bench_utils.h $(LIB) ../arbor/libarbor.a ../shared/libshared.a
-	$(CC) $(CFLAGS) $(BENCH_INCLUDES) $< -L. -lsurge -L../arbor -larbor -L../shared -lshared $(LDFLAGS) -o $@
+$(BENCH_PD_BIN): benchmarks/bench_li_lim.c benchmarks/sg_bench_utils.h $(LIB_FILE) ../arbor/libarbor.a ../shared/libshared.a
+	$(CC) $(CFLAGS) $(BENCH_INCLUDES) $< $(call link_lib,.,surge) $(call link_lib,../arbor,arbor) $(call link_lib,../shared,shared) $(LDFLAGS) $(EXE_OUT)$@
 
-$(BENCH_CORD_BIN): benchmarks/bench_cordeau.c benchmarks/sg_bench_utils.h $(LIB) ../arbor/libarbor.a ../shared/libshared.a
-	$(CC) $(CFLAGS) $(BENCH_INCLUDES) $< -L. -lsurge -L../arbor -larbor -L../shared -lshared $(LDFLAGS) -o $@
+$(BENCH_CORD_BIN): benchmarks/bench_cordeau.c benchmarks/sg_bench_utils.h $(LIB_FILE) ../arbor/libarbor.a ../shared/libshared.a
+	$(CC) $(CFLAGS) $(BENCH_INCLUDES) $< $(call link_lib,.,surge) $(call link_lib,../arbor,arbor) $(call link_lib,../shared,shared) $(LDFLAGS) $(EXE_OUT)$@
 
-$(BENCH_TUNE_BIN): benchmarks/bench_tune.c benchmarks/sg_bench_utils.h $(LIB) ../arbor/libarbor.a ../shared/libshared.a
-	$(CC) $(CFLAGS) $(BENCH_INCLUDES) $< -L. -lsurge -L../arbor -larbor -L../shared -lshared $(LDFLAGS) -o $@
+$(BENCH_TUNE_BIN): benchmarks/bench_tune.c benchmarks/sg_bench_utils.h $(LIB_FILE) ../arbor/libarbor.a ../shared/libshared.a
+	$(CC) $(CFLAGS) $(BENCH_INCLUDES) $< $(call link_lib,.,surge) $(call link_lib,../arbor,arbor) $(call link_lib,../shared,shared) $(LDFLAGS) $(EXE_OUT)$@
 
 ../arbor/libarbor.a:
 	$(MAKE) -C ../arbor lib
@@ -215,7 +201,7 @@ $(SHARED_LIB): $(SRCS) $(ARBOR_SRCS) $(SHARED_BINDING_SRCS)
 	  -fstack-protector-strong -D_FORTIFY_SOURCE=2 -fno-common \
 	  $(INCLUDES) $(SHARED_LIB_FLAGS) \
 	  $(SRCS) $(ARBOR_SRCS) $(SHARED_BINDING_SRCS) \
-	  -lm -lpthread -o $@
+	  -lm -lpthread $(EXE_OUT)$@
 
 python-test: shared-lib
 	cd bindings/python && SURGE_LIB_PATH=../../$(SHARED_LIB) python3 -m pytest -v
@@ -250,7 +236,7 @@ $(FUZZ_BIN): fuzz/fuzz_json_api.c $(SRCS) $(ARBOR_SRCS) $(SHARED_BINDING_SRCS)
 	  -fsanitize=fuzzer,address,undefined -fno-omit-frame-pointer \
 	  $(INCLUDES) \
 	  $< $(SRCS) $(ARBOR_SRCS) $(SHARED_BINDING_SRCS) \
-	  -lm -lpthread -o $@
+	  -lm -lpthread $(EXE_OUT)$@
 
 fuzz: $(FUZZ_BIN)
 	@echo "Run: ./$(FUZZ_BIN) fuzz/corpus/ -max_len=65536 -jobs=4"
@@ -260,13 +246,13 @@ fuzz: $(FUZZ_BIN)
 $(TSAN_TEST_BIN): tests/test_surge.c $(SRCS) $(ARBOR_SRCS) ../shared/libshared.a
 	$(CC) $(TSAN_CFLAGS) $(INCLUDES) \
 	  $< $(SRCS) $(ARBOR_SRCS) \
-	  -L../shared -lshared -lm -lpthread $(TSAN_LDFLAGS) -o $@
+	  $(call link_lib,../shared,shared) -lm -lpthread $(TSAN_LDFLAGS) $(EXE_OUT)$@
 
 tsan: $(TSAN_TEST_BIN)
 	./$(TSAN_TEST_BIN)
 
 clean:
-	rm -f $(OBJS) $(LIB) $(TEST_BIN) $(TEST_TB_BIN) $(TEST_NB_BIN) $(TEST_PM_BIN) $(TRANSPORT_TEST_BIN) $(BENCH_SOL_BIN) $(BENCH_PD_BIN) $(BENCH_CORD_BIN) $(BENCH_TUNE_BIN) $(SHARED_LIB) \
+	rm -f $(OBJS) $(LIB_FILE) $(TEST_BIN) $(TEST_TB_BIN) $(TEST_NB_BIN) $(TEST_PM_BIN) $(TRANSPORT_TEST_BIN) $(BENCH_SOL_BIN) $(BENCH_PD_BIN) $(BENCH_CORD_BIN) $(BENCH_TUNE_BIN) $(SHARED_LIB) \
 	  $(FUZZ_BIN) $(TSAN_TEST_BIN)
 
 help:

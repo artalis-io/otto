@@ -15,7 +15,11 @@
 #include "sh_pal.h"
 #include <time.h>
 #include <math.h>
-#include <unistd.h>
+#ifdef _MSC_VER
+  #include <io.h>   /* close, read */
+#else
+  #include <unistd.h>
+#endif
 
 /* Minimal mmap context for cleanup (first 3 fields same as LCMmapContextV3) */
 typedef struct {

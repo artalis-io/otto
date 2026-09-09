@@ -8,6 +8,7 @@
 #ifndef LC_MMAP_H
 #define LC_MMAP_H
 
+#include "sh_attr.h"
 #include <stdint.h>
 #include <stddef.h>
 #include "sh_geo.h"
@@ -25,8 +26,16 @@ extern "C" {
 #define LC_BINARY_VERSION_V4 4
 #define LC_MMAP_NULL_OFFSET 0xFFFFFFFF
 
+/* These describe the on-disk index. MSVC has no packing attribute, so the
+ * region is bracketed by #pragma pack and SH_PACKED is empty there; on GNU
+ * the attribute does the work and the pragmas are absent. Layout is asserted
+ * identical between the two by tests/test_lc_mmap_layout. */
+#if defined(_MSC_VER)
+  #pragma pack(push, 1)
+#endif
+
 /* Header - 96 bytes (extended from v3's 64 bytes) */
-typedef struct __attribute__((packed)) {
+typedef struct SH_PACKED {
     uint32_t magic;
     uint32_t version;
     uint32_t entity_count;
@@ -48,7 +57,7 @@ typedef struct __attribute__((packed)) {
 } LCBinaryHeaderV4;
 
 /* Section offsets - 96 bytes (extended from v3's 64 bytes) */
-typedef struct __attribute__((packed)) {
+typedef struct SH_PACKED {
     uint64_t entities_offset;
     uint64_t alt_names_offset;
     uint64_t string_pool_offset;
@@ -65,7 +74,7 @@ typedef struct __attribute__((packed)) {
 } LCSectionOffsetsV4;
 
 /* Entity record - 72 bytes (extended with geometry_offset) */
-typedef struct __attribute__((packed)) {
+typedef struct SH_PACKED {
     uint64_t osm_id;
     uint8_t type;
     uint8_t fclass;
@@ -88,7 +97,7 @@ typedef struct __attribute__((packed)) {
 } LCBinaryEntityV4;
 
 /* Serialized trie node - 160 bytes (same as v3) */
-typedef struct __attribute__((packed)) {
+typedef struct SH_PACKED {
     uint32_t children[LC_TRIE_ALPHABET_SIZE];
     uint32_t entity_offset;
     uint16_t entity_count;
@@ -96,7 +105,7 @@ typedef struct __attribute__((packed)) {
 } LCBinaryTrieNodeV4;
 
 /* N-gram entry - 12 bytes */
-typedef struct __attribute__((packed)) {
+typedef struct SH_PACKED {
     uint32_t trigram;        /* 3 chars packed into lower 24 bits */
     uint32_t entity_offset;  /* Offset into ngram entity array */
     uint16_t entity_count;
@@ -104,17 +113,21 @@ typedef struct __attribute__((packed)) {
 } LCBinaryNgramEntry;
 
 /* Geometry entry - 12 bytes */
-typedef struct __attribute__((packed)) {
+typedef struct SH_PACKED {
     uint32_t entity_id;
     uint32_t point_offset;   /* Offset into geometry_points array */
     uint32_t point_count;
 } LCBinaryGeometry;
 
 /* Geometry point - 8 bytes (fixed-point int32) */
-typedef struct __attribute__((packed)) {
+typedef struct SH_PACKED {
     int32_t lat_e7;          /* latitude * 1e7 */
     int32_t lon_e7;          /* longitude * 1e7 */
 } LCBinaryPoint;
+
+#if defined(_MSC_VER)
+  #pragma pack(pop)
+#endif
 
 /* ============================================================================
  * mmap'd Index Structure
