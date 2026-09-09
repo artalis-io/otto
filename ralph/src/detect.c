@@ -617,6 +617,21 @@ int detect_network(const LPModel *model, NetworkSignature *sig) {
     }
 
     /*
+     * Reject any variable with a negative lower bound. solve_as_network treats
+     * arc flows as >= 0 -- sig->lower clamps a negative lb to 0 below -- so a
+     * network-structured LP with a negative lower bound would be solved over a
+     * different feasible region and report a silently wrong optimum. Mirror the
+     * LAP detection guard and fall back to the general simplex.
+     */
+    if (model->lb) {
+        for (int v = 0; v < num_vars; v++) {
+            if (model->lb[v] < -TOLERANCE) {
+                return 0;
+            }
+        }
+    }
+
+    /*
      * First pass: Check each variable appears in exactly 2 constraints
      * and has coefficients +1 and -1.
      */
