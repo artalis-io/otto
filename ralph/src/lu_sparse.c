@@ -1315,6 +1315,12 @@ LUFailureReason lu_factorize_sparse(LUFactorization *lu, const SparseMatrix *B) 
 
     /* Fill entries */
     int *L_pos = (int*)calloc(m, sizeof(int));
+    if (!L_pos) {
+        free(L_i); free(L_j); free(L_v);
+        free(U_i); free(U_j); free(U_v);
+        sparse_work_free(work);
+        return LU_FAIL_FACTOR_ALLOC;
+    }
     for (int k = 0; k < L_nnz; k++) {
         int j = L_j[k];
         int pos = lu->L_colptr[j] + L_pos[j]++;
@@ -1336,6 +1342,13 @@ LUFailureReason lu_factorize_sparse(LUFactorization *lu, const SparseMatrix *B) 
     }
 
     int *U_pos = (int*)calloc(m, sizeof(int));
+    if (!U_pos) {
+        /* L_pos already freed above. */
+        free(L_i); free(L_j); free(L_v);
+        free(U_i); free(U_j); free(U_v);
+        sparse_work_free(work);
+        return LU_FAIL_FACTOR_ALLOC;
+    }
     for (int k = 0; k < U_nnz; k++) {
         int orig_col = U_j[k];
         int step_col = work->col_perm_inv[orig_col];
