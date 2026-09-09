@@ -38,7 +38,7 @@ Validation and promotion gates:
 
 ## Stable Baseline
 
-**Validation checkpoint** (2026-03-02, `cc3d1ff`) — rollback to capri-working interim baseline:
+**Validation checkpoint** (2026-03-02, `c76613c`) — rollback to capri-working interim baseline:
 - Reverted the uncommitted Phase-1 extreme-relax/retry experiment and restored the prior clean code baseline.
 - Direct check:
   - `capri.mps`: `optimal` (`82` iterations, `~264 ms`);
@@ -55,7 +55,7 @@ Validation and promotion gates:
   - keep this rollback state as the active working baseline for `capri`;
   - treat `fit1p` timeout boundary stabilization as next targeted follow-up.
 
-**Validation checkpoint** (2026-03-02, `efd5c8b`) — identity-separation retry-lane baseline:
+**Validation checkpoint** (2026-03-02, `55bd38d`) — identity-separation retry-lane baseline:
 - Implemented adaptive identity-separation retry-lane selection in sparse LU numeric:
   - default retry lane remains dense-GE;
   - repeated same-signature identity-separation events promote retry lane to supernode
@@ -77,7 +77,7 @@ Validation and promotion gates:
   - `capri.mps`: timeout-class -> `optimal` (now solved inside gate budget);
   - `bore3d.mps`: still timeout-class (next priority remains Phase-1 iteration-control).
 
-**Validation checkpoint** (2026-02-27, `da16bce`) — P1-G Markowitz numeric retry-ladder baseline:
+**Validation checkpoint** (2026-02-27, `f12c9d8`) — P1-G Markowitz numeric retry-ladder baseline:
 - Implemented P1-G in sparse LU path:
   - explicit sparse numeric terminal-failure taxonomy
     (`identity_separation`, `backend_exhausted`, `pathological`);
@@ -119,7 +119,7 @@ Validation and promotion gates:
      on high-iteration timeout families;
   3. continue degeneracy iteration-control tuning while preserving zero dense fallback regression.
 
-Previous checkpoint (2026-02-27, `64c154c`) had required-pass regression on `nesm.mps`
+Previous checkpoint (2026-02-27, `02f05c2`) had required-pass regression on `nesm.mps`
 (dense fallback), which P1-G resolved.
 
 Previous (2026-02-25) — full-retry backend ordering + LU telemetry expansion baseline:
@@ -216,7 +216,7 @@ Latest gates:
 `make -C ralph test-netlib-gate-small` PASS (26 files, dense fallback files: 0, no unexpected
 regressions, artifacts: `/tmp/netlib-regression-gate-20260223-122939`).
 
-Previous: (2026-02-23, `abd62fa`) — LP dispatch module extraction baseline:
+Previous: (2026-02-23, `d3185e7`) — LP dispatch module extraction baseline:
 extracted LP algorithm/backend routing and fallback planning from `ralph.c` into a dedicated
 internal module (`ralph/src/lp_dispatch.c`, `ralph/src/lp_dispatch.h`) so LP solve selection,
 normalization, and capability logic are centralized and unit-testable in isolation.
@@ -229,7 +229,7 @@ Latest gates:
 `make -C ralph test-netlib-gate-small` PASS (26 files, dense fallback files: 0, no unexpected
 regressions, artifacts: `/tmp/netlib-regression-gate-20260223-110000`).
 
-Previous: (2026-02-23, `c65fe09`) — LP algorithm/capability API baseline:
+Previous: (2026-02-23, `7a95804`) — LP algorithm/capability API baseline:
 added LP algorithm API surface with explicit capability and fallback reporting:
 `ralph_get_lp_capabilities`, `ralph_get_last_lp_algorithm_report`,
 `RalphLPAlgorithm`, `RalphLPCrossoverMode`, and `RalphLPFallbackReason`.
@@ -246,7 +246,7 @@ Latest gates:
 `make -C ralph test-netlib-gate-small` PASS (26 files, dense fallback files: 0, no unexpected
 regressions, artifacts: `/tmp/netlib-regression-gate-20260223-102818`).
 
-Previous: (2026-02-23, `8e5e8bf`) — fixed-basis LP sensitivity/ranging API baseline:
+Previous: (2026-02-23, `634e1e7`) — fixed-basis LP sensitivity/ranging API baseline:
 added LP-only fixed-basis sensitivity APIs for constraint RHS, objective coefficients, and
 variable bounds (`ralph_get_constraint_rhs_range`, `ralph_get_obj_coef_range`,
 `ralph_get_var_bound_range`) with explicit availability guards (optimal LP state, live tableau,
@@ -258,7 +258,7 @@ Latest gates:
 `make -C ralph test_api` PASS, and
 `./ralph/test_ralph --skip-mip` PASS (387/387).
 
-Previous: (2026-02-22, `4b5620c`) — typed parameter API + metadata baseline:
+Previous: (2026-02-22, `3cb549f`) — typed parameter API + metadata baseline:
 added enum-based typed parameter IDs, strict LP/MIP typed parameter setters/getters, and
 parameter metadata/introspection APIs (`count`, `meta`, `find-by-name`) with a single
 table-driven parameter registry in `ralph.c` (canonical name + aliases, scope, type, defaults,
@@ -274,7 +274,7 @@ regressions, artifacts: `/tmp/netlib-regression-gate-20260222-232802`), and
 mismatches 0, dense fallback files: 0, no unexpected regressions, artifacts:
 `/tmp/netlib-regression-gate-20260222-232948`).
 
-Previous: (2026-02-22, `beac5bb`) — Phase 2 LP/MIP boundary extraction baseline:
+Previous: (2026-02-22, `1195c33`) — Phase 2 LP/MIP boundary extraction baseline:
 introduced a dedicated MIP/LP adapter surface (`mip_lp_adapter`) and moved MIP node/probing LP
 state transitions behind adapter operations (`apply bounds`, `recompute`, `dual reopt`,
 `warm restore`, `cold recover`) to reduce direct tableau lifecycle mutation in `mip.c` and
@@ -287,7 +287,7 @@ regressions, artifacts: `/tmp/netlib-regression-gate-20260222-174924`) and
 mismatches 0, dense fallback files: 0, no unexpected regressions, artifacts:
 `/tmp/netlib-regression-gate-20260222-175112`).
 
-Previous: (2026-02-22, `d093284`) — logging + telemetry architecture baseline:
+Previous: (2026-02-22, `6823ebd`) — logging + telemetry architecture baseline:
 introduced a shared LP logging shim (`lp_log`) backed by `sh_log`, migrated verbose solver output
 paths in `simplex.c`, `dual_simplex.c`, and `mip.c` off direct `printf`/`fprintf`, and added
 timed telemetry wrappers in `lp_telemetry` so solver/LU timing callsites use a single coherent
@@ -297,7 +297,7 @@ propagation (`telemetry=0/1`) including LU/node-LP propagation checks. Latest ga
 `make -C ralph test-lp-telemetry` PASS (58/58), and full `make -C ralph test` PASS
 (`test_ralph` 398/398, presolve/netlib parser gates PASS).
 
-Previous: (2026-02-21, `2ef9ac4`) — H5 adaptive Devex-partial pricing baseline:
+Previous: (2026-02-21, `2e079cc`) — H5 adaptive Devex-partial pricing baseline:
 added adaptive Devex-partial pricing for large, degenerate Phase 2 workloads with periodic full
 Devex rescans to preserve robustness while reducing pricing cost on heavy NETLIB outliers. Latest gates:
 `make -C ralph test-simplex-policy` PASS (16/16), `make -C ralph test-lu-markowitz` PASS (59/59),
@@ -308,7 +308,7 @@ GLPK comparison snapshot from `/tmp/netlib-regression-gate-20260221-094637`: bot
 geometric mean time ratio (`Ralph/GLPK`) 1.38x, geometric mean iteration ratio 0.98x, geometric mean
 per-iteration ratio 1.41x.
 
-Previous: (2026-02-20, `738a2fe`) — H4 simplex pivot/ratio kernel baseline:
+Previous: (2026-02-20, `e386bfb`) — H4 simplex pivot/ratio kernel baseline:
 optimized hot simplex kernels in `simplex_pivot` and `ratio_test_harris` (pointer-hoisting and fused
 basic-variable update + direction-norm accumulation) while preserving numerical behavior. Latest gates:
 `make -C ralph test-simplex-policy` PASS (16/16), `make -C ralph test-lu-markowitz` PASS (59/59),
@@ -316,7 +316,7 @@ basic-variable update + direction-norm accumulation) while preserving numerical 
 `make -C ralph test-netlib-gate` PASS (84 files; 27 known timeouts; status mismatch 0; objective
 mismatch 0; invalid solution 0; dense fallback files 0; no unexpected regressions vs baseline).
 
-Previous: (2026-02-20, `25e0b93`) — Phase-1 direction-stabilize cooldown baseline:
+Previous: (2026-02-20, `e5fbd6b`) — Phase-1 direction-stabilize cooldown baseline:
 added a bounded cooldown gate for `RALPH_REFACTOR_REASON_DIRECTION_STABILIZE` in primal Phase 1 so
 large-direction handling does not refactor on nearly every iteration, while preserving hard LU-safety
 override conditions (`lu_needs_refactorization` and extreme-direction forcing). Latest gates:
@@ -325,7 +325,7 @@ override conditions (`lu_needs_refactorization` and extreme-direction forcing). 
 `make -C ralph test-netlib-gate` PASS (84 files; 27 known timeouts; status mismatch 0; objective
 mismatch 0; invalid solution 0; dense fallback files 0; no unexpected regressions vs baseline).
 
-Previous: (2026-02-20, `ece147e`) — NETLIB MPS parser + objective-offset correctness baseline:
+Previous: (2026-02-20, `fb3bc92`) — NETLIB MPS parser + objective-offset correctness baseline:
 fixed fixed-format MPS edge cases (embedded-space names, optional BOUNDS set name), preserved imported
 variable names, and added RHS objective-row constant handling (`obj_offset`) to parser + simplex/dual
 objective reporting. Latest gates: `make -C ralph test` PASS (includes new
@@ -333,7 +333,7 @@ objective reporting. Latest gates: `make -C ralph test` PASS (includes new
 and full NETLIB gate on 84 files now has status mismatch 0, objective mismatch 0, invalid solution 0,
 dense fallback files 0; `forplan.mps` is now a known timeout under the 20s hard cap (27 known timeouts).
 
-Previous: (2026-02-20, `eabbaa8`) — H3 adaptive Markowitz retry baseline + full NETLIB/GLPK refresh:
+Previous: (2026-02-20, `02f1755`) — H3 adaptive Markowitz retry baseline + full NETLIB/GLPK refresh:
 adapted Markowitz pool multiplier on retries to cut retry churn while preserving sparse-LU-first behavior.
 Latest full gate: `make -C ralph test-netlib-gate` PASS (84 files, 26 known timeouts, dense fallback
 files: 0, no unexpected regressions vs baseline). Known baseline mismatches remain:
@@ -342,7 +342,7 @@ status mismatch 2 (`forplan.mps`, `sierra.mps`), objective mismatch 3 (`e226.mps
 `/tmp/netlib-regression-gate-20260220-143400`: both-optimal set 56 files, geometric mean time ratio
 (`Ralph/GLPK`) 1.44x, geometric mean iteration ratio 1.03x, geometric mean per-iteration ratio 1.40x.
 
-Previous: (2026-02-20, `c844cbe`) — H1c + H2 Markowitz refactor baseline:
+Previous: (2026-02-20, `ee91eea`) — H1c + H2 Markowitz refactor baseline:
 added adaptive reach-mask sparse transpose solves (H1c), then reduced Markowitz numeric refactor
 work with pivot-row-scoped cleanup and cached row-to-column position hints. Latest gates:
 `make -C ralph test-simplex-policy` PASS (16/16), `make -C ralph test-lu-markowitz` PASS (59/59),
@@ -351,7 +351,7 @@ regressions vs baseline). H2 focus snapshot (vs `/tmp/h2base_*.json`): `refactor
 improved on `25fv47` (-40.22%), `fit1p` (-15.00%), `80bau3b` (-74.52%), `nesm` (-72.58%),
 `czprob` (-75.13%), with status/objective validation preserved on all five.
 
-Previous: (2026-02-20, `eefe861`) — Phase 5 FT-chain baseline + GLPK comparison refresh:
+Previous: (2026-02-20, `71aaf37`) — Phase 5 FT-chain baseline + GLPK comparison refresh:
 batched FT spike micro-kernels for long update chains are now baseline, with roadmap/docs aligned.
 Latest gates: `make -C ralph test` PASS, `make -C ralph test-simplex-policy` PASS (16/16),
 `make -C ralph test-lu-markowitz` PASS (59/59), `make -C ralph test-netlib-gate-small` PASS
@@ -361,7 +361,7 @@ regressions; known pre-existing `bnl1` command failure remains). GLPK comparison
 mean time ratio (`Ralph/GLPK`) 1.48x, geometric mean iteration ratio ~1.00x, geometric mean
 per-iteration ratio 1.48x.
 
-Previous: (2026-02-20, `f068c66`) — LP periodic scheduler feedback baseline:
+Previous: (2026-02-20, `f03e65a`) — LP periodic scheduler feedback baseline:
 unified pressure scheduler now includes bounded per-phase adaptive feedback from observed
 periodic refactor outcomes while preserving hard LU safety triggers and no-regression canaries.
 Latest gates: `make -C ralph test-simplex-policy` PASS (16/16),
@@ -369,25 +369,25 @@ Latest gates: `make -C ralph test-simplex-policy` PASS (16/16),
 `make -C ralph test-netlib-gate-small` PASS (26/26, dense fallback files: 0),
 and canary gate `fit1p|nesm|bandm|scagr25` PASS (dense fallback files: 0).
 
-Previous: (2026-02-20, `59958a4`) — LP sparse refactor baseline hardening:
+Previous: (2026-02-20, `b0ff091`) — LP sparse refactor baseline hardening:
 persisted symbolic identity workspaces (removes per-refactor malloc churn), enabled sparse
 symbolic `k=m` fast-path to avoid avoidable dense fallback, and hardened identity-separation
 numeric flow with retry/stage telemetry coverage updates.
 Latest gates: `make -C ralph test` PASS, `make -C ralph test-netlib-gate-small` PASS (26/26,
 dense fallback files: 0, no unexpected regressions vs baseline).
 
-Previous: (2026-02-20, `5ad46a9`) — LP refactor telemetry baseline:
+Previous: (2026-02-20, `20132cd`) — LP refactor telemetry baseline:
 stage-level LU timing/counters (symbolic cache, sparse numeric split, dense factorization timing),
 sparse fallback reason telemetry (`small_matrix` / `symbolic` / `numeric`), and removed symbolic
 `num_identity >= m/4` cutoff to avoid unnecessary dense fallback on low-identity bases.
 Latest gates: `make -C ralph test` PASS, `make -C ralph test-netlib-gate-small` PASS (26/26, dense fallback files: 0).
 
-Previous: (2026-02-20, `173d430`) — Unified pressure-based periodic LU scheduler (single path),
+Previous: (2026-02-20, `9451483`) — Unified pressure-based periodic LU scheduler (single path),
 Markowitz sparse LU default, and NETLIB no-regression gate with required-pass canaries:
 `bandm`, `scagr25`, `fit1p`, `nesm`.
 Latest canary gate run: 4/4 PASS, no dense fallback, no timeout regressions (including `fit1p`/`nesm`).
 
-Previous: (2026-02-18, `165fe05`) — LP performance: CSR row-scatter for sparse RC updates,
+Previous: (2026-02-18, `487c702`) — LP performance: CSR row-scatter for sparse RC updates,
 supernodal LU auto-enabled for m>300, conservative refactorization for m≥500, Markowitz LU.
 NETLIB fast tier: 22/22 PASS, 1 ERROR (share1b), 2 SKIP (bore3d, capri). All 378 tests pass.
 
@@ -397,18 +397,18 @@ NETLIB fast gate: 23/23 PASS, 1 ERROR (share1b), 1 SKIP (bore3d). recipe 89s→2
 now 0.5x). scagr25 now solves. beaconfd excluded (tier 5). All 378+ unit tests pass.
 
 Previous: (2026-02-17) — LP gap closure: sparse BTRAN, dual refinement, runtime tolerances.
-Previous: `85a5295` — Week 2 Devex fix + Phase 1/2 pricing robustness.
-Previous: `a67f09f` — Week 1 LP perf: B1-B6 low-hanging fruit, net -138 LoC.
-Previous: `5ccab2e` — NETLIB suite extended to 84 problems, full test infrastructure.
-Previous: `f80487e` — Phase E perf fix: 500-iter budget + primal cold-start.
-Previous: `140a1f2` — Phase E: replace dual_reopt with clean dual simplex in MIP.
-Previous: `7d78375` — Phase D: dual simplex default, 90% SotA.
-Previous: `9315fd3` — Strong branching UAF fix + NaN safety + RC fixing + RINS.
-Previous: `64f6cdc` — Cut generation normalization fix + pseudocost branching + probing.
-Previous: `af158fa` — P5/P6 re-landed with infeasibility guards (208 tests, 60/60 MILP).
-Previous: `fc454a7` — c-MIR sign fixes + infeasibility guard (199 tests, 100/100 MILP).
-Previous: `b1d0e8c` — Objective cutoff + lightweight presolve with priority remapping.
-Previous: `4387869` — HYBRID + PATH B LU reuse (9x milp15, 1.9x milp30).
+Previous: `bf4e1e3` — Week 2 Devex fix + Phase 1/2 pricing robustness.
+Previous: `b73588d` — Week 1 LP perf: B1-B6 low-hanging fruit, net -138 LoC.
+Previous: `a7e65b0` — NETLIB suite extended to 84 problems, full test infrastructure.
+Previous: `671edbb` — Phase E perf fix: 500-iter budget + primal cold-start.
+Previous: `dfa169a` — Phase E: replace dual_reopt with clean dual simplex in MIP.
+Previous: `3106ddc` — Phase D: dual simplex default, 90% SotA.
+Previous: `a6d3f41` — Strong branching UAF fix + NaN safety + RC fixing + RINS.
+Previous: `30399f3` — Cut generation normalization fix + pseudocost branching + probing.
+Previous: `31f1095` — P5/P6 re-landed with infeasibility guards (208 tests, 60/60 MILP).
+Previous: `8e22dfc` — c-MIR sign fixes + infeasibility guard (199 tests, 100/100 MILP).
+Previous: `bd0b62f` — Objective cutoff + lightweight presolve with priority remapping.
+Previous: `984077a` — HYBRID + PATH B LU reuse (9x milp15, 1.9x milp30).
 
 ## Status Summary (Feb 2026)
 
@@ -916,10 +916,10 @@ Hardening pass targeting phase-1 simplex failure modes observed with NETLIB beac
 
 | Feature | Status | Commit | Notes |
 |---------|--------|--------|-------|
-| Phase-1 failure trace | ✅ Complete | `600d025` | Deterministic LU pivot-failure classification |
-| LU failure reason tracking | ✅ Complete | `06981e7` | Classifies zero-pivot, threshold, singular causes |
-| Basis action policy | ✅ Complete | `a3ce8b4` | Policy-driven simplex stabilization (exclude/cooldown/restore) |
-| Beaconfd recovery | ✅ Complete | `67020ac` | Dual-simplex rescue on phase-1 stall |
+| Phase-1 failure trace | ✅ Complete | `a4d5a04` | Deterministic LU pivot-failure classification |
+| LU failure reason tracking | ✅ Complete | `c447d5c` | Classifies zero-pivot, threshold, singular causes |
+| Basis action policy | ✅ Complete | `b2a1e49` | Policy-driven simplex stabilization (exclude/cooldown/restore) |
+| Beaconfd recovery | ✅ Complete | `7a0fe82` | Dual-simplex rescue on phase-1 stall |
 
 **Phase-1 trace infrastructure:** When phase-1 fails (artificial variables remain), the solver
 now records a deterministic trace of which basis actions were attempted (variable exclusions,
@@ -941,7 +941,7 @@ Full `/c-audit` pass on MIP infrastructure. 15 findings fixed (3 critical, 6 hig
 | `branch_bound.c` | 3 | INT_MIN return removed, bounds checks on variable indices in branching |
 | `simplex.c` | 1 | Documentation of phase1_exclude_entering_var validation |
 
-Commit: `e794dac ralph: harden MIP infrastructure from c-audit findings`
+Commit: `62e3dd7 ralph: harden MIP infrastructure from c-audit findings`
 
 ### 1.7 GLPK MIP Comparison (Feb 2026)
 
@@ -950,7 +950,7 @@ reach cuts, branching priorities/directions, LP presolve P3) against GLPK `glpso
 the identical LP-format MILP without hints). Both solvers get the same constraint set; Ralph
 has additional domain-specific guidance.
 
-**Current results (post Phase E + perf fix, seed 42, 5 runs, `f80487e`):**
+**Current results (post Phase E + perf fix, seed 42, 5 runs, `671edbb`):**
 
 | Scenario | Ralph avg | GLPK avg | Speed | Obj match | Gap avg |
 |----------|-----------|----------|-------|-----------|---------|
@@ -1048,7 +1048,7 @@ and needs cut pool management for larger problems.
 - milp100–milp200 speed regression from cut constraints: each node LP is larger
 - GLPK faster at milp100+ (3–10x) due to: faster LP solves, cut pool pruning, heuristics
 
-**Post-`9315fd3` improvements (not yet benchmarked in table above):**
+**Post-`a6d3f41` improvements (not yet benchmarked in table above):**
 - Reliability branching (default), reduced-cost fixing, RINS heuristic
 - Strong branching UAF fix + NaN safety — all 5 seeds crash-free
 - Root cause analysis: ~80% of gap from cut generation (only 2 families vs GLPK's 7+),
@@ -1190,11 +1190,11 @@ Lightweight presolve enabled by default in FuelWise MILP (`fw_presolve_mask = 0x
 
 **Files:** `presolve.c` (~2750 lines), `presolve.h`, `ralph.c` (obj_offset + trivial model)
 **Tests:** 105 assertions in `test_presolve.c` covering all techniques + edge cases + regressions
-**Commits:** `94c3808` (initial P3), subsequent commits for proportional/shift/probing/orthogonalization
+**Commits:** `27926dd` (initial P3), subsequent commits for proportional/shift/probing/orthogonalization
 
 ### 1.11 Supernodal LU Factorization ✅
 
-**Implemented** (`9df568a`, hardened `fc67b84`).
+**Implemented** (`5735e29`, hardened `8adacd6`).
 
 Supernodal factorization groups columns with similar sparsity structures into dense blocks
 ("supernodes") and uses inline BLAS kernels (dgemm/dtrsm) for inner operations. No external
@@ -1204,13 +1204,13 @@ BLAS dependency (WASM compatible).
 
 | Phase | Task | Status |
 |-------|------|--------|
-| 1 | Symbolic/numeric separation | ✅ Done (T1.4, `5aaa91c`) |
+| 1 | Symbolic/numeric separation | ✅ Done (T1.4, `8e6c228`) |
 | 2 | Elimination tree | ✅ Done |
 | 3 | Supernode detection | ✅ Done (fundamental + relaxed merge) |
 | 4 | Dense BLAS kernels | ✅ Done (inline dgemm/dtrsm for 2-20 column supernodes) |
 | 5 | Supernodal triangular solves | ✅ Done |
 
-**Hardening** (`fc67b84`): COO bounds checks, integer overflow protection, double-swap safety.
+**Hardening** (`8adacd6`): COO bounds checks, integer overflow protection, double-swap safety.
 
 **Key design decisions:**
 - No external BLAS dependency (WASM compatibility, zero-dependency mandate)
@@ -1295,19 +1295,19 @@ pattern unchanged (fingerprint = column pointer diff). Workspace pre-allocation,
 arrays, row-major GE, O(1) identity placement, L/U capacity tracking all included.
 
 - **Impact**: 1.5-2x on refactorization (42% of per-iteration cost → ~25%).
-- **Commits**: `5aaa91c` (full separation), `622013a` (COO pre-alloc), `32a4804` (workspace pre-alloc).
+- **Commits**: `8e6c228` (full separation), `893df8e` (COO pre-alloc), `1d25833` (workspace pre-alloc).
 - **Dependencies**: Enables §1.11 supernodal (T2.1).
 
 #### Tier 2: High-Impact Gaps (1.5-3x on specific scenarios)
 
 **T2.1 Supernodal LU Factorization** — ✅ DONE
 
-Implemented in §1.11 (`9df568a`, hardened `fc67b84`). Groups columns with similar sparsity
+Implemented in §1.11 (`5735e29`, hardened `8adacd6`). Groups columns with similar sparsity
 into dense blocks, uses inline BLAS-3 kernels (no external dependency). Reduces LU factorization
 cost via cache-friendly dense operations on 2-20 column supernodes.
 
 - **Impact**: 3-5x factorization, ~2x overall for m > 500.
-- **Commits**: `9df568a` (implementation), `fc67b84` (hardening: COO bounds, overflow, swap safety).
+- **Commits**: `5735e29` (implementation), `8adacd6` (hardening: COO bounds, overflow, swap safety).
 
 **T2.2 Heap-Based Pricing (DynamicMaximum)** — ✅ DONE
 
@@ -1328,7 +1328,7 @@ maintenance O(n log n) which is worse than the O(n) scan it replaces. Devex rema
 
 - **NETLIB**: Heap 14/17 (matches Dantzig), Devex 16/17 (unchanged).
 - **API**: `ralph_set_int_param(model, "pricing", 4)`.
-- **Commit**: `b3594c6`.
+- **Commit**: `5c3e021`.
 
 **T2.3 Post-Solve Verification** — ✅ DONE
 
@@ -1372,8 +1372,8 @@ plus ASAN build (`CFLAGS="-fsanitize=address,undefined -g" make test`).
 - T1.1 Crash Basis — `crash_triangular()`, primal only, with singular/infeasible fallback
 - T1.2 Multi-Round Scaling — `apply_scaling()`, orthogonal to primal/dual
 - T1.3 Dual Simplex Standalone — `dual_simplex_solve_from_scratch_v2()` + `dual_phase1()`
-- T1.4 Symbolic/Numeric LU Separation — full separation with fingerprint caching (`5aaa91c`)
-- T2.2 Heap-Based Pricing — binary max-heap, improvement scoring, bound-flip fix (`b3594c6`)
+- T1.4 Symbolic/Numeric LU Separation — full separation with fingerprint caching (`8e6c228`)
+- T2.2 Heap-Based Pricing — binary max-heap, improvement scoring, bound-flip fix (`5c3e021`)
 - T2.3 Post-Solve Verification — `verify_solution()`, orthogonal to primal/dual
 - T3.1 Objective Limits — early-exit in phase2
 - T3.2 Dynamic Refactorization — condition-based adaptive period
@@ -1396,7 +1396,7 @@ plus ASAN build (`CFLAGS="-fsanitize=address,undefined -g" make test`).
 
 Full symbolic/numeric separation with fingerprint caching. `lu_symbolic_analyze()` produces pivot
 ordering and elimination tree; `lu_numeric_factorize()` reuses symbolic when sparsity fingerprint
-(column pointer diff) is unchanged. COO arrays pre-allocated. Commits: `5aaa91c`, `622013a`, `32a4804`.
+(column pointer diff) is unchanged. COO arrays pre-allocated. Commits: `8e6c228`, `893df8e`, `1d25833`.
 
 **T2.2 Heap-Based Pricing — ✅ IMPLEMENTED**
 
@@ -1404,7 +1404,7 @@ Binary max-heap (pricing=4) with improvement-score keying. Heap maintained incre
 `simplex_pivot()`: `heap_update()` on RC changes, `heap_remove()` entering→basic, `heap_insert()`
 leaving→non-basic, `heap_update()` on bound flips. Lazy `heap_build()` after full RC recomputation.
 Critical bound-flip bug found/fixed (Fix A + Fix B safety net). NETLIB: 14/17 (matches Dantzig).
-Not composable with Devex/SE (weighted scoring). Commit: `b3594c6`.
+Not composable with Devex/SE (weighted scoring). Commit: `5c3e021`.
 
 **T1.3 Dual Simplex as Default — ✅ ALL PHASES COMPLETE** (Phases A-E done)
 
@@ -1432,11 +1432,11 @@ Crash implemented for primal (method=0). Dual from-scratch uses independent tabl
 Method dispatch: method=0 (primal), method=1 (dual forced), method=2 (auto: dual first,
 verify, primal fallback if dual fails or IMPRECISE).
 
-**Phase D: Make dual the default** — ✅ DONE (`dac309a`)
+**Phase D: Make dual the default** — ✅ DONE (`46a34f8`)
 
 Changed default `method` from 0 to 2. All tests pass. NETLIB: 16/17.
 
-**Phase E: Replace dual_reopt in B&B** — ✅ DONE (`140a1f2`)
+**Phase E: Replace dual_reopt in B&B** — ✅ DONE (`dfa169a`)
 
 Collapsed `solve_node_lp()` from 3-path dispatch (PATH A/B/C with `dual_reopt`) to single
 warm-start path using `dual_simplex_solve_v2()`. MIP now uses method=2 instead of method=0.
@@ -1456,7 +1456,7 @@ Bugs found and fixed during Phase E:
 
 All tests pass: Ralph 359/359, LAP 358/358, Netflow 153/153, FuelWise 123/123.
 
-**Phase E Performance Fix** (`f80487e`):
+**Phase E Performance Fix** (`671edbb`):
 
 Phase E caused catastrophic MIP regression (milp15: ~1ms → 92s). Three root causes:
 1. `dse_init_exact()` (O(m²)) called unconditionally every v2 call. Fix: conditional on
@@ -1654,13 +1654,13 @@ Gap = `(ralph_obj - glpk_obj) / |glpk_obj| × 100%`. Positive = Ralph worse.
    cuts, discard ALL cuts (rebuild `working_model` from `original_model`), re-solve, and
    continue tree search without cuts (`mip.c` ~line 1192).
 
-4. **Heap-use-after-free in reliability branching** (`9315fd3`). `strong_branch()` calls
+4. **Heap-use-after-free in reliability branching** (`a6d3f41`). `strong_branch()` calls
    `dual_simplex_solve()` which may fall back to `simplex_solve()`, freeing and reallocating
    `lp->solution`. The caller `select_reliability_branch_impl` held a stale `solution` pointer.
    Fix: re-read solution pointer after every `strong_branch()` call, add NULL guards, and
    cold-start re-solve recovery in `process_node()`.
 
-5. **`-ffinite-math-only` causing NaN safety check elision** (`9315fd3`). The `-ffast-math`
+5. **`-ffinite-math-only` causing NaN safety check elision** (`a6d3f41`). The `-ffast-math`
    flag implies `-ffinite-math-only`, which lets the compiler assume NaN/Inf never occur,
    optimizing away `isnan()`/`isinf()` checks. Degenerate pivots produce NaN which then
    propagates silently. Fix: add `-fno-finite-math-only` to CFLAGS in both `ralph/Makefile`
@@ -1683,9 +1683,9 @@ have the worst gaps — the *inverse* of what LP solver weakness would cause.
 
 | Fix | Impact | Cost | Status |
 |-----|--------|------|--------|
-| ~~Reliability branching~~ | ~~High~~ | ~~Medium~~ | ✅ Done (`9315fd3`) |
-| ~~Reduced-cost fixing~~ | ~~Medium~~ | ~~Low~~ | ✅ Done (`9315fd3`) |
-| ~~RINS heuristic~~ | ~~High~~ | ~~Medium~~ | ✅ Done (`9315fd3`) |
+| ~~Reliability branching~~ | ~~High~~ | ~~Medium~~ | ✅ Done (`a6d3f41`) |
+| ~~Reduced-cost fixing~~ | ~~Medium~~ | ~~Low~~ | ✅ Done (`a6d3f41`) |
+| ~~RINS heuristic~~ | ~~High~~ | ~~Medium~~ | ✅ Done (`a6d3f41`) |
 | Cover cuts for knapsack constraints | **High** (milp15 LP bounds) | Medium (~400 LoC) | TODO |
 | Node-level cut generation | **High** (tighter per-node bounds) | Medium (~200 LoC) | TODO |
 | Cut pool management (efficacy purging) | **High** (milp100+ speed) | Medium (~300 LoC) | TODO |
@@ -1701,7 +1701,7 @@ better performance than generic improvements for these structured problem classe
 **Goal:** Achieve ≤1% optimality gap vs GLPK across all scenarios and seeds, while
 maintaining competitive speed through milp75.
 
-**Phase 1: Reliability branching + RC fixing + RINS ✅ Done (`9315fd3`)**
+**Phase 1: Reliability branching + RC fixing + RINS ✅ Done (`a6d3f41`)**
 
 - **Reliability branching**: hybrid strong/pseudocost. Strong-branch when obs < 8, then
   trust pseudocosts. Priority-aware (respects FuelWise branching priorities). Default
@@ -2675,7 +2675,7 @@ Based on deep analysis of `simplex.c` (4865 LoC), `dual_simplex.c` (1546 LoC), `
 **NETLIB Correctness (Tier 0-1, fast):** 22/25 PASS, 2 SKIP (bore3d, scagr25), 1 ERROR (share1b)
 **beaconfd:** Excluded (tier 5, Phase 2 degenerate pivot failure)
 
-Post W1-W5 (`929afe5`): capri now solves (was timeout). All pricing strategies (Devex/SE+Devex/SE)
+Post W1-W5 (`88f269a`): capri now solves (was timeout). All pricing strategies (Devex/SE+Devex/SE)
 produce identical 22/25 results.
 
 | Problem | Status | Cause |
@@ -2737,7 +2737,7 @@ cycling problems (bandm 609x, recipe 11546x). Overall competitive for embedded u
 
 ### 8.3 Implementation Plan
 
-#### Week 1: Low-Hanging Fruit — ✅ DONE (`a67f09f`)
+#### Week 1: Low-Hanging Fruit — ✅ DONE (`b73588d`)
 1. ✅ Remove per-iteration `tableau_compute_solution` in dual_v2 (B1)
 2. ✅ Pre-allocate backup arrays in `dual_simplex_pivot` (B2)
 3. ✅ Delete FT spike compaction + tune refactorization threshold (B4)
@@ -2777,12 +2777,12 @@ several O(m) operations per pivot. Bigger gains require Supernodal LU (T2.1).
 9. Build CSR copy of A_ext at tableau creation (B7)
 10. Row-scatter RC update in both primal and dual pivot
 
-#### Supernodal LU (T2.1) — ✅ DONE (`9df568a`, `fc67b84`)
+#### Supernodal LU (T2.1) — ✅ DONE (`5735e29`, `8adacd6`)
 - BLAS-3 dense blocks within sparse structure
 - Inline dgemm/dtrsm for 2-20 column supernodes
 - No external BLAS dependency
 
-#### LP Gap Closure (W1-W5) — ✅ DONE (`929afe5`)
+#### LP Gap Closure (W1-W5) — ✅ DONE (`88f269a`)
 - W1: Sparse BTRAN — DFS-based reach on U^T/L^T (~330 LoC in lu.c)
 - W2: Runtime tolerances — `feas_tol`, `opt_tol`, `pivot_tol` via API
 - W3: SE+Devex hybrid pricing — pricing=5 (Devex init + exact SE update)
@@ -2930,10 +2930,10 @@ Current bottleneck on large degenerate LPs is no longer sparse→dense fallback;
 refactor wall-time plus frequent periodic reinversion (`fit1p`, `nesm`, `scagr25` class).
 Track execution with these phases:
 
-1. ✅ **Stage-level refactor telemetry** (done in `5ad46a9`)
+1. ✅ **Stage-level refactor telemetry** (done in `20132cd`)
    Add timers/counters for basis rebuild, symbolic analyze, sparse numeric, dense numeric,
    and internal sparse→dense fallback reasons.
-2. ✅ **Remove avoidable fallback/copies** (done in `59958a4`)
+2. ✅ **Remove avoidable fallback/copies** (done in `b0ff091`)
    Eliminated symbolic malloc churn and enabled sparse symbolic `k=m` viable path, with
    sparse numeric hardening for identity-separation edge cases.
 3. ✅ **Periodic scheduler effectiveness feedback** (done)
@@ -2982,7 +2982,7 @@ performance/correctness checks focused and reproducible:
 - Full gate baseline now enforces required small-instance presence via
   `required_coverage` in `ralph/benchmarks/netlib_regression_baseline.json`
 
-### 8.10 Ranked Per-Iteration Hotspot Queue (Baseline `eefe861`)
+### 8.10 Ranked Per-Iteration Hotspot Queue (Baseline `71aaf37`)
 
 Source dataset: full NETLIB gate artifacts at
 `/tmp/netlib-regression-gate-20260220-121147` (84 files, 55 comparable optimal LPs).

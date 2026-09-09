@@ -10,7 +10,7 @@ This document captures:
 ## Reference Baseline (2026-02-25)
 
 - Branch: `feature/724da701-ralph-mip-infrastructure`
-- Baseline commit: `e032125`
+- Baseline commit: `f5c3020`
 - NETLIB gate artifact: `/tmp/netlib-regression-gate-20260225-120035`
 - Gate status:
   - `84/84` processed

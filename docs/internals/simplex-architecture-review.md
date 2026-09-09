@@ -1,7 +1,7 @@
 # Ralph Simplex Architecture Review
 
 **Date:** 2026-02-16
-**Baseline:** `f58b421` (universal two-phase + redundant row presolve)
+**Baseline:** `af94170` (universal two-phase + redundant row presolve)
 **Branch:** `feature/724da701-ralph-mip-infrastructure`
 
 ---
@@ -369,8 +369,8 @@ degenerate problems. Medium effort (~200 LoC) but requires careful weight mainte
 | **Dual simplex first (method=2)** | Dual is better for bounded problems; auto mode safely falls back | Implemented, 3 safety gates |
 | **Primal Phase 1 as authoritative feasibility oracle** | Dual infeasibility detection unreliable; primal Phase 1 is definitive | Correct design |
 | **6-metric verify_solution** | Catches silently wrong solutions; enables IMPRECISE downgrade | Implemented |
-| **Conditional DSE init** | Avoid O(m²) cost on every MIP node; weights persist across nodes | Implemented (`f80487e`) |
-| **Perturbation backup-only-first** | Prevents re-perturbation from corrupting original bounds | Fixed (`f80487e`) |
+| **Conditional DSE init** | Avoid O(m²) cost on every MIP node; weights persist across nodes | Implemented (`671edbb`) |
+| **Perturbation backup-only-first** | Prevents re-perturbation from corrupting original bounds | Fixed (`671edbb`) |
 | **500-pivot MIP warm-start budget** | Prevents catastrophic per-node cost while allowing most nodes to converge | Implemented |
 | **Stuck artificials → redundant rows** | Rank-deficient constraints marked, LU regularizes their pivots | Implemented, needs improvement (P0.1) |
 | **Do NOT reset Devex weights at Phase transition** | Resetting destabilizes brandy catastrophically; current weights provide useful column-norm info | Decision recorded, not ideal but necessary |
