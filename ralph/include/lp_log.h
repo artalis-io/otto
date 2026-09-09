@@ -8,13 +8,12 @@
 #define RALPH_LP_LOG_H
 
 #include <stdarg.h>
+#include "sh_attr.h"
 #include "sh_log.h"
 
-#if defined(__GNUC__) || defined(__clang__)
-#define LP_LOG_PRINTF_ATTR(fmt_idx, args_idx) __attribute__((format(printf, fmt_idx, args_idx)))
-#else
-#define LP_LOG_PRINTF_ATTR(fmt_idx, args_idx)
-#endif
+/* One definition, in shared: on MinGW a plain format(printf) means the
+ * Microsoft checker, which rejects %z. See sh_attr.h. */
+#define LP_LOG_PRINTF_ATTR(fmt_idx, args_idx) SH_PRINTF_ATTR(fmt_idx, args_idx)
 
 void lp_log_emitf(ShLogLevel level,
                   const char *file,

@@ -26,6 +26,27 @@
  * on-disk layouts, and getting it wrong misreads every file written by the
  * other compiler.
  */
+/* printf-style format checking.
+ *
+ * On MinGW, format(printf, ...) means Microsoft's printf, which has no %z --
+ * so a size_t argument that is correct on every other platform is reported as
+ * an error there. gnu_printf is the checker that matches the ANSI-compliant
+ * printf MinGW actually links, and it is what MinGW's own headers select.
+ *
+ * Keyed on __MINGW32__ rather than __MINGW_PRINTF_FORMAT because the latter
+ * arrives with <stdio.h>: a header included before it would silently get the
+ * Microsoft checker and the error this exists to prevent.
+ */
+#if defined(__MINGW32__)
+  #define SH_PRINTF_ATTR(fmt_idx, args_idx) \
+      __attribute__((format(gnu_printf, fmt_idx, args_idx)))
+#elif defined(__GNUC__) || defined(__clang__)
+  #define SH_PRINTF_ATTR(fmt_idx, args_idx) \
+      __attribute__((format(printf, fmt_idx, args_idx)))
+#else
+  #define SH_PRINTF_ATTR(fmt_idx, args_idx)
+#endif
+
 #if defined(__GNUC__) || defined(__clang__)
   /* Declared but possibly never referenced; do not warn. */
   #define SH_PACKED   __attribute__((packed))
