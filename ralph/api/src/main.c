@@ -30,6 +30,8 @@
 #include "shared.h"          /* sh_ratelimit, sh_cors, sh_args */
 #include "sh_httpserver.h"   /* sh_http_reply_*, sh_http_check_rate_limit */
 #include "sh_httpasync.h"    /* sh_http_async_dispatch, ShHttpAsync */
+#include "sh_json.h"         /* /api/v1/stats body */
+#include "sh_metrics.h"      /* /metrics registry */
 
 /* Server configuration (from sh_args) */
 static ShServerConfig s_config;
@@ -45,9 +47,8 @@ static ShRateLimiter *s_rate_limiter = NULL;
 static RalphAPIContext *s_ctx = NULL;
 
 /*
- * Solve pool. KlThreadPool exposes no statistics of its own; the dispatch
- * protocol still requires a stats slot, so keep one even though no endpoint
- * publishes it here.
+ * Solve pool. KlThreadPool exposes no statistics of its own; sh_http_async_dispatch
+ * maintains the ShHttpAsyncStats counters below, which /api/v1/stats publishes.
  */
 static KlThreadPool *s_pool = NULL;
 static ShHttpAsyncStats s_qstats;
@@ -120,10 +121,109 @@ static void dispatch_inline(KlHttpRequest *req, KlHttpResponse *res) {
  * Handlers
  * ============================================================================ */
 
+/* Count a request and observe its latency under a fixed, low-cardinality
+   endpoint label. */
+static void record_metrics(ShMetricsTimer timer, const char *endpoint) {
+    sh_metrics_counter_inc("http_requests_total", 1,
+                           "endpoint", endpoint, "service", "ralph", NULL);
+    sh_metrics_timer_observe(timer, "http_request_duration_ms",
+                             "endpoint", endpoint, "service", "ralph", NULL);
+}
+
 /* Health and formats: instant, run inline on the event loop. */
 static void handle_get(KlHttpRequest *req, KlHttpResponse *res, void *ud) {
     (void)ud;
+    ShMetricsTimer timer = sh_metrics_timer_start();
     dispatch_inline(req, res);
+    record_metrics(timer, "meta");
+}
+
+/*
+ * /api/v1/stats: publishes solve-queue and rate-limiter health. Registered as a
+ * plain route (bypasses the pool) and exempted from the rate limiter below, so a
+ * monitoring probe never queues behind a solve or spends the request budget.
+ */
+static void handle_stats(KlHttpRequest *req, KlHttpResponse *res, void *ud) {
+    (void)req; (void)ud;
+    ShMetricsTimer timer = sh_metrics_timer_start();
+
+    ShJsonBuf jb;
+    sh_json_buf_init(&jb);
+    ShJsonWriter jw;
+    sh_json_writer_init(&jw, sh_json_buf_write, &jb);
+
+    sh_json_write_object_start(&jw);
+    sh_json_write_key(&jw, "service");
+    sh_json_write_string(&jw, "ralph-api");
+    sh_json_write_key(&jw, "version");
+    sh_json_write_string(&jw, ralph_api_version());
+
+    /* Solve queue, backed by the Keel thread pool. Depth is outstanding items
+       (pushed not yet completed); KlThreadPool exposes no live queue depth. */
+    sh_json_write_key(&jw, "work_queue");
+    sh_json_write_object_start(&jw);
+    if (s_pool) {
+        sh_json_write_key(&jw, "enabled");
+        sh_json_write_bool(&jw, true);
+        sh_json_write_key(&jw, "depth");
+        sh_json_write_int(&jw, (int64_t)(s_qstats.pushed - s_qstats.popped));
+        sh_json_write_key(&jw, "capacity");
+        sh_json_write_int(&jw, (int64_t)s_config.work_queue_depth);
+        sh_json_write_key(&jw, "pushed");
+        sh_json_write_int(&jw, (int64_t)s_qstats.pushed);
+        sh_json_write_key(&jw, "popped");
+        sh_json_write_int(&jw, (int64_t)s_qstats.popped);
+        sh_json_write_key(&jw, "dropped");
+        sh_json_write_int(&jw, (int64_t)s_qstats.dropped);
+        sh_json_write_key(&jw, "expired");
+        sh_json_write_int(&jw, (int64_t)s_qstats.expired);
+        sh_json_write_key(&jw, "timeout_sec");
+        sh_json_write_double(&jw, s_config.work_queue_timeout);
+    } else {
+        sh_json_write_key(&jw, "enabled");
+        sh_json_write_bool(&jw, false);
+    }
+    sh_json_write_object_end(&jw);
+
+    /* Rate limiter. */
+    sh_json_write_key(&jw, "rate_limit");
+    sh_json_write_object_start(&jw);
+    if (s_rate_limiter) {
+        ShRateLimitStats rl;
+        sh_ratelimit_stats(s_rate_limiter, &rl);
+        sh_json_write_key(&jw, "enabled");
+        sh_json_write_bool(&jw, true);
+        sh_json_write_key(&jw, "rps");
+        sh_json_write_double(&jw, s_config.rate_limit_rps);
+        sh_json_write_key(&jw, "burst");
+        sh_json_write_double(&jw, s_config.rate_limit_burst);
+        sh_json_write_key(&jw, "allowed");
+        sh_json_write_int(&jw, (int64_t)rl.requests_allowed);
+        sh_json_write_key(&jw, "denied");
+        sh_json_write_int(&jw, (int64_t)rl.requests_denied);
+        sh_json_write_key(&jw, "active_entries");
+        sh_json_write_int(&jw, (int64_t)rl.active_entries);
+        sh_json_write_key(&jw, "evictions");
+        sh_json_write_int(&jw, (int64_t)rl.evictions);
+    } else {
+        sh_json_write_key(&jw, "enabled");
+        sh_json_write_bool(&jw, false);
+    }
+    sh_json_write_object_end(&jw);
+
+    sh_json_write_object_end(&jw);
+
+    char *json = sh_json_buf_take(&jb);
+    sh_http_reply_json(res, 200, &s_cors, NULL, json);
+    free(json);
+
+    record_metrics(timer, "stats");
+}
+
+/* /metrics: Prometheus exposition of the sh_metrics registry. */
+static void handle_metrics(KlHttpRequest *req, KlHttpResponse *res, void *ud) {
+    (void)req; (void)ud;
+    sh_http_handle_metrics(res);
 }
 
 /*
@@ -133,6 +233,7 @@ static void handle_get(KlHttpRequest *req, KlHttpResponse *res, void *ud) {
  */
 static void handle_solve(KlHttpRequest *req, KlHttpResponse *res, void *ud) {
     AppCtx *app = (AppCtx *)ud;
+    ShMetricsTimer timer = sh_metrics_timer_start();
 
     KlHttpBufReader *br = (KlHttpBufReader *)req->body_reader;
     ShApiRequest api_req;
@@ -143,6 +244,10 @@ static void handle_solve(KlHttpRequest *req, KlHttpResponse *res, void *ud) {
     api_req.body_len = (br && br->len > 0) ? br->len : 0;
 
     sh_http_async_dispatch(&app->async, req, res, ralph_api_handle, s_ctx, &api_req);
+
+    /* Records dispatch/submit time, not solve time: the worker completes the
+       response asynchronously after this returns. */
+    record_metrics(timer, "solve");
 }
 
 /* ============================================================================
@@ -164,7 +269,9 @@ static int mw_preflight(KlHttpRequest *req, KlHttpResponse *res, void *ud) {
 static int mw_rate_limit(KlHttpRequest *req, KlHttpResponse *res, void *ud) {
     (void)ud;
 
-    static const char *exempt[] = { "/api/v1/health", "/api/v1/formats" };
+    static const char *exempt[] = {
+        "/api/v1/health", "/api/v1/formats", "/api/v1/stats", "/metrics"
+    };
     for (size_t i = 0; i < sizeof(exempt) / sizeof(exempt[0]); i++) {
         size_t len = strlen(exempt[i]);
         if (req->path_len == len && memcmp(req->path, exempt[i], len) == 0)
@@ -219,6 +326,8 @@ static void print_usage(const char *prog) {
         "\nEndpoints:\n"
         "  GET  /api/v1/health   Health check\n"
         "  GET  /api/v1/formats  Supported formats\n"
+        "  GET  /api/v1/stats    Queue + rate-limiter stats\n"
+        "  GET  /metrics         Prometheus metrics\n"
         "  POST /api/v1/solve    Solve LP/MIP problem\n");
 }
 
@@ -260,6 +369,11 @@ int main(int argc, char *argv[]) {
     printf("Ralph LP/MIP Solver API v%s\n", ralph_api_version());
     printf("Limits: %d vars/constraints (LP), %d (MIP)\n", 100, 50);
     printf("Timeout: 5s default, 30s max\n\n");
+
+    /* Metrics registry, exposed at /metrics. */
+    ShMetricsConfig metrics_cfg = SH_METRICS_CONFIG_DEFAULT;
+    metrics_cfg.service = "ralph";
+    sh_metrics_init(&metrics_cfg);
 
     /* Rate limiter */
     if (s_config.rate_limit_enabled) {
@@ -319,9 +433,11 @@ int main(int argc, char *argv[]) {
      * Routes. Health/formats are instant GETs; solve is CPU-bound and carries
      * the app context so it can reach the pool.
      */
-    kl_http_server_route(&server, "GET",  "/api/v1/health",  handle_get,   NULL, NULL);
-    kl_http_server_route(&server, "GET",  "/api/v1/formats", handle_get,   NULL, NULL);
-    kl_http_server_route(&server, "POST", "/api/v1/solve",   handle_solve, &app,
+    kl_http_server_route(&server, "GET",  "/api/v1/health",  handle_get,     NULL, NULL);
+    kl_http_server_route(&server, "GET",  "/api/v1/formats", handle_get,     NULL, NULL);
+    kl_http_server_route(&server, "GET",  "/api/v1/stats",   handle_stats,   NULL, NULL);
+    kl_http_server_route(&server, "GET",  "/metrics",        handle_metrics, NULL, NULL);
+    kl_http_server_route(&server, "POST", "/api/v1/solve",   handle_solve,   &app,
                          solve_body_reader);
 
     /*
