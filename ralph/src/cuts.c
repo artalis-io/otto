@@ -2809,59 +2809,77 @@ int generate_odd_hole_cuts(MIPSolver *solver, CutPool *pool, const ConflictGraph
  *
  * This is done via a simple knapsack DP.
  */
-static int compute_lifting_coef(const double *coefs, const int *vars, int num_vars,
-                                  double rhs, const int *in_cover, int cover_size,
-                                  int var_to_lift) {
-    /* Knapsack DP: compute max number of cover elements we can select
-     * when var_to_lift is fixed to 1 */
-
-    /* Get coefficient of var_to_lift */
-    double lift_coef = 0.0;
-    for (int i = 0; i < num_vars; i++) {
-        if (vars[i] == var_to_lift) {
-            lift_coef = coefs[i];
-            break;
-        }
+/*
+ * Sequential up-lifting of the non-cover variables of a cover inequality.
+ *
+ * The cover cut sum_{j in C} x_j <= |C|-1 is valid for any cover C. Non-cover
+ * variables are then lifted in. INDEPENDENT lifting -- computing each non-cover
+ * coefficient against the original cover alone -- is NOT valid: when two or
+ * more non-cover variables can be 1 simultaneously, their independently
+ * computed coefficients can sum above |C|-1 at a feasible point, cutting it off
+ * (e.g. two small items that each individually block the cover but together
+ * fit). Lift SEQUENTIALLY instead: each new coefficient is computed against the
+ * cover PLUS the already-lifted variables, so the running inequality stays
+ * valid. Any lifting order yields a valid inequality; we use index order.
+ *
+ * Fills lift_coefs[i] = 1 for cover variables and the lifted coefficient (>= 0)
+ * for non-cover variables, using the same 1000x weight scaling as the rest of
+ * the cover-cut code.
+ */
+static void compute_sequential_lift(const double *coefs, int num_vars_in_row,
+                                    double rhs, const int *in_cover,
+                                    int cover_size, double *lift_coefs) {
+    /* Cover variables carry coefficient 1; non-cover start at 0 and are lifted
+       below (in index order). */
+    for (int i = 0; i < num_vars_in_row; i++) {
+        lift_coefs[i] = in_cover[i] ? 1.0 : 0.0;
     }
 
-    if (lift_coef < RALPH_ZERO_TOL) return 0;
+    const int scale = 1000;
+    int cap_full = (int)(rhs * scale + 0.5);
+    if (cap_full < 0) cap_full = 0;
+    if (cap_full > 100000) cap_full = 100000;  /* Limit for efficiency */
 
-    /* Remaining capacity after selecting var_to_lift */
-    double remaining = rhs - lift_coef;
-    if (remaining < -RALPH_ZERO_TOL) {
-        /* var_to_lift alone exceeds capacity - lifting coef is |C| - 1 */
-        return cover_size - 1;
+    int *dp = (int *)malloc((size_t)(cap_full + 1) * sizeof(int));
+    if (!dp) {
+        /* Out of memory: leave the basic (unlifted) cover cut, still valid. */
+        return;
     }
 
-    /* DP: dp[w] = max items from cover we can fit with capacity w */
-    /* Use integer weights (scale by 1000 for precision) */
-    int scale = 1000;
-    int capacity = (int)(remaining * scale + 0.5);
-    if (capacity < 0) capacity = 0;
-    if (capacity > 100000) capacity = 100000;  /* Limit for efficiency */
+    for (int k = 0; k < num_vars_in_row; k++) {
+        if (in_cover[k]) continue;
+        double a_k = coefs[k];
+        if (a_k < RALPH_ZERO_TOL) { lift_coefs[k] = 0.0; continue; }
 
-    int *dp = (int *)calloc(capacity + 1, sizeof(int));
-    if (!dp) return 0;
-
-    /* Process each cover item */
-    for (int i = 0; i < num_vars; i++) {
-        if (!in_cover[i]) continue;
-        int w = (int)(coefs[i] * scale + 0.5);
-        if (w <= 0) continue;
-
-        for (int c = capacity; c >= w; c--) {
-            if (dp[c - w] + 1 > dp[c]) {
-                dp[c] = dp[c - w] + 1;
+        int cap = (int)((rhs - a_k) * scale + 0.5);
+        int alpha;
+        if (cap < 0) {
+            /* k alone exceeds capacity: nothing else can be 1 with it, so the
+               max coefficient keeping validity is |C| - 1. */
+            alpha = cover_size - 1;
+        } else {
+            if (cap > cap_full) cap = cap_full;
+            /* Value-knapsack DP over the items currently carrying a coefficient
+               (cover items, value 1, plus already-lifted non-cover items with
+               their coefficients): max total coefficient-value with weight <=
+               cap. */
+            for (int c = 0; c <= cap; c++) dp[c] = 0;
+            for (int i = 0; i < num_vars_in_row; i++) {
+                if (i == k) continue;
+                int v = (int)(lift_coefs[i] + 0.5);
+                if (v <= 0) continue;                 /* not yet lifted / zero */
+                int w = (int)(coefs[i] * scale + 0.5);
+                if (w <= 0 || w > cap) continue;
+                for (int c = cap; c >= w; c--) {
+                    if (dp[c - w] + v > dp[c]) dp[c] = dp[c - w] + v;
+                }
             }
+            alpha = (cover_size - 1) - dp[cap];
         }
+        lift_coefs[k] = alpha > 0 ? (double)alpha : 0.0;
     }
 
-    int max_selected = dp[capacity];
     free(dp);
-
-    /* Lifting coefficient: |C| - 1 - max_selected */
-    int lift = cover_size - 1 - max_selected;
-    return lift > 0 ? lift : 0;
 }
 
 /*
@@ -2951,16 +2969,10 @@ int generate_lifted_cover_cuts(MIPSolver *solver, CutPool *pool) {
 
         if (cover_coef_sum <= rhs + RALPH_ZERO_TOL || cover_size < 2) continue;
 
-        /* Compute lifting coefficients for non-cover variables */
-        for (int i = 0; i < num_vars_in_row; i++) {
-            if (in_cover[i]) {
-                lift_coefs[i] = 1.0;  /* Cover variables have coefficient 1 */
-            } else {
-                int lc = compute_lifting_coef(coefs, vars, num_vars_in_row,
-                                              rhs, in_cover, cover_size, vars[i]);
-                lift_coefs[i] = (double)lc;
-            }
-        }
+        /* Lift the non-cover variables sequentially. Independent lifting can
+           over-lift into an invalid cut; see compute_sequential_lift. */
+        compute_sequential_lift(coefs, num_vars_in_row, rhs, in_cover,
+                                cover_size, lift_coefs);
 
         /* Check if lifting improved the cut (any non-zero lifting coef) */
         int has_lifting = 0;
