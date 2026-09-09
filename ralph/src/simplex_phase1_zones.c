@@ -744,6 +744,16 @@ P1ZoneResult p1_zone_pricing(SimplexSolver *solver,
             /* Small residual - try to clean up with a few more iterations */
             rs->progress.no_entering_cleanup_streak++;
             if (rs->progress.no_entering_cleanup_streak >= PHASE1_NO_ENTERING_CLEANUP_MAX_ITERS) {
+                /* Accepting feasibility here with art_sum in (RALPH_FEAS_TOL, 1e-4]
+                 * is only SAFE because of the hard backstop at Phase-2 entry
+                 * (simplex_phase2() in simplex.c): after recomputing the
+                 * solution it rejects with RALPH_STATUS_ERROR if max|artificial|
+                 * still exceeds RALPH_FEAS_TOL. That guard is what prevents a
+                 * spread-out or concentrated residual accepted here from turning
+                 * into a bogus OPTIMAL/UNBOUNDED (cf. artalis-io/otto#96). Do NOT
+                 * relax this accept, or remove that guard, without preserving the
+                 * coupling: this band + that per-artificial ceiling together are
+                 * the feasibility contract. */
                 if (solver->verbose) {
                     LP_LOG_STDERR("[simplex_phase1] Accepting Phase 1 feasibility after %d no-entering cleanup iterations (art_sum=%g)\n",
                             rs->progress.no_entering_cleanup_streak, art_sum);
