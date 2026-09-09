@@ -380,6 +380,21 @@ jobs:
       - name: Build and test Ralph LAP
         run: make -C ralph test-lap
 
+      # The Linux matrix runs netflow, detect and netlib as their own entries;
+      # Windows ran none of the three. netflow and detect already passed here --
+      # 153 and 194 assertions that nobody was collecting. netlib could not run
+      # at all: ralph-benchmark did not compile on Windows, because its NETLIB
+      # harness forks a child per problem and <sys/wait.h> does not exist here.
+      # That harness now has a Windows path, and this is what keeps it honest.
+      - name: Build and test Ralph Netflow
+        run: make -C ralph test-netflow
+
+      - name: Build and test Ralph Detect
+        run: make -C ralph test-detect
+
+      - name: Build and test Ralph Netlib
+        run: make -C ralph test-netlib
+
       # fuelwise and surge were missing here, and that is exactly why #63 shipped
       # a fuelwise link that had never been tried on Windows. Surge's own LDFLAGS
       # had the same hole, found the moment this step existed.
