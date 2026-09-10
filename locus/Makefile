@@ -63,7 +63,7 @@ all: lib $(TEST_BIN)
 lib: $(LIB_FILE)
 
 $(LIB_FILE): $(CORE_OBJS) $(SHARED_DIR)/libshared.a
-	ar rcs $@ $(CORE_OBJS)
+	$(AR_CMD)$@ $(CORE_OBJS)
 
 # Compile rules
 src/%.o: src/%.c
