@@ -33,7 +33,14 @@ to WASM for browser demos.
 ### NETLIB Status
 
 Full gate passes (84 problems): 0 objective mismatches, 0 invalid solutions.
-5 timeouts on medium-large problems (fit2p, pilot, pilot.ja, wood1p, pilot.we).
+
+**Honest caveat (2026-09-10):** that "84/84" is the Ralph + external-GLPK-fallback
+*system*, not native Ralph. The `ralph-benchmark` tool routes 18 numerically-hard
+problems to the external GLPK backend. Native-only: Ralph solves ~66/84 correctly and
+competitively (iteration ratio geomean 0.97 / median 1.17 vs GLPK; ~1.14× wall on
+native GLPK≥50ms problems), but the hard tail is not yet native-viable — see the
+Hard-Tail Closure section below and `ralph/benchmarks/netlib_perf_baseline.{json,md}`
+(per-problem `solve_path`). Full frank comparison: `docs/roadmaps/ralph-vs-glop.md`.
 
 ### Completed Milestones
 
@@ -225,6 +232,78 @@ each pivot. Primal already has `heap[]`/`heap_pos[]` infrastructure.
 
 Add approximate steepest edge pricing for the dual that's cheaper than
 exact DSE but better than most-infeasible.
+
+---
+
+## Planned: Hard-Tail Closure — native NETLIB frontier vs GLPK
+
+**Goal:** make native Ralph solve the ~18 numerically-hard NETLIB problems it currently
+offloads to external GLPK (pilot family, maros-r7, d2q06c, greenbea/b, 25fv47, 80bau3b,
+fit1p/2p, cycle, sierra, woodw). Measured against the native-only rows of
+`ralph/benchmarks/netlib_perf_baseline.json`. Diagnosis complete (2026-09-10); no code
+started. Frank write-up: `docs/roadmaps/ralph-vs-glop.md` (2026-09-10 addendum).
+
+### Diagnosis (read-only sweep, native, hard-capped)
+
+Three failure modes across the 18:
+
+| Mode | Evidence | Sample |
+|------|----------|--------|
+| Dual breakdown | dual simplex → `ERROR` in 350–820ms, **presolve-independent** | 25fv47, pilot, 80bau3b, d2q06c, pilot87 |
+| Primal cycling/stall | primal → `ITERATION_LIMIT` (honest non-convergence, no false optimum) | 25fv47, pilot |
+| Primal correct-but-slow | converges 100–700× slower (80bau3b 172s vs GLPK 0.6s) | 80bau3b, maros-r7, d2q06c, pilot87 |
+
+`AUTO` rescues none (picks a failing method). No native barrier
+(`lp_backend.c`: "not implemented yet"). GLPK solves all 18 in <1s, primarily via a
+robust dual simplex. So the gap is fundamentally **robustness**, not just speed.
+
+### Work packages
+
+- **P0: Instrument & root-cause (~2–4 days, low risk, read/measure only).** Pin the exact
+  dual `ERROR` origin (LU breakdown vs dual ratio-test vs dual phase-1 basis); classify all
+  18 by true mode; answer the load-bearing question — of the 15 "too slow," how many
+  actually converge uncapped vs never?
+- **P1: Dual simplex robustness — the spine (~3–6 weeks, high risk, hot core).** The dual
+  errors fast and presolve-independent → a diagnosable core defect. Robust dual ratio test
+  (bound-flipping/long-step), dual phase-1 / dual feasibility restoration, LU stability under
+  the dual, kill the fast-breakdown. Highest impact: a working dual likely converts most of
+  the 18 from FAIL to solved (as GLPK's does).
+- **P2: Primal anti-cycling (~1–2 weeks, medium risk).** 25fv47/pilot stall despite the
+  phase-1 recovery ladder. Expand-style tolerance relaxation and/or bound-flipping ratio test
+  so degenerate problems terminate.
+- **P3: Primal per-iteration performance (~2–3 weeks, medium risk).** Profiling hotspots:
+  phase-1 pricing `O(candidates×artificials)` (pilot87), LU factorization (maros-r7),
+  triangular solves (d2q06c). Steepest-edge/Devex as default hard-problem pricing, partial/
+  sparse phase-1 pricing, warm-start/crash basis. Only helps where it already converges.
+- **P4: Native barrier/interior-point (multi-month, very high effort — likely OUT of scope).**
+  The only path to parity on the largest/densest (maros-r7, 151k nnz). Treat as a separate
+  initiative, not part of "close the tail."
+- **Cross-cutting:** determinism (`degen2` 492/492/537 run-to-run — same family as robustness)
+  and presolve strength (GLPK reduces these more). Fold into P0/P1.
+
+### Tiered goals (pick the bar)
+
+- **Tier A — "no lies, no hangs" (~P0+P2, weeks):** native either solves or cleanly reports
+  non-convergence without cycling/hanging; a fraction of the 18 solving. Removes the need to
+  offload for *correctness*; still offload for *speed*.
+- **Tier B — "native solves the tail" (~P0+P1+P2, ~2 months):** all 18 solved correctly
+  natively within ~10–50× GLPK. The real "close the gap" target; external-GLPK fallback
+  becomes optional.
+- **Tier C — "parity" (+P3+P4, quarters):** within ~2–3× GLPK across the tail. Research-grade;
+  barrier likely required.
+
+### Guardrails
+
+Every change verifies against: the NETLIB gate (0 status / 0 objective mismatch), the
+presolve/infinite-bound/equality fuzzers + GLPK oracle, and the native-only rows of
+`netlib_perf_baseline` as the before/after. Verify-first, same discipline as #86/#94/#96 —
+mandatory here since it is the hot core.
+
+### Honest sizing
+
+Not a quick win. A robust dual simplex is exactly what took GLPK/HiGHS/Clp years. Tier B is a
+~2-month focused effort with real regression risk in the most sensitive code; Tier C is
+multi-quarter. Cheapest genuinely-valuable milestone is Tier A (stop the cycling/hangs).
 
 ---
 
