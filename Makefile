@@ -20,7 +20,7 @@
 #   docs/         - Architecture documentation
 
 .PHONY: all lib clean test help
-.PHONY: ralph fuelwise velo carta locus shared arbor surge surge-api
+.PHONY: ralph fuelwise velo carta locus shared arbor surge surge-api nexus
 .PHONY: fuelwise-api carta-api velo-api
 .PHONY: wasm wasm-fuelwise wasm-velo wasm-carta wasm-locus wasm-types wasm-test wasm-api-demos
 .PHONY: fuelwise-ui fuelwise-ui-dev carta-ui carta-ui-dev clay-map clay-map-serve site-build site-serve
@@ -34,11 +34,12 @@
 # =============================================================================
 
 # Build all libraries
-all: shared arbor ralph fuelwise velo carta locus surge
+all: shared arbor ralph fuelwise velo carta locus surge nexus
 
 # Build libraries only (no tests)
 lib:
 	$(MAKE) -C arbor lib
+	$(MAKE) -C nexus lib
 	$(MAKE) -C ralph lib
 	$(MAKE) -C fuelwise lib
 	$(MAKE) -C shared lib
@@ -58,6 +59,10 @@ ralph:
 # Arbor search framework (depends on shared for RNG)
 arbor: shared
 	$(MAKE) -C arbor all
+
+# Nexus document ingestion (depends on shared for JSON, miniz for XLSX)
+nexus: shared
+	$(MAKE) -C nexus all
 
 # FuelWise refueling library (depends on Ralph)
 fuelwise: ralph
@@ -226,10 +231,13 @@ ci:
 # =============================================================================
 
 # Run all tests
-test: test-arbor test-ralph test-fuelwise test-shared test-velo test-carta test-locus test-surge
+test: test-arbor test-ralph test-fuelwise test-shared test-velo test-carta test-locus test-surge test-nexus
 
 test-arbor: shared
 	$(MAKE) -C arbor test
+
+test-nexus: shared
+	$(MAKE) -C nexus test
 
 test-ralph:
 	$(MAKE) -C ralph test
@@ -277,6 +285,7 @@ test-api: test-fuelwise-api test-velo-api test-carta-api
 
 clean:
 	$(MAKE) -C arbor clean
+	$(MAKE) -C nexus clean
 	$(MAKE) -C ralph clean
 	$(MAKE) -C fuelwise clean
 	$(MAKE) -C shared clean
@@ -430,6 +439,7 @@ help:
 	@echo "  lib              - Build all libraries only (no tests)"
 	@echo "  ralph            - Build Ralph LP/MIP solver"
 	@echo "  arbor            - Build Arbor search/ALNS framework"
+	@echo "  nexus            - Build Nexus document ingestion pipeline"
 	@echo "  fuelwise         - Build FuelWise refueling library"
 	@echo "  shared           - Build shared utilities library"
 	@echo "  velo             - Build Velo routing engine"
@@ -486,6 +496,7 @@ help:
 	@echo "Testing:"
 	@echo "  test             - Run all library tests"
 	@echo "  test-arbor       - Run Arbor tests"
+	@echo "  test-nexus       - Run Nexus tests"
 	@echo "  test-ralph       - Run Ralph tests (73)"
 	@echo "  test-fuelwise    - Run FuelWise tests with full regression harness"
 	@echo "  test-fuelwise-regression - Run FuelWise full regression harness explicitly"

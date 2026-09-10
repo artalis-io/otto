@@ -34,7 +34,6 @@
 #include <stdlib.h>
 #include <string.h>
 #include <stdarg.h>
-#include <libgen.h>
 
 #define PIPELINE_ARENA_SIZE (64 * 1024 * 1024) /* 64 MB */
 #define MAX_PDF_TEXT_SIZE   (32 * 1024 * 1024)  /* 32 MB max text-run JSON */

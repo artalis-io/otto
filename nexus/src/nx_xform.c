@@ -30,7 +30,7 @@
 #include <stdio.h>
 #include <ctype.h>
 #include <math.h>
-#include <regex.h>
+#include "tre_regex.h"
 #include "nx_compute.h"
 
 /* ============================================================================
@@ -576,10 +576,10 @@ static int execute_multi_transforms(const MultiTransform *multis, int multi_coun
                     virtual_vals[vi][0] = '\0';
             }
 
-            regex_t re;
-            if (regcomp(&re, mt->pattern, REG_EXTENDED) == 0) {
-                regmatch_t matches[10];
-                if (regexec(&re, src, 10, matches, 0) == 0) {
+            tre_regex_t re;
+            if (tre_regcomp(&re, mt->pattern, TRE_REG_EXTENDED) == 0) {
+                tre_regmatch_t matches[10];
+                if (tre_regexec(&re, src, 10, matches, 0) == 0) {
                     for (int t = 0; t < mt->target_count; t++) {
                         int grp = mt->targets[t].index;
                         if (grp >= 0 && grp < 10 && matches[grp].rm_so >= 0) {
@@ -600,7 +600,7 @@ static int execute_multi_transforms(const MultiTransform *multis, int multi_coun
                         }
                     }
                 }
-                regfree(&re);
+                tre_regfree(&re);
             }
             break;
         }
@@ -643,11 +643,11 @@ static int execute_multi_transforms(const MultiTransform *multis, int multi_coun
                                        total_virtual, mt->source);
 
             for (int c = 0; c < mt->condition_count; c++) {
-                regex_t re;
-                if (regcomp(&re, mt->conditions[c].match,
-                            REG_EXTENDED | REG_NOSUB) == 0) {
-                    int matched = (regexec(&re, src, 0, NULL, 0) == 0);
-                    regfree(&re);
+                tre_regex_t re;
+                if (tre_regcomp(&re, mt->conditions[c].match,
+                            TRE_REG_EXTENDED | TRE_REG_NOSUB) == 0) {
+                    int matched = (tre_regexec(&re, src, 0, NULL, 0) == 0);
+                    tre_regfree(&re);
 
                     if (matched) {
                         const char *val = mt->conditions[c].value;

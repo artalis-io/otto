@@ -56,6 +56,15 @@ CC_STD    := /std:c11 /experimental:c11atomics
 # so the standard has to be named explicitly there and nowhere else.
 CC_STD_BASELINE := /std:c11 /experimental:c11atomics
 CC_WARN   := /W3
+# Deliberately empty. MSVC /W3 diagnoses things GCC does not -- signed/unsigned
+# narrowing and size_t truncation most of all -- so /WX would not mean "the same
+# bar as -Werror", it would mean "a second, different bar". Raising that bar
+# is a per-module warning-cleanup job, not a toolchain one.
+CC_WERROR :=
+
+# Treating a header as a system header, so its warnings do not count against
+# the including module. /external:W0 needs /external:I to take effect.
+CC_SYSINC := /external:W0 /external:I$(SPACE)
 CC_OPT    := /O2
 
 # -march=native has no portable MSVC equivalent. /arch:AVX2 is not the same
@@ -121,6 +130,9 @@ CC_PORT_DEFS += /Dpopen=_popen /Dpclose=_pclose
 # /guard:cf its control-flow guard. There is no _FORTIFY_SOURCE equivalent and
 # ASLR (/DYNAMICBASE) is already the linker default, so -fPIE has no counterpart
 # to emit.
+# Position-independent code. Windows binaries are relocatable by construction,
+# so there is nothing to ask for.
+CC_PIE    :=
 CC_HARDEN := /GS /guard:cf
 
 # OpenMP is deliberately OFF for MSVC.
@@ -182,6 +194,8 @@ else
 CC_STD    := -std=c11
 CC_STD_BASELINE :=
 CC_WARN   := -Wall -Wextra
+CC_WERROR := -Werror
+CC_SYSINC := -isystem$(SPACE)
 CC_OPT    := -O3
 CC_ARCH   := -march=native
 # Two knobs, not one: Ralph wants both, Velo wants only the first.
@@ -191,7 +205,8 @@ CC_FP_KEEP_NONFINITE := -fno-finite-math-only
 CC_VECTORIZE         := -ftree-vectorize
 CC_DEFS   := -D_GNU_SOURCE
 CC_PORT_DEFS :=
-CC_HARDEN := -fstack-protector-strong -D_FORTIFY_SOURCE=2 -fPIE -fno-common
+CC_PIE    := -fPIE
+CC_HARDEN := -fstack-protector-strong -D_FORTIFY_SOURCE=2 $(CC_PIE) -fno-common
 
 CC_DEBUG_OPT := -g -O0
 CC_SANITIZE  := -fsanitize=address,undefined -fno-omit-frame-pointer

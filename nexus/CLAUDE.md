@@ -163,6 +163,23 @@ Transform schemas live in `schemas/`. Format (v2 with multi-transforms):
 | `unique` | field(s) | No duplicate values (first kept) | error |
 | `outlier` | numeric field | IQR-based outlier detection | warning |
 
+### Which regex engine
+
+Both `format` validation rules and `regex` transform rules are compiled by the
+vendored engine in `vendor/tre/`, on every platform -- not by the host libc.
+That is deliberate: these patterns come from customer config, and a rule has to
+mean the same thing on a Linux worker and on a Windows box. See
+`vendor/tre/CLAUDE.md`.
+
+They are POSIX **extended** regular expressions, plus the common GNU/TRE
+escapes. One thing to know: `\d` is a digit class here. Under glibc it is
+not -- GNU has no `\d` and reads it as a literal `d` -- so a rule using `\d`
+behaves differently now than it did before the engine was vendored, in the
+direction this document already assumed. `\w`, `\s`, `\S`, `\b` and `\<`
+mean the same in both.
+
+Bounded repeats are capped at `RE_DUP_MAX` = 255, so `x{1,300}` is rejected.
+
 **Hungarian validation presets** (used in v2 schemas):
 - Hungary geo bounds: 45.7-48.6N, 16.1-22.9E
 - Hungarian ZIP: 4 digits, first digit 1-9

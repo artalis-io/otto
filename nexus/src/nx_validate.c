@@ -14,7 +14,7 @@
 #include <string.h>
 #include <stdio.h>
 #include <math.h>
-#include <regex.h>
+#include "tre_regex.h"
 #include <ctype.h>
 #include <stdint.h>
 
@@ -60,7 +60,7 @@ typedef struct {
     char format_field[NX_MAX_FIELD_NAME_LEN];
     char pattern[NX_MAX_PATTERN_LEN];
     char message[NX_MAX_MESSAGE_LEN];
-    regex_t regex;
+    tre_regex_t regex;
     int regex_compiled;
 
     /* unique */
@@ -172,7 +172,7 @@ static int parse_validation_rules(ShJsonValue *validate_array, SHArena *arena,
             }
 
             /* Compile regex */
-            if (regcomp(&rule->regex, rule->pattern, REG_EXTENDED | REG_NOSUB) == 0) {
+            if (tre_regcomp(&rule->regex, rule->pattern, TRE_REG_EXTENDED | TRE_REG_NOSUB) == 0) {
                 rule->regex_compiled = 1;
                 parsed++;
             }
@@ -261,7 +261,7 @@ static int validate_format(const NxValidationRule *rule, ShJsonValue *record,
     const char *str = sh_json_as_string(field_val, "");
     if (!str[0]) return 1; /* Skip empty strings */
 
-    if (regexec(&rule->regex, str, 0, NULL, 0) != 0) {
+    if (tre_regexec(&rule->regex, str, 0, NULL, 0) != 0) {
         snprintf(detail->message, sizeof(detail->message), "%s", rule->message);
         detail->field_name = rule->format_field;
         return 0;
@@ -792,7 +792,7 @@ NxValidateStatus nx_validate(const char *canonical_json, size_t canon_len,
     /* Clean up regex */
     for (int r = 0; r < rule_count; r++) {
         if (rules[r].regex_compiled) {
-            regfree(&rules[r].regex);
+            tre_regfree(&rules[r].regex);
         }
     }
 
