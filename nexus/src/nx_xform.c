@@ -636,9 +636,20 @@ static int execute_multi_transforms(const MultiTransform *multis, int multi_coun
                               outputs, mt->target_count);
                 for (int t = 0; t < nout && t < mt->target_count; t++) {
                     int vi = mt->virtual_base + t;
-                    if (vi < MAX_VIRTUAL_COLS)
+                    if (vi < MAX_VIRTUAL_COLS) {
+                        /*
+                         * outputs is [MAX_MULTI_TARGETS][256] and t is not
+                         * a constant, so GCC treats the source as able to
+                         * run to the end of the whole array rather than the
+                         * end of one row. Each row is NUL-terminated well
+                         * inside 256, but -Wformat-truncation cannot know
+                         * that, and nexus builds with -Werror. The explicit
+                         * precision states the bound that already held.
+                         */
                         snprintf(virtual_vals[vi], MAX_FIELD_LEN,
-                                 "%s", outputs[t]);
+                                 "%.*s", (int)(MAX_FIELD_LEN - 1),
+                                 outputs[t]);
+                    }
                 }
             }
             break;
