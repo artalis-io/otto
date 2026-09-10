@@ -387,9 +387,19 @@ static int parse_multi_transforms(ShJsonValue *arr, XformSchema *schema)
         /* For conditional without explicit targets: single output */
         if (m->type == MULTI_CONDITIONAL && m->target_count == 0) {
             m->target_count = 1;
-            if (m->condition_count > 0)
-                snprintf(m->targets[0].field, MAX_FIELD_LEN, "%s",
-                         m->conditions[0].field);
+            if (m->condition_count > 0) {
+                /*
+                 * Both operands live inside the same MultiTransform, and
+                 * snprintf's are restrict-qualified. GCC cannot prove two
+                 * members of one struct do not overlap, so under glibc's
+                 * _FORTIFY_SOURCE wrapper this was a -Wrestrict error -- and
+                 * nexus is built with -Werror. They are distinct arrays and
+                 * never overlap; memmove needs no proof of that.
+                 */
+                size_t n = strnlen(m->conditions[0].field, MAX_FIELD_LEN - 1);
+                memmove(m->targets[0].field, m->conditions[0].field, n);
+                m->targets[0].field[n] = '\0';
+            }
         }
 
         m->virtual_base = virtual_base;
