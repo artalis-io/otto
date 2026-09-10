@@ -1,5 +1,45 @@
 # Ralph vs Production LP/MIP Solvers — Frank Assessment
 
+## 2026-09-10 Addendum (Benchmark contamination + honest native NETLIB frontier)
+
+A full Ralph-vs-GLPK sweep of all 84 local NETLIB LP problems, followed by a correction
+after noticing the `ralph-benchmark` tool's `solve_path` field. **The earlier "84/84 correct,
+iteration parity with GLPK" framing was inflated and is corrected here.**
+
+**What happened.** The `ralph-benchmark` tool opts the 18 numerically-hard problems into the
+**external GLPK backend** (`*_EXTERNAL` algorithm + `lp_external_provider=GLPK`), reported as
+`solve_path=external_glpk_oop`. Those 18 rows — `25fv47, 80bau3b, cycle, d2q06c, fit1p, fit2p,
+greenbea, greenbeb, maros-r7, perold, pilot, pilot.ja, pilot.we, pilot4, pilot87, pilotnov,
+sierra, woodw` — are the exact set that showed "identical iteration count to GLPK." Their
+`ralph_*` numbers were **GLPK's, not native Ralph's**. This is a *tool* behaviour (external is
+deliberate opt-in per the 2026-02-23 addendum; the default library LP path is internal-first and
+does not auto-route to external), but a "vs GLPK" table must separate the two, and it hadn't.
+
+**Integrity checks (native solver is genuinely native).** `libralph.a` contains zero `glp_*`
+symbols and links no libglpk; the 66 `native` rows all have iteration counts that *diverge* from
+GLPK (0/66 identical); native CPU profiles are dominated by Ralph's own simplex/LU/phase-1 code.
+On the hard tail native Ralph honestly reports `ITERATION_LIMIT`/`TIME_LIMIT` — it never returns
+a false optimum.
+
+**Honest native-only frontier (66 problems Ralph solved itself, Apple M1 Max):**
+- Objective matches GLPK: 66/66.
+- Iteration ratio Ralph/GLPK: geomean 0.97, median 1.17.
+- Wall-time ratio on native GLPK≥50ms problems: geomean ~1.14× (heavy tail, e.g. `degen3` ~5.9×).
+
+**Hard-tail reality (the 18 offloaded), native, 15s cap:** 1 solved (`pilot.we`, 4.2s); 2 fail to
+converge (`25fv47`, `pilot` → `ITERATION_LIMIT`); 15 exceed 15s (`80bau3b` ~172–742s vs GLPK
+0.6s). This tail — the classic hard NETLIB (pilot family, maros-r7, d2q06c, greenbea) — is where
+GLPK is far ahead and why the benchmark offloads it.
+
+**Corrected verdict.** Native Ralph solves well-conditioned LPs (~66/84) correctly and roughly
+competitively (~1.1–1.4× GLPK wall on real-size problems), but is **not yet a GLPK replacement on
+the numerically-hard large tail**, where it fails to converge or is 100–700× slower. The gap to
+GLPK is real and larger than the mixed benchmark implied. The zero-dependency / WASM-embeddable /
+permissive-license / native-LAP+network-simplex advantages are unaffected by this correction.
+
+Data: `ralph/benchmarks/netlib_perf_baseline.{json,md}` (now annotated with per-problem
+`solve_path` and a native-only summary).
+
 ## 2026-02-23 Addendum (API/Architecture Baseline `d3185e7`)
 
 This document started as a performance-only snapshot. Ralph now has a materially stronger LP API

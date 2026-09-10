@@ -28,7 +28,8 @@
    "ralph_obj": -464.753142857143,
    "glpk_obj": -464.753142857143,
    "obj_match": true,
-   "rel_err": 2.446177e-16
+   "rel_err": 2.446177e-16,
+   "solve_path": "native"
   },
   {
    "name": "sc50b",
@@ -42,7 +43,8 @@
    "ralph_obj": -70,
    "glpk_obj": -70,
    "obj_match": true,
-   "rel_err": 4.060244e-16
+   "rel_err": 4.060244e-16,
+   "solve_path": "native"
   },
   {
    "name": "sc50a",
@@ -56,7 +58,8 @@
    "ralph_obj": -64.5750770585645,
    "glpk_obj": -64.5750770585645,
    "obj_match": true,
-   "rel_err": 2.200672e-16
+   "rel_err": 2.200672e-16,
+   "solve_path": "native"
   },
   {
    "name": "sc105",
@@ -70,7 +73,8 @@
    "ralph_obj": -52.2020612117072,
    "glpk_obj": -52.2020612117072,
    "obj_match": true,
-   "rel_err": 5.444557e-16
+   "rel_err": 5.444557e-16,
+   "solve_path": "native"
   },
   {
    "name": "kb2",
@@ -84,7 +88,8 @@
    "ralph_obj": -1749.90012991049,
    "glpk_obj": -1749.90012990621,
    "obj_match": true,
-   "rel_err": 2.444601e-12
+   "rel_err": 2.444601e-12,
+   "solve_path": "native"
   },
   {
    "name": "adlittle",
@@ -98,7 +103,8 @@
    "ralph_obj": 225494.963143057,
    "glpk_obj": 225494.963162377,
    "obj_match": true,
-   "rel_err": 8.56774e-11
+   "rel_err": 8.56774e-11,
+   "solve_path": "native"
   },
   {
    "name": "scagr7",
@@ -112,7 +118,8 @@
    "ralph_obj": -2331389.82433098,
    "glpk_obj": -2331389.82433098,
    "obj_match": true,
-   "rel_err": 1.198413e-15
+   "rel_err": 1.198413e-15,
+   "solve_path": "native"
   },
   {
    "name": "stocfor1",
@@ -126,7 +133,8 @@
    "ralph_obj": -41131.9762489212,
    "glpk_obj": -41131.976219436,
    "obj_match": true,
-   "rel_err": 7.168437e-10
+   "rel_err": 7.168437e-10,
+   "solve_path": "native"
   },
   {
    "name": "blend",
@@ -140,7 +148,8 @@
    "ralph_obj": -30.8121498458282,
    "glpk_obj": -30.8121498458293,
    "obj_match": true,
-   "rel_err": 3.493662e-14
+   "rel_err": 3.493662e-14,
+   "solve_path": "native"
   },
   {
    "name": "sc205",
@@ -154,7 +163,8 @@
    "ralph_obj": -52.2020612117072,
    "glpk_obj": -52.2020612117072,
    "obj_match": true,
-   "rel_err": 5.444557e-16
+   "rel_err": 5.444557e-16,
+   "solve_path": "native"
   },
   {
    "name": "recipe",
@@ -168,7 +178,8 @@
    "ralph_obj": -266.616,
    "glpk_obj": -266.616,
    "obj_match": true,
-   "rel_err": 0.0
+   "rel_err": 0.0,
+   "solve_path": "native"
   },
   {
    "name": "share2b",
@@ -182,7 +193,8 @@
    "ralph_obj": -415.732242190084,
    "glpk_obj": -415.73224074142,
    "obj_match": true,
-   "rel_err": 3.484608e-09
+   "rel_err": 3.484608e-09,
+   "solve_path": "native"
   },
   {
    "name": "lotfi",
@@ -196,7 +208,8 @@
    "ralph_obj": -25.26470606188,
    "glpk_obj": -25.2647060618801,
    "obj_match": true,
-   "rel_err": 5.202926e-15
+   "rel_err": 5.202926e-15,
+   "solve_path": "native"
   },
   {
    "name": "share1b",
@@ -210,7 +223,8 @@
    "ralph_obj": -76589.3185791858,
    "glpk_obj": -76589.3185791857,
    "obj_match": true,
-   "rel_err": 1.519994e-15
+   "rel_err": 1.519994e-15,
+   "solve_path": "native"
   },
   {
    "name": "scorpion",
@@ -224,7 +238,8 @@
    "ralph_obj": 1878.12482273811,
    "glpk_obj": 1878.12482273811,
    "obj_match": true,
-   "rel_err": 1.694899e-15
+   "rel_err": 1.694899e-15,
+   "solve_path": "native"
   },
   {
    "name": "bore3d",
@@ -238,7 +253,8 @@
    "ralph_obj": 1373.08039420849,
    "glpk_obj": 1373.08039420849,
    "obj_match": true,
-   "rel_err": 1.987126e-15
+   "rel_err": 1.987126e-15,
+   "solve_path": "native"
   },
   {
    "name": "scagr25",
@@ -252,7 +268,8 @@
    "ralph_obj": -14753433.0607685,
    "glpk_obj": -14753433.0607685,
    "obj_match": true,
-   "rel_err": 1.388768e-15
+   "rel_err": 1.388768e-15,
+   "solve_path": "native"
   },
   {
    "name": "sctap1",
@@ -266,7 +283,8 @@
    "ralph_obj": 1412.249997295,
    "glpk_obj": 1412.25,
    "obj_match": true,
-   "rel_err": 1.915383e-09
+   "rel_err": 1.915383e-09,
+   "solve_path": "native"
   },
   {
    "name": "capri",
@@ -280,7 +298,8 @@
    "ralph_obj": 2690.01291376816,
    "glpk_obj": 2690.01291376816,
    "obj_match": true,
-   "rel_err": 1.690502e-16
+   "rel_err": 1.690502e-16,
+   "solve_path": "native"
   },
   {
    "name": "brandy",
@@ -294,7 +313,8 @@
    "ralph_obj": 1518.50989655488,
    "glpk_obj": 1518.5098964881,
    "obj_match": true,
-   "rel_err": 4.397574e-11
+   "rel_err": 4.397574e-11,
+   "solve_path": "native"
   },
   {
    "name": "israel",
@@ -308,7 +328,8 @@
    "ralph_obj": -896644.821863046,
    "glpk_obj": -896644.821863046,
    "obj_match": true,
-   "rel_err": 2.596688e-16
+   "rel_err": 2.596688e-16,
+   "solve_path": "native"
   },
   {
    "name": "finnis",
@@ -322,7 +343,8 @@
    "ralph_obj": 172791.065528844,
    "glpk_obj": 172791.065595612,
    "obj_match": true,
-   "rel_err": 3.864114e-10
+   "rel_err": 3.864114e-10,
+   "solve_path": "native"
   },
   {
    "name": "scsd1",
@@ -336,7 +358,8 @@
    "ralph_obj": 8.66666667433337,
    "glpk_obj": 8.66666667433336,
    "obj_match": true,
-   "rel_err": 6.148928e-16
+   "rel_err": 6.148928e-16,
+   "solve_path": "native"
   },
   {
    "name": "etamacro",
@@ -350,7 +373,8 @@
    "ralph_obj": -755.715232301531,
    "glpk_obj": -755.715233138834,
    "obj_match": true,
-   "rel_err": 1.107961e-09
+   "rel_err": 1.107961e-09,
+   "solve_path": "native"
   },
   {
    "name": "agg",
@@ -364,7 +388,8 @@
    "ralph_obj": -35991767.2865765,
    "glpk_obj": -35991767.2865765,
    "obj_match": true,
-   "rel_err": 2.070079e-16
+   "rel_err": 2.070079e-16,
+   "solve_path": "native"
   },
   {
    "name": "bandm",
@@ -378,7 +403,8 @@
    "ralph_obj": -158.628018450121,
    "glpk_obj": -158.628018450121,
    "obj_match": true,
-   "rel_err": 1.970893e-15
+   "rel_err": 1.970893e-15,
+   "solve_path": "native"
   },
   {
    "name": "e226",
@@ -392,7 +418,8 @@
    "ralph_obj": -25.8649291036355,
    "glpk_obj": -25.8649290663708,
    "obj_match": true,
-   "rel_err": 1.440744e-09
+   "rel_err": 1.440744e-09,
+   "solve_path": "native"
   },
   {
    "name": "scfxm1",
@@ -406,7 +433,8 @@
    "ralph_obj": 18416.7590148402,
    "glpk_obj": 18416.7590283489,
    "obj_match": true,
-   "rel_err": 7.335029e-10
+   "rel_err": 7.335029e-10,
+   "solve_path": "native"
   },
   {
    "name": "grow7",
@@ -420,7 +448,8 @@
    "ralph_obj": -47787811.8147117,
    "glpk_obj": -47787811.8147231,
    "obj_match": true,
-   "rel_err": 2.38074e-13
+   "rel_err": 2.38074e-13,
+   "solve_path": "native"
   },
   {
    "name": "standata",
@@ -434,7 +463,8 @@
    "ralph_obj": 1257.6995,
    "glpk_obj": 1257.6995,
    "obj_match": true,
-   "rel_err": 1.807854e-16
+   "rel_err": 1.807854e-16,
+   "solve_path": "native"
   },
   {
    "name": "beaconfd",
@@ -448,7 +478,8 @@
    "ralph_obj": 33592.4858072,
    "glpk_obj": 33592.4858072,
    "obj_match": true,
-   "rel_err": 0.0
+   "rel_err": 0.0,
+   "solve_path": "native"
   },
   {
    "name": "shell",
@@ -462,7 +493,8 @@
    "ralph_obj": 1208825346,
    "glpk_obj": 1208825346,
    "obj_match": true,
-   "rel_err": 1.775085e-15
+   "rel_err": 1.775085e-15,
+   "solve_path": "native"
   },
   {
    "name": "standmps",
@@ -476,7 +508,8 @@
    "ralph_obj": 1406.01749903264,
    "glpk_obj": 1406.0175,
    "obj_match": true,
-   "rel_err": 6.880133e-10
+   "rel_err": 6.880133e-10,
+   "solve_path": "native"
   },
   {
    "name": "stair",
@@ -490,7 +523,8 @@
    "ralph_obj": -251.266951193241,
    "glpk_obj": -251.266951192963,
    "obj_match": true,
-   "rel_err": 1.106251e-12
+   "rel_err": 1.106251e-12,
+   "solve_path": "native"
   },
   {
    "name": "degen2",
@@ -504,7 +538,8 @@
    "ralph_obj": -1435.178,
    "glpk_obj": -1435.178,
    "obj_match": true,
-   "rel_err": 1.584289e-16
+   "rel_err": 1.584289e-16,
+   "solve_path": "native"
   },
   {
    "name": "agg2",
@@ -518,7 +553,8 @@
    "ralph_obj": -20239252.3559771,
    "glpk_obj": -20239252.3559771,
    "obj_match": true,
-   "rel_err": 3.681253e-16
+   "rel_err": 3.681253e-16,
+   "solve_path": "native"
   },
   {
    "name": "agg3",
@@ -532,7 +568,8 @@
    "ralph_obj": 10312115.9350892,
    "glpk_obj": 10312115.9350892,
    "obj_match": true,
-   "rel_err": 2.528776e-15
+   "rel_err": 2.528776e-15,
+   "solve_path": "native"
   },
   {
    "name": "scsd6",
@@ -546,7 +583,8 @@
    "ralph_obj": 50.5000000782624,
    "glpk_obj": 50.5000000782624,
    "obj_match": true,
-   "rel_err": 4.221046e-16
+   "rel_err": 4.221046e-16,
+   "solve_path": "native"
   },
   {
    "name": "ship04s",
@@ -560,7 +598,8 @@
    "ralph_obj": 1798714.70040018,
    "glpk_obj": 1798714.70044539,
    "obj_match": true,
-   "rel_err": 2.513585e-11
+   "rel_err": 2.513585e-11,
+   "solve_path": "native"
   },
   {
    "name": "seba",
@@ -574,7 +613,8 @@
    "ralph_obj": 15711.59997885,
    "glpk_obj": 15711.6,
    "obj_match": true,
-   "rel_err": 1.346139e-09
+   "rel_err": 1.346139e-09,
+   "solve_path": "native"
   },
   {
    "name": "forplan",
@@ -588,7 +628,8 @@
    "ralph_obj": -664.218961272206,
    "glpk_obj": -664.218961272203,
    "obj_match": true,
-   "rel_err": 4.792443e-15
+   "rel_err": 4.792443e-15,
+   "solve_path": "native"
   },
   {
    "name": "bnl1",
@@ -602,7 +643,8 @@
    "ralph_obj": 1977.62934701859,
    "glpk_obj": 1977.62956152289,
    "obj_match": true,
-   "rel_err": 1.084654e-07
+   "rel_err": 1.084654e-07,
+   "solve_path": "native"
   },
   {
    "name": "pilot4",
@@ -616,7 +658,8 @@
    "ralph_obj": -2581.13925888389,
    "glpk_obj": -2581.13925888389,
    "obj_match": true,
-   "rel_err": 1.057085e-15
+   "rel_err": 1.057085e-15,
+   "solve_path": "external_glpk_oop"
   },
   {
    "name": "scfxm2",
@@ -630,7 +673,8 @@
    "ralph_obj": 36660.261541674,
    "glpk_obj": 36660.2615649988,
    "obj_match": true,
-   "rel_err": 6.362412e-10
+   "rel_err": 6.362412e-10,
+   "solve_path": "native"
   },
   {
    "name": "grow15",
@@ -644,7 +688,8 @@
    "ralph_obj": -106870941.293575,
    "glpk_obj": -106870941.293575,
    "obj_match": true,
-   "rel_err": 3.06749e-15
+   "rel_err": 3.06749e-15,
+   "solve_path": "native"
   },
   {
    "name": "perold",
@@ -658,7 +703,8 @@
    "ralph_obj": -9380.75527823516,
    "glpk_obj": -9380.75527823516,
    "obj_match": true,
-   "rel_err": 3.87813e-16
+   "rel_err": 3.87813e-16,
+   "solve_path": "external_glpk_oop"
   },
   {
    "name": "fffff800",
@@ -672,7 +718,8 @@
    "ralph_obj": 555679.564817497,
    "glpk_obj": 555679.564817496,
    "obj_match": true,
-   "rel_err": 1.885507e-15
+   "rel_err": 1.885507e-15,
+   "solve_path": "native"
   },
   {
    "name": "ship04l",
@@ -686,7 +733,8 @@
    "ralph_obj": 1793324.53781785,
    "glpk_obj": 1793324.53797036,
    "obj_match": true,
-   "rel_err": 8.504116e-11
+   "rel_err": 8.504116e-11,
+   "solve_path": "native"
   },
   {
    "name": "sctap2",
@@ -700,7 +748,8 @@
    "ralph_obj": 1724.80714285714,
    "glpk_obj": 1724.80714285714,
    "obj_match": true,
-   "rel_err": 1.581907e-15
+   "rel_err": 1.581907e-15,
+   "solve_path": "native"
   },
   {
    "name": "ganges",
@@ -714,7 +763,8 @@
    "ralph_obj": -109585.736129278,
    "glpk_obj": -109585.736129278,
    "obj_match": true,
-   "rel_err": 1.593483e-15
+   "rel_err": 1.593483e-15,
+   "solve_path": "native"
   },
   {
    "name": "ship08s",
@@ -728,7 +778,8 @@
    "ralph_obj": 1920098.21053462,
    "glpk_obj": 1920098.21053462,
    "obj_match": true,
-   "rel_err": 1.212598e-16
+   "rel_err": 1.212598e-16,
+   "solve_path": "native"
   },
   {
    "name": "sierra",
@@ -742,7 +793,8 @@
    "ralph_obj": 15394362.1836319,
    "glpk_obj": 15394362.1836319,
    "obj_match": true,
-   "rel_err": 2.05692e-15
+   "rel_err": 2.05692e-15,
+   "solve_path": "external_glpk_oop"
   },
   {
    "name": "scfxm3",
@@ -756,7 +808,8 @@
    "ralph_obj": 54901.2545175081,
    "glpk_obj": 54901.2545497515,
    "obj_match": true,
-   "rel_err": 5.872976e-10
+   "rel_err": 5.872976e-10,
+   "solve_path": "native"
   },
   {
    "name": "ship12s",
@@ -770,7 +823,8 @@
    "ralph_obj": 1489236.13440613,
    "glpk_obj": 1489236.13440613,
    "obj_match": true,
-   "rel_err": 7.817116e-16
+   "rel_err": 7.817116e-16,
+   "solve_path": "native"
   },
   {
    "name": "grow22",
@@ -784,7 +838,8 @@
    "ralph_obj": -160834336.482563,
    "glpk_obj": -160834336.482563,
    "obj_match": true,
-   "rel_err": 1.297088e-15
+   "rel_err": 1.297088e-15,
+   "solve_path": "native"
   },
   {
    "name": "stocfor2",
@@ -798,7 +853,8 @@
    "ralph_obj": -39024.4089636379,
    "glpk_obj": -39024.4085378821,
    "obj_match": true,
-   "rel_err": 1.090999e-08
+   "rel_err": 1.090999e-08,
+   "solve_path": "native"
   },
   {
    "name": "scsd8",
@@ -812,7 +868,8 @@
    "ralph_obj": 904.999999925464,
    "glpk_obj": 904.999999925465,
    "obj_match": true,
-   "rel_err": 7.537249e-16
+   "rel_err": 7.537249e-16,
+   "solve_path": "native"
   },
   {
    "name": "sctap3",
@@ -826,7 +883,8 @@
    "ralph_obj": 1424,
    "glpk_obj": 1424,
    "obj_match": true,
-   "rel_err": 0.0
+   "rel_err": 0.0,
+   "solve_path": "native"
   },
   {
    "name": "pilot.we",
@@ -840,7 +898,8 @@
    "ralph_obj": -2720107.53284496,
    "glpk_obj": -2720107.53284496,
    "obj_match": true,
-   "rel_err": 1.711922e-15
+   "rel_err": 1.711922e-15,
+   "solve_path": "external_glpk_oop"
   },
   {
    "name": "maros",
@@ -854,7 +913,8 @@
    "ralph_obj": -58063.74370135,
    "glpk_obj": -58063.7437011258,
    "obj_match": true,
-   "rel_err": 3.861046e-12
+   "rel_err": 3.861046e-12,
+   "solve_path": "native"
   },
   {
    "name": "fit1p",
@@ -868,7 +928,8 @@
    "ralph_obj": 9146.37809242093,
    "glpk_obj": 9146.37809242093,
    "obj_match": true,
-   "rel_err": 1.988754e-16
+   "rel_err": 1.988754e-16,
+   "solve_path": "external_glpk_oop"
   },
   {
    "name": "25fv47",
@@ -882,7 +943,8 @@
    "ralph_obj": 5501.84588828674,
    "glpk_obj": 5501.84588828675,
    "obj_match": true,
-   "rel_err": 1.818379e-15
+   "rel_err": 1.818379e-15,
+   "solve_path": "external_glpk_oop"
   },
   {
    "name": "czprob",
@@ -896,7 +958,8 @@
    "ralph_obj": 2185196.69885658,
    "glpk_obj": 2185196.69885658,
    "obj_match": true,
-   "rel_err": 1.278589e-15
+   "rel_err": 1.278589e-15,
+   "solve_path": "native"
   },
   {
    "name": "ship08l",
@@ -910,7 +973,8 @@
    "ralph_obj": 1909055.21138913,
    "glpk_obj": 1909055.21138913,
    "obj_match": true,
-   "rel_err": 7.317671e-16
+   "rel_err": 7.317671e-16,
+   "solve_path": "native"
   },
   {
    "name": "pilotnov",
@@ -924,7 +988,8 @@
    "ralph_obj": -4497.27618821887,
    "glpk_obj": -4497.27618821887,
    "obj_match": true,
-   "rel_err": 6.06697e-16
+   "rel_err": 6.06697e-16,
+   "solve_path": "external_glpk_oop"
   },
   {
    "name": "fit1d",
@@ -938,7 +1003,8 @@
    "ralph_obj": -9146.37809242092,
    "glpk_obj": -9146.37809242093,
    "obj_match": true,
-   "rel_err": 5.966261e-16
+   "rel_err": 5.966261e-16,
+   "solve_path": "native"
   },
   {
    "name": "nesm",
@@ -952,7 +1018,8 @@
    "ralph_obj": 14076036.4875627,
    "glpk_obj": 14076036.4875627,
    "obj_match": true,
-   "rel_err": 2.51422e-15
+   "rel_err": 2.51422e-15,
+   "solve_path": "native"
   },
   {
    "name": "bnl2",
@@ -966,7 +1033,8 @@
    "ralph_obj": 1811.23653515569,
    "glpk_obj": 1811.23654035855,
    "obj_match": true,
-   "rel_err": 2.872548e-09
+   "rel_err": 2.872548e-09,
+   "solve_path": "native"
   },
   {
    "name": "pilot.ja",
@@ -980,7 +1048,8 @@
    "ralph_obj": -6113.13646558134,
    "glpk_obj": -6113.13646558135,
    "obj_match": true,
-   "rel_err": 1.487771e-15
+   "rel_err": 1.487771e-15,
+   "solve_path": "external_glpk_oop"
   },
   {
    "name": "ship12l",
@@ -994,7 +1063,8 @@
    "ralph_obj": 1470187.91932926,
    "glpk_obj": 1470187.91932926,
    "obj_match": true,
-   "rel_err": 2.850623e-15
+   "rel_err": 2.850623e-15,
+   "solve_path": "native"
   },
   {
    "name": "cycle",
@@ -1008,7 +1078,8 @@
    "ralph_obj": -5.2263930248941,
    "glpk_obj": -5.2263930248941,
    "obj_match": true,
-   "rel_err": 3.39882e-16
+   "rel_err": 3.39882e-16,
+   "solve_path": "external_glpk_oop"
   },
   {
    "name": "80bau3b",
@@ -1022,7 +1093,8 @@
    "ralph_obj": 987224.19240909,
    "glpk_obj": 987224.192409091,
    "obj_match": true,
-   "rel_err": 5.896093e-16
+   "rel_err": 5.896093e-16,
+   "solve_path": "external_glpk_oop"
   },
   {
    "name": "degen3",
@@ -1036,7 +1108,8 @@
    "ralph_obj": -987.29400028978,
    "glpk_obj": -987.294,
    "obj_match": true,
-   "rel_err": 2.935096e-10
+   "rel_err": 2.935096e-10,
+   "solve_path": "native"
   },
   {
    "name": "greenbea",
@@ -1050,7 +1123,8 @@
    "ralph_obj": -72555248.129846,
    "glpk_obj": -72555248.129846,
    "obj_match": true,
-   "rel_err": 2.053768e-16
+   "rel_err": 2.053768e-16,
+   "solve_path": "external_glpk_oop"
   },
   {
    "name": "greenbeb",
@@ -1064,7 +1138,8 @@
    "ralph_obj": -4302260.26120659,
    "glpk_obj": -4302260.26120659,
    "obj_match": true,
-   "rel_err": 6.494186e-16
+   "rel_err": 6.494186e-16,
+   "solve_path": "external_glpk_oop"
   },
   {
    "name": "d2q06c",
@@ -1078,7 +1153,8 @@
    "ralph_obj": 122784.210814189,
    "glpk_obj": 122784.210814189,
    "obj_match": true,
-   "rel_err": 3.199937e-15
+   "rel_err": 3.199937e-15,
+   "solve_path": "external_glpk_oop"
   },
   {
    "name": "woodw",
@@ -1092,7 +1168,8 @@
    "ralph_obj": 1.30447633308423,
    "glpk_obj": 1.30447633308423,
    "obj_match": true,
-   "rel_err": 8.510871e-16
+   "rel_err": 8.510871e-16,
+   "solve_path": "external_glpk_oop"
   },
   {
    "name": "d6cube",
@@ -1106,7 +1183,8 @@
    "ralph_obj": 315.491666627156,
    "glpk_obj": 315.491666666667,
    "obj_match": true,
-   "rel_err": 1.25235e-10
+   "rel_err": 1.25235e-10,
+   "solve_path": "native"
   },
   {
    "name": "pilot",
@@ -1120,7 +1198,8 @@
    "ralph_obj": -557.489706157402,
    "glpk_obj": -557.489706157402,
    "obj_match": true,
-   "rel_err": 0.0
+   "rel_err": 0.0,
+   "solve_path": "external_glpk_oop"
   },
   {
    "name": "fit2p",
@@ -1134,7 +1213,8 @@
    "ralph_obj": 68464.293293832,
    "glpk_obj": 68464.2932938322,
    "obj_match": true,
-   "rel_err": 2.55057e-15
+   "rel_err": 2.55057e-15,
+   "solve_path": "external_glpk_oop"
   },
   {
    "name": "wood1p",
@@ -1148,7 +1228,8 @@
    "ralph_obj": 1.44290241157341,
    "glpk_obj": 1.44290241157341,
    "obj_match": true,
-   "rel_err": 1.2311e-15
+   "rel_err": 1.2311e-15,
+   "solve_path": "native"
   },
   {
    "name": "pilot87",
@@ -1162,7 +1243,8 @@
    "ralph_obj": 301.710347333113,
    "glpk_obj": 301.710347333113,
    "obj_match": true,
-   "rel_err": 1.507232e-15
+   "rel_err": 1.507232e-15,
+   "solve_path": "external_glpk_oop"
   },
   {
    "name": "fit2d",
@@ -1176,7 +1258,8 @@
    "ralph_obj": -68464.2932938322,
    "glpk_obj": -68464.293293832,
    "obj_match": true,
-   "rel_err": 3.188213e-15
+   "rel_err": 3.188213e-15,
+   "solve_path": "native"
   },
   {
    "name": "maros-r7",
@@ -1190,7 +1273,40 @@
    "ralph_obj": 1497185.16647964,
    "glpk_obj": 1497185.16647964,
    "obj_match": true,
-   "rel_err": 2.799221e-15
+   "rel_err": 2.799221e-15,
+   "solve_path": "external_glpk_oop"
   }
- ]
+ ],
+ "IMPORTANT_CAVEAT": "The ralph-benchmark tool routes 18 numerically-hard problems through the EXTERNAL GLPK provider (solve_path='external_glpk_oop'); for those rows the 'ralph_*' numbers are GLPK's, not native Ralph's. Only the 66 solve_path='native' rows reflect Ralph's own solver. See the native_only_summary and docs/roadmaps/ralph-vs-glop.md for the honest picture.",
+ "externally_routed_problems": [
+  "25fv47",
+  "80bau3b",
+  "cycle",
+  "d2q06c",
+  "fit1p",
+  "fit2p",
+  "greenbea",
+  "greenbeb",
+  "maros-r7",
+  "perold",
+  "pilot",
+  "pilot.ja",
+  "pilot.we",
+  "pilot4",
+  "pilot87",
+  "pilotnov",
+  "sierra",
+  "woodw"
+ ],
+ "native_only_summary": {
+  "problems": 66,
+  "objective_matches": 66,
+  "identical_iteration_count_to_glpk": 0,
+  "iter_ratio_geomean": 0.9674,
+  "iter_ratio_median": 1.1687,
+  "walltime_ratio_geomean": 0.7692,
+  "walltime_ratio_median": 0.7191,
+  "walltime_ratio_geomean_glpk_ge_50ms": 1.1424
+ },
+ "hard_tail_native_reality": "Of the 18 externally-routed problems, native Ralph within a 15s cap: 1 solved (pilot.we, 4.2s); 2 report ITERATION_LIMIT non-convergence (25fv47, pilot) -- it does NOT return a false optimum; 15 exceed 15s (e.g. 80bau3b ~172-742s vs GLPK 0.6s). This tail is where GLPK is far ahead and why the benchmark offloads it."
 }
