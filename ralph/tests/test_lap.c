@@ -56,6 +56,15 @@ static int tests_passed = 0;
  * inside the noise. Each benchmark grows its iteration count until the baseline
  * arm clears BENCH_MIN_MS, so the ratio is always taken between two numbers
  * large enough to mean something.
+ *
+ * Nor is size enough. A single sample of a 20 ms arm on a shared CI runner
+ * moves by more than the tightest of these ratios allows (1.1x), and one
+ * scheduling hiccup in the wrong arm fails the build for no reason -- which is
+ * exactly what happened. So each benchmark takes BENCH_SAMPLES measurements at
+ * the settled size and keeps the *minimum* of each arm. Interference only ever
+ * adds time, so the minimum is the closest thing to the cost being asserted
+ * about, and taking both arms in every round keeps them equally exposed to
+ * whatever else the machine is doing.
  * ============================================================================ */
 static double bench_now_ms(void) {
     return sh_monotonic_seconds() * 1000.0;
@@ -63,6 +72,7 @@ static double bench_now_ms(void) {
 
 #define BENCH_MIN_MS   20.0
 #define BENCH_MAX_REPS 64
+#define BENCH_SAMPLES  5
 
 /* ============================================================================
  * Test helper: print assignment
@@ -1229,8 +1239,11 @@ static void test_workspace_repeated(void) {
     RalphLapWorkspace *ws = ralph_lap_workspace_create(n);
 
     double time_no_ws = 0.0, time_ws = 0.0;
+    double best_time_no_ws = 0.0, best_time_ws = 0.0;
 
-    for (int reps = 1; ; reps *= 2) {
+    int ws_samples = 0;
+
+    for (int reps = 1; ; ) {
         num_solves = 20 * reps;
 
         /* Time without workspace */
@@ -1255,8 +1268,25 @@ static void test_workspace_repeated(void) {
         }
         time_ws = bench_now_ms() - start2;
 
-        if (time_no_ws >= BENCH_MIN_MS || reps >= BENCH_MAX_REPS) break;
+        /* Still too quick to measure? Grow the arm and try again. */
+        if (time_no_ws < BENCH_MIN_MS && reps < BENCH_MAX_REPS) {
+            reps *= 2;
+            continue;
+        }
+
+        /* Settled. Keep the best of each arm; noise only adds time. */
+        if (ws_samples == 0) {
+            best_time_no_ws = time_no_ws;
+            best_time_ws = time_ws;
+        } else {
+            if (time_no_ws  < best_time_no_ws)  best_time_no_ws  = time_no_ws;
+            if (time_ws < best_time_ws) best_time_ws = time_ws;
+        }
+        if (++ws_samples >= BENCH_SAMPLES) break;
     }
+
+    time_no_ws  = best_time_no_ws;
+    time_ws = best_time_ws;
 
     ralph_lap_workspace_free(ws);
 
@@ -1615,8 +1645,11 @@ static void test_warm_start_performance(void) {
     RalphLapWorkspace *ws = ralph_lap_workspace_create(n);
 
     double cold_time = 0.0, warm_time = 0.0;
+    double best_cold_time = 0.0, best_warm_time = 0.0;
 
-    for (int reps = 1; ; reps *= 2) {
+    int warm_samples = 0;
+
+    for (int reps = 1; ; ) {
         num_problems = 10 * reps;
 
         /* Generate base problem, then measure cold start time */
@@ -1654,8 +1687,25 @@ static void test_warm_start_performance(void) {
         }
         warm_time = bench_now_ms() - warm_start;
 
-        if (cold_time >= BENCH_MIN_MS || reps >= BENCH_MAX_REPS) break;
+        /* Still too quick to measure? Grow the arm and try again. */
+        if (cold_time < BENCH_MIN_MS && reps < BENCH_MAX_REPS) {
+            reps *= 2;
+            continue;
+        }
+
+        /* Settled. Keep the best of each arm; noise only adds time. */
+        if (warm_samples == 0) {
+            best_cold_time = cold_time;
+            best_warm_time = warm_time;
+        } else {
+            if (cold_time  < best_cold_time)  best_cold_time  = cold_time;
+            if (warm_time < best_warm_time) best_warm_time = warm_time;
+        }
+        if (++warm_samples >= BENCH_SAMPLES) break;
     }
+
+    cold_time  = best_cold_time;
+    warm_time = best_warm_time;
 
     printf("  %d problems of size %dx%d with small perturbations:\n", num_problems, n, n);
     printf("    Cold start: %.3f ms total\n", cold_time);
@@ -2028,8 +2078,11 @@ static void test_callback_performance(void) {
     double total_cost;
     int num_trials = 10;
     double dense_total = 0.0, callback_total = 0.0;
+    double best_dense_total = 0.0, best_callback_total = 0.0;
 
-    for (int reps = 1; ; reps *= 2) {
+    int cb_samples = 0;
+
+    for (int reps = 1; ; ) {
         num_trials = 10 * reps;
 
         /* Benchmark dense solver */
@@ -2048,8 +2101,25 @@ static void test_callback_performance(void) {
         }
         callback_total = bench_now_ms() - start;
 
-        if (dense_total >= BENCH_MIN_MS || reps >= BENCH_MAX_REPS) break;
+        /* Still too quick to measure? Grow the arm and try again. */
+        if (dense_total < BENCH_MIN_MS && reps < BENCH_MAX_REPS) {
+            reps *= 2;
+            continue;
+        }
+
+        /* Settled. Keep the best of each arm; noise only adds time. */
+        if (cb_samples == 0) {
+            best_dense_total = dense_total;
+            best_callback_total = callback_total;
+        } else {
+            if (dense_total  < best_dense_total)  best_dense_total  = dense_total;
+            if (callback_total < best_callback_total) best_callback_total = callback_total;
+        }
+        if (++cb_samples >= BENCH_SAMPLES) break;
     }
+
+    dense_total  = best_dense_total;
+    callback_total = best_callback_total;
 
     double dense_time = dense_total / num_trials;
     double callback_time = callback_total / num_trials;

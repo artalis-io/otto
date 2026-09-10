@@ -665,3 +665,103 @@ whitespace-normalised sets before and after.
   in 14.9 ms, in both floating-point modes. Unexplained.
 - api/, wasm/ and clayshards/ Makefiles are unwired. None is on a library
   `test` path.
+## Nexus on Windows, and a vendored regex engine
+
+Nexus was the last library outside the top-level Makefile and outside CI. It was
+outside both because it did not build on Windows, and it did not build on Windows
+because `nx_validate.c` and `nx_xform.c` include POSIX `<regex.h>`, which neither
+the Windows CRT nor MinGW nor MSVC provides.
+
+### The decision
+
+`vendor/tre/` now holds musl's TRE-derived POSIX regex engine, and Nexus uses it
+on **every** platform -- not as a Windows fallback.
+
+The Windows gap is the reason the question came up, but it is the weaker of the
+two arguments. Validation rules and transform match patterns come from
+customer-authored config, not from OTTO's source. If the engine behind them
+varied with the host, the same rule could accept a load on a Linux worker and
+reject it on a developer's macOS laptop, and the pipeline's verdict would depend
+on where it ran. Regex implementations really do differ at the edges --
+leftmost-longest in alternation, what a capture holds after a repeat matched
+empty, how bounded repeats interact with backtracking.
+
+The alternatives were weaker:
+
+- **Link libgnurx or libsystre on Windows.** Cheapest, but it is an external
+  dependency the manifesto rules out, it does nothing for MSVC, and it leaves
+  three different engines in play across the fleet.
+- **Compile the pattern rules out on Windows.** Cheapest of all and the worst:
+  rules would silently stop applying, so a document that fails validation on
+  Linux would pass on Windows.
+
+### Making it verifiable rather than hoped-for
+
+"The same engine everywhere" is only worth something if the vendored engine
+agrees with the one it replaced. `nexus/tests/test_regex_differential.c` compiles
+both and runs them over a corpus of 49 patterns and inputs -- the real Nexus
+patterns plus the ERE constructs they are built from -- asserting identical
+compile outcomes, identical match results, identical subexpression counts, and
+identical capture offsets. Offsets matter as much as match/no-match: `nx_xform.c`
+slices virtual columns out of them, so an off-by-one there is a silently wrong
+field rather than a failure.
+
+On Windows there is no system engine to compare against and the test reports a
+skip, which is honest -- the vendored engine is the only engine there.
+
+The corpus deliberately excludes `(a*)*`, `(a*)+` against an empty match, and
+`a.*?b`. POSIX leaves the captured span of a subexpression that matched empty on
+a repeat unspecified, and leaves a repetition applied to a repetition undefined.
+Asserting on those would make the test a musl-versus-glibc conformance suite
+rather than a check that Nexus's patterns mean one thing.
+
+### Two real bugs found in the port
+
+Neither was a compile error; both would have been silent.
+
+- **`ALIGN(p, long)` under-aligns on Win64.** The macro aligns a scratch buffer
+  that `tre_tnfa_run_parallel` then carves into structures holding pointers.
+  `sizeof(long)` is 8 on LP64 and 4 on Windows LLP64, so upstream got 8-byte
+  alignment everywhere musl runs and 4 here. Now `ALIGN(p, void *)`, which
+  reproduces musl's behaviour exactly on musl's platforms and fixes Windows.
+- **`ALIGN` cast its pointer through `long`,** truncating it on LLP64. Harmless
+  for the modulo it feeds, but undefined and a warning. Now `uintptr_t`.
+
+`regoff_t` had the same LLP64 problem -- `long` would cap a match offset at 2 GB
+on Windows -- and is now `ptrdiff_t`.
+
+### Toolchain additions
+
+Two normalised variables, both because Nexus needed something no other module
+did:
+
+- `CC_WERROR` -- Nexus is the only library built with `-Werror`. Empty for MSVC
+  on purpose: `/W3` diagnoses things GCC does not, so `/WX` would not mean "the
+  same bar", it would mean "a second, different bar", and clearing it is a
+  per-module warning-cleanup job rather than a toolchain one.
+- `CC_SYSINC` -- `-isystem` against `/external:W0 /external:I`, for holding
+  vendored code to upstream's warning bar rather than Nexus's.
+
+`CC_PIE` was factored out of `CC_HARDEN` so the vendor compile rule can ask for
+position-independent code without also inheriting stack protectors and
+`_FORTIFY_SOURCE`, which is what miniz was built with before and still is.
+
+And `LIB = libnexus.a` became `LIB_FILE`, the sixth time that trap has been hit:
+make re-exports any variable that also exists in the environment, and `LIB` is
+MSVC's library search path.
+
+### Verified
+
+| | GCC (UCRT64 16.2.0) | MSVC 19.44 |
+|---|---|---|
+| `make -C nexus test` | 9 suites, 197 checks, 0 failures | 9 suites, 197 checks, 0 failures |
+
+GCC command lines are unchanged: the only differences against the pre-change
+`make -n` output are the new `-isystem ../vendor/tre`, the four new engine
+compiles, the engine objects in the archive, and `-lbcrypt -lws2_32`, which
+`LD_PLATFORM` leaves empty on Linux and macOS.
+
+The differential half of the regex test cannot run on Windows, so before shipping
+it the corpus was cross-checked locally against GNU `grep -E` -- the same engine
+lineage as glibc's. All 45 comparable cases agreed; the other 4 have empty or
+newline-containing inputs, which grep cannot express because it is line-oriented.

@@ -82,6 +82,13 @@ jobs:
           - name: Locus
             build: make locus
             test: make test-locus
+          # Nexus was never in CI at all. Its 182 assertions ran nowhere, and
+          # test_regex_differential only means anything on a platform that has a
+          # POSIX <regex.h> for the vendored engine to be compared against --
+          # which is this one.
+          - name: Nexus
+            build: make nexus
+            test: make test-nexus
 
     steps:
       - name: Checkout code
@@ -369,6 +376,12 @@ jobs:
       - name: Build and test Ralph
         run: make -C ralph test
 
+      # Nexus did not compile on Windows at all until vendor/tre landed:
+      # nx_validate.c and nx_xform.c both include <regex.h>, which is POSIX and
+      # does not exist here. This is what stops that regressing.
+      - name: Build and test Nexus
+        run: make -C nexus test
+
       # test-lap is not part of `make -C ralph test` -- the Linux matrix runs it
       # as its own entry, and Windows never did. It belongs here more than
       # anywhere: three of its cases compare two timed arms, and this is the
@@ -474,6 +487,9 @@ jobs:
 
       - name: Build and test Surge
         run: make -C surge test
+
+      - name: Build and test Nexus
+        run: make -C nexus test
 
       - name: Build the API servers
         run: |

@@ -34,7 +34,6 @@
 #include <stdlib.h>
 #include <string.h>
 #include <stdarg.h>
-#include <libgen.h>
 
 #define PIPELINE_ARENA_SIZE (64 * 1024 * 1024) /* 64 MB */
 #define MAX_PDF_TEXT_SIZE   (32 * 1024 * 1024)  /* 32 MB max text-run JSON */
@@ -865,8 +864,12 @@ static int run_batch(const char *config_path)
 
     /* Open manifest file */
     char manifest_path[512];
-    snprintf(manifest_path, sizeof(manifest_path), "%s/manifest.json",
-             abs_output_dir);
+    if (snprintf(manifest_path, sizeof(manifest_path), "%s/manifest.json",
+                 abs_output_dir) >= (int)sizeof(manifest_path)) {
+        fprintf(stderr, "error: output directory path too long: %s\n",
+                abs_output_dir);
+        return 1;
+    }
     FILE *mf = fopen(manifest_path, "w");
     if (mf) {
         fprintf(mf, "{\"nx_manifest\":1,\"files\":[\n");
@@ -921,13 +924,22 @@ static int run_batch(const char *config_path)
         const char *base = strrchr(abs_file, '/');
         base = base ? base + 1 : abs_file;
         char name[256];
-        snprintf(name, sizeof(name), "%s", base);
+        if (snprintf(name, sizeof(name), "%s", base) >= (int)sizeof(name)) {
+            fprintf(stderr, "error: file name too long: %s\n", base);
+            failures++;
+            continue;
+        }
         char *dot = strrchr(name, '.');
         if (dot) *dot = '\0';
 
         char out_raw[512], out_canon[512];
-        snprintf(out_raw, sizeof(out_raw), "%s/%s_raw.json",
-                 abs_output_dir, name);
+        if (snprintf(out_raw, sizeof(out_raw), "%s/%s_raw.json",
+                     abs_output_dir, name) >= (int)sizeof(out_raw)) {
+            fprintf(stderr, "error: output path too long: %s/%s_raw.json\n",
+                    abs_output_dir, name);
+            failures++;
+            continue;
+        }
 
         /* Per-file issue tracking */
         NxIssueList file_issues;
@@ -949,8 +961,14 @@ static int run_batch(const char *config_path)
 
         /* If schema given, also produce canonical */
         if (!file_failed && schema_ptr) {
-            snprintf(out_canon, sizeof(out_canon), "%s/%s_canonical.json",
-                     abs_output_dir, name);
+            if (snprintf(out_canon, sizeof(out_canon), "%s/%s_canonical.json",
+                         abs_output_dir, name) >= (int)sizeof(out_canon)) {
+                fprintf(stderr,
+                        "error: output path too long: %s/%s_canonical.json\n",
+                        abs_output_dir, name);
+                file_failed = 1;
+                goto batch_file_done;
+            }
 
             /* Read back the raw output and apply schema */
             size_t raw_len = 0;

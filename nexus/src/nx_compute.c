@@ -119,13 +119,23 @@ static int nx_compute_phone_normalize(const char **sources, int nsources,
     }
     digits[pos] = '\0';
 
-    /* Normalize to E.164 */
+    /*
+     * Normalize to E.164.
+     *
+     * The precisions are load-bearing, not decoration. digits[] holds up to
+     * 255 characters, so "+36" followed by all of them would not fit in the
+     * 256-byte output -- GCC says so via -Wformat-truncation, which is an
+     * error here because nexus is the only library built with -Werror. An
+     * E.164 number is at most 15 digits, so anything near this bound is junk
+     * input either way; an explicit precision truncates it predictably
+     * instead of leaving it to snprintf.
+     */
     if (digits[0] == '0' && digits[1] == '6') {
         /* "06..." -> "+36..." */
-        snprintf(outputs[0], 256, "+36%s", digits + 2);
+        snprintf(outputs[0], 256, "+36%.252s", digits + 2);
     } else if (digits[0] == '3' && digits[1] == '6') {
         /* "36..." -> "+36..." */
-        snprintf(outputs[0], 256, "+%s", digits);
+        snprintf(outputs[0], 256, "+%.254s", digits);
     } else if (digits[0] == '+' && digits[1] == '3' && digits[2] == '6') {
         /* "+36..." -> unchanged */
         snprintf(outputs[0], 256, "%s", digits);

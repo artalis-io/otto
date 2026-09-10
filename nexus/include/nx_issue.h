@@ -12,6 +12,7 @@
 #ifndef NX_ISSUE_H
 #define NX_ISSUE_H
 
+#include "sh_attr.h"
 #include <stddef.h>
 #include "sh_json.h"
 
@@ -70,7 +71,7 @@ int nx_issue_add(NxIssueList *list, NxStage stage, NxIssueSeverity severity,
 /* Append an issue with printf-style message. Returns 0 on success, -1 on OOM. */
 int nx_issue_addf(NxIssueList *list, NxStage stage, NxIssueSeverity severity,
                   int row, const char *field, const char *code,
-                  const char *fmt, ...) __attribute__((format(printf, 7, 8)));
+                  const char *fmt, ...) SH_PRINTF_ATTR(7, 8);
 
 /*
  * Count issues matching filters. Pass -1 for stage or severity to match any.

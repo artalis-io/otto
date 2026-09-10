@@ -161,6 +161,7 @@ The next session can `cd` to the worktree and continue. Delete the WIP section w
 | FuelWise | `fuelwise/` | 8080 | Refueling optimization |
 | Surge | `surge/` | - | Unified VRP/PDPTW engine (stop-based state, ALNS, Li & Lim benchmarks) |
 | ClayShards | `clayshards/` | - | Immediate mode UI |
+| Nexus | `nexus/` | - | Document ingestion (XLSX/PDF/CSV -> validated records) |
 | Shared | `shared/` | - | Geo, protobuf, rate limiting |
 
 ## Key Files by Task
@@ -288,7 +289,7 @@ void *p = calloc(count, element_size);  /* Or use calloc */
 ```bash
 # Libraries
 make all              # Build all + tests
-make {ralph,velo,carta,locus,fuelwise,shared}
+make {ralph,velo,carta,locus,fuelwise,shared,nexus}
 
 # API Servers
 make {carta,velo,locus,fuelwise}-api
@@ -298,7 +299,7 @@ make wasm
 
 # Testing
 make test             # All tests
-make test-{ralph,velo,carta,locus,fuelwise,shared}
+make test-{ralph,velo,carta,locus,fuelwise,shared,nexus}
 make test-{carta,velo,locus,fuelwise}-api
 
 # API Documentation
@@ -377,7 +378,7 @@ make site-serve   # Build and serve on :8000
 ├─────────────────────────────────────────────────────┤
 │  Core: Ralph (LP/MIP) │ Shared (geo, proto, rate)   │
 ├─────────────────────────────────────────────────────┤
-│  Vendor: miniz │ Keel │ Clay                        │
+│  Vendor: miniz │ Keel │ Clay │ TRE (regex)             │
 └─────────────────────────────────────────────────────┘
 ```
 
@@ -482,6 +483,7 @@ Deep-dive documentation in `docs/internals/`:
 | Library | Location | Purpose |
 |---------|----------|---------|
 | miniz | `vendor/miniz/` | zlib compression |
+| TRE | `vendor/tre/` | POSIX regex, used on every platform (2-clause BSD) |
 | Keel | `vendor/keel/` | HTTP server (git submodule, MIT) |
 | Clay | `vendor/clay/` | UI layout |
 
