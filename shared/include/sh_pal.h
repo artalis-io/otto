@@ -167,6 +167,19 @@ int sh_localtime(int64_t unix_sec, struct tm *out);
  * Returns 1 if it is, 0 otherwise. */
 int sh_stderr_is_tty(void);
 
+/* Whether stdout is attached to a terminal. Separate from the stderr call
+ * above because a renderer writing to a redirected stdout still wants its
+ * diagnostics on a live stderr, and vice versa. */
+int sh_stdout_is_tty(void);
+
+/* Size of the terminal attached to stdout, in character cells.
+ *
+ * Returns 0 and fills both out-params on success, -1 if stdout is not a
+ * terminal or the size cannot be determined -- in which case the caller
+ * should fall back to its own default rather than trusting the values.
+ * POSIX answers with TIOCGWINSZ, Windows with the console screen buffer. */
+int sh_term_size(int *cols, int *rows);
+
 /* Sleep for at least this many milliseconds. Coarser than nanosleep, which is
  * all any caller here needs -- it is used for poll backoff, not pacing. */
 void sh_sleep_ms(unsigned ms);

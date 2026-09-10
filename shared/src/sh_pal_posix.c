@@ -22,6 +22,7 @@
 #include <pthread.h>
 #include <string.h>
 #include <sys/time.h>
+#include <sys/ioctl.h>
 #include <unistd.h>
 
 /*
@@ -219,6 +220,26 @@ uint64_t sh_wall_ns(void)
 int sh_stderr_is_tty(void)
 {
     return isatty(STDERR_FILENO) ? 1 : 0;
+}
+
+int sh_stdout_is_tty(void)
+{
+    return isatty(STDOUT_FILENO) ? 1 : 0;
+}
+
+int sh_term_size(int *cols, int *rows)
+{
+    struct winsize ws;
+
+    if (!cols || !rows) return -1;
+    if (ioctl(STDOUT_FILENO, TIOCGWINSZ, &ws) != 0) return -1;
+    /* A terminal that reports zero in either axis is telling us it does not
+     * know; a caller's default beats a zero-width layout. */
+    if (ws.ws_col == 0 || ws.ws_row == 0) return -1;
+
+    *cols = (int)ws.ws_col;
+    *rows = (int)ws.ws_row;
+    return 0;
 }
 
 void sh_sleep_ms(unsigned ms)

@@ -695,6 +695,17 @@ jobs:
           source scripts/msvc-env.sh
           mingw32-make -C surge CC=cl test-transport
 
+      # ClayShards. clay-shards-tui reaches the terminal through sh_pal.h
+      # (is-stdout-a-tty, terminal size) rather than termios/ioctl, which is
+      # what lets it build here at all. demos/tty is absent on purpose: raw-mode
+      # input and SIGWINCH are a real Windows Console port, not a shim.
+      - name: Build and test ClayShards
+        run: |
+          source scripts/msvc-env.sh
+          mingw32-make -C clayshards/clay-shards CC=cl test
+          mingw32-make -C clayshards/clay-shards-soft CC=cl test
+          mingw32-make -C clayshards/clay-shards-tui CC=cl test
+
   # ==========================================================================
   sanitizers:
     name: Sanitize ${{ matrix.suite.name }}

@@ -337,6 +337,35 @@ int sh_stderr_is_tty(void)
     return _isatty(_fileno(stderr)) ? 1 : 0;
 }
 
+int sh_stdout_is_tty(void)
+{
+    return _isatty(_fileno(stdout)) ? 1 : 0;
+}
+
+int sh_term_size(int *cols, int *rows)
+{
+    CONSOLE_SCREEN_BUFFER_INFO csbi;
+    HANDLE h;
+    int w, h_rows;
+
+    if (!cols || !rows) return -1;
+
+    h = GetStdHandle(STD_OUTPUT_HANDLE);
+    if (h == INVALID_HANDLE_VALUE || h == NULL) return -1;
+    if (!GetConsoleScreenBufferInfo(h, &csbi)) return -1;
+
+    /* srWindow is the visible viewport. dwSize is the scrollback buffer, which
+     * is routinely far taller than the window and would make a renderer draw
+     * off-screen. */
+    w      = (int)(csbi.srWindow.Right  - csbi.srWindow.Left + 1);
+    h_rows = (int)(csbi.srWindow.Bottom - csbi.srWindow.Top  + 1);
+    if (w <= 0 || h_rows <= 0) return -1;
+
+    *cols = w;
+    *rows = h_rows;
+    return 0;
+}
+
 void sh_sleep_ms(unsigned ms)
 {
     Sleep((DWORD)ms);

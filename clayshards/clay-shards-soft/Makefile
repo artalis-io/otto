@@ -2,8 +2,11 @@
 #
 # CPU-based rasterizer with platform backends.
 
+# Every compiler difference lives in one place; see mk/toolchain.mk.
+include ../../mk/toolchain.mk
+
 CC = gcc
-CFLAGS = -O2 -Wall -Wextra -std=c11 -D_GNU_SOURCE
+CFLAGS = $(strip $(CC_OPT_O2) $(CC_WARN) $(CC_STD) $(CC_DEFS) $(CC_PORT_DEFS))
 INCLUDES = -Iinclude -I../clay-shards/include -I../../shared/include -I../../vendor/clay
 
 # Platform-specific flags
@@ -38,25 +41,28 @@ $(BUILD_DIR):
 	mkdir -p $(BUILD_DIR)
 
 $(BUILD_DIR)/cs_soft.o: src/cs_soft.c src/cs_soft_internal.h include/cs_soft.h | $(BUILD_DIR)
-	$(CC) $(CFLAGS) $(INCLUDES) -c $< -o $@
+	$(CC) $(CFLAGS) $(INCLUDES) -c $< $(OBJ_OUT)$@
 
 # Cocoa backend (macOS only)
 $(BUILD_DIR)/cs_soft_cocoa.o: src/platforms/cs_soft_cocoa.m src/cs_soft_internal.h include/cs_soft.h | $(BUILD_DIR)
-	$(CC) $(CFLAGS) $(INCLUDES) -c $< -o $@
+	$(CC) $(CFLAGS) $(INCLUDES) -c $< $(OBJ_OUT)$@
 
 $(BUILD_DIR)/libcs_soft.a: $(BUILD_DIR)/cs_soft.o $(COCOA_OBJ)
-	ar rcs $@ $^
+	$(AR_CMD)$@ $^
 	@echo "Built: $@"
 
 # Test binary
 TEST_DEPS = ../clay-shards/build/libclay_shards.a ../../shared/libshared.a
 
-$(BUILD_DIR)/test_soft: tests/test_soft.c $(BUILD_DIR)/libcs_soft.a | $(BUILD_DIR)
+# TEST_DEPS above was declared, and the rules to build those archives exist
+# further down, but nothing ever depended on them -- so the rules never fired
+# and a standalone `make test` here died at link on -lclay_shards.
+$(BUILD_DIR)/test_soft: tests/test_soft.c $(BUILD_DIR)/libcs_soft.a $(TEST_DEPS) | $(BUILD_DIR)
 	$(CC) $(CFLAGS) $(INCLUDES) $< \
-		-L$(BUILD_DIR) -lcs_soft \
-		-L../clay-shards/build -lclay_shards \
-		-L../../shared -lshared \
-		$(PLATFORM_LIBS) -lm -o $@
+		$(call link_lib,$(BUILD_DIR),cs_soft) \
+		$(call link_lib,../clay-shards/build,clay_shards) \
+		$(call link_lib,../../shared,shared) \
+		$(PLATFORM_LIBS) $(LD_MATH) $(LD_PLATFORM) $(EXE_OUT)$@
 
 test: $(BUILD_DIR)/test_soft
 	@echo "Running software renderer tests..."
