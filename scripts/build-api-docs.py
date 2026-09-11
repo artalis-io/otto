@@ -29,6 +29,17 @@ import json
 import re
 import shutil
 import sys
+
+# This script prints check marks and reads UTF-8 sources. On Windows both
+# default to the locale codepage (cp1252), which cannot represent either --
+# reading raised "charmap codec can't decode" and printing raised "can't
+# encode ✗". Every open() below names its encoding explicitly; this
+# handles the streams, which are not ours to pass an encoding to.
+for _stream in (sys.stdout, sys.stderr):
+    try:
+        _stream.reconfigure(encoding="utf-8")
+    except (AttributeError, ValueError):
+        pass  # not a real stream, or Python < 3.7
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -307,7 +318,7 @@ class AnnotationParser:
         if not filepath.exists():
             return [], []
 
-        content = filepath.read_text()
+        content = filepath.read_text(encoding="utf-8")
 
         # Find all /*@api ... */ blocks
         api_pattern = r"/\*@api\s*(.*?)\*/"
@@ -1407,7 +1418,7 @@ class TemplateRenderer:
                 continue
 
             if handlers_path.exists():
-                content = handlers_path.read_text()
+                content = handlers_path.read_text(encoding="utf-8")
                 # Strip the comment header and add module comment
                 lines = content.split('\n')
                 # Skip initial comment block
@@ -1490,7 +1501,7 @@ def load_config() -> Config:
         raise ConfigError(f"Config file not found: {CONFIG_FILE}")
 
     try:
-        with open(CONFIG_FILE) as f:
+        with open(CONFIG_FILE, encoding="utf-8") as f:
             data = json.load(f)
     except json.JSONDecodeError as e:
         raise ConfigError(f"Invalid JSON in config file: {e}")
@@ -1576,14 +1587,14 @@ def main() -> int:
         if not TEMPLATE_FILE.exists():
             raise TemplateError(f"Template file not found: {TEMPLATE_FILE}")
 
-        template = TEMPLATE_FILE.read_text()
+        template = TEMPLATE_FILE.read_text(encoding="utf-8")
         renderer = TemplateRenderer(config, endpoints_html, verbose=verbose)
         output_html = renderer.render(template)
 
         if check_mode:
             # Compare with existing file
             if OUTPUT_FILE.exists():
-                existing = OUTPUT_FILE.read_text()
+                existing = OUTPUT_FILE.read_text(encoding="utf-8")
                 if existing == output_html:
                     print(f"\n✓ {OUTPUT_FILE.name} is up-to-date")
                     return 0
@@ -1603,7 +1614,7 @@ def main() -> int:
                     print(f"  {c}")
 
             # Write output
-            OUTPUT_FILE.write_text(output_html)
+            OUTPUT_FILE.write_text(output_html, encoding="utf-8")
             print(f"\n✓ Generated {OUTPUT_FILE.name} ({len(output_html):,} bytes)")
             return 0
 
