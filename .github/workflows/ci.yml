@@ -695,16 +695,20 @@ jobs:
           source scripts/msvc-env.sh
           mingw32-make -C surge CC=cl test-transport
 
-      # ClayShards. clay-shards-tui reaches the terminal through sh_pal.h
-      # (is-stdout-a-tty, terminal size) rather than termios/ioctl, which is
-      # what lets it build here at all. demos/tty is absent on purpose: raw-mode
-      # input and SIGWINCH are a real Windows Console port, not a shim.
+      # ClayShards. The whole native stack reaches the terminal through
+      # sh_pal.h -- is-stdout-a-tty, terminal size, raw mode, input bytes --
+      # rather than termios/ioctl/signal, which is what lets it build here.
+      # The tty demo is exercised headless: it renders frames to stdout with
+      # no terminal involved, so it is the one part of a TUI that CI can
+      # actually check.
       - name: Build and test ClayShards
         run: |
           source scripts/msvc-env.sh
           mingw32-make -C clayshards/clay-shards CC=cl test
           mingw32-make -C clayshards/clay-shards-soft CC=cl test
           mingw32-make -C clayshards/clay-shards-tui CC=cl test
+          mingw32-make -C clayshards/demos/tty CC=cl all
+          ./clayshards/demos/tty/build/demo_tui_tty.exe --headless > /dev/null
 
   # ==========================================================================
   sanitizers:

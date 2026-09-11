@@ -180,6 +180,30 @@ int sh_stdout_is_tty(void);
  * POSIX answers with TIOCGWINSZ, Windows with the console screen buffer. */
 int sh_term_size(int *cols, int *rows);
 
+/* Raw terminal input, for full-screen character UIs.
+ *
+ * Raw mode means: no line buffering, no echo, and no interpretation of
+ * control characters by the terminal driver. Ctrl-C therefore arrives as a
+ * plain 0x03 byte rather than raising SIGINT, on every platform -- which is
+ * why there is no signal handling here to abstract.
+ *
+ * Windows is put into virtual-terminal input mode, so arrow and function keys
+ * arrive as the same ANSI escape sequences POSIX sends. A caller decodes one
+ * byte stream, not two.
+ *
+ * sh_term_raw_enter() returns 0 on success, -1 if stdin is not a terminal or
+ * the mode cannot be set. Calling it twice is harmless. sh_term_raw_leave()
+ * restores the previous mode and is safe to call without a matching enter,
+ * which makes it usable from atexit(). */
+int  sh_term_raw_enter(void);
+void sh_term_raw_leave(void);
+
+/* Read one byte of terminal input without blocking.
+ *
+ * Returns 1 and stores the byte if one was waiting, 0 if none was, -1 on
+ * error. Only meaningful between raw_enter and raw_leave. */
+int  sh_term_read_byte(unsigned char *out);
+
 /* Sleep for at least this many milliseconds. Coarser than nanosleep, which is
  * all any caller here needs -- it is used for poll backoff, not pacing. */
 void sh_sleep_ms(unsigned ms);
