@@ -189,6 +189,9 @@ SHStatus sh_pbf_decompress_blob(const uint8_t *data, size_t len, SHPBFBlob *out)
             n = sh_pb_read_varint(data + pos, len - pos, &field_len);
             if (n == 0) break;
             pos += n;
+            /* Blob length must fit the remaining buffer, else raw_len/zlib_len
+             * below would point past it (same guard as the other readers). */
+            if (field_len > (uint64_t)SIZE_MAX || field_len > len - pos) break;
 
             if (field == SH_PBF_BLOB_RAW) {
                 raw_data = data + pos;

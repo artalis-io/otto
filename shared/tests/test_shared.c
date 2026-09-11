@@ -4,6 +4,7 @@
 
 #include "sh_pal.h"
 #include "shared.h"
+#include "sh_pbf.h"
 #include "sh_polyline.h"
 #include "sh_circuit.h"
 #include "sh_backoff.h"
@@ -519,6 +520,24 @@ TEST(pb_packed_svarint)
     ASSERT_EQ(out[2], 1);
     ASSERT_EQ(out[3], 100);
     ASSERT_EQ(out[4], -100);
+}
+
+/* Regression: a PBF Blob whose length-delimited field claims a length far
+ * larger than the input buffer must be rejected, not returned as a blob whose
+ * (data, len) points past the input (an OOB read for the consumer). Pre-fix,
+ * sh_pbf_decompress_blob returned SH_OK with out.len = 0xFFFFFFFF pointing past
+ * a 6-byte buffer. Field 1 (RAW), wire 2 (length-delimited), then varint. */
+TEST(pbf_decompress_blob_oob_length)
+{
+    const uint8_t mal[] = { 0x0A, 0xFF, 0xFF, 0xFF, 0xFF, 0x0F };
+    SHPBFBlob out;
+    memset(&out, 0, sizeof(out));
+    SHStatus st = sh_pbf_decompress_blob(mal, sizeof(mal), &out);
+    /* Accept only if the returned blob lies entirely within the input. */
+    int in_bounds = (out.data == NULL) ||
+                    (out.data >= mal && out.data + out.len <= mal + sizeof(mal));
+    ASSERT(st != SH_OK || in_bounds);
+    sh_pbf_blob_free(&out);
 }
 
 TEST(pb_delta_decode)
@@ -5452,6 +5471,7 @@ int main(void)
     RUN_TEST(pb_svarint_negative);
     RUN_TEST(pb_svarint_edge);
     RUN_TEST(pb_tag_roundtrip);
+    RUN_TEST(pbf_decompress_blob_oob_length);
     RUN_TEST(pb_fixed32_roundtrip);
     RUN_TEST(pb_fixed64_roundtrip);
     RUN_TEST(pb_packed_svarint);

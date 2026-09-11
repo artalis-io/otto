@@ -1026,6 +1026,10 @@ static CTStatus parse_dense_nodes(CTPBFContext *ctx, const uint8_t *data, size_t
             n = sh_pb_read_varint(data + pos, len - pos, &packed_len);
             if (n == 0) goto error;
             pos += n;
+            /* The wire-provided length must fit the remaining buffer, or the
+             * packed-array read below (and pos += packed_len) would run past
+             * the block on malicious input. */
+            if (packed_len > len - pos) goto error;
 
             if (field == SH_PBF_DENSE_ID) {
                 id_count = sh_pb_read_packed_svarint_array(data + pos, packed_len,
@@ -1201,6 +1205,7 @@ static CTStatus parse_way(CTPBFContext *ctx, const uint8_t *data, size_t len,
             n = sh_pb_read_varint(data + pos, len - pos, &packed_len);
             if (n == 0) goto skip_way;
             pos += n;
+            if (packed_len > len - pos) goto skip_way;  /* fit remaining buffer */
 
             const uint8_t *p = data + pos;
             size_t ppos = 0;
@@ -1217,6 +1222,7 @@ static CTStatus parse_way(CTPBFContext *ctx, const uint8_t *data, size_t len,
             n = sh_pb_read_varint(data + pos, len - pos, &packed_len);
             if (n == 0) goto skip_way;
             pos += n;
+            if (packed_len > len - pos) goto skip_way;  /* fit remaining buffer */
 
             const uint8_t *p = data + pos;
             size_t ppos = 0;
@@ -1233,6 +1239,7 @@ static CTStatus parse_way(CTPBFContext *ctx, const uint8_t *data, size_t len,
             n = sh_pb_read_varint(data + pos, len - pos, &packed_len);
             if (n == 0) goto skip_way;
             pos += n;
+            if (packed_len > len - pos) goto skip_way;  /* fit remaining buffer */
 
             ref_count = sh_pb_read_packed_svarint_array(data + pos, packed_len,
                                                         refs, max_refs);
@@ -1396,6 +1403,7 @@ static CTStatus parse_relation(CTPBFContext *ctx, const uint8_t *data, size_t le
             n = sh_pb_read_varint(data + pos, len - pos, &packed_len);
             if (n == 0) goto skip_relation;
             pos += n;
+            if (packed_len > len - pos) goto skip_relation;  /* fit remaining buffer */
 
             const uint8_t *p = data + pos;
             size_t ppos = 0;
@@ -1412,6 +1420,7 @@ static CTStatus parse_relation(CTPBFContext *ctx, const uint8_t *data, size_t le
             n = sh_pb_read_varint(data + pos, len - pos, &packed_len);
             if (n == 0) goto skip_relation;
             pos += n;
+            if (packed_len > len - pos) goto skip_relation;  /* fit remaining buffer */
 
             const uint8_t *p = data + pos;
             size_t ppos = 0;
@@ -1428,6 +1437,7 @@ static CTStatus parse_relation(CTPBFContext *ctx, const uint8_t *data, size_t le
             n = sh_pb_read_varint(data + pos, len - pos, &packed_len);
             if (n == 0) goto skip_relation;
             pos += n;
+            if (packed_len > len - pos) goto skip_relation;  /* fit remaining buffer */
 
             const uint8_t *p = data + pos;
             size_t ppos = 0;
@@ -1444,6 +1454,7 @@ static CTStatus parse_relation(CTPBFContext *ctx, const uint8_t *data, size_t le
             n = sh_pb_read_varint(data + pos, len - pos, &packed_len);
             if (n == 0) goto skip_relation;
             pos += n;
+            if (packed_len > len - pos) goto skip_relation;  /* fit remaining buffer */
 
             memid_count = sh_pb_read_packed_svarint_array(data + pos, packed_len,
                                                           memids, max_members);
@@ -1454,6 +1465,7 @@ static CTStatus parse_relation(CTPBFContext *ctx, const uint8_t *data, size_t le
             n = sh_pb_read_varint(data + pos, len - pos, &packed_len);
             if (n == 0) goto skip_relation;
             pos += n;
+            if (packed_len > len - pos) goto skip_relation;  /* fit remaining buffer */
 
             const uint8_t *p = data + pos;
             size_t ppos = 0;
@@ -1696,6 +1708,9 @@ static CTStatus parse_primitive_group(CTPBFContext *ctx, const uint8_t *data, si
             n = sh_pb_read_varint(data + pos, len - pos, &msg_len);
             if (n == 0) return CT_ERROR_PARSE_ERROR;
             pos += n;
+            /* Sub-message length must fit the remaining buffer before we hand
+             * data+pos/msg_len to the sub-parser and advance pos += msg_len. */
+            if (msg_len > len - pos) return CT_ERROR_PARSE_ERROR;
 
             if (field == SH_PBF_PRIMGROUP_DENSE) {
                 CTStatus status = parse_dense_nodes(ctx, data + pos, msg_len, st,
@@ -1753,6 +1768,10 @@ static CTStatus parse_primitive_block(CTPBFContext *ctx, const uint8_t *data, si
                 return CT_ERROR_PARSE_ERROR;
             }
             pos += n;
+            if (msg_len > len - pos) {   /* must fit remaining buffer */
+                sh_string_table_free(&st);
+                return CT_ERROR_PARSE_ERROR;
+            }
 
             CTStatus status = parse_string_table(data + pos, msg_len, &st);
             if (status != CT_OK) {
@@ -1816,6 +1835,10 @@ static CTStatus parse_primitive_block(CTPBFContext *ctx, const uint8_t *data, si
                 return CT_ERROR_PARSE_ERROR;
             }
             pos += n;
+            if (msg_len > len - pos) {   /* must fit remaining buffer */
+                sh_string_table_free(&st);
+                return CT_ERROR_PARSE_ERROR;
+            }
 
             CTStatus status = parse_primitive_group(ctx, data + pos, msg_len, &st,
                                                     granularity, lat_offset, lon_offset, bufs);
