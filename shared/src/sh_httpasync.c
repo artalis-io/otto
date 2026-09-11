@@ -5,8 +5,9 @@
  *   The call context is freed in exactly one place: done_fn when the item
  *   ran, or cancel_fn when the pool dropped it at shutdown before starting.
  *   on_cancel and on_deadline never free -- work_fn may still be running on a
- *   worker -- they only set `detached`, a plain int touched only on the event
- *   loop thread.
+ *   worker -- they only set `detached`. It is written on the event loop thread
+ *   and read on the worker (work_fn's early-out), so all accesses go through
+ *   __atomic_{load,store}_n with acquire/release ordering.
  *
  * See docs/roadmaps/transport.md.
  */
@@ -188,6 +189,13 @@ static void call_work_fn(void *user_data)
     KeelCall *c = (KeelCall *)user_data;
     ShApiRequest req;
 
+    /* The op was already resolved -- the deadline fired and replied 504, or the
+     * connection died -- while this item waited in the queue. Skip the
+     * CPU-heavy handler: done_fn will free the context and the reply is already
+     * sent. This sheds expired work under queue backlog instead of running a
+     * full job whose result is discarded, which would amplify overload. */
+    if (__atomic_load_n(&c->detached, __ATOMIC_ACQUIRE)) return;
+
     memset(&req, 0, sizeof(req));
     req.method   = c->method;
     req.path     = c->path;
@@ -208,7 +216,7 @@ static void call_done_fn(void *user_data)
     if (c->cfg->stats) c->cfg->stats->popped++;
 
     /* Connection gone, or on_deadline already replied. Nothing to write. */
-    if (c->detached) {
+    if (__atomic_load_n(&c->detached, __ATOMIC_ACQUIRE)) {
         call_free(c);
         return;
     }
@@ -259,7 +267,7 @@ static void call_on_cancel(KlAsyncOp *op, void *ud)
 {
     KeelCall *c = (KeelCall *)((char *)op - offsetof(KeelCall, op));
     (void)ud;
-    c->detached = 1;
+    __atomic_store_n(&c->detached, 1, __ATOMIC_RELEASE);
 }
 
 /* Deadline exceeded: reply 504 now, let done_fn free the context later. */
@@ -268,8 +276,8 @@ static void call_on_deadline(KlAsyncOp *op, void *ud)
     KeelCall *c = (KeelCall *)((char *)op - offsetof(KeelCall, op));
     (void)ud;
 
-    if (c->detached) return;
-    c->detached = 1;
+    if (__atomic_load_n(&c->detached, __ATOMIC_ACQUIRE)) return;
+    __atomic_store_n(&c->detached, 1, __ATOMIC_RELEASE);
     if (c->cfg->stats) c->cfg->stats->expired++;
 
     sh_http_reply_error(kl_http_conn_response(op->conn), 504,
@@ -381,7 +389,7 @@ void sh_http_async_dispatch(const ShHttpAsync *cfg,
             /* Queue full: backpressure. The op is suspended, so complete it
              * before freeing -- and mark detached so nothing else replies. */
             if (cfg->stats) cfg->stats->dropped++;
-            c->detached = 1;
+            __atomic_store_n(&c->detached, 1, __ATOMIC_RELEASE);
             sh_http_reply_error(res, 503, cfg->cors, NULL,
                               "Service unavailable - queue full");
             kl_async_complete(cfg->server, &c->op);
