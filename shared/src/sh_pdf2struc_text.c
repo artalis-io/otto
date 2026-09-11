@@ -138,8 +138,11 @@ static uint32_t parse_cmap_hex(const uint8_t *data, size_t len)
 /* Parse hex-encoded multi-codepoint sequence into UTF-8 string.
  * CMap values >4 hex digits represent multiple 16-bit codepoints (e.g. ligatures).
  * Returns the primary (first) codepoint. */
-static uint32_t parse_cmap_hex_to_utf8(const uint8_t *data, size_t len, char *out)
+static uint32_t parse_cmap_hex_to_utf8(const uint8_t *data, size_t len,
+                                       char *out, size_t out_size)
 {
+    if (out_size == 0) return 0;
+
     /* Count actual hex digits */
     size_t ndigits = 0;
     for (size_t i = 0; i < len; i++) {
@@ -149,18 +152,22 @@ static uint32_t parse_cmap_hex_to_utf8(const uint8_t *data, size_t len, char *ou
     /* Single codepoint: up to 4 hex digits (16-bit) */
     if (ndigits <= 4) {
         uint32_t cp = parse_cmap_hex(data, len);
-        int n = utf8_encode(cp, out);
-        out[n] = '\0';
+        int n = utf8_encode(cp, out);           /* <= 4 bytes */
+        if ((size_t)n + 1 <= out_size) out[n] = '\0';
+        else out[0] = '\0';                     /* no room: keep terminated */
         return cp;
     }
 
-    /* Multi-codepoint: pairs of 4 hex digits = 16-bit codepoints each */
+    /* Multi-codepoint: pairs of 4 hex digits = 16-bit codepoints each.
+     * Encode only while a max-length UTF-8 sequence (4 bytes) plus the trailing
+     * NUL still fit. The old `out_pos < 14` guard assumed a 2-byte reserve and
+     * overflowed a 16-byte buffer by one (out[16] = '\0'). */
     size_t out_pos = 0;
     uint32_t first_cp = 0;
     uint32_t cur = 0;
     int digit_count = 0;
 
-    for (size_t i = 0; i < len && out_pos < 14; i++) {
+    for (size_t i = 0; i < len && out_pos + 4 < out_size; i++) {
         int d = hex_val(data[i]);
         if (d < 0) continue;
         cur = (cur << 4) | (uint32_t)d;
@@ -174,7 +181,7 @@ static uint32_t parse_cmap_hex_to_utf8(const uint8_t *data, size_t len, char *ou
         }
     }
     /* Handle remaining digits (shouldn't happen for well-formed CMaps) */
-    if (digit_count > 0 && out_pos < 14) {
+    if (digit_count > 0 && out_pos + 4 < out_size) {
         if (first_cp == 0) first_cp = cur;
         int n = utf8_encode(cur, out + out_pos);
         out_pos += (size_t)n;
@@ -277,7 +284,8 @@ static void parse_tounicode(ShPdf2strucCtx *ctx, PdfFont *font,
                 if (font->tounicode_count < PDF_MAX_TOUNICODE) {
                     PdfToUnicodeEntry *e = &font->tounicode[font->tounicode_count];
                     e->glyph_id = glyph_id;
-                    e->codepoint = parse_cmap_hex_to_utf8(dst_start, dst_len, e->text);
+                    e->codepoint = parse_cmap_hex_to_utf8(dst_start, dst_len,
+                                                          e->text, sizeof(e->text));
                     font->tounicode_count++;
                 }
             }
@@ -335,7 +343,8 @@ static void parse_tounicode(ShPdf2strucCtx *ctx, PdfFont *font,
                         if (font->tounicode_count < PDF_MAX_TOUNICODE) {
                             PdfToUnicodeEntry *e = &font->tounicode[font->tounicode_count];
                             e->glyph_id = gid;
-                            e->codepoint = parse_cmap_hex_to_utf8(d_start, d_len, e->text);
+                            e->codepoint = parse_cmap_hex_to_utf8(d_start, d_len,
+                                                                  e->text, sizeof(e->text));
                             font->tounicode_count++;
                         }
                     }
