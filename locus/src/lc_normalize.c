@@ -96,6 +96,28 @@ static int utf8_decode(const uint8_t *str, uint32_t *cp)
     return 0;
 }
 
+/* Number of bytes in the UTF-8 sequence starting at p, clamped so it never
+ * counts past the NUL terminator or a non-continuation byte. A truncated or
+ * malformed multi-byte sequence yields 1 (advance one byte). Callers that do
+ * `p += utf8_seq_len(p)` are therefore guaranteed never to step past the NUL,
+ * even on hostile/truncated input (fixes the OOB read in the normalize loops).
+ * p[0] is assumed non-NUL (the loops test *p first); each p[k] is only read
+ * after p[k-1] was confirmed a non-NUL continuation byte, so no over-read. */
+static int utf8_seq_len(const uint8_t *p)
+{
+    int len;
+    if ((p[0] & 0x80) == 0)         len = 1;
+    else if ((p[0] & 0xE0) == 0xC0) len = 2;
+    else if ((p[0] & 0xF0) == 0xE0) len = 3;
+    else if ((p[0] & 0xF8) == 0xF0) len = 4;
+    else                            return 1;  /* stray continuation / invalid lead */
+
+    for (int k = 1; k < len; k++) {
+        if ((p[k] & 0xC0) != 0x80) return 1;   /* NUL or non-continuation: truncated */
+    }
+    return len;
+}
+
 /* Encode a codepoint as UTF-8, return bytes written */
 static int utf8_encode(uint32_t cp, uint8_t *out)
 {
@@ -313,18 +335,8 @@ char *lc_lowercase(char *str)
 
     while (*p) {
         uint8_t buf[4];
-        int in_len = 1;
-
-        /* Determine input character length */
-        if ((*p & 0x80) == 0) {
-            in_len = 1;
-        } else if ((*p & 0xE0) == 0xC0) {
-            in_len = 2;
-        } else if ((*p & 0xF0) == 0xE0) {
-            in_len = 3;
-        } else if ((*p & 0xF8) == 0xF0) {
-            in_len = 4;
-        }
+        /* Clamped length: never advances past the NUL on truncated input. */
+        int in_len = utf8_seq_len(p);
 
         int out_len = lc_char_to_lower(p, buf);
 
@@ -350,18 +362,8 @@ size_t lc_remove_diacritics_to(const char *input, char *output, size_t output_si
 
     while (*p && w < end) {
         uint8_t buf[4];
-        int in_len = 1;
-
-        /* Determine input character length */
-        if ((*p & 0x80) == 0) {
-            in_len = 1;
-        } else if ((*p & 0xE0) == 0xC0) {
-            in_len = 2;
-        } else if ((*p & 0xF0) == 0xE0) {
-            in_len = 3;
-        } else if ((*p & 0xF8) == 0xF0) {
-            in_len = 4;
-        }
+        /* Clamped length: never advances past the NUL on truncated input. */
+        int in_len = utf8_seq_len(p);
 
         int out_len = lc_char_to_base(p, buf);
 
@@ -407,17 +409,8 @@ char *lc_normalize_whitespace(char *str)
             }
             p += space_len;
         } else {
-            /* Copy non-space character */
-            int char_len = 1;
-            if ((*p & 0x80) == 0) {
-                char_len = 1;
-            } else if ((*p & 0xE0) == 0xC0) {
-                char_len = 2;
-            } else if ((*p & 0xF0) == 0xE0) {
-                char_len = 3;
-            } else if ((*p & 0xF8) == 0xF0) {
-                char_len = 4;
-            }
+            /* Copy non-space character (clamped: safe on truncated input). */
+            int char_len = utf8_seq_len(p);
 
             for (int i = 0; i < char_len; i++) {
                 *w++ = *p++;
@@ -445,16 +438,8 @@ char *lc_remove_punctuation(char *str)
     uint8_t *w = p;
 
     while (*p) {
-        int char_len = 1;
-        if ((*p & 0x80) == 0) {
-            char_len = 1;
-        } else if ((*p & 0xE0) == 0xC0) {
-            char_len = 2;
-        } else if ((*p & 0xF0) == 0xE0) {
-            char_len = 3;
-        } else if ((*p & 0xF8) == 0xF0) {
-            char_len = 4;
-        }
+        /* Clamped length: never advances past the NUL on truncated input. */
+        int char_len = utf8_seq_len(p);
 
         /* Keep if alphanumeric or space */
         int is_alnum = lc_is_alnum(p);

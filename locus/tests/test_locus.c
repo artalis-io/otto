@@ -441,6 +441,49 @@ TEST(normalize_mixed)
     free(result);
 }
 
+/*
+ * Regression: truncated/malformed UTF-8 must not make the normalizers advance
+ * past the NUL terminator (heap over-read on untrusted query strings). The
+ * observable correctness consequence is that a valid byte following a truncated
+ * multi-byte lead is preserved: the buggy code advanced by the lead byte's
+ * declared length (2-4), skipping that byte and reading past the terminator;
+ * the fixed code clamps the length to 1 for truncated sequences.
+ * (The pure memory-safety proof is a guard-page harness; this guards a revert.)
+ */
+TEST(normalize_truncated_utf8)
+{
+    char buf[64];
+
+    /* 3-byte lead 0xE0 immediately followed by ASCII 'z': the truncated lead is
+       dropped, 'z' survives. Buggy code skipped 'z' (and over-read). */
+    buf[0] = (char)0xE0; buf[1] = 'z'; buf[2] = '\0';
+    lc_lowercase(buf);
+    ASSERT_STR_EQ(buf, "z");
+
+    /* 4-byte lead 0xF0 + ASCII 'a' through punctuation stripper. */
+    buf[0] = (char)0xF0; buf[1] = 'a'; buf[2] = '\0';
+    lc_remove_punctuation(buf);
+    ASSERT(strchr(buf, 'a') != NULL);
+    ASSERT(strlen(buf) <= 2);
+
+    /* Lone truncated lead byte: dropped, yields empty string, stays terminated. */
+    buf[0] = (char)0xF0; buf[1] = '\0';
+    lc_lowercase(buf);
+    ASSERT_EQ((int)strlen(buf), 0);
+
+    /* 2-byte lead 0xC3 + space + 'x' through whitespace collapser. */
+    buf[0] = (char)0xC3; buf[1] = ' '; buf[2] = 'x'; buf[3] = '\0';
+    lc_normalize_whitespace(buf);
+    ASSERT(strchr(buf, 'x') != NULL);
+
+    /* Truncated lead into diacritic remover must terminate output safely. */
+    char out[64];
+    char in[3] = { (char)0xE0, (char)0x80, '\0' };  /* lead + 1 continuation, truncated */
+    size_t n = lc_remove_diacritics_to(in, out, sizeof(out));
+    ASSERT(n < sizeof(out));
+    ASSERT_EQ((int)out[n], 0);
+}
+
 /* ============================================================================
  * Trie Tests
  * ============================================================================ */
@@ -1401,6 +1444,7 @@ int main(void)
     RUN_TEST(normalize_whitespace);
     RUN_TEST(normalize_full);
     RUN_TEST(normalize_mixed);
+    RUN_TEST(normalize_truncated_utf8);
 
     printf("\nTrie:\n");
     RUN_TEST(trie_create);
