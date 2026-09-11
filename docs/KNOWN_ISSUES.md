@@ -143,10 +143,7 @@ Include:
   flags are what hide it. Any build without `-march=native` or `-ffast-math` --
   a plain `gcc -O2`, a distro package, another compiler -- fails to solve a
   NETLIB LP that takes 45 iterations here.
-- **Status**: Diagnosed, not fixed.
-- **Found**: While bringing Ralph up on MSVC, which has no equivalent of either
-  flag. It looked like an MSVC problem for exactly as long as it took to
-  reproduce it under GCC.
+- **Status**: Root cause identified in Phase 1. Not fixed.
 
 **The behaviour.** Same source, same solver parameters, same machine, one
 NETLIB problem:
@@ -156,28 +153,91 @@ NETLIB problem:
 | `-march=native -ffast-math` (OTTO default) | **45** | 15.1 ms | OPTIMAL, 6.2e-12 |
 | drop `-march=native` only | 45 | 13.6 ms | OPTIMAL |
 | drop fast-math only | 45 | 15.1 ms | OPTIMAL |
-| **drop both** | **20000** (cap) | 75.9 s | iteration limit |
+| **drop both** | **20000** (cap) | 72.8 s | iteration limit |
 | MSVC 19.44, any `/fp:` setting | **20000** (cap) | 78.5 s | iteration limit |
 
 Either flag alone masks it. Removing both exposes it, and MSVC has neither.
 
-**It is not the optimiser and not fast-math semantics.** `-O0` and `-O2` both
-stall, at 20000 iterations, once the two flags are gone. What the flags change
-is the arithmetic -- FMA contraction from `-march=native`, reassociation from
-`-ffast-math` -- and either perturbation is enough to knock the pivot sequence
-off whatever degenerate path strict IEEE evaluation walks into.
+**What it actually is: the primal solution drifts, and nothing notices.**
 
-**It is not floating-point mode.** `/fp:precise`, `/fp:fast` and `/fp:strict`
-are identical on MSVC. All three differ from the GCC flags, and none reproduces
-GCC's result.
+Phase 1 maintains `x` incrementally across pivots rather than re-solving
+`B x_B = b` every iteration. On this problem, under strict IEEE, that
+incremental `x` drifts catastrophically far from the true basic solution, and
+the drift is invisible until something forces a full recompute.
 
-**It is not OpenMP.** Building the GCC side without `-fopenmp`, so the 29
-`#pragma omp simd` directives are ignored exactly as MSVC ignores them, still
-converges in 45 iterations.
+Measured, on the failing build:
+
+| event | artificial sum before | after full recompute | after refactorize + recompute |
+|---|---|---|---|
+| first  | 30.1187 | **5194.73** | 5194.73 |
+| second | 19823.9 | **4638608.7** | 4638608.7 |
+
+The solver believed Phase 1 infeasibility was 30. It was 5195 -- a factor of 172.
+Refactorizing the basis first changes the recomputed value not at all, which is
+the whole point: the recompute is not corrupting anything, it is *revealing* a
+point the incremental updates had already lost track of. From there the run
+never recovers; the artificial sum peaks near 3.2e9 and Phase 1 never completes.
+The passing build never exceeds 45.05 and ends at 6.1e-21.
+
+**Why the existing guard cannot see it.** The scaled-direction acceptance path
+in `simplex_phase1_zones.c` is guarded by
+`p1_engine_direction_preserves_artificial_progress()`, which compares a
+*predicted* artificial sum against the current one. Both are computed from the
+same drifted `x`, so the guard is self-consistent and wrong about reality. It
+passes every time while the true infeasibility climbs.
+
+**Where the drift comes from.** The verbose log shows Phase 1 repeatedly pivoting
+on directions with an infinity-norm of 1e6 to 1e9:
+
+    Large direction norm 1.76e+09 at iter 294 (entering=179), re-factorizing before pivot
+    Skipping unstable entering column after stabilization attempts (iter=294, entering=180, dir_inf=1.75e+09)
+    Large direction norm 1.01e+06 at iter 290 (entering=179), skipping direction-stabilize refactor (cooldown=7)
+
+Two paths let such a pivot through:
+
+- **The cooldown bypass.** `skipping direction-stabilize refactor (cooldown=N)`
+  suppresses the stabilizing refactorization precisely when the direction norm
+  says it is most needed.
+- **The force-pivot budget.** In the dir-stabilize retry loop it sets
+  `stabilized = 1` on `refactored_pivot_abs >= RALPH_PIVOT_TOL` alone, skipping
+  the `dir_inf <= RALPH_PHASE1_DIR_INF_REFACTOR_TRIGGER` bound that the very next
+  block enforces.
+
+Each such pivot injects error into the incrementally-maintained `x`.
+
+**Ruled out, with evidence:**
+
+- *Not the pivot application.* Instrumenting `simplex_pivot()` inside
+  `p1_zone_pivot()` over 304 Phase 1 pivots found **zero** that grew the
+  artificial sum by even 2x. The blow-up is never in the pivot itself.
+- *Not recompute corruption.* Forcing a fresh `tableau_refactorize_with_reason()`
+  before recomputing reproduces the same value to all printed digits, and does
+  not fix the run (still 20000 iterations).
+- *Not the optimiser.* `-O0` and `-O2` both stall once the two flags are gone.
+- *Not floating-point mode.* `/fp:precise`, `/fp:fast` and `/fp:strict` are
+  identical on MSVC.
+- *Not OpenMP.* Building without `-fopenmp`, so the `#pragma omp simd`
+  directives are ignored exactly as MSVC ignores them, still converges in 45.
+- *Not `max_iterations`.* The passing build returns 45 iterations at every cap
+  from 500 to 20000; the parameter is a ceiling and nothing more.
 
 **Presolve is in the loop.** With `presolve=0` the failing build errors out in
 125 ms instead of stalling. Presolve alone does not explain it -- the passing
 builds run the same presolve -- but the stall needs it.
+
+**Why the flags hide it.** Both builds are bit-identical for the first 107 Phase
+1 iterations. FMA contraction and reassociation then nudge pricing and ratio
+decisions just enough that the passing build never selects the entering column
+that produces the 1e9 direction; it reaches a fourth stall re-perturbation
+(`scale 9.0`) and completes Phase 1 at iteration 350. The failing build reaches
+only three perturbations before losing the point.
+
+**A related gap, worth fixing regardless.** `p1_zone_stall_detect()` computes an
+artificial-sum progress window via `p1_progress_window_update()`, but the whole
+block sits behind `if (tab->m < 1000) { ... return P1_ZONE_PROCEED; }`. For any
+problem with fewer than 1000 rows -- bore3d has 228 -- that window is dead code,
+and stall detection falls back to the change in `tab->obj_value`, which is the
+*perturbed* objective and is computed from the same drifted `x`.
 
 **Reproduce, with GCC, no MSVC required:**
 
@@ -185,24 +245,30 @@ builds run the same presolve -- but the stall needs it.
     make -C ralph lib CC_ARCH= CC_FP_FASTMATH= CC_FP_KEEP_NONFINITE=
     # then run bore3d through the NETLIB harness
 
+`make -C ralph clean` is not optional. `make lib` after changing those variables
+rebuilds only what is out of date, leaving an archive of mixed-flag objects that
+behaves like neither build.
+
 The parameters the harness uses for this case, captured rather than guessed:
 
     verbose=0  max_iterations=10000000  presolve=1  verify=1
     method=2   random_seed=0  lp_basis_governor_mode=0
     lp_reinvert_controller_mode=1
 
-`max_iterations=10000000` is why an untouched run burns its whole wall-clock cap
-instead of reporting an iteration limit; clamp it to see the real outcome.
+**Where a fix should go.** Not at the recompute -- that one is the messenger.
+Either stop taking pivots whose direction norm implies the incremental update
+will destroy `x` (close the cooldown and force-pivot bypasses so
+`RALPH_PHASE1_DIR_INF_REFACTOR_TRIGGER` actually binds), or periodically
+validate the incremental `x` against a fresh solve and treat a large discrepancy
+as a basis failure rather than a new starting point. The second is cheaper to
+make safe and would catch the whole class; the first addresses the cause.
 
-**Where to look.** 20000 iterations on a 315x233 LP, with time per iteration
-roughly 11x the healthy build's, is what a basis degrading into constant
-refactorization looks like. Ralph's anti-cycling machinery -- Bland,
-perturbation, the stabilise and rescue ladders -- is either not triggering on
-this path or not helping. That machinery has only ever been exercised against
-arithmetic that carries FMA or reassociation, which is the gap this exposes.
+Any change here must clear `ralph/benchmarks/netlib_regression_gate.sh` against
+its baselines -- this path is shared by every LP Ralph solves.
 
 **A note for whoever picks this up.** The NETLIB harness runs each problem in a
 child process, and on Windows that child is created with `bInheritHandles=FALSE`
 -- anything it writes to stderr is lost. Diagnostics added inside
 `solve_with_ralph` will not appear until the isolation is bypassed by calling
-`test_run_job()` directly.
+`test_run_job()` directly, or by driving `ralph_test_optimize()` from a small
+in-process driver, which is how the numbers above were taken.
