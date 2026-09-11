@@ -16,6 +16,20 @@
 /* Maximum stations to prevent integer overflow in allocations */
 #define FW_MAX_STATIONS 100000
 
+/* Cross-platform thread-local storage. The solver config below is per-thread so
+ * a caller that configures and solves on one thread cannot race another thread
+ * doing the same (FuelWise is a library and must be reentrant). Single-threaded
+ * use is unchanged; a caller must configure on the same thread it solves on. */
+#if defined(__STDC_VERSION__) && __STDC_VERSION__ >= 201112L && !defined(__STDC_NO_THREADS__)
+    #define FW_THREAD_LOCAL _Thread_local
+#elif defined(__GNUC__) || defined(__clang__)
+    #define FW_THREAD_LOCAL __thread
+#elif defined(_MSC_VER)
+    #define FW_THREAD_LOCAL __declspec(thread)
+#else
+    #define FW_THREAD_LOCAL   /* no TLS: single-threaded only */
+#endif
+
 /* ============================================================================
  * Fuel Consumption Calculation
  *
@@ -298,11 +312,10 @@ int fw_solve_refuel_lp(
 #define FW_HINT_NO_DOMINATED_ELIM (1 << 4)  /* Disable dominated station elimination */
 #define FW_HINT_NO_SYMMETRY_BREAK (1 << 5)  /* Disable symmetry-breaking constraints */
 
-/* Global hint flags. Default 0 = all enabled.
- * Set before solving, NOT thread-safe if modified concurrently. */
-static int fw_mip_hint_flags = FW_HINT_DEFAULT;
-static int fw_presolve = 1;
-static unsigned int fw_presolve_mask = 0x100F;  /* Lightweight: fixed+empty+empty_cols+singleton_rows+shift */
+/* Per-thread solver config (see FW_THREAD_LOCAL above). Default 0 = all enabled. */
+static FW_THREAD_LOCAL int fw_mip_hint_flags = FW_HINT_DEFAULT;
+static FW_THREAD_LOCAL int fw_presolve = 1;
+static FW_THREAD_LOCAL unsigned int fw_presolve_mask = 0x100F;  /* Lightweight: fixed+empty+empty_cols+singleton_rows+shift */
 
 void fw_set_mip_hint_flags(int flags) { fw_mip_hint_flags = flags; }
 int fw_get_mip_hint_flags(void) { return fw_mip_hint_flags; }
@@ -976,9 +989,8 @@ int fw_solve_refuel_milp(
  * ============================================================================ */
 
 /* Threshold for using Benders vs MILP. 0 = always use Benders.
- * Note: global configuration — set once at startup before solving.
- * NOT thread-safe if modified concurrently with fw_solve_refuel_benders(). */
-static int fw_benders_threshold = 0;
+ * Per-thread config (see FW_THREAD_LOCAL): set on the thread that solves. */
+static FW_THREAD_LOCAL int fw_benders_threshold = 0;
 
 /*
  * Set the threshold for using Benders decomposition.
