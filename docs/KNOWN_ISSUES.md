@@ -158,52 +158,65 @@ NETLIB problem:
 
 Either flag alone masks it. Removing both exposes it, and MSVC has neither.
 
-**What it actually is: the primal solution drifts, and nothing notices.**
+**What it actually is: the solver enters bases whose true solution is
+catastrophic, and a recompute then adopts it.**
 
-Phase 1 maintains `x` incrementally across pivots rather than re-solving
-`B x_B = b` every iteration. On this problem, under strict IEEE, that
-incremental `x` drifts catastrophically far from the true basic solution, and
-the drift is invisible until something forces a full recompute.
+An earlier revision of this entry said the incrementally-maintained `x` drifts
+away from the true basic solution. That was measured and is **wrong**.
 
-Measured, on the failing build:
+Probing every Phase 1 iteration -- snapshot the basis, strictly refactorize,
+recompute `x` from scratch, compare, restore -- gives this over the first 250
+iterations of the failing run:
 
-| event | artificial sum before | after full recompute | after refactorize + recompute |
-|---|---|---|---|
-| first  | 30.1187 | **5194.73** | 5194.73 |
-| second | 19823.9 | **4638608.7** | 4638608.7 |
+| | |
+|---|---|
+| incremental and true artificial sum agree to 9 decimal places | **227** |
+| agree within 1% | 17 |
+| differ by more than 1% | **6** |
 
-The solver believed Phase 1 infeasibility was 30. It was 5195 -- a factor of 172.
-Refactorizing the basis first changes the recomputed value not at all, which is
-the whole point: the recompute is not corrupting anything, it is *revealing* a
-point the incremental updates had already lost track of. From there the run
-never recovers; the artificial sum peaks near 3.2e9 and Phase 1 never completes.
+The incremental `x` is accurate essentially all of the time. There is no
+accumulating drift. What there is instead is a handful of isolated iterations
+where the basis is so ill-conditioned that its *true* solution is enormous:
+
+    iter=246  incremental=29.198   true=1612.04   ratio=55.2
+    iter=256  incremental=33.679   true=100.47    ratio=3.0
+
+and the very next iteration is back to agreeing exactly. `B^-1 b` for those
+bases is not a better answer than the incremental `x` -- it is a meaningless
+one, because `B` is nearly singular. The incremental update is smooth across
+them; a full recompute is not.
+
+That is the actual failure. At iteration 297 a DIR_SKIP recompute lands on one
+of these bases and **adopts** its true solution, taking Phase 1 feasibility from
+30.1187 to 5194.73 in one step. A second does the same later, 19823.9 to
+4638608.7. Refactorizing first changes neither value to any printed digit,
+because the basis, not the arithmetic, is what is wrong. From there the run
+never recovers: the artificial sum peaks near 3.2e9 and Phase 1 never completes.
 The passing build never exceeds 45.05 and ends at 6.1e-21.
 
-**Why the existing guard cannot see it.** The scaled-direction acceptance path
-in `simplex_phase1_zones.c` is guarded by
+**Why the existing guards cannot see it.** Every feasibility check in
+`simplex_phase1_zones.c` reads the incremental `x`, including
 `p1_engine_direction_preserves_artificial_progress()`, which compares a
-*predicted* artificial sum against the current one. Both are computed from the
-same drifted `x`, so the guard is self-consistent and wrong about reality. It
-passes every time while the true infeasibility climbs.
+*predicted* artificial sum against the current one. Both come from the same
+place, so the check is self-consistent and says nothing about whether the basis
+it is about to commit to is usable.
 
-**Where the drift comes from.** The verbose log shows Phase 1 repeatedly pivoting
-on directions with an infinity-norm of 1e6 to 1e9:
+**Two fixes tried and rejected, with evidence:**
 
-    Large direction norm 1.76e+09 at iter 294 (entering=179), re-factorizing before pivot
-    Skipping unstable entering column after stabilization attempts (iter=294, entering=180, dir_inf=1.75e+09)
-    Large direction norm 1.01e+06 at iter 290 (entering=179), skipping direction-stabilize refactor (cooldown=7)
-
-Two paths let such a pivot through:
-
-- **The cooldown bypass.** `skipping direction-stabilize refactor (cooldown=N)`
-  suppresses the stabilizing refactorization precisely when the direction norm
-  says it is most needed.
-- **The force-pivot budget.** In the dir-stabilize retry loop it sets
-  `stabilized = 1` on `refactored_pivot_abs >= RALPH_PIVOT_TOL` alone, skipping
-  the `dir_inf <= RALPH_PHASE1_DIR_INF_REFACTOR_TRIGGER` bound that the very next
-  block enforces.
-
-Each such pivot injects error into the incrementally-maintained `x`.
+- *Refactorize before accepting a worsened recompute.* Implemented: on a
+  recompute that worsens feasibility by more than 4x, refactorize and recompute
+  again before accepting. The retry reproduces the same value to every printed
+  digit (5194.731563 both times, 4638608.731 both times) and the run still hits
+  20000 iterations. The basis is the problem; better arithmetic on it does not
+  help.
+- *Gate the force-pivot budget on a true-feasibility probe.* The dir-stabilize
+  retry loop accepts a pivot on `|pivot| >= RALPH_PIVOT_TOL` alone, skipping the
+  `dir_inf <= RALPH_PHASE1_DIR_INF_REFACTOR_TRIGGER` ceiling the next block
+  enforces. Gating it additionally on `p1_candidate_basis_refactorable()` --
+  which applies the candidate basis, strictly refactorizes, recomputes and
+  compares the true artificial sum -- does not fix it either: still 20000
+  iterations, and 111s against 78s from the probe cost. The bad bases are
+  reached through ordinary pivots too, not only through that one path.
 
 **Ruled out, with evidence:**
 
@@ -237,7 +250,8 @@ artificial-sum progress window via `p1_progress_window_update()`, but the whole
 block sits behind `if (tab->m < 1000) { ... return P1_ZONE_PROCEED; }`. For any
 problem with fewer than 1000 rows -- bore3d has 228 -- that window is dead code,
 and stall detection falls back to the change in `tab->obj_value`, which is the
-*perturbed* objective and is computed from the same drifted `x`.
+*perturbed* objective -- a different quantity from the artificial sum the phase
+is actually trying to drive to zero.
 
 **Reproduce, with GCC, no MSVC required:**
 
@@ -255,13 +269,14 @@ The parameters the harness uses for this case, captured rather than guessed:
     method=2   random_seed=0  lp_basis_governor_mode=0
     lp_reinvert_controller_mode=1
 
-**Where a fix should go.** Not at the recompute -- that one is the messenger.
-Either stop taking pivots whose direction norm implies the incremental update
-will destroy `x` (close the cooldown and force-pivot bypasses so
-`RALPH_PHASE1_DIR_INF_REFACTOR_TRIGGER` actually binds), or periodically
-validate the incremental `x` against a fresh solve and treat a large discrepancy
-as a basis failure rather than a new starting point. The second is cheaper to
-make safe and would catch the whole class; the first addresses the cause.
+**Where a fix should go.** Not at the recompute, and not at any single
+acceptance path -- both have been tried. The thing that distinguishes the six
+bad iterations is conditioning: `B` is nearly singular, so `B^-1 b` is
+meaningless rather than merely large. Ralph already computes a condition
+estimate (`[verify] ... cond=`), so the promising direction is to refuse to
+adopt a recomputed point from a basis whose conditioning says the solve cannot
+be trusted -- keeping the previous basis and taking the existing stall path
+instead. That has not been implemented or tested.
 
 Any change here must clear `ralph/benchmarks/netlib_regression_gate.sh` against
 its baselines -- this path is shared by every LP Ralph solves.
