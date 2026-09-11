@@ -9,7 +9,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <math.h>
-#include <unistd.h>
+#include "sh_pal.h"
 
 #define CLAY_IMPLEMENTATION
 #include "clay.h"
@@ -64,8 +64,26 @@ static void draw_demo(CsSoftRenderer *r)
     cs_soft_text(r, buf, -1, 50, 520, 14.0f, cs_pack_color(150, 150, 150, 255));
 }
 
-int main(void)
+int main(int argc, char **argv)
 {
+    /* Frame budget, for running where there is no window to close.
+     *
+     * The only backend that can deliver an ESC key is Cocoa; everywhere else
+     * cs_soft_create() falls back to the headless framebuffer, which has no
+     * input at all, so should_close() can never become true and the loop below
+     * never ends. That makes the demo unrunnable off macOS unless something
+     * bounds it -- hence --frames. */
+    long max_frames = 0;   /* 0 means run until asked to close */
+
+    for (int i = 1; i < argc; i++) {
+        if (strcmp(argv[i], "--frames") == 0 && i + 1 < argc) {
+            max_frames = strtol(argv[++i], NULL, 10);
+        } else {
+            fprintf(stderr, "usage: %s [--frames N]\n", argv[0]);
+            return 2;
+        }
+    }
+
     printf("ClayShards Software Renderer Demo\n");
     printf("==================================\n");
     printf("Move mouse, click, press ESC to quit\n\n");
@@ -136,8 +154,10 @@ int main(void)
         anim_time += 0.016f;
         frame++;
 
+        if (max_frames > 0 && frame >= max_frames) break;
+
         /* Simple frame rate limiting (~60 FPS) */
-        usleep(16000);
+        sh_sleep_ms(16);
     }
 
     printf("\nExiting after %d frames\n", frame);

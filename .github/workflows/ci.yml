@@ -709,6 +709,7 @@ jobs:
           mingw32-make -C clayshards/clay-shards-tui CC=cl test
           mingw32-make -C clayshards/demos/tty CC=cl all
           ./clayshards/demos/tty/build/demo_tui_tty.exe --headless > /dev/null
+          mingw32-make -C clayshards/clay-shards-soft CC=cl demo DEMO_ARGS="--frames 3"
 
   # ==========================================================================
   sanitizers:

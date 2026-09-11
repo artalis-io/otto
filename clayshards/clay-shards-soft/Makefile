@@ -69,16 +69,22 @@ test: $(BUILD_DIR)/test_soft
 	@./$(BUILD_DIR)/test_soft
 
 # Demo application
-$(BUILD_DIR)/demo_soft: tests/demo_soft.c $(BUILD_DIR)/libcs_soft.a | $(BUILD_DIR)
+$(BUILD_DIR)/demo_soft: tests/demo_soft.c $(BUILD_DIR)/libcs_soft.a $(TEST_DEPS) | $(BUILD_DIR)
 	$(CC) $(CFLAGS) $(INCLUDES) $< \
-		-L$(BUILD_DIR) -lcs_soft \
-		-L../clay-shards/build -lclay_shards \
-		-L../../shared -lshared \
-		$(PLATFORM_LIBS) -lm -o $@
+		$(call link_lib,$(BUILD_DIR),cs_soft) \
+		$(call link_lib,../clay-shards/build,clay_shards) \
+		$(call link_lib,../../shared,shared) \
+		$(PLATFORM_LIBS) $(LD_MATH) $(LD_PLATFORM) $(EXE_OUT)$@
+
+# DEMO_ARGS exists because only the Cocoa backend can deliver the ESC key
+# that closes the window. Everywhere else cs_soft falls back to the headless
+# framebuffer, which has no input at all, so an unbounded run never returns:
+#   make demo DEMO_ARGS="--frames 120"
+DEMO_ARGS ?=
 
 demo: $(BUILD_DIR)/demo_soft
 	@echo "Running demo..."
-	@./$(BUILD_DIR)/demo_soft
+	@./$(BUILD_DIR)/demo_soft $(DEMO_ARGS)
 
 clean:
 	rm -rf $(BUILD_DIR)
