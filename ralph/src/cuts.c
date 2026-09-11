@@ -1910,6 +1910,7 @@ static Cut* generate_single_cover_cut(LPModel *model, int row, double rhs,
 
     /* Sort variables by LP value (descending) - simple bubble sort for small sets */
     int *order = (int*)calloc(num_vars, sizeof(int));
+    if (!order) return NULL;
     for (int i = 0; i < num_vars; i++) order[i] = i;
 
     for (int i = 0; i < num_vars - 1; i++) {
@@ -1924,6 +1925,7 @@ static Cut* generate_single_cover_cut(LPModel *model, int row, double rhs,
 
     /* Greedily build minimal cover */
     int *in_cover = (int*)calloc(num_vars, sizeof(int));
+    if (!in_cover) { free(order); return NULL; }
     double cover_coef_sum = 0.0;
     int cover_size = 0;
 
