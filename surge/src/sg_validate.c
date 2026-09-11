@@ -116,9 +116,15 @@ static void collect_violations(SGContext *ctx, const SGRouteSolution *sol) {
 
         /* Compartment capacity violation */
         if (ctx->has_compartments && veh->num_compartments > 0 && dim_count > 0) {
-            double comp_load[SG_MAX_COMPARTMENTS_PER_VEHICLE * 6];
-            memset(comp_load, 0, sizeof(comp_load));
-            for (i = 0; i < stop_len; i++) {
+            /* dimension_count is caller-controlled and unbounded; a fixed
+             * [SG_MAX_COMPARTMENTS_PER_VEHICLE * 6] array overflowed the stack
+             * for dim_count > 6. Size it to the real dim_count (num_compartments
+             * is capped at SG_MAX_COMPARTMENTS_PER_VEHICLE, so ci is in range).
+             * Heap-allocated + calloc overflow-checked so a huge dim_count
+             * cannot blow the stack either; calloc zero-inits. */
+            double *comp_load = calloc(
+                (size_t)SG_MAX_COMPARTMENTS_PER_VEHICLE * dim_count, sizeof(double));
+            for (i = 0; comp_load && i < stop_len; i++) {
                 const SGRouteStop *s = &stops[i];
                 const SGTaskRecord *task = &ctx->tasks[s->task_id];
                 uint32_t ct = ctx->requests[s->request_id].compartment_type;
@@ -159,6 +165,7 @@ static void collect_violations(SGContext *ctx, const SGRouteSolution *sol) {
                     }
                 }
             }
+            free(comp_load);
         }
 
         /* Forbidden vehicle / qualification checks (per request on this route) */
