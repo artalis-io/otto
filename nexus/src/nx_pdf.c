@@ -952,13 +952,18 @@ static void write_pdf_raw_json(ShJsonWriter *w, const char *filename,
                     end_ch--;
                 if (end_ch <= start_ch) continue;
 
-                /* Avoid splitting inside UTF-8 multi-byte sequences */
+                /* Avoid splitting inside UTF-8 multi-byte sequences: drop a
+                 * partial sequence at each edge. The trailing loop must back
+                 * *up* to the sequence's lead byte (end_ch is exclusive) -- the
+                 * previous `end_ch++` grew the range outward with no upper
+                 * bound (its sibling at the split path has `< len`), walking
+                 * toward/over the terminator on continuation-looking bytes. */
                 while (start_ch < end_ch &&
                        (run->text[start_ch] & 0xC0) == 0x80)
                     start_ch++;
                 while (end_ch > start_ch &&
                        (run->text[end_ch] & 0xC0) == 0x80)
-                    end_ch++;
+                    end_ch--;
 
                 cell_len = append_cell_text(cell_buf, cell_len,
                                 (int)sizeof(cell_buf),
