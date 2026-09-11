@@ -1129,6 +1129,15 @@ VLGraph *vl_graph_load(const char *filename)
     graph->bbox_max.lon = header.bbox_max_lon;
     graph->owns_memory = 1;
 
+    /* Guard the size math against a malformed header on 32-bit (WASM) targets,
+     * matching the mmap loader's check. */
+    if (graph->num_nodes > SIZE_MAX / sizeof(VLNode) ||
+        graph->num_edges > SIZE_MAX / sizeof(VLEdge)) {
+        vl_graph_free(graph);
+        fclose(f);
+        return NULL;
+    }
+
     graph->nodes = malloc(graph->num_nodes * sizeof(VLNode));
     graph->edges = malloc(graph->num_edges * sizeof(VLEdge));
 
@@ -1156,6 +1165,14 @@ VLGraph *vl_graph_load_memory(const uint8_t *data, size_t size)
     const VLBinaryHeader *header = (const VLBinaryHeader *)data;
 
     if (header->magic != VL_BINARY_MAGIC) {
+        return NULL;
+    }
+
+    /* Guard the size math against a malformed header before it feeds the
+     * `size < expected_size` check: on 32-bit (WASM) a wrapped product would
+     * pass the check and then over-read `data` in the memcpy below. */
+    if (header->num_nodes > SIZE_MAX / sizeof(VLNode) ||
+        header->num_edges > SIZE_MAX / sizeof(VLEdge)) {
         return NULL;
     }
 

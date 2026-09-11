@@ -547,8 +547,10 @@ void sh_rng_sample(SHRng *rng, int n, int k, int *out)
             }
         }
     } else {
-        /* Create array 0..n-1, shuffle, take first k */
-        int *arr = malloc(n * sizeof(int));
+        /* Create array 0..n-1, shuffle, take first k. calloc checks the
+         * count*size product, so a large n can't wrap the allocation size on
+         * 32-bit (WASM) targets. */
+        int *arr = calloc((size_t)n, sizeof(int));
         if (!arr) return;
         for (int i = 0; i < n; i++) {
             arr[i] = i;

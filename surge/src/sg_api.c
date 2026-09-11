@@ -222,6 +222,9 @@ static int build_travel_profiles(SGContext *ctx, const ShJsonValue *arr) {
             if ((size_t)location_count * (size_t)location_count != n || location_count <= 0) {
                 return -1;
             }
+            /* Guard the allocation size against wraparound on 32-bit (WASM)
+             * targets before allocating n doubles from the untrusted length. */
+            if (n > SIZE_MAX / sizeof(double)) return -1;
 
             if (dist_arr) {
                 if (sh_json_type(dist_arr) != SH_JSON_ARRAY || sh_json_array_len(dist_arr) != n) {
@@ -295,6 +298,7 @@ static int build_travel_profiles(SGContext *ctx, const ShJsonValue *arr) {
                     if ((size_t)tb_loc_count * (size_t)tb_loc_count != tb_n || tb_loc_count <= 0) {
                         return -1;
                     }
+                    if (tb_n > SIZE_MAX / sizeof(double)) return -1;  /* alloc guard (WASM32) */
 
                     tb_dur = (double *)malloc(tb_n * sizeof(double));
                     if (!tb_dur) return -1;
@@ -472,6 +476,7 @@ static int build_zones(SGContext *ctx, const ShJsonValue *zones_val) {
     if (!v || sh_json_type(v) != SH_JSON_ARRAY || sh_json_array_len(v) != n) {
         return -1;
     }
+    if (n > SIZE_MAX / sizeof(double)) return -1;  /* alloc guard (WASM32) */
 
     matrix = (double *)malloc(n * sizeof(double));
     if (!matrix) return -1;
