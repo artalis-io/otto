@@ -10817,6 +10817,64 @@ static void test_validate_plan_api(void) {
     sg_free(ctx);
 }
 
+/* Regression: collect_violations (sg_validate.c) sized its per-vehicle
+ * comp_load scratch as a fixed [SG_MAX_COMPARTMENTS_PER_VEHICLE * 6] stack
+ * array but indexed it with the runtime dimension_count (ci*dim_count + d).
+ * dimension_count is caller-controlled and unbounded, so dim_count > 6
+ * overflowed the array; with dim_count > 48 it overflows even at ci=0. This
+ * builds a compartment model with a large dimension count and validates a plan
+ * routing the task through the compartment: pre-fix this smashed the stack
+ * (aborts under -fstack-protector); post-fix the buffer is sized to the real
+ * dimension_count. Reaching the end is the check. */
+static void test_validate_plan_compartment_high_dim(void) {
+    enum { DIM = 64 };  /* > 6 and > 48 so even ci=0 overflowed the old array */
+    SGContext *ctx = sg_create();
+    assert(ctx != NULL);
+    SGConfig cfg;
+    sg_config_default(&cfg);
+    assert(sg_set_config(ctx, &cfg) == SG_STATUS_OK);
+    assert(sg_set_dimension_count(ctx, DIM) == SG_STATUS_OK);
+
+    uint32_t depot;
+    add_depot_with_location(ctx, &depot, 0.0, 0.0);
+    assert(sg_depot_set_time_window(ctx, depot, 0, 100000) == SG_STATUS_OK);
+
+    uint32_t v = sg_add_vehicle(ctx);
+    assert(v != UINT32_MAX);
+    assert(sg_vehicle_set_depots(ctx, v, depot, depot) == SG_STATUS_OK);
+    assert(sg_vehicle_set_shift_time_window(ctx, v, 0, 100000) == SG_STATUS_OK);
+
+    double cap[DIM];
+    for (int i = 0; i < DIM; i++) cap[i] = 1000.0;
+    assert(sg_vehicle_set_capacity(ctx, v, cap, DIM) == SG_STATUS_OK);
+
+    uint32_t ctype;
+    assert(sg_add_compartment_type(ctx, &ctype) == SG_STATUS_OK);
+    assert(sg_vehicle_add_compartment(ctx, v, ctype, cap, DIM) == SG_STATUS_OK);
+
+    uint32_t req = sg_add_request(ctx);
+    uint32_t task = sg_add_task(ctx, SG_TASK_DELIVERY);
+    assert(sg_task_set_location(ctx, task, 10.0, 0.0) == SG_STATUS_OK);
+    assert(sg_task_set_time_window(ctx, task, 0, 50000) == SG_STATUS_OK);
+    assert(sg_task_set_service_seconds(ctx, task, 60) == SG_STATUS_OK);
+    double dem[DIM];
+    for (int i = 0; i < DIM; i++) dem[i] = -1.0;   /* delivery demand */
+    assert(sg_task_set_demand(ctx, task, dem, DIM) == SG_STATUS_OK);
+    assert(sg_request_bind_delivery_task(ctx, req, task) == SG_STATUS_OK);
+    assert(sg_request_set_compartment_type(ctx, req, ctype) == SG_STATUS_OK);
+
+    uint32_t task_ids[] = { task };
+    SGPlanRoute route;
+    route.vehicle_id = v;
+    route.task_ids = task_ids;
+    route.task_count = 1;
+
+    SGStatus st = sg_validate_plan(ctx, 1, &route);
+    assert(st == SG_STATUS_OK || st == SG_STATUS_INFEASIBLE);
+
+    sg_free(ctx);
+}
+
 static void test_validate_plan_timing(void) {
     SGContext *ctx = make_validate_ctx();
     uint32_t task_ids[] = {0, 1};
@@ -17935,6 +17993,7 @@ int main(void) {
 
     /* Plan validation */
     RUN_TEST(test_validate_plan_api);
+    RUN_TEST(test_validate_plan_compartment_high_dim);
     RUN_TEST(test_validate_plan_timing);
     RUN_TEST(test_validate_plan_tw_violation);
     RUN_TEST(test_validate_plan_capacity_violation);
@@ -18194,9 +18253,9 @@ int main(void) {
     printf("================\n");
     printf("%d/%d tests passed\n", tests_passed, tests_run);
 #ifdef SG_HAS_THREADS
-    assert(tests_run == 467);
+    assert(tests_run == 468);
 #else
-    assert(tests_run == 443);
+    assert(tests_run == 444);
 #endif
     return tests_passed == tests_run ? 0 : 1;
 }
