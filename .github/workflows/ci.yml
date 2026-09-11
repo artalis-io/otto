@@ -574,6 +574,144 @@ jobs:
   # full suite under -O0 + ASan would cost far more CI time for far less signal.
   # Widen it when a module's own memory handling starts changing.
   # ==========================================================================
+  # Windows MSVC
+  #
+  # Every other Windows job here is MSYS2/MinGW. Until this existed, nothing in
+  # CI ever ran cl.exe -- so "OTTO builds with MSVC" rested entirely on someone
+  # running it by hand, and a contributor could break it without a single check
+  # going red. mk/toolchain.mk carries the whole compiler difference; this is
+  # what keeps it honest.
+  #
+  # The API servers are deliberately absent: they need Keel, which is MinGW-only
+  # (13 of its 56 sources are on POSIX sockets). Everything that does build with
+  # MSVC is here, and it is the same target list Windows Core runs, so a
+  # divergence between the two compilers shows up as one job red and the other
+  # green rather than as a mystery.
+  #
+  # mingw32-make, not MSYS's make: /usr/bin/make strips TMPDIR/TMP/TEMP from the
+  # environment, and cl.exe needs them for its intermediates.
+  # ==========================================================================
+  windows-msvc:
+    name: Windows MSVC
+    runs-on: windows-latest
+
+    defaults:
+      run:
+        shell: msys2 {0}
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Set up MSYS2 (make and coreutils only; the compiler is MSVC)
+        uses: msys2/setup-msys2@v2
+        with:
+          msystem: UCRT64
+          update: false
+          install: >-
+            mingw-w64-ucrt-x86_64-make
+
+      - name: Report the MSVC toolchain
+        run: |
+          source scripts/msvc-env.sh
+          cl 2>&1 | head -2
+          echo "cl:   $(command -v cl)"
+          echo "link: $(command -v link)"
+          echo "lib:  $(command -v lib)"
+
+      - name: Build and run the PAL tests
+        run: |
+          source scripts/msvc-env.sh
+          mingw32-make -C shared CC=cl test-pal
+
+      - name: Build and test all of shared
+        run: |
+          source scripts/msvc-env.sh
+          mingw32-make -C shared CC=cl test
+
+      - name: Build and test Velo
+        run: |
+          source scripts/msvc-env.sh
+          mingw32-make -C velo CC=cl test
+
+      - name: Build and test Carta
+        run: |
+          source scripts/msvc-env.sh
+          mingw32-make -C carta CC=cl test
+
+      - name: Build and test Locus
+        run: |
+          source scripts/msvc-env.sh
+          mingw32-make -C locus CC=cl test
+
+      - name: Build and test Ralph
+        run: |
+          source scripts/msvc-env.sh
+          mingw32-make -C ralph CC=cl test
+
+      - name: Build and test Ralph LAP
+        run: |
+          source scripts/msvc-env.sh
+          mingw32-make -C ralph CC=cl test-lap
+
+      - name: Build and test Ralph Netflow
+        run: |
+          source scripts/msvc-env.sh
+          mingw32-make -C ralph CC=cl test-netflow
+
+      - name: Build and test Ralph Detect
+        run: |
+          source scripts/msvc-env.sh
+          mingw32-make -C ralph CC=cl test-detect
+
+      # bore3d does not converge under strict IEEE arithmetic, which is what
+      # MSVC gives; the harness records the timeout as a SKIP, so this passes
+      # 25/25 where GCC passes 26/26. See docs/KNOWN_ISSUES.md.
+      - name: Build and test Ralph Netlib
+        run: |
+          source scripts/msvc-env.sh
+          mingw32-make -C ralph CC=cl test-netlib
+
+      - name: Build and test Arbor
+        run: |
+          source scripts/msvc-env.sh
+          mingw32-make -C arbor CC=cl test
+
+      - name: Build and test Nexus
+        run: |
+          source scripts/msvc-env.sh
+          mingw32-make -C nexus CC=cl test
+
+      - name: Build and test FuelWise
+        run: |
+          source scripts/msvc-env.sh
+          mingw32-make -C fuelwise CC=cl test-transport
+          mingw32-make -C fuelwise CC=cl test-unit
+
+      - name: Build and test Surge
+        run: |
+          source scripts/msvc-env.sh
+          mingw32-make -C surge CC=cl test-transport
+
+      # ClayShards. The whole native stack reaches the terminal through
+      # sh_pal.h -- is-stdout-a-tty, terminal size, raw mode, input bytes --
+      # rather than termios/ioctl/signal, which is what lets it build here.
+      # The tty demo is exercised headless: it renders frames to stdout with
+      # no terminal involved, so it is the one part of a TUI that CI can
+      # actually check.
+      - name: Build and test ClayShards
+        run: |
+          source scripts/msvc-env.sh
+          mingw32-make -C clayshards/clay-shards CC=cl test
+          mingw32-make -C clayshards/clay-shards-soft CC=cl test
+          mingw32-make -C clayshards/clay-shards-tui CC=cl test
+          mingw32-make -C clayshards/demos/tty CC=cl all
+          ./clayshards/demos/tty/build/demo_tui_tty.exe --headless > /dev/null
+          mingw32-make -C clayshards/clay-shards-soft CC=cl demo DEMO_ARGS="--frames 3"
+
+  # ==========================================================================
   sanitizers:
     name: Sanitize ${{ matrix.suite.name }}
     runs-on: ubuntu-latest

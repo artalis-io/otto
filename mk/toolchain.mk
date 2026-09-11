@@ -55,6 +55,14 @@ CC_STD    := /std:c11 /experimental:c11atomics
 # extensions in the compiler's default mode. MSVC has no such default,
 # so the standard has to be named explicitly there and nowhere else.
 CC_STD_BASELINE := /std:c11 /experimental:c11atomics
+# For modules that ask for C99 on GCC. MSVC has no C99 mode at all -- its
+# choices are C11 and C17 -- so this is the nearest thing that exists rather
+# than a translation. Nothing that uses it depends on C99-specific semantics.
+CC_STD_C99 := /std:c11
+# For modules that deliberately build at -O2 rather than the -O3 default.
+# /O2 is MSVC's optimise-for-speed setting and is what CC_OPT uses too, so on
+# this compiler the distinction does not arise.
+CC_OPT_O2 := /O2
 CC_WARN   := /W3
 # Deliberately empty. MSVC /W3 diagnoses things GCC does not -- signed/unsigned
 # narrowing and size_t truncation most of all -- so /WX would not mean "the same
@@ -193,6 +201,8 @@ else
 
 CC_STD    := -std=c11
 CC_STD_BASELINE :=
+CC_STD_C99 := -std=c99
+CC_OPT_O2 := -O2
 CC_WARN   := -Wall -Wextra
 CC_WERROR := -Werror
 CC_SYSINC := -isystem$(SPACE)

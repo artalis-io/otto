@@ -7,9 +7,7 @@
 #include "cs_tui_internal.h"
 #include <stdarg.h>
 #include <stdint.h>
-#include <unistd.h>
-#include <sys/ioctl.h>
-#include <termios.h>
+#include "sh_pal.h"
 
 /* Include Clay for command types */
 #include "clay.h"
@@ -73,7 +71,7 @@ void cs_tui_config_init(CsTuiConfig *config) {
 }
 
 bool cs_tui_is_tty(void) {
-    return isatty(STDOUT_FILENO) != 0;
+    return sh_stdout_is_tty() != 0;
 }
 
 CsTuiColorMode cs_tui_detect_color_mode(void) {
@@ -152,7 +150,12 @@ void cs_tui_output_printf(CsTuiRenderer *r, const char *fmt, ...) {
 
 void cs_tui_output_flush(CsTuiRenderer *r) {
     if (r->output_len > 0 && r->output_buf) {
-        (void)write(STDOUT_FILENO, r->output_buf, r->output_len);
+        /* fwrite rather than write(2): this is the only place the renderer
+         * touches the descriptor directly, and stdio is what every platform
+         * has. The flush is the part that matters -- an escape stream left
+         * sitting in a buffer is a half-drawn screen. */
+        (void)fwrite(r->output_buf, 1, r->output_len, stdout);
+        (void)fflush(stdout);
         r->output_len = 0;
     }
 }
@@ -326,11 +329,9 @@ static void cs_tui_buffer_free(CsTuiBuffer *buf) {
 }
 
 void cs_tui_get_terminal_size(int *width, int *height) {
-    struct winsize ws;
-    if (ioctl(STDOUT_FILENO, TIOCGWINSZ, &ws) == 0) {
-        *width = ws.ws_col;
-        *height = ws.ws_row;
-    } else {
+    if (sh_term_size(width, height) != 0) {
+        /* Not a terminal, or it will not say. 80x24 is the conventional
+         * fallback and is what this did before. */
         *width = 80;
         *height = 24;
     }

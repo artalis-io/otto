@@ -312,6 +312,55 @@ static void test_temp_dir(void)
     check(sh_pal_temp_dir(buf, 0) == -1, "zero length is refused");
 }
 
+/* --------------------------------------------------------------- terminal */
+
+static void test_terminal(void)
+{
+    int cols = -1, rows = -1;
+    int tty = sh_stdout_is_tty();
+    int rc;
+
+    /* Both answers are legitimate -- CI redirects stdout, a developer shell
+     * does not -- so this asserts the contract, not the environment. */
+    check(tty == 0 || tty == 1, "sh_stdout_is_tty answers 0 or 1");
+    check(sh_stderr_is_tty() == 0 || sh_stderr_is_tty() == 1,
+          "sh_stderr_is_tty answers 0 or 1");
+
+    rc = sh_term_size(&cols, &rows);
+    check(rc == 0 || rc == -1, "sh_term_size answers 0 or -1");
+    if (rc == 0) {
+        check(cols > 0 && rows > 0, "a reported size is positive");
+    } else {
+        /* The contract is that a caller falls back to its own default, so a
+         * failure must not have scribbled a misleading value. */
+        check(cols == -1 && rows == -1, "a failed size leaves the outputs alone");
+    }
+    check(sh_term_size(NULL, &rows) == -1, "NULL cols is refused");
+    check(sh_term_size(&cols, NULL) == -1, "NULL rows is refused");
+
+    /* raw_leave without a matching enter is what atexit() will do on any run
+     * that never reached raw mode; it has to be harmless. */
+    sh_term_raw_leave();
+    check(1, "raw_leave without enter is harmless");
+
+    check(sh_term_read_byte(NULL) == -1, "read_byte refuses NULL");
+
+    /* Under CI stdin is not a terminal, so raw_enter is expected to fail and
+     * the suite must not depend on which it gets. */
+    if (sh_term_raw_enter() == 0) {
+        unsigned char c = 0xAA;
+        int got = sh_term_read_byte(&c);
+        check(got == 0 || got == 1 || got == -1,
+              "read_byte answers 0, 1 or -1");
+        check(sh_term_raw_enter() == 0, "raw_enter twice is harmless");
+        sh_term_raw_leave();
+        sh_term_raw_leave();
+        check(1, "raw_leave twice is harmless");
+    } else {
+        check(1, "raw_enter declines when stdin is not a terminal");
+    }
+}
+
 /* ------------------------------------------------------------------- main */
 
 int main(void)
@@ -327,6 +376,7 @@ int main(void)
     test_cpu();
     test_env();
     test_temp_dir();
+    test_terminal();
 
     printf("\n%d passed, %d failed\n", g_pass, g_fail);
     return g_fail ? 1 : 0;

@@ -337,6 +337,101 @@ int sh_stderr_is_tty(void)
     return _isatty(_fileno(stderr)) ? 1 : 0;
 }
 
+int sh_stdout_is_tty(void)
+{
+    return _isatty(_fileno(stdout)) ? 1 : 0;
+}
+
+int sh_term_size(int *cols, int *rows)
+{
+    CONSOLE_SCREEN_BUFFER_INFO csbi;
+    HANDLE h;
+    int w, h_rows;
+
+    if (!cols || !rows) return -1;
+
+    h = GetStdHandle(STD_OUTPUT_HANDLE);
+    if (h == INVALID_HANDLE_VALUE || h == NULL) return -1;
+    if (!GetConsoleScreenBufferInfo(h, &csbi)) return -1;
+
+    /* srWindow is the visible viewport. dwSize is the scrollback buffer, which
+     * is routinely far taller than the window and would make a renderer draw
+     * off-screen. */
+    w      = (int)(csbi.srWindow.Right  - csbi.srWindow.Left + 1);
+    h_rows = (int)(csbi.srWindow.Bottom - csbi.srWindow.Top  + 1);
+    if (w <= 0 || h_rows <= 0) return -1;
+
+    *cols = w;
+    *rows = h_rows;
+    return 0;
+}
+
+#ifndef ENABLE_VIRTUAL_TERMINAL_INPUT
+#define ENABLE_VIRTUAL_TERMINAL_INPUT 0x0200
+#endif
+
+static DWORD g_saved_console_mode;
+static int   g_raw_active = 0;
+
+int sh_term_raw_enter(void)
+{
+    HANDLE h;
+    DWORD mode;
+
+    if (g_raw_active) return 0;
+
+    h = GetStdHandle(STD_INPUT_HANDLE);
+    if (h == INVALID_HANDLE_VALUE || h == NULL) return -1;
+    if (!GetConsoleMode(h, &g_saved_console_mode)) return -1;
+
+    mode = g_saved_console_mode;
+    /* PROCESSED_INPUT off is what turns Ctrl-C into a 0x03 byte rather than a
+     * console control event, matching the POSIX side. LINE_INPUT and ECHO off
+     * give character-at-a-time delivery. MOUSE and WINDOW input stay off so
+     * the only thing that can wake the handle is a keystroke. */
+    mode &= ~(DWORD)(ENABLE_PROCESSED_INPUT | ENABLE_LINE_INPUT |
+                     ENABLE_ECHO_INPUT | ENABLE_MOUSE_INPUT |
+                     ENABLE_WINDOW_INPUT);
+    /* And this is what makes arrow keys arrive as ANSI escape sequences, so a
+     * caller decodes the same byte stream it would on POSIX. */
+    mode |= (DWORD)ENABLE_VIRTUAL_TERMINAL_INPUT;
+
+    if (!SetConsoleMode(h, mode)) return -1;
+    g_raw_active = 1;
+    return 0;
+}
+
+void sh_term_raw_leave(void)
+{
+    HANDLE h;
+
+    if (!g_raw_active) return;
+    h = GetStdHandle(STD_INPUT_HANDLE);
+    if (h != INVALID_HANDLE_VALUE && h != NULL) {
+        (void)SetConsoleMode(h, g_saved_console_mode);
+    }
+    g_raw_active = 0;
+}
+
+int sh_term_read_byte(unsigned char *out)
+{
+    HANDLE h;
+    DWORD got = 0;
+
+    if (!out) return -1;
+
+    h = GetStdHandle(STD_INPUT_HANDLE);
+    if (h == INVALID_HANDLE_VALUE || h == NULL) return -1;
+
+    /* Poll rather than block. The handle is signalled when input is pending,
+     * and with mouse and window events disabled above the only thing that
+     * signals it is a keystroke -- so the ReadFile below will not block. */
+    if (WaitForSingleObject(h, 0) != WAIT_OBJECT_0) return 0;
+    if (!ReadFile(h, out, 1, &got, NULL)) return -1;
+    return got == 1 ? 1 : 0;
+}
+
+
 void sh_sleep_ms(unsigned ms)
 {
     Sleep((DWORD)ms);

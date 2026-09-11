@@ -27,11 +27,8 @@
 #include <stdlib.h>
 #include <string.h>
 #include <stdbool.h>
-#include <signal.h>
-#include <unistd.h>
-#include <termios.h>
-#include <sys/select.h>
-#include <sys/ioctl.h>
+#include "sh_pal.h"
+#include "sh_time.h"
 #include <time.h>
 
 #define CLAY_IMPLEMENTATION
@@ -118,42 +115,23 @@ static const struct {
  * Terminal Input
  * ============================================================================ */
 
-static struct termios g_orig_termios;
-static bool g_raw_mode = false;
-
-static void disable_raw_mode(void) {
-    if (g_raw_mode) {
-        tcsetattr(STDIN_FILENO, TCSAFLUSH, &g_orig_termios);
-        g_raw_mode = false;
-    }
-}
-
 static void enable_raw_mode(void) {
-    if (tcgetattr(STDIN_FILENO, &g_orig_termios) == -1) return;
-
-    struct termios raw = g_orig_termios;
-    raw.c_lflag &= ~(ECHO | ICANON | ISIG | IEXTEN);
-    raw.c_iflag &= ~(BRKINT | ICRNL | INPCK | ISTRIP | IXON);
-    raw.c_oflag &= ~(OPOST);
-    raw.c_cflag |= (CS8);
-    raw.c_cc[VMIN] = 0;
-    raw.c_cc[VTIME] = 0;
-
-    if (tcsetattr(STDIN_FILENO, TCSAFLUSH, &raw) != -1) {
-        g_raw_mode = true;
-        atexit(disable_raw_mode);
+    if (sh_term_raw_enter() == 0) {
+        atexit(sh_term_raw_leave);
     }
 }
 
 static int read_key(void) {
-    char c;
-    if (read(STDIN_FILENO, &c, 1) != 1) return 0;
+    unsigned char c;
+    if (sh_term_read_byte(&c) != 1) return 0;
 
-    /* Handle escape sequences */
+    /* Escape sequences. Windows is put into virtual-terminal input mode by
+     * sh_term_raw_enter(), so arrow keys arrive as the same sequences POSIX
+     * sends and this decoding is shared rather than duplicated. */
     if (c == '\x1b') {
-        char seq[3];
-        if (read(STDIN_FILENO, &seq[0], 1) != 1) return '\x1b';
-        if (read(STDIN_FILENO, &seq[1], 1) != 1) return '\x1b';
+        unsigned char seq[3];
+        if (sh_term_read_byte(&seq[0]) != 1) return '\x1b';
+        if (sh_term_read_byte(&seq[1]) != 1) return '\x1b';
 
         if (seq[0] == '[') {
             switch (seq[1]) {
@@ -174,17 +152,14 @@ static int read_key(void) {
  * Signal Handling
  * ============================================================================ */
 
-static volatile sig_atomic_t g_resize_pending = 0;
-
-static void handle_sigwinch(int sig) {
-    (void)sig;
-    g_resize_pending = 1;
-}
-
-static void handle_sigint(int sig) {
-    (void)sig;
-    g_app.running = false;
-}
+/* No SIGWINCH and no SIGINT.
+ *
+ * Resize is picked up by comparing the terminal size each frame, which costs
+ * one cheap syscall in a loop that already sleeps 16ms and works the same on
+ * every platform. Ctrl-C arrives as a 0x03 byte through the normal input path,
+ * because raw mode turns off the driver's interpretation of it -- see
+ * sh_term_raw_enter(). Neither needed a signal, and signals are the part of
+ * this that would not have ported. */
 
 /* ============================================================================
  * Headless Mode Support
@@ -507,8 +482,6 @@ int main(int argc, char *argv[]) {
             fprintf(stderr, "Use --headless for non-interactive mode\n");
             return 1;
         }
-        signal(SIGWINCH, handle_sigwinch);
-        signal(SIGINT, handle_sigint);
         enable_raw_mode();
     }
 
@@ -612,25 +585,29 @@ int main(int argc, char *argv[]) {
         /* ================================================================
          * Interactive mode: normal terminal UI
          * ================================================================ */
-        struct timespec last_time, now;
-        clock_gettime(CLOCK_MONOTONIC, &last_time);
+        double last_time = sh_monotonic_seconds();
 
         while (g_app.running) {
-            if (g_resize_pending) {
-                g_resize_pending = 0;
-                cs_tui_get_terminal_size(&g_app.width, &g_app.height);
+            /* Resize detection, in place of SIGWINCH. */
+            int term_w = g_app.width, term_h = g_app.height;
+            cs_tui_get_terminal_size(&term_w, &term_h);
+            if (term_w != g_app.width || term_h != g_app.height) {
+                g_app.width = term_w;
+                g_app.height = term_h;
                 cs_tui_resize(renderer, g_app.width, g_app.height);
                 cs_tui_update_clay_size(g_app.width, g_app.height);
             }
 
-            clock_gettime(CLOCK_MONOTONIC, &now);
-            float dt = (float)(now.tv_sec - last_time.tv_sec) +
-                       (float)(now.tv_nsec - last_time.tv_nsec) / 1e9f;
+            double now = sh_monotonic_seconds();
+            float dt = (float)(now - last_time);
             last_time = now;
 
             int key = read_key();
             if (key > 0) {
-                if (key == 'q' || key == 'Q') {
+                if (key == 'q' || key == 'Q' || key == 3) {
+                    /* 3 is Ctrl-C: raw mode delivers it as a byte rather than
+                     * as a signal, so quitting on it is what keeps the key
+                     * working at all. */
                     g_app.running = false;
                 } else if (key == '\t') {
                     cs_focus_next();
@@ -676,7 +653,7 @@ int main(int argc, char *argv[]) {
             }
 
             cs_tui_end(renderer);
-            usleep(16000);
+            sh_sleep_ms(16);
         }
 
         printf("\nGoodbye!\n");

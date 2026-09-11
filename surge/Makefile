@@ -76,7 +76,7 @@ all: lib $(TEST_BIN)
 lib: $(LIB_FILE)
 
 $(LIB_FILE): $(OBJS) ../arbor/libarbor.a ../shared/libshared.a
-	ar rcs $@ $(OBJS)
+	$(AR_CMD)$@ $(OBJS)
 
 src/%.o: src/%.c
 	$(CC) $(CFLAGS) $(INCLUDES) -c $< $(OBJ_OUT)$@

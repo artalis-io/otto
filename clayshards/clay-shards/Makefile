@@ -3,8 +3,13 @@
 # Thin immediate mode components on top of Clay layout.
 # Include cs_immediate.c in your WASM build directly.
 
+# Every compiler difference lives in one place; see mk/toolchain.mk.
+include ../../mk/toolchain.mk
+
 CC = gcc
-CFLAGS = -O2 -Wall -Wextra -std=c99
+# c99 rather than the toolchain's c11 default: this library is deliberately
+# buildable by anything, and nothing in it needs c11.
+CFLAGS = $(strip $(CC_OPT_O2) $(CC_WARN) $(CC_STD_C99) $(CC_PORT_DEFS))
 INCLUDES = -Iinclude -I../../shared/include -I../../vendor/clay
 
 # Shared library for polyline simplification
@@ -30,10 +35,10 @@ $(BUILD_DIR):
 	mkdir -p $(BUILD_DIR)
 
 $(BUILD_DIR)/cs_immediate.o: src/cs_immediate.c $(HEADERS) | $(BUILD_DIR)
-	$(CC) $(CFLAGS) $(INCLUDES) -c $< -o $@
+	$(CC) $(CFLAGS) $(INCLUDES) -c $< $(OBJ_OUT)$@
 
 $(BUILD_DIR)/libclay_shards.a: $(BUILD_DIR)/cs_immediate.o
-	ar rcs $@ $^
+	$(AR_CMD)$@ $^
 	@echo "Built: $@"
 
 # WASM objects for inclusion in WASM builds
@@ -57,5 +62,5 @@ $(SHARED_LIB):
 # Note: cs_immediate.c is an amalgamation file that includes cs_map.c, so we only compile cs_immediate.c
 # cs_map_provider.c is separate (only for API-based builds)
 $(BUILD_DIR)/test_clay_shards: tests/test_clay_shards.c src/cs_immediate.c src/cs_map_provider.c $(HEADERS) $(SHARED_LIB) | $(BUILD_DIR)
-	$(CC) $(CFLAGS) $(INCLUDES) tests/test_clay_shards.c src/cs_immediate.c src/cs_map_provider.c -L$(SHARED_DIR) -lshared -o $@ -lm
+	$(CC) $(CFLAGS) $(INCLUDES) tests/test_clay_shards.c src/cs_immediate.c src/cs_map_provider.c $(call link_lib,$(SHARED_DIR),shared) $(LD_MATH) $(LD_PLATFORM) $(EXE_OUT)$@
 	@echo "Built: $@"

@@ -22,6 +22,8 @@
 #include <pthread.h>
 #include <string.h>
 #include <sys/time.h>
+#include <termios.h>
+#include <sys/ioctl.h>
 #include <unistd.h>
 
 /*
@@ -220,6 +222,72 @@ int sh_stderr_is_tty(void)
 {
     return isatty(STDERR_FILENO) ? 1 : 0;
 }
+
+int sh_stdout_is_tty(void)
+{
+    return isatty(STDOUT_FILENO) ? 1 : 0;
+}
+
+int sh_term_size(int *cols, int *rows)
+{
+    struct winsize ws;
+
+    if (!cols || !rows) return -1;
+    if (ioctl(STDOUT_FILENO, TIOCGWINSZ, &ws) != 0) return -1;
+    /* A terminal that reports zero in either axis is telling us it does not
+     * know; a caller's default beats a zero-width layout. */
+    if (ws.ws_col == 0 || ws.ws_row == 0) return -1;
+
+    *cols = (int)ws.ws_col;
+    *rows = (int)ws.ws_row;
+    return 0;
+}
+
+static struct termios g_saved_termios;
+static int g_raw_active = 0;
+
+int sh_term_raw_enter(void)
+{
+    struct termios raw;
+
+    if (g_raw_active) return 0;
+    if (!isatty(STDIN_FILENO)) return -1;
+    if (tcgetattr(STDIN_FILENO, &g_saved_termios) != 0) return -1;
+
+    raw = g_saved_termios;
+    /* ISIG off is what turns Ctrl-C into a 0x03 byte instead of a signal. */
+    raw.c_lflag &= (tcflag_t)~(ECHO | ICANON | ISIG | IEXTEN);
+    raw.c_iflag &= (tcflag_t)~(BRKINT | ICRNL | INPCK | ISTRIP | IXON);
+    raw.c_oflag &= (tcflag_t)~(OPOST);
+    raw.c_cflag |= (tcflag_t)CS8;
+    /* Return immediately with whatever is there, including nothing. */
+    raw.c_cc[VMIN]  = 0;
+    raw.c_cc[VTIME] = 0;
+
+    if (tcsetattr(STDIN_FILENO, TCSAFLUSH, &raw) != 0) return -1;
+    g_raw_active = 1;
+    return 0;
+}
+
+void sh_term_raw_leave(void)
+{
+    if (!g_raw_active) return;
+    (void)tcsetattr(STDIN_FILENO, TCSAFLUSH, &g_saved_termios);
+    g_raw_active = 0;
+}
+
+int sh_term_read_byte(unsigned char *out)
+{
+    ssize_t n;
+
+    if (!out) return -1;
+    n = read(STDIN_FILENO, out, 1);
+    if (n == 1) return 1;
+    if (n == 0) return 0;                 /* VMIN=0: nothing waiting */
+    if (errno == EAGAIN || errno == EINTR) return 0;
+    return -1;
+}
+
 
 void sh_sleep_ms(unsigned ms)
 {

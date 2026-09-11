@@ -106,7 +106,7 @@ omp-mode:
 	fi
 
 $(LIB_FILE): $(ALL_OBJS) $(SHARED_DIR)/libshared.a
-	ar rcs $@ $(ALL_OBJS)
+	$(AR_CMD)$@ $(ALL_OBJS)
 
 # Compile rules
 src/%.o: src/%.c
