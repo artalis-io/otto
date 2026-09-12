@@ -237,25 +237,32 @@ and `which` elsewhere.
 | invalid solutions | 0 |
 | command failures | 0 |
 | dense-fallback violations | 0 |
-| unexpected timeouts | 1 (`bnl1.mps`) |
+| unexpected timeouts | 0 |
 
-So the solver agrees with GLPK on every problem it finishes, and the
+So the solver agrees with GLPK on every problem, and the
 per-platform-baseline theory was unnecessary.
 
-### Two things this turned up, still open
+### Run the gate on an idle machine
 
-**`bnl1.mps` overruns its own cap.** It is not in the baseline's
-`known_timeouts`, nor in `required_pass` or `required_coverage`. It was killed
-by the *external* 50s wrapper (`time_ms: 50000`, exit 124) rather than
-stopping at the 20s hard cap, so the internal cap did not take effect. Whether
-that is Windows-specific is unmeasured -- the gate has never been run on Linux
-either.
+The first full run recorded `bnl1.mps` as an unexpected timeout, killed by the
+external 50s wrapper. That was a measurement artifact: the run shared the
+machine with a concurrent MSVC build and test suite. On an idle box bnl1 passes
+the gate 3 times out of 3, and solves standalone in 176 ms over 439 iterations.
 
-**Nothing runs the gate.** No workflow invokes
-`ralph/benchmarks/netlib_regression_gate.sh`; CI runs `make -C ralph
-test-netlib`, which is `--test` mode against a table of reference optimals and
-needs no GLPK. A full gate run takes upwards of twenty minutes, so putting it
-in CI is a scheduling decision rather than a free win.
+It is worth knowing why the gate is this sensitive. The limit handed to Ralph
+is derived from GLPK's *measured* time on the same problem
+(`ralph_benchmark.c`: `ralph_time_limit = glpk.time_ms / 1000.0 *
+time_multiplier`), so contention inflates the reference and the budget
+together, and Ralph is OpenMP-parallel on top of that. A loaded machine does
+not just make the gate slow, it makes it report failures that are not there.
+
+### Still open: nothing runs the gate
+
+No workflow invokes `ralph/benchmarks/netlib_regression_gate.sh`. CI runs `make
+-C ralph test-netlib`, which is `--test` mode against a table of reference
+optimals and needs no GLPK. A full gate run takes upwards of twenty minutes and
+wants an otherwise idle machine, so putting it in CI is a scheduling decision
+rather than a free win.
 
 **Two traps for whoever runs it by hand on Windows.** The gate shells out to
 `make`, so it needs `--no-build` with a `mingw32-make`-built binary --
