@@ -1,7 +1,8 @@
 /*
  * Tests for GLPK out-of-process external adapter registration + execution.
  *
- * Uses mock shell scripts (no GLPK dependency in unit test gate).
+ * No GLPK dependency in the unit test gate: this binary impersonates glpsol
+ * when armed through the environment. See "Mock glpsol" below.
  */
 
 #include <stdio.h>
@@ -15,6 +16,10 @@
   #include <unistd.h>
 #endif
 #include <sys/stat.h>
+#ifdef _WIN32
+  #define WIN32_LEAN_AND_MEAN
+  #include <windows.h>
+#endif
 
 #include "../src/lp_external_oop.h"
 #include "test_tmp.h"
@@ -51,32 +56,134 @@ static int tests_passed = 0;
     } \
 } while (0)
 
-static int write_mock_script(const char *script_body, char *path, size_t path_size) {
-    FILE *f;
+/* ---------------------------------------------------------------------------
+ * Mock glpsol
+ *
+ * These tests need a program that behaves like glpsol without depending on
+ * one. That used to be a "#!/bin/sh" script written to a temp file, which
+ * cannot work on Windows: CreateProcess has no shebang handling, so the whole
+ * suite below was skipped there and the adapter went unexercised on the one
+ * platform whose process runner was newest.
+ *
+ * So this binary impersonates glpsol instead, re-executed by the adapter under
+ * test. The scenario cannot travel in argv -- the adapter builds glpsol's
+ * argument list itself and has no slot for a test flag -- so it travels in the
+ * environment, which the child inherits either way.
+ * ------------------------------------------------------------------------ */
 
-    if (!script_body || !path || path_size < 32) return -1;
-    if (lp_external_oop_make_tempfile("ralph_glpk_mock_", path, path_size) != 0) return -1;
-    f = fopen(path, "w");
-    if (!f) {
-        unlink(path);
-        return -1;
-    }
-    if (fputs(script_body, f) == EOF) {
-        fclose(f);
-        unlink(path);
-        return -1;
-    }
-    if (fclose(f) != 0) {
-        unlink(path);
-        return -1;
-    }
-    if (chmod(path, 0700) != 0) {
-        unlink(path);
-        return -1;
-    }
+#define MOCK_ENV "RALPH_MOCK_GLPSOL"
+
+/* Path this binary can be re-executed by; see self_exe_path(). */
+static char self_exe[1024];
+
+static int self_exe_path(char *buf, size_t size, const char *argv0)
+{
+#ifdef _WIN32
+    (void)argv0;
+    if (GetModuleFileNameA(NULL, buf, (DWORD)size) == 0) return -1;
     return 0;
+#else
+    if (!argv0 || argv0[0] == '\0') return -1;
+    if (snprintf(buf, size, "%s", argv0) >= (int)size) return -1;
+    return 0;
+#endif
 }
 
+/* Returns 0 on success, matching what write_mock_script() used to return, so
+ * the call sites keep their shape. */
+static int arm_mock(const char *scenario) {
+    return sh_pal_setenv(MOCK_ENV, scenario);
+}
+
+static void disarm_mock(void) {
+    (void)sh_pal_setenv(MOCK_ENV, "");
+}
+
+/* The GLPK --write payload each scenario produces. */
+static const char *mock_write_body(const char *scenario) {
+    if (strcmp(scenario, "dual") == 0) {
+        return "c Status:     OPTIMAL\n"
+               "c Objective:  obj = 2 (MINimum)\n"
+               "s bas 1 1 f f 2\n"
+               "i 1 l 2 2\n"
+               "j 1 b 2 0\n"
+               "e o f\n";
+    }
+    if (strcmp(scenario, "timelimit") == 0) {
+        return "c Status:     TIME LIMIT EXCEEDED\n"
+               "s bas 1 1 u u 0\n"
+               "i 1 b 0 0\n"
+               "j 1 l 0 0\n"
+               "e o f\n";
+    }
+    if (strcmp(scenario, "infeasible") == 0 || strcmp(scenario, "unbounded") == 0) {
+        /* Both are UNDEFINED in the file; they differ only in the stdout line,
+         * which is where the adapter reads the hint from. */
+        return "c Status:     UNDEFINED\n"
+               "s bas 1 1 u u 0\n"
+               "i 1 b 0 0\n"
+               "j 1 l 0 0\n"
+               "e o f\n";
+    }
+    /* primal and offset */
+    return "c Status:     OPTIMAL\n"
+           "c Objective:  obj = 1 (MINimum)\n"
+           "s bas 1 1 f f 1\n"
+           "i 1 l 1 1\n"
+           "j 1 b 1 0\n"
+           "e o f\n";
+}
+
+/* The one line each scenario prints. The adapter parses iteration counts and
+ * status hints out of glpsol's stdout, so these are load-bearing. */
+static const char *mock_stdout_line(const char *scenario) {
+    if (strcmp(scenario, "primal") == 0)     return "  11 simplex iterations";
+    if (strcmp(scenario, "dual") == 0)       return "  17 simplex iterations";
+    if (strcmp(scenario, "offset") == 0)     return "  9 simplex iterations";
+    if (strcmp(scenario, "infeasible") == 0) return "PROBLEM HAS NO PRIMAL FEASIBLE SOLUTION";
+    if (strcmp(scenario, "unbounded") == 0)  return "PROBLEM HAS NO DUAL FEASIBLE SOLUTION";
+    if (strcmp(scenario, "timelimit") == 0)  return "TIME LIMIT EXCEEDED";
+    return NULL;
+}
+
+static int run_mock_glpsol(int argc, char **argv, const char *scenario) {
+    const char *write_path = NULL;
+    const char *line;
+    FILE *f;
+    int i;
+
+    setvbuf(stdout, NULL, _IONBF, 0);
+
+    /* The capabilities test registers an adapter and never solves, so the
+     * child is only ever spawned by accident. Exiting 0 keeps that harmless. */
+    if (strcmp(scenario, "caps") == 0) return 0;
+
+    for (i = 1; i < argc; i++) {
+        if (strcmp(argv[i], "--write") == 0 && i + 1 < argc) {
+            write_path = argv[i + 1];
+            i++;
+        }
+    }
+    if (!write_path) return 2;
+
+    if (strcmp(scenario, "dual") == 0) {
+        int saw_dual = 0;
+        for (i = 1; i < argc; i++) {
+            if (strcmp(argv[i], "--dual") == 0) saw_dual = 1;
+        }
+        /* The point of that test: --dual must actually reach glpsol. */
+        if (!saw_dual) return 9;
+    }
+
+    f = fopen(write_path, "w");
+    if (!f) return 3;
+    fputs(mock_write_body(scenario), f);
+    if (fclose(f) != 0) return 3;
+
+    line = mock_stdout_line(scenario);
+    if (line) printf("%s\n", line);
+    return 0;
+}
 static RalphModel* build_small_lp(void) {
     RalphModel *model = ralph_test_create();
     if (!model) return NULL;
@@ -94,20 +201,16 @@ static RalphModel* build_small_lp(void) {
 }
 
 static void test_register_caps_and_unregister(void) {
-    char script_path[256];
-    const char *script =
-        "#!/bin/sh\n"
-        "exit 0\n";
     RalphLPExternalCapabilities caps;
     int rc_script;
 
     ralph_lp_external_unregister_all_adapters();
-    rc_script = write_mock_script(script, script_path, sizeof(script_path));
+    rc_script = arm_mock("caps");
     ASSERT_INT_EQ(rc_script, 0,
                   "register/caps: create mock script");
     if (rc_script != 0) return;
 
-    ASSERT_INT_EQ(ralph_lp_external_register_glpk_oop(script_path), 0,
+    ASSERT_INT_EQ(ralph_lp_external_register_glpk_oop(self_exe), 0,
                   "register/caps: register GLPK OOP");
     ASSERT_INT_EQ(ralph_lp_external_is_adapter_registered(RALPH_LP_EXTERNAL_PROVIDER_GLPK), 1,
                   "register/caps: GLPK registered");
@@ -127,30 +230,10 @@ static void test_register_caps_and_unregister(void) {
                   "register/caps: unregister helper");
     ASSERT_INT_EQ(ralph_lp_external_is_adapter_registered(RALPH_LP_EXTERNAL_PROVIDER_GLPK), 0,
                   "register/caps: GLPK removed");
-    unlink(script_path);
+    disarm_mock();
 }
 
 static void test_primal_simplex_oop_success_with_duals(void) {
-    char script_path[256];
-    const char *script =
-        "#!/bin/sh\n"
-        "wri=\"\"\n"
-        "next_wri=0\n"
-        "for arg in \"$@\"; do\n"
-        "  if [ \"$next_wri\" = \"1\" ]; then wri=\"$arg\"; next_wri=0; continue; fi\n"
-        "  if [ \"$arg\" = \"--write\" ]; then next_wri=1; continue; fi\n"
-        "done\n"
-        "if [ -z \"$wri\" ]; then exit 2; fi\n"
-        "cat > \"$wri\" <<'EOF_WR'\n"
-        "c Status:     OPTIMAL\n"
-        "c Objective:  obj = 1 (MINimum)\n"
-        "s bas 1 1 f f 1\n"
-        "i 1 l 1 1\n"
-        "j 1 b 1 0\n"
-        "e o f\n"
-        "EOF_WR\n"
-        "echo \"  11 simplex iterations\"\n"
-        "exit 0\n";
     RalphModel *model = NULL;
     double x = 0.0;
     double y = 0.0;
@@ -158,18 +241,18 @@ static void test_primal_simplex_oop_success_with_duals(void) {
     int rc_script;
 
     ralph_lp_external_unregister_all_adapters();
-    rc_script = write_mock_script(script, script_path, sizeof(script_path));
+    rc_script = arm_mock("primal");
     ASSERT_INT_EQ(rc_script, 0,
                   "primal/success: create mock script");
     if (rc_script != 0) return;
-    ASSERT_INT_EQ(ralph_lp_external_register_glpk_oop(script_path), 0,
+    ASSERT_INT_EQ(ralph_lp_external_register_glpk_oop(self_exe), 0,
                   "primal/success: register GLPK OOP");
 
     model = build_small_lp();
     ASSERT_TRUE(model != NULL, "primal/success: model created");
     if (!model) {
         ralph_lp_external_unregister_all_adapters();
-        unlink(script_path);
+        disarm_mock();
         return;
     }
 
@@ -204,50 +287,27 @@ static void test_primal_simplex_oop_success_with_duals(void) {
 
     ralph_test_free(model);
     ralph_lp_external_unregister_all_adapters();
-    unlink(script_path);
+    disarm_mock();
 }
 
 static void test_dual_simplex_routes_dual_flag(void) {
-    char script_path[256];
-    const char *script =
-        "#!/bin/sh\n"
-        "wri=\"\"\n"
-        "mode=\"primal\"\n"
-        "next_wri=0\n"
-        "for arg in \"$@\"; do\n"
-        "  if [ \"$next_wri\" = \"1\" ]; then wri=\"$arg\"; next_wri=0; continue; fi\n"
-        "  if [ \"$arg\" = \"--write\" ]; then next_wri=1; continue; fi\n"
-        "  if [ \"$arg\" = \"--dual\" ]; then mode=\"dual\"; fi\n"
-        "done\n"
-        "if [ -z \"$wri\" ]; then exit 2; fi\n"
-        "if [ \"$mode\" != \"dual\" ]; then exit 9; fi\n"
-        "cat > \"$wri\" <<'EOF_WR'\n"
-        "c Status:     OPTIMAL\n"
-        "c Objective:  obj = 2 (MINimum)\n"
-        "s bas 1 1 f f 2\n"
-        "i 1 l 2 2\n"
-        "j 1 b 2 0\n"
-        "e o f\n"
-        "EOF_WR\n"
-        "echo \"  17 simplex iterations\"\n"
-        "exit 0\n";
     RalphModel *model = NULL;
     double x = 0.0;
     int rc_script;
 
     ralph_lp_external_unregister_all_adapters();
-    rc_script = write_mock_script(script, script_path, sizeof(script_path));
+    rc_script = arm_mock("dual");
     ASSERT_INT_EQ(rc_script, 0,
                   "dual/route: create mock script");
     if (rc_script != 0) return;
-    ASSERT_INT_EQ(ralph_lp_external_register_glpk_oop(script_path), 0,
+    ASSERT_INT_EQ(ralph_lp_external_register_glpk_oop(self_exe), 0,
                   "dual/route: register GLPK OOP");
 
     model = build_small_lp();
     ASSERT_TRUE(model != NULL, "dual/route: model created");
     if (!model) {
         ralph_lp_external_unregister_all_adapters();
-        unlink(script_path);
+        disarm_mock();
         return;
     }
 
@@ -272,46 +332,26 @@ static void test_dual_simplex_routes_dual_flag(void) {
 
     ralph_test_free(model);
     ralph_lp_external_unregister_all_adapters();
-    unlink(script_path);
+    disarm_mock();
 }
 
 static void test_external_objective_includes_model_offset(void) {
-    char script_path[256];
-    const char *script =
-        "#!/bin/sh\n"
-        "wri=\"\"\n"
-        "next_wri=0\n"
-        "for arg in \"$@\"; do\n"
-        "  if [ \"$next_wri\" = \"1\" ]; then wri=\"$arg\"; next_wri=0; continue; fi\n"
-        "  if [ \"$arg\" = \"--write\" ]; then next_wri=1; continue; fi\n"
-        "done\n"
-        "if [ -z \"$wri\" ]; then exit 2; fi\n"
-        "cat > \"$wri\" <<'EOF_WR'\n"
-        "c Status:     OPTIMAL\n"
-        "c Objective:  obj = 1 (MINimum)\n"
-        "s bas 1 1 f f 1\n"
-        "i 1 l 1 1\n"
-        "j 1 b 1 0\n"
-        "e o f\n"
-        "EOF_WR\n"
-        "echo \"  9 simplex iterations\"\n"
-        "exit 0\n";
     RalphModel *model = NULL;
     int rc_script;
 
     ralph_lp_external_unregister_all_adapters();
-    rc_script = write_mock_script(script, script_path, sizeof(script_path));
+    rc_script = arm_mock("offset");
     ASSERT_INT_EQ(rc_script, 0,
                   "objective-offset: create mock script");
     if (rc_script != 0) return;
-    ASSERT_INT_EQ(ralph_lp_external_register_glpk_oop(script_path), 0,
+    ASSERT_INT_EQ(ralph_lp_external_register_glpk_oop(self_exe), 0,
                   "objective-offset: register GLPK OOP");
 
     model = build_small_lp();
     ASSERT_TRUE(model != NULL, "objective-offset: model created");
     if (!model) {
         ralph_lp_external_unregister_all_adapters();
-        unlink(script_path);
+        disarm_mock();
         return;
     }
 
@@ -334,54 +374,16 @@ static void test_external_objective_includes_model_offset(void) {
 
     ralph_test_free(model);
     ralph_lp_external_unregister_all_adapters();
-    unlink(script_path);
+    disarm_mock();
 }
 
 static void test_status_hints_for_infeasible_and_unbounded(void) {
-    char inf_script[256];
-    char unb_script[256];
-    const char *inf_body =
-        "#!/bin/sh\n"
-        "wri=\"\"\n"
-        "next_wri=0\n"
-        "for arg in \"$@\"; do\n"
-        "  if [ \"$next_wri\" = \"1\" ]; then wri=\"$arg\"; next_wri=0; continue; fi\n"
-        "  if [ \"$arg\" = \"--write\" ]; then next_wri=1; continue; fi\n"
-        "done\n"
-        "if [ -z \"$wri\" ]; then exit 2; fi\n"
-        "cat > \"$wri\" <<'EOF_WR'\n"
-        "c Status:     UNDEFINED\n"
-        "s bas 1 1 u u 0\n"
-        "i 1 b 0 0\n"
-        "j 1 l 0 0\n"
-        "e o f\n"
-        "EOF_WR\n"
-        "echo \"PROBLEM HAS NO PRIMAL FEASIBLE SOLUTION\"\n"
-        "exit 0\n";
-    const char *unb_body =
-        "#!/bin/sh\n"
-        "wri=\"\"\n"
-        "next_wri=0\n"
-        "for arg in \"$@\"; do\n"
-        "  if [ \"$next_wri\" = \"1\" ]; then wri=\"$arg\"; next_wri=0; continue; fi\n"
-        "  if [ \"$arg\" = \"--write\" ]; then next_wri=1; continue; fi\n"
-        "done\n"
-        "if [ -z \"$wri\" ]; then exit 2; fi\n"
-        "cat > \"$wri\" <<'EOF_WR'\n"
-        "c Status:     UNDEFINED\n"
-        "s bas 1 1 u u 0\n"
-        "i 1 b 0 0\n"
-        "j 1 l 0 0\n"
-        "e o f\n"
-        "EOF_WR\n"
-        "echo \"PROBLEM HAS NO DUAL FEASIBLE SOLUTION\"\n"
-        "exit 0\n";
     RalphModel *model = NULL;
 
     ralph_lp_external_unregister_all_adapters();
-    ASSERT_INT_EQ(write_mock_script(inf_body, inf_script, sizeof(inf_script)), 0,
+    ASSERT_INT_EQ(arm_mock("infeasible"), 0,
                   "status-hints: create infeasible script");
-    ASSERT_INT_EQ(ralph_lp_external_register_glpk_oop(inf_script), 0,
+    ASSERT_INT_EQ(ralph_lp_external_register_glpk_oop(self_exe), 0,
                   "status-hints: register infeasible script");
 
     model = build_small_lp();
@@ -403,9 +405,9 @@ static void test_status_hints_for_infeasible_and_unbounded(void) {
     }
     ralph_lp_external_unregister_all_adapters();
 
-    ASSERT_INT_EQ(write_mock_script(unb_body, unb_script, sizeof(unb_script)), 0,
+    ASSERT_INT_EQ(arm_mock("unbounded"), 0,
                   "status-hints: create unbounded script");
-    ASSERT_INT_EQ(ralph_lp_external_register_glpk_oop(unb_script), 0,
+    ASSERT_INT_EQ(ralph_lp_external_register_glpk_oop(self_exe), 0,
                   "status-hints: register unbounded script");
 
     model = build_small_lp();
@@ -427,47 +429,28 @@ static void test_status_hints_for_infeasible_and_unbounded(void) {
     }
 
     ralph_lp_external_unregister_all_adapters();
-    unlink(inf_script);
-    unlink(unb_script);
+    disarm_mock();
+    disarm_mock();
 }
 
 static void test_time_limit_maps_to_external_failure_report(void) {
-    char script_path[256];
-    const char *script =
-        "#!/bin/sh\n"
-        "wri=\"\"\n"
-        "next_wri=0\n"
-        "for arg in \"$@\"; do\n"
-        "  if [ \"$next_wri\" = \"1\" ]; then wri=\"$arg\"; next_wri=0; continue; fi\n"
-        "  if [ \"$arg\" = \"--write\" ]; then next_wri=1; continue; fi\n"
-        "done\n"
-        "if [ -z \"$wri\" ]; then exit 2; fi\n"
-        "cat > \"$wri\" <<'EOF_WR'\n"
-        "c Status:     TIME LIMIT EXCEEDED\n"
-        "s bas 1 1 u u 0\n"
-        "i 1 b 0 0\n"
-        "j 1 l 0 0\n"
-        "e o f\n"
-        "EOF_WR\n"
-        "echo \"TIME LIMIT EXCEEDED\"\n"
-        "exit 0\n";
     RalphModel *model = NULL;
     RalphLPExternalFailureReport report;
     int rc_script;
 
     ralph_lp_external_unregister_all_adapters();
-    rc_script = write_mock_script(script, script_path, sizeof(script_path));
+    rc_script = arm_mock("timelimit");
     ASSERT_INT_EQ(rc_script, 0,
                   "time-limit: create mock script");
     if (rc_script != 0) return;
-    ASSERT_INT_EQ(ralph_lp_external_register_glpk_oop(script_path), 0,
+    ASSERT_INT_EQ(ralph_lp_external_register_glpk_oop(self_exe), 0,
                   "time-limit: register GLPK OOP");
 
     model = build_small_lp();
     ASSERT_TRUE(model != NULL, "time-limit: model created");
     if (!model) {
         ralph_lp_external_unregister_all_adapters();
-        unlink(script_path);
+        disarm_mock();
         return;
     }
 
@@ -495,30 +478,30 @@ static void test_time_limit_maps_to_external_failure_report(void) {
 
     ralph_test_free(model);
     ralph_lp_external_unregister_all_adapters();
-    unlink(script_path);
+    disarm_mock();
 }
 
-int main(void) {
+int main(int argc, char **argv) {
+    const char *scenario = getenv(MOCK_ENV);
+
+    /* Armed means this process is the child: behave like glpsol and exit. The
+     * parent is started by the Makefile with the variable unset, so it always
+     * falls through to the tests. */
+    if (scenario && scenario[0]) return run_mock_glpsol(argc, argv, scenario);
+
     printf("=== LP External GLPK OOP Adapter Tests ===\n");
 
-    /* Registration and capability reporting need no subprocess. */
-    test_register_caps_and_unregister();
+    if (self_exe_path(self_exe, sizeof(self_exe), argc > 0 ? argv[0] : NULL) != 0) {
+        printf("  FAIL: could not determine own executable path\n");
+        return 1;
+    }
 
-#ifdef _WIN32
-    /*
-     * SKIPPED, not passed. Every test below actually runs glpsol through
-     * lp_external_oop_run(), which has no Windows implementation yet.
-     * Reporting them as failures would blame the adapter for a missing
-     * process runner.
-     */
-    printf("  SKIP: solver tests -- out-of-process runner unimplemented on Windows\n");
-#else
+    test_register_caps_and_unregister();
     test_primal_simplex_oop_success_with_duals();
     test_dual_simplex_routes_dual_flag();
     test_external_objective_includes_model_offset();
     test_status_hints_for_infeasible_and_unbounded();
     test_time_limit_maps_to_external_failure_report();
-#endif
 
     printf("Passed %d/%d tests\n", tests_passed, tests_run);
     return (tests_run == tests_passed) ? 0 : 1;

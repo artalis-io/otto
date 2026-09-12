@@ -482,9 +482,13 @@ caution: never name a make variable `LIB`, `INCLUDE`, `LINK` or `CL`.
 | failures | 0 | 0 |
 | `make -n` command lines | byte-identical to before | — |
 
-The two out-of-process suites SKIP under MSVC exactly as they already do on
-MinGW: `lp_external_oop_run()` has no Windows implementation, which is a feature
-port tracked separately.
+The two out-of-process suites SKIPped under MSVC exactly as they did on MinGW,
+because `lp_external_oop_run()` had no Windows implementation. **Done:** it now
+uses `CreateProcess` over a pipe polled with `PeekNamedPipe`, and both suites
+run on both toolchains -- `test_lp_external_oop_runner` 26/26 and
+`test_lp_external_glpk_oop` 68/68. Their mock children are this same binary
+re-executed rather than `#!/bin/sh` scripts, so POSIX and Windows are held to
+the same assertions.
 
 ### Not in this pass
 

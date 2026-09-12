@@ -330,10 +330,12 @@ jobs:
   # Covers every core library: shared/, velo/, carta/, locus/ and ralph/.
   # The API servers are what remain; they additionally need Keel built here.
   #
-  # Two Ralph suites skip rather than run: lp_external_oop_run() spawns a
-  # child process with fork/execvp over a non-blocking pipe, and the Windows
-  # equivalent (CreateProcess + PeekNamedPipe) is a feature port rather than a
-  # portability fix. They report SKIP so the gap stays visible.
+  # The two Ralph out-of-process suites used to skip here, because
+  # lp_external_oop_run() had no Windows implementation. It has one now
+  # (CreateProcess over a pipe polled with PeekNamedPipe), and both suites run
+  # on this job -- which is the point: the GLPK cross-validation path is how
+  # solver changes get checked against a reference, and it was unavailable on
+  # Windows entirely.
   # ==========================================================================
   windows:
     name: Windows Core
