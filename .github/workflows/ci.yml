@@ -753,6 +753,48 @@ jobs:
   # ==========================================================================
   # Build WebAssembly
   # ==========================================================================
+  # API docs
+  #
+  # site/api.html is generated from the /*@api ... */ annotations in the module
+  # headers, and `--check` fails if the committed file no longer matches what
+  # those headers say. CLAUDE.md has described this target as "for CI" for a
+  # long time while no workflow ran it, and the cost of that was two bugs at
+  # once: the generator could not run on Windows at all (Python defaults to the
+  # locale codepage there, so reading UTF-8 sources and printing check marks both
+  # raised), and api.html had drifted out of date -- it documented "gallons" and
+  # "price_per_gallon" where fuelwise's headers now say "purchase" and "price".
+  #
+  # Windows is in the matrix for exactly that reason. A Linux-only job would not
+  # have caught the half of this that mattered.
+  #
+  # The target takes no build: it reads headers and a template, so there is no
+  # Emscripten or C toolchain here despite api.html's WASM demos.
+  # ==========================================================================
+  api-docs:
+    name: API Docs (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            python: python3
+          - os: windows-latest
+            python: python
+
+    defaults:
+      run:
+        shell: bash
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Check api.html is up-to-date with the headers
+        run: ${{ matrix.python }} scripts/build-api-docs.py --check
+
+  # ==========================================================================
   build-wasm:
     name: Build WASM
     runs-on: ubuntu-latest
