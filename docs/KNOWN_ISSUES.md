@@ -137,174 +137,69 @@ Include:
 
 ## Compiler-Dependent Behaviour
 
-### bore3d does not converge under plain IEEE arithmetic
+### bore3d does not converge under plain IEEE arithmetic -- FIXED
 
-- **Severity**: High. This is a solver bug, not a build problem, and OTTO's own
-  flags are what hide it. Any build without `-march=native` or `-ffast-math` --
-  a plain `gcc -O2`, a distro package, another compiler -- fails to solve a
-  NETLIB LP that takes 45 iterations here.
-- **Status**: Root cause identified in Phase 1. Not fixed.
+- **Status**: Fixed. Kept here because the diagnosis took three attempts and
+  two of them were wrong in instructive ways.
 
-**The behaviour.** Same source, same solver parameters, same machine, one
-NETLIB problem:
+**The symptom.** Any build without `-march=native` or `-ffast-math` -- a plain
+`gcc -O2`, a distro package, MSVC, which has neither -- failed to solve a
+NETLIB LP that takes 45 iterations with them, running to the 20000 iteration
+cap in 76 seconds instead.
 
-| build | iterations | time | status |
-|---|---|---|---|
-| `-march=native -ffast-math` (OTTO default) | **45** | 15.1 ms | OPTIMAL, 6.2e-12 |
-| drop `-march=native` only | 45 | 13.6 ms | OPTIMAL |
-| drop fast-math only | 45 | 15.1 ms | OPTIMAL |
-| **drop both** | **20000** (cap) | 72.8 s | iteration limit |
-| MSVC 19.44, any `/fp:` setting | **20000** (cap) | 78.5 s | iteration limit |
+**The cause.** Phase 1 would occasionally reach a basis so ill-conditioned that
+`B^-1 b` is meaningless, and a DIR_SKIP full recompute would then *adopt* that
+point -- taking artificial feasibility from 30.1 to 5194.7 in one step, and
+from there to 3.2e9 without recovering.
 
-Either flag alone masks it. Removing both exposes it, and MSVC has neither.
+**The fix.** `simplex_phase1_zones.c` declines the recompute when the basis
+condition estimate exceeds `RALPH_PHASE1_RECOMPUTE_COND_LIMIT` (1e4), keeping
+the incrementally maintained `x` and leaving the existing stall machinery to
+make progress. bore3d now solves in 39 iterations under strict IEEE and 45
+with the default flags, to the same objective either way.
 
-**What it actually is: the solver enters bases whose true solution is
-catastrophic, and a recompute then adopts it.**
-
-An earlier revision of this entry said the incrementally-maintained `x` drifts
-away from the true basic solution. That was measured and is **wrong**.
-
-Probing every Phase 1 iteration -- snapshot the basis, strictly refactorize,
-recompute `x` from scratch, compare, restore -- gives this over the first 250
+**What made it measurable.** Probing every Phase 1 iteration -- snapshot,
+strictly refactorize, recompute, compare, restore -- over the first 250
 iterations of the failing run:
 
 | | |
 |---|---|
-| incremental and true artificial sum agree to 9 decimal places | **227** |
+| incremental and true artificial sum agree to 9 decimal places | 227 |
 | agree within 1% | 17 |
-| differ by more than 1% | **6** |
+| differ by more than 1% | 6 |
 
-The incremental `x` is accurate essentially all of the time. There is no
-accumulating drift. What there is instead is a handful of isolated iterations
-where the basis is so ill-conditioned that its *true* solution is enormous:
+and on those six the condition estimate runs 4.9e4 to 1.9e5 against a median of
+7.3 everywhere else. The threshold sits below all six. It also declines on 14
+of the 244 good iterations, which costs nothing: on those the two values agree
+to within 1% anyway, so keeping the incremental one loses nothing. The
+asymmetry is the point -- refusing a good recompute keeps a correct `x`,
+adopting a bad one loses the solve.
 
-    iter=246  incremental=29.198   true=1612.04   ratio=55.2
-    iter=256  incremental=33.679   true=100.47    ratio=3.0
+**Two wrong answers first, recorded so nobody retraces them.**
 
-and the very next iteration is back to agreeing exactly. `B^-1 b` for those
-bases is not a better answer than the incremental `x` -- it is a meaningless
-one, because `B` is nearly singular. The incremental update is smooth across
-them; a full recompute is not.
+- *"The primal solution drifts."* It does not. The measurement above says the
+  incremental `x` is accurate on 244 of 250 iterations. The failure is six
+  isolated bad bases, not accumulated error. A fix built on the drift theory
+  (refactorize before accepting a worsened recompute) reproduces the same
+  value to every printed digit and does not help: better arithmetic on a bad
+  basis is still a bad basis.
+- *"The force-pivot budget lets the bad pivot through."* Gating it on
+  `p1_candidate_basis_refactorable()` -- which applies the candidate basis,
+  strictly refactorizes and compares the true artificial sum -- also does not
+  help. The bad bases are reached through ordinary pivots too.
 
-That is the actual failure. At iteration 297 a DIR_SKIP recompute lands on one
-of these bases and **adopts** its true solution, taking Phase 1 feasibility from
-30.1187 to 5194.73 in one step. A second does the same later, 19823.9 to
-4638608.7. Refactorizing first changes neither value to any printed digit,
-because the basis, not the arithmetic, is what is wrong. From there the run
-never recovers: the artificial sum peaks near 3.2e9 and Phase 1 never completes.
-The passing build never exceeds 45.05 and ends at 6.1e-21.
-
-**Why the existing guards cannot see it.** Every feasibility check in
-`simplex_phase1_zones.c` reads the incremental `x`, including
-`p1_engine_direction_preserves_artificial_progress()`, which compares a
-*predicted* artificial sum against the current one. Both come from the same
-place, so the check is self-consistent and says nothing about whether the basis
-it is about to commit to is usable.
-
-**Two fixes tried and rejected, with evidence:**
-
-- *Refactorize before accepting a worsened recompute.* Implemented: on a
-  recompute that worsens feasibility by more than 4x, refactorize and recompute
-  again before accepting. The retry reproduces the same value to every printed
-  digit (5194.731563 both times, 4638608.731 both times) and the run still hits
-  20000 iterations. The basis is the problem; better arithmetic on it does not
-  help.
-- *Gate the force-pivot budget on a true-feasibility probe.* The dir-stabilize
-  retry loop accepts a pivot on `|pivot| >= RALPH_PIVOT_TOL` alone, skipping the
-  `dir_inf <= RALPH_PHASE1_DIR_INF_REFACTOR_TRIGGER` ceiling the next block
-  enforces. Gating it additionally on `p1_candidate_basis_refactorable()` --
-  which applies the candidate basis, strictly refactorizes, recomputes and
-  compares the true artificial sum -- does not fix it either: still 20000
-  iterations, and 111s against 78s from the probe cost. The bad bases are
-  reached through ordinary pivots too, not only through that one path.
-
-**Ruled out, with evidence:**
-
-- *Not the pivot application.* Instrumenting `simplex_pivot()` inside
-  `p1_zone_pivot()` over 304 Phase 1 pivots found **zero** that grew the
-  artificial sum by even 2x. The blow-up is never in the pivot itself.
-- *Not recompute corruption.* Forcing a fresh `tableau_refactorize_with_reason()`
-  before recomputing reproduces the same value to all printed digits, and does
-  not fix the run (still 20000 iterations).
-- *Not the optimiser.* `-O0` and `-O2` both stall once the two flags are gone.
-- *Not floating-point mode.* `/fp:precise`, `/fp:fast` and `/fp:strict` are
-  identical on MSVC.
-- *Not OpenMP.* Building without `-fopenmp`, so the `#pragma omp simd`
-  directives are ignored exactly as MSVC ignores them, still converges in 45.
-- *Not `max_iterations`.* The passing build returns 45 iterations at every cap
-  from 500 to 20000; the parameter is a ceiling and nothing more.
-
-**Presolve is in the loop.** With `presolve=0` the failing build errors out in
-125 ms instead of stalling. Presolve alone does not explain it -- the passing
-builds run the same presolve -- but the stall needs it.
-
-**Why the flags hide it.** Both builds are bit-identical for the first 107 Phase
-1 iterations. FMA contraction and reassociation then nudge pricing and ratio
-decisions just enough that the passing build never selects the entering column
-that produces the 1e9 direction; it reaches a fourth stall re-perturbation
-(`scale 9.0`) and completes Phase 1 at iteration 350. The failing build reaches
-only three perturbations before losing the point.
-
-**A related gap, worth fixing regardless.** `p1_zone_stall_detect()` computes an
-artificial-sum progress window via `p1_progress_window_update()`, but the whole
-block sits behind `if (tab->m < 1000) { ... return P1_ZONE_PROCEED; }`. For any
-problem with fewer than 1000 rows -- bore3d has 228 -- that window is dead code,
-and stall detection falls back to the change in `tab->obj_value`, which is the
-*perturbed* objective -- a different quantity from the artificial sum the phase
-is actually trying to drive to zero.
-
-**How CI holds the line on this.** The NETLIB harness used to record a
-timeout as a SKIP, which is excluded from both the PASS denominator and the
-exit status -- so the suite reported 25/25 PASS on a build where this
-problem never terminates. A timeout on a problem that has a reference
-optimal is a failure, and is now reported as one.
-
-The Windows MSVC job names bore3d as an expected timeout
-(`NETLIB_XFAIL=bore3d`), so it stays green on the other 25 problems rather
-than sitting permanently red on one known bug -- a job that is always red is
-a job nobody reads. The entry clears itself: if bore3d ever solves under
-MSVC the run fails with
-
-    XPASS bore3d        solved, but is on the expected-timeout list -- remove it
-
-so whoever fixes this is told to delete it. Today it reports:
-
-    XFAIL bore3d        timed out, as expected on this build
-    Results: 25/25 PASS, 58 SKIP, 1 XFAIL
-
-GCC is unaffected -- it solves bore3d in 15ms and reports 26/26.
-
-**Reproduce, with GCC, no MSVC required:**
+**Reproduce the old failure** (on a commit before the fix):
 
     make -C ralph clean
     make -C ralph lib CC_ARCH= CC_FP_FASTMATH= CC_FP_KEEP_NONFINITE=
-    # then run bore3d through the NETLIB harness
 
-`make -C ralph clean` is not optional. `make lib` after changing those variables
-rebuilds only what is out of date, leaving an archive of mixed-flag objects that
-behaves like neither build.
+`make -C ralph clean` is not optional: `make lib` after changing those
+variables rebuilds only what is out of date, leaving an archive of mixed-flag
+objects that behaves like neither build.
 
-The parameters the harness uses for this case, captured rather than guessed:
-
-    verbose=0  max_iterations=10000000  presolve=1  verify=1
-    method=2   random_seed=0  lp_basis_governor_mode=0
-    lp_reinvert_controller_mode=1
-
-**Where a fix should go.** Not at the recompute, and not at any single
-acceptance path -- both have been tried. The thing that distinguishes the six
-bad iterations is conditioning: `B` is nearly singular, so `B^-1 b` is
-meaningless rather than merely large. Ralph already computes a condition
-estimate (`[verify] ... cond=`), so the promising direction is to refuse to
-adopt a recomputed point from a basis whose conditioning says the solve cannot
-be trusted -- keeping the previous basis and taking the existing stall path
-instead. That has not been implemented or tested.
-
-Any change here must clear `ralph/benchmarks/netlib_regression_gate.sh` against
-its baselines -- this path is shared by every LP Ralph solves.
-
-**A note for whoever picks this up.** The NETLIB harness runs each problem in a
-child process, and on Windows that child is created with `bInheritHandles=FALSE`
--- anything it writes to stderr is lost. Diagnostics added inside
-`solve_with_ralph` will not appear until the isolation is bypassed by calling
-`test_run_job()` directly, or by driving `ralph_test_optimize()` from a small
-in-process driver, which is how the numbers above were taken.
+**A note for whoever works in this area.** The NETLIB harness runs each problem
+in a child process, and on Windows that child is created with
+`bInheritHandles=FALSE` -- anything it writes to stderr is lost. Diagnostics
+added inside `solve_with_ralph` will not appear until the isolation is bypassed
+by calling `test_run_job()` directly, or by driving `ralph_test_optimize()`
+from a small in-process driver, which is how the numbers above were taken.

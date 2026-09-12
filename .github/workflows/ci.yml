@@ -666,19 +666,10 @@ jobs:
           source scripts/msvc-env.sh
           mingw32-make -C ralph CC=cl test-detect
 
-      # bore3d does not converge under strict IEEE arithmetic, which is what
-      # MSVC gives, so it times out here while GCC solves it in 15ms. That is
-      # a real defect (docs/KNOWN_ISSUES.md), not a platform quirk to ignore,
-      # and a timeout is now a failure rather than a skip.
-      #
-      # Naming it here keeps this job green on everything else rather than
-      # permanently red on one known bug -- a job that is always red is a job
-      # nobody reads. The entry is self-clearing: if bore3d ever solves under
-      # MSVC the run fails as XPASS, telling whoever fixed it to delete this.
       - name: Build and test Ralph Netlib
         run: |
           source scripts/msvc-env.sh
-          mingw32-make -C ralph CC=cl test-netlib NETLIB_XFAIL=bore3d
+          mingw32-make -C ralph CC=cl test-netlib
 
       - name: Build and test Arbor
         run: |
