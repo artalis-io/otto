@@ -197,28 +197,83 @@ adopting a bad one loses the solve.
 variables rebuilds only what is out of date, leaving an archive of mixed-flag
 objects that behaves like neither build.
 
-### The NETLIB regression gate fails on Windows
+### The NETLIB regression gate could not run on Windows -- FIXED
 
-- **Severity**: Medium. Three problems the gate marks required-pass do not
-  meet its checks on Windows: `25fv47`, `bandm`, `scagr25`.
-- **Status**: Observed, not diagnosed. Pre-existing -- the same three fail on
-  the commit before the bore3d fix, checked by rebuilding from that source
-  rather than assumed.
+- **Severity**: was Medium. **Status**: fixed; root cause was a broken
+  availability probe, not the solver.
 
-Nothing notices, for two reasons. No workflow runs the gate, and it needs `jq`,
-which was not installed on any Windows box until now (the three Windows CI
-toolchains install it as of this change, so it can at least be run there).
+This entry previously said three problems -- `25fv47`, `bandm`, `scagr25` --
+"do not meet its checks on Windows", and speculated about per-platform
+baselines. That was wrong, and the shape of it should have been the clue:
+those three are the baseline's *entire* `required_pass` set, so all three
+failing together was systematic rather than three numerical coincidences.
 
-Whether the same three fail on Linux is unknown. The baselines in
-`ralph/benchmarks/*_baseline.json` may encode expectations recorded on a
-different platform, in which case the answer is that the gate needs
-per-platform baselines rather than that the solver is wrong. Run:
+They were never solved at all. `ralph-benchmark` probed for its reference
+oracle with:
 
-    bash ralph/benchmarks/netlib_regression_gate.sh
+```c
+system("which glpsol >/dev/null 2>&1")
+```
+
+On Windows `system()` runs `cmd.exe`, which has neither `which` nor
+`/dev/null` -- it reads the redirect as a path and fails with "The system
+cannot find the path specified" whether or not glpsol is installed. GLPK is
+required outside `--test` mode, so the harness exited 1 before solving
+anything, and the gate recorded three command failures. Every mismatch
+artifact it wrote was empty, which is what gave it away.
+
+Six other call sites had copied the same spelling, including
+`test_lp_external_glpk_oop_integration.c`, whose "glpsol not in PATH" skip
+was therefore unconditional on Windows rather than a real dependency check.
+All seven now use `sh_pal_program_on_path()`, which asks `where` on Windows
+and `which` elsewhere.
+
+**Result on Windows once it could run.** The full 84-problem gate:
+
+| category | count |
+|---|---|
+| objective mismatches | 0 |
+| status mismatches | 0 |
+| invalid solutions | 0 |
+| command failures | 0 |
+| dense-fallback violations | 0 |
+| unexpected timeouts | 0 |
+
+So the solver agrees with GLPK on every problem, and the
+per-platform-baseline theory was unnecessary.
+
+### Run the gate on an idle machine
+
+The first full run recorded `bnl1.mps` as an unexpected timeout, killed by the
+external 50s wrapper. That was a measurement artifact: the run shared the
+machine with a concurrent MSVC build and test suite. On an idle box bnl1 passes
+the gate 3 times out of 3, and solves standalone in 176 ms over 439 iterations.
+
+It is worth knowing why the gate is this sensitive. The limit handed to Ralph
+is derived from GLPK's *measured* time on the same problem
+(`ralph_benchmark.c`: `ralph_time_limit = glpk.time_ms / 1000.0 *
+time_multiplier`), so contention inflates the reference and the budget
+together, and Ralph is OpenMP-parallel on top of that. A loaded machine does
+not just make the gate slow, it makes it report failures that are not there.
+
+### Still open: nothing runs the gate
+
+No workflow invokes `ralph/benchmarks/netlib_regression_gate.sh`. CI runs `make
+-C ralph test-netlib`, which is `--test` mode against a table of reference
+optimals and needs no GLPK. A full gate run takes upwards of twenty minutes and
+wants an otherwise idle machine, so putting it in CI is a scheduling decision
+rather than a free win.
+
+**Two traps for whoever runs it by hand on Windows.** The gate shells out to
+`make`, so it needs `--no-build` with a `mingw32-make`-built binary --
+`/usr/bin/make` strips `TMPDIR` and dies with "Cannot create temporary file in
+C:\WINDOWS\". And it must run under MSYS2's UCRT64 shell, not Git Bash:
+MSYS2's `jq.exe` segfaults there because it loads Git Bash's `msys-2.0.dll`
+instead of its own.
 
 **A note for whoever works in this area.** The NETLIB harness runs each problem
 in a child process, and on Windows that child is created with
 `bInheritHandles=FALSE` -- anything it writes to stderr is lost. Diagnostics
 added inside `solve_with_ralph` will not appear until the isolation is bypassed
 by calling `test_run_job()` directly, or by driving `ralph_test_optimize()`
-from a small in-process driver, which is how the numbers above were taken.
+from a small in-process driver.

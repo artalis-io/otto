@@ -231,6 +231,22 @@ uint64_t sh_pal_pid(void);
 int sh_pal_setenv(const char *name, const char *value);
 
 /*
+ * Is `program` runnable from PATH? Returns 1 if it is, 0 if not.
+ *
+ * POSIX asks `which`; Windows asks `where`. That difference is the whole
+ * reason this exists: system() on Windows runs cmd.exe, which has neither
+ * `which` nor /dev/null, so the POSIX spelling fails there whether or not the
+ * program is installed. Seven call sites had copied that spelling, and every
+ * one of them reported "missing" on every Windows box -- silently skipping
+ * tests and failing benchmark harnesses that had nothing wrong with them.
+ *
+ * `program` is interpolated into a shell command, so it must be a plain
+ * program name: anything with shell metacharacters is rejected as not found.
+ */
+int sh_pal_program_on_path(const char *program);
+
+
+/*
  * Remove an environment variable.
  *
  * Returns 0 on success -- including when the variable was not set, matching

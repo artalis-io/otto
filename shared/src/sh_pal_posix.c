@@ -372,6 +372,40 @@ int sh_pal_setenv(const char *name, const char *value)
     return setenv(name, value ? value : "", 1) == 0 ? 0 : -1;
 }
 
+/*
+ * A plain program name: letters, digits, and the few punctuation characters
+ * real executables use. Anything else is rejected rather than escaped, because
+ * `program` is interpolated into a shell command below. A whitelist is the
+ * safe direction here -- an unusual but legitimate name is reported as "not
+ * found", which is the same answer the caller would act on anyway.
+ */
+static int pal_program_name_ok(const char *program)
+{
+    const char *p;
+
+    if (!program || !program[0]) return 0;
+    for (p = program; *p; p++) {
+        unsigned char c = (unsigned char)*p;
+        int ok = (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
+                 (c >= '0' && c <= '9') ||
+                 c == '.' || c == '-' || c == '_' || c == '+';
+        if (!ok) return 0;
+    }
+    return 1;
+}
+
+int sh_pal_program_on_path(const char *program)
+{
+    char cmd[512];
+
+    if (!pal_program_name_ok(program)) return 0;
+    if (snprintf(cmd, sizeof(cmd), "which %s >/dev/null 2>&1", program) >= (int)sizeof(cmd)) {
+        return 0;
+    }
+    return system(cmd) == 0;
+}
+
+
 int sh_pal_unsetenv(const char *name)
 {
     if (!name || !name[0] || strchr(name, '=')) return -1;
