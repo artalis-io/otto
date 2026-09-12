@@ -30,6 +30,8 @@
 #include <sys/resource.h>
 #endif
 
+#include "sh_pal.h"
+
 /* ============================================================================
  * Configuration
  * ============================================================================ */
@@ -433,7 +435,9 @@ static void query_osrm(const char *osrm_url, BenchRoute *route,
  */
 static int osrm_check_curl(void)
 {
-    return system("which curl >/dev/null 2>&1") == 0;
+    /* See sh_pal_program_on_path: the system("which ...") spelling this
+     * replaced reported "missing" on every Windows box. */
+    return sh_pal_program_on_path("curl");
 }
 
 /*

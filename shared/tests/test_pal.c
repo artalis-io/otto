@@ -11,6 +11,13 @@
 
 #include "sh_pal.h"
 
+/* A program guaranteed to be on PATH wherever this suite runs. */
+#ifdef _WIN32
+  #define SH_TEST_KNOWN_PROGRAM "cmd"
+#else
+  #define SH_TEST_KNOWN_PROGRAM "sh"
+#endif
+
 static int g_pass = 0;
 static int g_fail = 0;
 
@@ -314,6 +321,37 @@ static void test_temp_dir(void)
 
 /* --------------------------------------------------------------- terminal */
 
+static void test_program_on_path(void)
+{
+    /*
+     * The interpreter running this suite is on PATH by definition on both
+     * platforms, so it is the one program we can positively assert on without
+     * assuming anything about the machine.
+     *
+     * The negative case is the one that actually regressed: on Windows this
+     * probe used to shell out to `which` with a /dev/null redirect, which
+     * cmd.exe cannot do, so it answered "not found" for everything -- silently
+     * skipping the GLPK integration suite and failing the NETLIB harness
+     * outright. A probe that always says no passes no test here.
+     */
+    int found_sh = sh_pal_program_on_path(SH_TEST_KNOWN_PROGRAM);
+    check(found_sh == 1, "a program that is on PATH is found");
+
+    check(sh_pal_program_on_path("sh_pal_no_such_program_xyzzy") == 0,
+          "a program that is not on PATH is not found");
+
+    /* `program` is interpolated into a shell command, so anything that could
+     * change its meaning is refused rather than escaped. */
+    check(sh_pal_program_on_path("sh; echo pwned") == 0,
+          "a name with a command separator is refused");
+    check(sh_pal_program_on_path("sh && echo pwned") == 0,
+          "a name with an operator is refused");
+    check(sh_pal_program_on_path("../../bin/sh") == 0,
+          "a name with path separators is refused");
+    check(sh_pal_program_on_path("") == 0, "an empty name is refused");
+    check(sh_pal_program_on_path(NULL) == 0, "a NULL name is refused");
+}
+
 static void test_terminal(void)
 {
     int cols = -1, rows = -1;
@@ -376,6 +414,7 @@ int main(void)
     test_cpu();
     test_env();
     test_temp_dir();
+    test_program_on_path();
     test_terminal();
 
     printf("\n%d passed, %d failed\n", g_pass, g_fail);

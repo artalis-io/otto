@@ -23,9 +23,13 @@
 
 /* Ralph headers */
 #include "ralph_test_mod_api.h"
+#include "sh_pal.h"
 
 static int glpsol_available(void) {
-    int rc = system("which glpsol >/dev/null 2>&1");
+    /* sh_pal_program_on_path, not system("which ..."): that spelling fails on
+     * Windows whether or not glpsol is installed, because cmd.exe has neither
+     * `which` nor /dev/null. */
+    int rc = sh_pal_program_on_path("glpsol") ? 0 : 1;
     return rc == 0 ? 1 : 0;
 }
 

@@ -1345,8 +1345,20 @@ static const char* periodic_cost_reason_string(int reason) {
  * ============================================================================ */
 
 static int check_glpk_available(void) {
-    int ret = system("which glpsol >/dev/null 2>&1");
-    return ret == 0;
+    /*
+     * This used to be system("which glpsol >/dev/null 2>&1"), which cannot
+     * work on Windows: system() runs cmd.exe, which has neither `which` nor
+     * /dev/null, so it failed with "The system cannot find the path specified"
+     * whether or not glpsol was installed. Since the benchmark requires GLPK
+     * as its reference oracle, ralph-benchmark then exited 1 before solving
+     * anything.
+     *
+     * That was the whole of the "NETLIB regression gate fails on Windows"
+     * entry in docs/KNOWN_ISSUES.md: the gate reported 25fv47, bandm and
+     * scagr25 -- its entire required_pass set -- as failures, and none of the
+     * three had been solved at all, let alone solved wrongly.
+     */
+    return sh_pal_program_on_path("glpsol");
 }
 
 static int load_problem_into_model(RalphModel *model, const char *problem_path) {
