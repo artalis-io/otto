@@ -5698,8 +5698,19 @@ static int test_solve_one(const char *path, const char *name,
     }
 
     if (rc == 1) {
-        fprintf(stderr, "  SKIP  %-12s  (timeout after %ds)\n", name, timeout_sec);
-        return 3;
+        /*
+         * A timeout is a failure, not a skip.
+         *
+         * Every problem that reaches here has a reference optimal -- the ones
+         * without are skipped by the caller before this is called. So not
+         * finishing is a result: the solver did not solve a problem it is
+         * expected to solve. Returning 3 put it in skip_count, which is
+         * excluded from both the PASS denominator and the exit status, so the
+         * suite reported 25/25 PASS on a build where bore3d never terminates.
+         * See docs/KNOWN_ISSUES.md.
+         */
+        fprintf(stderr, "  TIMEOUT %-12s (no result after %ds)\n", name, timeout_sec);
+        return 2;
     }
 
     if (tr.status != 0) {
