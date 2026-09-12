@@ -253,17 +253,26 @@ and stall detection falls back to the change in `tab->obj_value`, which is the
 *perturbed* objective -- a different quantity from the artificial sum the phase
 is actually trying to drive to zero.
 
-**This now fails CI on Windows MSVC, on purpose.** The NETLIB harness used
-to record a timeout as a SKIP, which is excluded from both the PASS
-denominator and the exit status -- so the suite reported 25/25 PASS on a
-build where this problem never terminates. A timeout on a problem that has a
-reference optimal is a failure, and it is now reported as one:
+**How CI holds the line on this.** The NETLIB harness used to record a
+timeout as a SKIP, which is excluded from both the PASS denominator and the
+exit status -- so the suite reported 25/25 PASS on a build where this
+problem never terminates. A timeout on a problem that has a reference
+optimal is a failure, and is now reported as one.
 
-    TIMEOUT bore3d       (no result after 60s)
-    Results: 25/25 PASS, 1 ERROR, 58 SKIP
+The Windows MSVC job names bore3d as an expected timeout
+(`NETLIB_XFAIL=bore3d`), so it stays green on the other 25 problems rather
+than sitting permanently red on one known bug -- a job that is always red is
+a job nobody reads. The entry clears itself: if bore3d ever solves under
+MSVC the run fails with
 
-The Windows MSVC job is therefore expected to be red until this is fixed.
-GCC is unaffected -- it solves bore3d in 15ms and still reports 26/26.
+    XPASS bore3d        solved, but is on the expected-timeout list -- remove it
+
+so whoever fixes this is told to delete it. Today it reports:
+
+    XFAIL bore3d        timed out, as expected on this build
+    Results: 25/25 PASS, 58 SKIP, 1 XFAIL
+
+GCC is unaffected -- it solves bore3d in 15ms and reports 26/26.
 
 **Reproduce, with GCC, no MSVC required:**
 
