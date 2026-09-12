@@ -1150,8 +1150,13 @@ build-ralph-benchmark: $(RALPH_BENCHMARK_EXEC)
 	@echo "Run: ./ralph-benchmark --help"
 
 # Fast NETLIB correctness test (tiers 0-1)
+# NETLIB_XFAIL names problems expected to time out on this build, e.g.
+#   make test-netlib NETLIB_XFAIL=bore3d
+# A listed problem that times out is XFAIL and does not fail the run; one
+# that solves is XPASS and does, so a stale entry cannot linger.
 test-netlib: $(RALPH_BENCHMARK_EXEC)
-	cd $(CURDIR) && ./$(RALPH_BENCHMARK_EXEC) --test fast
+	cd $(CURDIR) && ./$(RALPH_BENCHMARK_EXEC) --test fast \
+	    $(if $(NETLIB_XFAIL),--xfail-timeout $(NETLIB_XFAIL))
 
 # Full NETLIB correctness test (all tiers)
 test-netlib-full: $(RALPH_BENCHMARK_EXEC)

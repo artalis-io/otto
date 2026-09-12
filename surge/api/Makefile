@@ -105,17 +105,14 @@ clean:
 	rm -rf $(BUILD_DIR) $(TARGET)
 
 # Test API endpoints
+# The heavy lifting lives in test_api.sh, which starts its own server, asserts
+# on every endpoint and exits non-zero when any of them fails. This target used
+# to inline a curl script that printed PASS and FAIL without counting either and
+# ended on `kill ... || true`, so it always succeeded -- `make test` here could
+# print FAIL five times and still exit 0. CI was unaffected (it calls the script
+# directly), but anyone running make locally was told the wrong thing.
 test: $(TARGET)
-	@echo "Testing Surge API..."
-	@echo "Note: Start server first with: make run"
-	@echo ""
-	@echo "Testing health endpoint:"
-	curl -s http://localhost:8085/api/v1/health | head -c 200
-	@echo ""
-	@echo ""
-	@echo "Testing version endpoint:"
-	curl -s http://localhost:8085/api/v1/version | head -c 200
-	@echo ""
+	@bash test_api.sh
 
 # Help
 help:

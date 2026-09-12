@@ -993,6 +993,13 @@ typedef struct {
     int verify_matrix;   /* Deep matrix verification via GLPK solution */
     int test_mode;       /* 0=off, 1=fast (tiers 0-1), 2=full (all tiers) */
 
+    /* Comma-separated problems expected to time out on this build, e.g.
+     * "bore3d". A listed problem that times out is reported XFAIL and does
+     * not fail the run; one that SOLVES is reported XPASS and does, because
+     * the entry is then stale and should be deleted. That is what stops an
+     * expected failure quietly becoming a permanent blind spot. */
+    const char *xfail_timeout;
+
     /* Time limits */
     double time_multiplier;
     double hard_cap_sec;
@@ -5654,6 +5661,25 @@ static int test_run_isolated(const TestJob *job, TestResult *tr) {
 
 /* Solve a single problem in a child process with hard timeout.
  * Returns: 0=pass, 1=fail, 2=error, 3=skip(timeout), 4=skip(other) */
+/* Is `name` in the comma-separated `list`? Matching is exact per element,
+ * so "bore" does not match "bore3d". */
+static int name_in_list(const char *list, const char *name)
+{
+    size_t nlen;
+    const char *p;
+
+    if (!list || !name) return 0;
+    nlen = strlen(name);
+    for (p = list; *p; ) {
+        const char *comma = strchr(p, ',');
+        size_t len = comma ? (size_t)(comma - p) : strlen(p);
+        if (len == nlen && strncmp(p, name, nlen) == 0) return 1;
+        if (!comma) break;
+        p = comma + 1;
+    }
+    return 0;
+}
+
 static int test_solve_one(const char *path, const char *name,
                            const NetlibReference *ref,
                            int timeout_sec, int method, int pricing,
@@ -5698,8 +5724,22 @@ static int test_solve_one(const char *path, const char *name,
     }
 
     if (rc == 1) {
-        fprintf(stderr, "  SKIP  %-12s  (timeout after %ds)\n", name, timeout_sec);
-        return 3;
+        /*
+         * A timeout is a result, not an absence of one.
+         *
+         * Every problem that reaches here has a reference optimal -- the ones
+         * without are skipped by the caller before this is called. So not
+         * finishing means the solver failed to solve something it is expected
+         * to solve. This used to return 3, landing in skip_count, which is
+         * excluded from both the PASS denominator and the exit status: the
+         * suite reported 25/25 PASS on a build where bore3d never terminates.
+         *
+         * 4 is reported rather than judged here. Whether a timeout is a
+         * failure or an expected one depends on the xfail list, and that lives
+         * with the caller, which has the options.
+         */
+        (void)timeout_sec;
+        return 4;
     }
 
     if (tr.status != 0) {
@@ -5764,6 +5804,7 @@ static int run_test_mode(const Options *opts) {
     qsort(problems, (size_t)count, sizeof(ProblemInfo), cmp_by_tier_name);
 
     int pass_count = 0, fail_count = 0, skip_count = 0, error_count = 0;
+    int xfail_count = 0, xpass_count = 0;
 
     for (int i = 0; i < count; i++) {
         const char *name = problems[i].name;
@@ -5791,11 +5832,38 @@ static int run_test_mode(const Options *opts) {
                                      opts->external_glpk_oop,
                                      opts->crash,
                                      opts->trace_phase1);
-        switch (result) {
-            case 0: pass_count++; break;
-            case 1: fail_count++; break;
-            case 2: error_count++; break;
-            default: skip_count++; break;
+        {
+            int expected = name_in_list(opts->xfail_timeout, problems[i].name);
+
+            switch (result) {
+                case 0:
+                    if (expected) {
+                        /* The entry is stale. Failing here is the whole point:
+                         * an xfail that nobody removes is a blind spot. */
+                        fprintf(stderr,
+                                "  XPASS %-12s  solved, but is on the expected-timeout list"
+                                " -- remove it\n", problems[i].name);
+                        xpass_count++;
+                    } else {
+                        pass_count++;
+                    }
+                    break;
+                case 1: fail_count++; break;
+                case 2: error_count++; break;
+                case 4:
+                    if (expected) {
+                        fprintf(stderr,
+                                "  XFAIL %-12s  timed out, as expected on this build"
+                                " (see docs/KNOWN_ISSUES.md)\n", problems[i].name);
+                        xfail_count++;
+                    } else {
+                        fprintf(stderr, "  TIMEOUT %-12s no result before the limit\n",
+                                problems[i].name);
+                        error_count++;
+                    }
+                    break;
+                default: skip_count++; break;
+            }
         }
     }
 
@@ -5805,9 +5873,11 @@ static int run_test_mode(const Options *opts) {
     if (fail_count > 0) fprintf(stderr, ", %d FAIL", fail_count);
     if (error_count > 0) fprintf(stderr, ", %d ERROR", error_count);
     if (skip_count > 0) fprintf(stderr, ", %d SKIP", skip_count);
+    if (xfail_count > 0) fprintf(stderr, ", %d XFAIL", xfail_count);
+    if (xpass_count > 0) fprintf(stderr, ", %d XPASS", xpass_count);
     fprintf(stderr, "\n");
 
-    return (fail_count + error_count > 0) ? 1 : 0;
+    return (fail_count + error_count + xpass_count > 0) ? 1 : 0;
 }
 
 static int run_suite(const char *suite_name, const Options *opts) {
@@ -5986,6 +6056,14 @@ static int parse_args(int argc, char **argv, Options *opts) {
             opts->lp_only = 0;
         } else if (strcmp(arg, "--verify-matrix") == 0) {
             opts->verify_matrix = 1;
+        } else if (strcmp(arg, "--xfail-timeout") == 0) {
+            /* --xfail-timeout NAME[,NAME...] */
+            if (i + 1 < argc) {
+                opts->xfail_timeout = argv[++i];
+            } else {
+                fprintf(stderr, "--xfail-timeout needs a comma-separated list\n");
+                return 1;
+            }
         } else if (strcmp(arg, "--test") == 0) {
             /* --test [fast|full], default is fast */
             if (i + 1 < argc && argv[i+1][0] != '-') {
