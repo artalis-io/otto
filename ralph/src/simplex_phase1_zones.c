@@ -1362,6 +1362,16 @@ void p1_zone_post_pivot_reset(SimplexSolver *solver,
     p1_basis_clear_entering_exclusions(&rs->basis);
 }
 
+/* Basis condition estimate above which a Phase 1 full recompute is refused.
+ *
+ * Tuned on bore3d, where the six iterations whose recomputed solution is wrong
+ * sit between 4.9e4 and 1.9e5 and the other 244 have a median of 7.3. 1e4 is
+ * below all six with room to spare; it also declines on 14 of the 244, which
+ * costs nothing, because on those the incremental x and the recomputed one
+ * agree to within 1% anyway. The asymmetry is deliberate -- refusing a good
+ * recompute keeps a correct x, adopting a bad one loses the solve. */
+#define RALPH_PHASE1_RECOMPUTE_COND_LIMIT 1.0e4
+
 /* ── Zone 7b: Stall detection ──────────────────────────────────────── */
 
 P1ZoneResult p1_zone_stall_detect(SimplexSolver *solver,
@@ -2822,11 +2832,50 @@ P1ZoneResult p1_zone_direction_guard(SimplexSolver *solver,
             }
             rs->numerical.dir_stabilize_cooldown = dir_stabilize_cooldown_target;
             rs->cycling.use_bland = 1;
-            phase1_recompute_full_with_reason(
-                solver,
-                tab,
-                &rs->numerical.rc_only_streak,
-                LP_PHASE1_RECOMPUTE_REASON_DIR_SKIP);
+            {
+                /*
+                 * Do not adopt a recomputed point from a basis this
+                 * ill-conditioned.
+                 *
+                 * A full recompute re-solves B x_B = b, which is the right
+                 * thing when B is sound. When it is not, B^-1 b is not a
+                 * better answer than the x we already have, it is a
+                 * meaningless one -- and adopting it is what breaks bore3d:
+                 * Phase 1 feasibility goes from 30.1 to 5194.7 in a single
+                 * step and never recovers.
+                 *
+                 * Measured over the first 250 Phase 1 iterations of that run:
+                 * the incremental x agrees with the recomputed one to nine
+                 * decimal places on 227 of them and within 1% on 17 more. On
+                 * the six where it does not, the condition estimate is 4.9e4
+                 * to 1.9e5 against a median of 7.3 everywhere else.
+                 *
+                 * Declining is the safe direction: it keeps the x that the
+                 * same measurements show to be accurate, and leaves the
+                 * existing stall and perturbation machinery to make progress.
+                 */
+                double cond = lu_get_cond_estimate(tab->lu);
+                if (isfinite(cond) &&
+                    cond >= RALPH_PHASE1_RECOMPUTE_COND_LIMIT) {
+                    if (solver->verbose >= 2) {
+                        LP_LOG_STDERR("[simplex_phase1] Declining DIR_SKIP recompute at iter %d:"
+                                " basis condition %.2e exceeds %.0e\n",
+                                iter, cond,
+                                (double)RALPH_PHASE1_RECOMPUTE_COND_LIMIT);
+                    }
+                    /* Let the stall path take it from here; that is the route
+                     * the passing build escapes by. */
+                    if (rs->cycling.stall_count < rs->cycling.stall_threshold) {
+                        rs->cycling.stall_count = rs->cycling.stall_threshold;
+                    }
+                } else {
+                    phase1_recompute_full_with_reason(
+                        solver,
+                        tab,
+                        &rs->numerical.rc_only_streak,
+                        LP_PHASE1_RECOMPUTE_REASON_DIR_SKIP);
+                }
+            }
             p1_window_pressure_note(
                 solver,
                 PHASE1_WINDOW_PRESSURE_EVENT_DIR_SKIP,
