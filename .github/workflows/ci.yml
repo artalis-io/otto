@@ -712,31 +712,6 @@ jobs:
           mingw32-make -C clayshards/clay-shards-soft CC=cl demo DEMO_ARGS="--frames 3"
 
   # ==========================================================================
-  # API docs freshness
-  #
-  # site/api.html is generated from the /*@api*/ and /*@wasm*/ annotations in
-  # each module's headers by scripts/build-api-docs.py. It is a committed file,
-  # so it silently rots the moment a header changes without a regen -- which is
-  # exactly how it came to document FuelWise request fields (gallons,
-  # price_per_gallon) that the header had already renamed. Nothing checked it.
-  #
-  # This runs the generator's own --check mode, which regenerates the HTML from
-  # the current headers in memory and diffs it against the committed file. It
-  # needs only Python and the checkout: --check parses headers and compares, it
-  # does not rebuild the WASM demos, so no Emscripten toolchain is required.
-  # ==========================================================================
-  api-docs:
-    name: API docs up-to-date
-    runs-on: ubuntu-latest
-
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Check API docs are up-to-date
-        run: make api-docs-check
-
-  # ==========================================================================
   sanitizers:
     name: Sanitize ${{ matrix.suite.name }}
     runs-on: ubuntu-latest
@@ -775,14 +750,13 @@ jobs:
       - name: Sanitize ${{ matrix.suite.name }}
         run: make -C ${{ matrix.suite.dir }} ${{ matrix.suite.target }}
 
-  # ==========================================================================
-  # Build WebAssembly
-  # ==========================================================================
   # API docs
   #
   # site/api.html is generated from the /*@api ... */ annotations in the module
-  # headers, and `--check` fails if the committed file no longer matches what
-  # those headers say. CLAUDE.md has described this target as "for CI" for a
+  # headers and is a committed file, so it rots silently the moment a header
+  # changes without a regen. `--check` regenerates the HTML from the current
+  # headers in memory and diffs it against what is committed, so it fails
+  # exactly when the two have parted company. CLAUDE.md has described this target as "for CI" for a
   # long time while no workflow ran it, and the cost of that was two bugs at
   # once: the generator could not run on Windows at all (Python defaults to the
   # locale codepage there, so reading UTF-8 sources and printing check marks both
@@ -819,6 +793,9 @@ jobs:
       - name: Check api.html is up-to-date with the headers
         run: ${{ matrix.python }} scripts/build-api-docs.py --check
 
+  # ==========================================================================
+  # ==========================================================================
+  # Build WebAssembly
   # ==========================================================================
   build-wasm:
     name: Build WASM
