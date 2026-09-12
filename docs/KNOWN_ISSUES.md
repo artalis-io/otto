@@ -197,6 +197,25 @@ adopting a bad one loses the solve.
 variables rebuilds only what is out of date, leaving an archive of mixed-flag
 objects that behaves like neither build.
 
+### The NETLIB regression gate fails on Windows
+
+- **Severity**: Medium. Three problems the gate marks required-pass do not
+  meet its checks on Windows: `25fv47`, `bandm`, `scagr25`.
+- **Status**: Observed, not diagnosed. Pre-existing -- the same three fail on
+  the commit before the bore3d fix, checked by rebuilding from that source
+  rather than assumed.
+
+Nothing notices, for two reasons. No workflow runs the gate, and it needs `jq`,
+which was not installed on any Windows box until now (the three Windows CI
+toolchains install it as of this change, so it can at least be run there).
+
+Whether the same three fail on Linux is unknown. The baselines in
+`ralph/benchmarks/*_baseline.json` may encode expectations recorded on a
+different platform, in which case the answer is that the gate needs
+per-platform baselines rather than that the solver is wrong. Run:
+
+    bash ralph/benchmarks/netlib_regression_gate.sh
+
 **A note for whoever works in this area.** The NETLIB harness runs each problem
 in a child process, and on Windows that child is created with
 `bInheritHandles=FALSE` -- anything it writes to stderr is lost. Diagnostics

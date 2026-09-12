@@ -357,6 +357,7 @@ jobs:
           install: >-
             make
             mingw-w64-ucrt-x86_64-gcc
+            jq
 
       - name: Build and run the PAL tests
         run: make -C shared test-pal
@@ -548,6 +549,7 @@ jobs:
             make
             mingw-w64-ucrt-x86_64-gcc
             mingw-w64-ucrt-x86_64-glpk
+            jq
 
       # The full Surge suite. Windows Core runs its transport test, which is
       # the invariant; this is the solver behaviour.
@@ -612,6 +614,7 @@ jobs:
           update: false
           install: >-
             mingw-w64-ucrt-x86_64-make
+            jq
 
       - name: Report the MSVC toolchain
         run: |
