@@ -283,6 +283,13 @@ void *p = calloc(count, element_size);  /* Or use calloc */
 4. **Locus**: Queries must be UTF-8 encoded
 5. **FuelWise**: Stations must be sorted by distance_from_start
 6. **Memory**: Always free: solutions, routes, contexts
+7. **Floating point**: Never add `-ffast-math`. The solvers compare nearly
+   equal values to choose pivots, so reassociation changes the answer per CPU
+   and has caused non-termination. See `mk/toolchain.mk`.
+8. **Windows**: Use `mingw32-make`, never `make` -- MSYS's make strips
+   `TMPDIR` and the build dies trying to write to `C:\WINDOWS`. And run
+   `make clean` when switching between GCC and MSVC: the object and archive
+   formats differ, and a mixed tree fails at link with undefined symbols.
 
 ## Build Commands
 
@@ -301,6 +308,10 @@ make wasm
 make test             # All tests
 make test-{ralph,velo,carta,locus,fuelwise,shared,nexus}
 make test-{carta,velo,locus,fuelwise}-api
+
+# NETLIB regression gate (needs glpsol and jq; ~20 min, wants an idle machine)
+# Runs nightly in CI on Linux and Windows -- see .github/workflows/netlib-nightly.yml
+bash ralph/benchmarks/netlib_regression_gate.sh
 
 # API Documentation
 make api-docs         # Generate site/api.html (auto-rebuilds dependencies)
