@@ -103,6 +103,11 @@ make carta velo locus     # Build specific modules
 
 Production flags include:
 - `-O3 -march=native` - Full optimization
+- `-ffp-contract=off`, and **no `-ffast-math`** - IEEE arithmetic, identically
+  on every CPU. This is deliberate and load-bearing: with fast math the solver
+  took a different path per machine and failed to terminate at all on some,
+  and removing it cost nothing measurable (2.4% *faster* across the NETLIB
+  regression set). See the FP block in `mk/toolchain.mk` before changing it.
 - `-fstack-protector-strong` - Stack buffer overflow protection
 - `-D_FORTIFY_SOURCE=2` - Buffer overflow detection
 - `-fPIE` + `-pie` (Linux) - Position independent executables

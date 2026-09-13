@@ -104,13 +104,35 @@
 ## Platform-Specific Issues
 
 ### macOS
-- No known platform-specific issues
+
+Built and tested on every push by the **macOS Core** job (`macos-latest`,
+Apple Silicon): `shared`, `ralph`, `velo`, `carta`, `locus`, `fuelwise`,
+`surge` and `nexus`. No known platform-specific issues.
 
 ### Linux
-- Not actively tested but should work
+
+The primary CI platform. Every module suite runs here on each push, alongside
+the API tests, the sanitiser jobs and the WASM build.
 
 ### Windows
-- Not tested, may need build system adjustments
+
+A first-class target, built and tested on every push by three jobs.
+
+- **Windows Core** (MinGW/UCRT64): `shared` (including the PAL suite), `velo`,
+  `carta`, `locus`, `nexus`, `ralph` (main suite plus detect, lap, netflow and
+  netlib), and the FuelWise and Surge transport tests. It also *builds* all
+  five API servers -- ralph, fuelwise, surge, velo, carta -- which is what
+  proves Keel and the Keel-side shared helpers link here.
+- **Windows Suites**: the full Surge suite and the FuelWise bench regression.
+- **Windows MSVC** (`CC=cl`): twenty targets, the above plus `arbor` and four
+  ClayShards ones.
+
+The nightly NETLIB regression gate also runs on Windows as well as Linux.
+
+Two gaps worth naming. The API servers are built on Windows but their test
+suites are not run there. And MSVC does not build them at all, because Keel is
+MinGW-targeted -- that is upstream work on a submodule. See
+docs/roadmaps/infrastructure.md.
 
 ## Workarounds
 
@@ -276,13 +298,18 @@ it ran until the external 50-second wrapper killed it. Strict FP means Ralph
 no longer takes that path on bnl1, but a time limit that does not fire is a
 live defect on whatever path goes bad next.
 
-### Still open: nothing runs the gate
+### The gate runs nightly
 
-No workflow invokes `ralph/benchmarks/netlib_regression_gate.sh`. CI runs `make
--C ralph test-netlib`, which is `--test` mode against a table of reference
-optimals and needs no GLPK. A full gate run takes upwards of twenty minutes and
-wants an otherwise idle machine, so putting it in CI is a scheduling decision
-rather than a free win.
+`.github/workflows/netlib-nightly.yml` runs the full 84-problem gate at 04:00
+UTC on Linux and Windows, and on pull requests that touch the gate script, its
+baseline manifest or the workflow itself. Per-push CI still runs `make -C ralph
+test-netlib`, which is `--test` mode against a table of reference optimals and
+needs no GLPK -- the cheap check that catches the common case.
+
+It is nightly rather than per-push because a full run takes upwards of twenty
+minutes and wants an otherwise idle machine: the limit handed to Ralph is
+derived from GLPK's measured time on the same problem, so contention inflates
+the reference and the budget together.
 
 **Two traps for whoever runs it by hand on Windows.** The gate shells out to
 `make`, so it needs `--no-build` with a `mingw32-make`-built binary --

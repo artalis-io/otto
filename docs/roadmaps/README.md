@@ -16,7 +16,7 @@ This directory contains development roadmaps and specifications for OTTO compone
 |--------|-------------|--------|
 | [velo.md](velo.md) | Routing engine - continental scale, CCH | In Progress |
 | [carta.md](carta.md) | Map tile generator - labels, styling | In Progress |
-| [locus.md](locus.md) | Geocoding - performance, fuzzy search | In Progress |
+| [locus.md](locus.md) | Geocoding - performance, fuzzy search | Done |
 | [nexus.md](nexus.md) | Document ingestion pipeline (XLSX/PDF/CSV) | Done |
 
 ## Planned Components
