@@ -88,16 +88,15 @@ jobs:
 
       # Built separately rather than letting the gate do it, so a build failure
       # is reported as a build failure instead of being buried in gate output.
-      # Pinned arch, deliberately. The default CC_ARCH is -march=native, and
-      # combined with -ffast-math that makes the binary's floating point
-      # behaviour a property of whichever machine GitHub hands out. That fleet
-      # is heterogeneous -- runs of this job have landed on Intel Xeon
-      # Platinum 8573C, AMD EPYC 9V45 and AMD EPYC 9V74 -- and Ralph's pivot
-      # choices are sensitive enough that bnl1 solves in 397 iterations on one
-      # and does not converge at all on another. A regression gate that changes
-      # answer with the runner lottery is not measuring the solver.
+      #
+      # Deliberately the default -march=native, i.e. what actually ships. An
+      # earlier revision of this file pinned the arch, because -ffast-math made
+      # results depend on which of GitHub's heterogeneous runners we landed on.
+      # That is fixed at the source now -- see the FP block in mk/toolchain.mk
+      # -- and strict IEEE gives the same iteration count on every CPU, so the
+      # pin would only mean the gate tests a build nobody uses.
       - name: Build ralph-benchmark
-        run: make -C ralph ralph-benchmark CC_ARCH=-march=x86-64-v3
+        run: make -C ralph ralph-benchmark
 
       - name: Run the NETLIB regression gate
         run: |
@@ -159,16 +158,17 @@ jobs:
           jq --version
           nproc
 
-      # Pinned arch, deliberately. The default CC_ARCH is -march=native, and
-      # combined with -ffast-math that makes the binary's floating point
-      # behaviour a property of whichever machine GitHub hands out. That fleet
-      # is heterogeneous -- runs of this job have landed on Intel Xeon
-      # Platinum 8573C, AMD EPYC 9V45 and AMD EPYC 9V74 -- and Ralph's pivot
-      # choices are sensitive enough that bnl1 solves in 397 iterations on one
-      # and does not converge at all on another. A regression gate that changes
-      # answer with the runner lottery is not measuring the solver.
+      # Built separately rather than letting the gate do it, so a build failure
+      # is reported as a build failure instead of being buried in gate output.
+      #
+      # Deliberately the default -march=native, i.e. what actually ships. An
+      # earlier revision of this file pinned the arch, because -ffast-math made
+      # results depend on which of GitHub's heterogeneous runners we landed on.
+      # That is fixed at the source now -- see the FP block in mk/toolchain.mk
+      # -- and strict IEEE gives the same iteration count on every CPU, so the
+      # pin would only mean the gate tests a build nobody uses.
       - name: Build ralph-benchmark
-        run: make -C ralph ralph-benchmark CC_ARCH=-march=x86-64-v3
+        run: make -C ralph ralph-benchmark
 
       # --no-build matters more here than on Linux: the gate would otherwise
       # shell out to make itself, and MSYS's make strips TMPDIR/TMP/TEMP, which
