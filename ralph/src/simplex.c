@@ -41,6 +41,7 @@ static int lp_run_user_callbacks(SimplexSolver *solver,
                                  int force_emit,
                                  int honor_progress_cancel);
 static int lp_time_limit_exceeded(SimplexSolver *solver, int iter);
+static int lp_solve_budget_exhausted(const SimplexSolver *solver);
 
 /* PHASE1_WINDOW_PRESSURE_EVENT_* now in simplex_phase1_recovery.h */
 /* PHASE1_PIVOT_FAIL_* enum now in simplex_phase1_recovery.h */
@@ -1526,6 +1527,24 @@ int repair_singular_basis(SimplexTableau *tab) {
 
     /* Strategy 1: Try swapping structural variables with any non-basic slack */
     for (int attempt = 0; attempt < MAX_REPAIRS && repairs < MAX_REPAIRS; attempt++) {
+        /*
+         * Give up if the solve is already out of time.
+         *
+         * Each attempt rebuilds the basis and factorizes it, twice over in the
+         * search below -- on a few hundred rows that is tens of milliseconds,
+         * and MAX_REPAIRS of them runs to tens of seconds. The iteration loops
+         * check the clock once per iteration, which is no help at all when a
+         * single pivot spends a minute in here: that is exactly how bnl1 blew
+         * a one-second limit by 45x, still inside iteration 2542. See
+         * docs/KNOWN_ISSUES.md.
+         *
+         * Failing the repair is the right answer rather than pressing on. The
+         * caller treats -1 as "this basis could not be repaired", the pivot
+         * fails, and the next trip round the iteration loop sees the expired
+         * limit and stops the solve properly, with a status and a count.
+         */
+        if (lp_solve_budget_exhausted(tab->owner)) goto repair_fail;
+
         /* Try factorization */
         int status = sparse_only_repair
             ? lu_factorize_sparse_no_dense(tab->lu, B)
@@ -3799,12 +3818,44 @@ static void reset_solver_perf(SimplexSolver *solver) {
     periodic_policy_refactor_reset(solver);
 }
 
+/* Grace on the wall-clock limit, so a solve that would finish just the far
+ * side of it is not thrown away. Shared by both checks below: they must agree
+ * on when the budget is gone, or the cheap in-pivot check would abandon work
+ * that the iteration check still considers live. */
+#define LP_TIME_LIMIT_SLACK 1.05
+
+/*
+ * Has the solve's wall-clock budget run out?
+ *
+ * This reports; it does not decide. Unlike lp_time_limit_exceeded() below it
+ * sets no status and records no iteration count, because its callers are in
+ * the middle of a pivot rather than at an iteration boundary, and each has its
+ * own idea of what an exhausted budget means.
+ *
+ * It is also const, which means it cannot lazily start the clock the way
+ * lp_time_limit_exceeded() does. A solver whose clock has not started is
+ * reported as having budget left -- correct here, because every path that
+ * reaches this has already been round the iteration loop at least once, and
+ * that is what starts it.
+ */
+static int lp_solve_budget_exhausted(const SimplexSolver *solver) {
+    if (!solver) return 0;
+    if (solver->time_limit <= 0.0 || solver->time_limit >= RALPH_INFINITY / 2.0) {
+        return 0;
+    }
+    if (solver->progress_start_ms <= 0.0) return 0;
+
+    double elapsed_sec =
+        (lp_telemetry_now_ms() - solver->progress_start_ms) / 1000.0;
+    return elapsed_sec > solver->time_limit * LP_TIME_LIMIT_SLACK;
+}
+
 static int lp_time_limit_exceeded(SimplexSolver *solver, int iter) {
     if (!solver) return 0;
     if (solver->time_limit <= 0.0 || solver->time_limit >= RALPH_INFINITY / 2.0) {
         return 0;
     }
-    const double time_limit_sec = solver->time_limit * 1.05;
+    const double time_limit_sec = solver->time_limit * LP_TIME_LIMIT_SLACK;
 
     double now_ms = lp_telemetry_now_ms();
     if (solver->progress_start_ms <= 0.0) {
