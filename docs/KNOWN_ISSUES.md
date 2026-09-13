@@ -242,19 +242,39 @@ and `which` elsewhere.
 So the solver agrees with GLPK on every problem, and the
 per-platform-baseline theory was unnecessary.
 
-### Run the gate on an idle machine
+### bnl1 did not converge on some CPUs -- FIXED
 
-The first full run recorded `bnl1.mps` as an unexpected timeout, killed by the
-external 50s wrapper. That was a measurement artifact: the run shared the
-machine with a concurrent MSVC build and test suite. On an idle box bnl1 passes
-the gate 3 times out of 3, and solves standalone in 176 ms over 439 iterations.
+- **Severity**: was Medium. **Status**: fixed by removing `-ffast-math`.
 
-It is worth knowing why the gate is this sensitive. The limit handed to Ralph
-is derived from GLPK's *measured* time on the same problem
-(`ralph_benchmark.c`: `ralph_time_limit = glpk.time_ms / 1000.0 *
-time_multiplier`), so contention inflates the reference and the budget
-together, and Ralph is OpenMP-parallel on top of that. A loaded machine does
-not just make the gate slow, it makes it report failures that are not there.
+`bnl1.mps` sometimes never finished. Measured, same source, same flags:
+
+| machine | `-ffast-math` | strict IEEE |
+|---|---|---|
+| AMD EPYC 9V74 80-core | **never converges** | optimal 264 ms, 439 it |
+| AMD EPYC 7763 64-core | **never converges** | optimal 247 ms, 439 it |
+| Intel Xeon 6973P-C | optimal 201 ms, 328 it | optimal 202 ms, 439 it |
+| Intel Xeon Platinum 8573C | optimal 268 ms, 328 it | optimal 286 ms, 439 it |
+
+Under strace the hang was 44 seconds of pure userspace work with zero
+syscalls, and glpsol was never spawned -- the simplex spinning, not I/O, not
+the harness, and not the reference solver, which does bnl1 alone in 0.035 s.
+
+The mechanism is the one the bore3d entry above describes. `-ffast-math` let
+the compiler use whatever the host CPU offered and reassociate freely; the
+resulting floating-point differences changed pivot selection, and a solve near
+the edge landed on a different side of it per machine. Note the iteration
+counts: under `-ffast-math` the solve took a different path on every CPU,
+while strict IEEE gives an identical 439 everywhere.
+
+Fixed by dropping `-ffast-math` and turning off FP contraction across the
+build (`mk/toolchain.mk`), which cost nothing: over the 26 problems in
+`required_coverage`, total solve time went 651 ms to 635 ms for 2.8% more
+iterations and zero status changes.
+
+**Still open, and separate.** `--hard-cap 20` did not stop the runaway solve;
+it ran until the external 50-second wrapper killed it. Strict FP means Ralph
+no longer takes that path on bnl1, but a time limit that does not fire is a
+live defect on whatever path goes bad next.
 
 ### Still open: nothing runs the gate
 
