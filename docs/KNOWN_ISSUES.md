@@ -242,19 +242,47 @@ and `which` elsewhere.
 So the solver agrees with GLPK on every problem, and the
 per-platform-baseline theory was unnecessary.
 
-### Run the gate on an idle machine
+### bnl1 does not converge on some CPUs
 
-The first full run recorded `bnl1.mps` as an unexpected timeout, killed by the
-external 50s wrapper. That was a measurement artifact: the run shared the
-machine with a concurrent MSVC build and test suite. On an idle box bnl1 passes
-the gate 3 times out of 3, and solves standalone in 176 ms over 439 iterations.
+- **Severity**: Medium. One NETLIB problem, but the mechanism is general.
+- **Status**: diagnosed, not fixed.
 
-It is worth knowing why the gate is this sensitive. The limit handed to Ralph
-is derived from GLPK's *measured* time on the same problem
-(`ralph_benchmark.c`: `ralph_time_limit = glpk.time_ms / 1000.0 *
-time_multiplier`), so contention inflates the reference and the budget
-together, and Ralph is OpenMP-parallel on top of that. A loaded machine does
-not just make the gate slow, it makes it report failures that are not there.
+`bnl1.mps` sometimes never finishes. Measured, same source, same flags:
+
+| machine | result | iterations |
+|---|---|---|
+| Intel Xeon Platinum 8573C | optimal, ~280 ms | 328 / 381 / 444 |
+| AMD EPYC 9V45 96-core | optimal, 233 ms | 397 |
+| AMD EPYC 9V74 80-core | **never converges** | -- |
+| dev box (Windows, 32 core) | optimal, ~60 ms | 598 |
+
+Note the iteration counts: the solve takes a *different path* on every
+machine, and on one of them that path does not terminate. Under strace the
+hang is 44 seconds of pure userspace work with zero syscalls, and glpsol is
+never spawned -- so this is the simplex spinning, not I/O, not the harness,
+and not the reference solver, which solves bnl1 alone in 0.035 s.
+
+The mechanism is the one the bore3d entry above describes. `CC_ARCH` defaults
+to `-march=native` and `CC_FP_FASTMATH` to `-ffast-math`, so the compiler is
+free to use whatever the host CPU offers and to reassociate as it likes. The
+resulting floating-point differences change pivot selection, and a solve that
+is close to the edge lands on a different side of it per machine. bnl1 is
+close to the edge.
+
+This is not a regression from the out-of-process work (#122, #123): the hang
+is pure computation that neither touches, and the same HEAD build converges
+on two of the three CPUs above.
+
+**What was done about it.** The nightly gate now builds with
+`CC_ARCH=-march=x86-64-v3` rather than `-march=native`. That does not fix the
+fragility; it makes the gate reproducible, so a failure means the solver
+changed rather than that GitHub handed out a different machine. A gate whose
+answer depends on the runner lottery cannot tell you anything.
+
+**What is still open.** Why the simplex fails to terminate on that path at
+all. A time limit ought to stop it regardless -- `--hard-cap` did not, which
+is worth understanding separately from the numerics. Fixing the convergence
+itself is bore3d-shaped work: find the state it gets stuck in, and gate on it.
 
 ### Still open: nothing runs the gate
 

@@ -9,6 +9,20 @@ RALPH_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 # memory handles on macOS during long NETLIB sweeps.
 export OMP_NUM_THREADS="${OMP_NUM_THREADS:-1}"
 
+# Every set this script builds is produced with `LC_ALL=C sort`, but the eight
+# `comm` calls that consume them inherited the ambient locale, and comm
+# validates its input against whatever collation *it* is running under. Where
+# the two disagree -- the MSYS2 shell sets a locale, a bare Git Bash does not,
+# which is why this showed up on CI and not on a developer box -- comm prints
+# "file N is not in sorted order" and exits non-zero. Under `set -e` that
+# killed the run during the summary, so the Windows gate could never report a
+# verdict at all: it went straight from the last problem to a bare exit 1,
+# whatever the results underneath actually were.
+#
+# Pinning the whole script to the C locale is the fix rather than prefixing
+# each comm, because every sort here already assumes it.
+export LC_ALL=C
+
 BASELINE_FILE="$SCRIPT_DIR/netlib_regression_baseline.json"
 NETLIB_DIR="$SCRIPT_DIR/netlib"
 BENCH_EXEC="$RALPH_DIR/ralph-benchmark"

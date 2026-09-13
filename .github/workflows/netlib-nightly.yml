@@ -1,0 +1,189 @@
+name: NETLIB Nightly
+
+# ============================================================================
+# The full NETLIB regression gate, on both platforms.
+#
+# This is deliberately NOT part of ci.yml. Two reasons:
+#
+#   1. It is slow. All 84 problems, each with a reference GLPK solve, runs in
+#      tens of minutes -- too long to sit in front of every push.
+#   2. It wants a quiet machine. The time limit handed to Ralph is derived from
+#      GLPK's *measured* time on the same problem (ralph_benchmark.c:
+#      ralph_time_limit = glpk.time_ms / 1000.0 * time_multiplier), so CPU
+#      contention inflates the reference and the budget together, and Ralph is
+#      OpenMP-parallel besides. A loaded machine does not merely make this
+#      slow, it makes it report failures that are not there -- which is exactly
+#      what happened during development, where a concurrent build produced a
+#      bnl1.mps "timeout" that does not reproduce on an idle box. A dedicated
+#      runner with nothing else scheduled on it is the point of this job.
+#
+# What ci.yml already covers per-push is `make -C ralph test-netlib`, which is
+# the benchmark's --test mode against a table of reference optimals. That needs
+# no GLPK and catches the common case. This job is the wider net: it compares
+# against GLPK problem by problem and enforces the baseline manifest in
+# ralph/benchmarks/netlib_regression_baseline.json.
+#
+# Until this ran, the gate had never been run in CI on any platform -- and on
+# Windows it could not run at all, because the GLPK availability probe used
+# `which` with a /dev/null redirect under cmd.exe. See docs/KNOWN_ISSUES.md.
+#
+# Linux and Windows are separate jobs rather than a matrix. Their setup differs
+# in almost every step -- apt vs pacman, bash vs the MSYS2 shell -- and
+# `defaults.run.shell` cannot be driven from a matrix value, so a matrix here
+# would be one `if:` per step and a job-level shell that is wrong for one of
+# them.
+# ============================================================================
+
+on:
+  schedule:
+    # 04:00 UTC, outside working hours in every timezone the team uses.
+    - cron: '0 4 * * *'
+  workflow_dispatch:
+  # Also on pull requests that touch the gate itself, its baseline manifest, or
+  # this file. Those are the changes that can make the nightly wrong, and
+  # finding that out at 04:00 rather than in review is the bad version. Scoped
+  # narrowly on purpose: ordinary Ralph changes do not pay for a half-hour job,
+  # and a baseline edit is precisely when you want the gate re-run anyway.
+  pull_request:
+    paths:
+      - '.github/workflows/netlib-nightly.yml'
+      - 'ralph/benchmarks/netlib_regression_gate.sh'
+      - 'ralph/benchmarks/netlib_regression_baseline.json'
+
+permissions:
+  contents: read
+
+concurrency:
+  # A nightly that overlaps itself would defeat the quiet-machine requirement.
+  group: netlib-nightly
+  cancel-in-progress: false
+
+jobs:
+  # --------------------------------------------------------------------------
+  # Linux
+  # --------------------------------------------------------------------------
+  gate-linux:
+    name: NETLIB gate (Linux)
+    runs-on: ubuntu-latest
+    # Generous, but bounded: a hung solve should not burn a six-hour runner.
+    timeout-minutes: 90
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential libomp-dev glpk-utils jq
+
+      - name: Report the toolchain
+        run: |
+          gcc --version | head -1
+          glpsol --version | head -1
+          jq --version
+          nproc
+
+      # Built separately rather than letting the gate do it, so a build failure
+      # is reported as a build failure instead of being buried in gate output.
+      # Pinned arch, deliberately. The default CC_ARCH is -march=native, and
+      # combined with -ffast-math that makes the binary's floating point
+      # behaviour a property of whichever machine GitHub hands out. That fleet
+      # is heterogeneous -- runs of this job have landed on Intel Xeon
+      # Platinum 8573C, AMD EPYC 9V45 and AMD EPYC 9V74 -- and Ralph's pivot
+      # choices are sensitive enough that bnl1 solves in 397 iterations on one
+      # and does not converge at all on another. A regression gate that changes
+      # answer with the runner lottery is not measuring the solver.
+      - name: Build ralph-benchmark
+        run: make -C ralph ralph-benchmark CC_ARCH=-march=x86-64-v3
+
+      - name: Run the NETLIB regression gate
+        run: |
+          bash ralph/benchmarks/netlib_regression_gate.sh \
+            --no-build \
+            --outdir netlib-gate-out
+
+      # The per-problem JSON and the actual.* sets are what make a failure
+      # diagnosable without reproducing a half-hour run locally.
+      - name: Upload gate artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: netlib-gate-results-linux
+          path: netlib-gate-out
+          retention-days: 14
+          if-no-files-found: warn
+
+  # --------------------------------------------------------------------------
+  # Windows
+  #
+  # Runs under MSYS2's UCRT64 environment because the gate needs jq (an MSYS
+  # package, /usr/bin) and glpsol (a UCRT64 package, /ucrt64/bin) on the same
+  # PATH. Git Bash is not a substitute: MSYS2's jq.exe segfaults there, because
+  # it loads Git Bash's msys-2.0.dll instead of its own.
+  # --------------------------------------------------------------------------
+  gate-windows:
+    name: NETLIB gate (Windows)
+    runs-on: windows-latest
+    # Windows runners are slower than the Linux ones for this work, and the
+    # gate is mostly solver time.
+    timeout-minutes: 120
+
+    defaults:
+      run:
+        shell: msys2 {0}
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Set up MSYS2 + UCRT64 toolchain
+        uses: msys2/setup-msys2@v2
+        with:
+          msystem: UCRT64
+          update: false
+          install: >-
+            make
+            mingw-w64-ucrt-x86_64-gcc
+            mingw-w64-ucrt-x86_64-glpk
+            jq
+
+      - name: Report the toolchain
+        run: |
+          gcc --version | head -1
+          glpsol --version | head -1
+          jq --version
+          nproc
+
+      # Pinned arch, deliberately. The default CC_ARCH is -march=native, and
+      # combined with -ffast-math that makes the binary's floating point
+      # behaviour a property of whichever machine GitHub hands out. That fleet
+      # is heterogeneous -- runs of this job have landed on Intel Xeon
+      # Platinum 8573C, AMD EPYC 9V45 and AMD EPYC 9V74 -- and Ralph's pivot
+      # choices are sensitive enough that bnl1 solves in 397 iterations on one
+      # and does not converge at all on another. A regression gate that changes
+      # answer with the runner lottery is not measuring the solver.
+      - name: Build ralph-benchmark
+        run: make -C ralph ralph-benchmark CC_ARCH=-march=x86-64-v3
+
+      # --no-build matters more here than on Linux: the gate would otherwise
+      # shell out to make itself, and MSYS's make strips TMPDIR/TMP/TEMP, which
+      # fails with "Cannot create temporary file in C:\WINDOWS\".
+      - name: Run the NETLIB regression gate
+        run: |
+          bash ralph/benchmarks/netlib_regression_gate.sh \
+            --no-build \
+            --outdir netlib-gate-out
+
+      - name: Upload gate artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: netlib-gate-results-windows
+          path: netlib-gate-out
+          retention-days: 14
+          if-no-files-found: warn
