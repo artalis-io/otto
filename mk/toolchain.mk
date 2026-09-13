@@ -84,10 +84,15 @@ CC_ARCH   :=
 # `make CC=cl FP_MODE=fast` exists so the two can be compared on real solver
 # output. See docs/roadmaps/infrastructure.md for the evidence behind this.
 #
-# Note this is NOT a translation of the GNU side. GCC builds Ralph with
-# -ffast-math -fno-finite-math-only: aggressive FP, NaN and Inf still honoured.
-# MSVC's /fp:fast has no such carve-out -- it assumes NaN and Inf do not occur,
-# which in a simplex is precisely the assumption that fails.
+# /fp:precise now agrees with the GNU side rather than merely resembling it:
+# both are IEEE with no reassociation. It was already the default here, which
+# is why MSVC builds never showed the cross-CPU divergence that -ffast-math
+# produced on GCC -- see the FP block in the GNU section below.
+#
+# FP_MODE=fast remains available for comparison, and remains a bad idea for
+# this workload: MSVC's /fp:fast assumes NaN and Inf do not occur, which in a
+# simplex is precisely the assumption that fails. GCC's -ffast-math could at
+# least be told otherwise with -fno-finite-math-only; /fp: is the whole dial.
 FP_MODE ?= precise
 ifeq ($(FP_MODE),fast)
   CC_FP_MODE := /fp:fast
@@ -208,9 +213,40 @@ CC_WERROR := -Werror
 CC_SYSINC := -isystem$(SPACE)
 CC_OPT    := -O3
 CC_ARCH   := -march=native
-# Two knobs, not one: Ralph wants both, Velo wants only the first.
-CC_FP_MODE           :=
-CC_FP_FASTMATH       := -ffast-math
+# Floating point: IEEE, and the same IEEE on every machine.
+#
+# This used to be -ffast-math. It was removed because it made the solver's
+# answer depend on the host CPU, and on some hosts there was no answer at all.
+# Measured on one NETLIB problem (bnl1) across four CPU families, same source,
+# same everything else:
+#
+#            -ffast-math                  strict (this setting)
+#   EPYC 9V74   never converges             optimal  264ms  439 iterations
+#   EPYC 7763   never converges             optimal  247ms  439 iterations
+#   Xeon 6973P  optimal 201ms 328 iters     optimal  202ms  439 iterations
+#   Xeon 8573C  optimal 268ms 328 iters     optimal  286ms  439 iterations
+#
+# Two things to read there. The hang is not one exotic machine -- it is two
+# AMD families, roughly half the hardware we tested on. And the iteration
+# counts under strict FP are *identical* everywhere, where -ffast-math gave a
+# different path per CPU. For a simplex, whose pivot choices are decided by
+# comparing nearly equal floating point values, reassociation does not buy
+# speed so much as it moves the answer around: on the same Xeon, 201ms fast
+# against 202ms strict. The extra iterations cost nothing measurable because
+# the faster arithmetic was being spent on a worse path.
+#
+# -ffp-contract=off is the other half and is not optional. GCC contracts a*b+c
+# into an FMA by default in C even without -ffast-math, and whether that
+# happens depends on the target supporting FMA -- so leaving it on would keep
+# exactly the cross-CPU variance this change exists to remove.
+#
+# See docs/KNOWN_ISSUES.md ("bnl1 does not converge on some CPUs") and the
+# bore3d entry above, which is the same mechanism found the hard way.
+CC_FP_MODE           := -ffp-contract=off
+CC_FP_FASTMATH       :=
+# Redundant now that -ffast-math is gone (finite-math-only is off by default),
+# kept because it states the requirement rather than relying on a default:
+# a simplex must keep honouring NaN and Inf.
 CC_FP_KEEP_NONFINITE := -fno-finite-math-only
 CC_VECTORIZE         := -ftree-vectorize
 CC_DEFS   := -D_GNU_SOURCE
