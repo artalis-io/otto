@@ -242,47 +242,39 @@ and `which` elsewhere.
 So the solver agrees with GLPK on every problem, and the
 per-platform-baseline theory was unnecessary.
 
-### bnl1 does not converge on some CPUs
+### bnl1 did not converge on some CPUs -- FIXED
 
-- **Severity**: Medium. One NETLIB problem, but the mechanism is general.
-- **Status**: diagnosed, not fixed.
+- **Severity**: was Medium. **Status**: fixed by removing `-ffast-math`.
 
-`bnl1.mps` sometimes never finishes. Measured, same source, same flags:
+`bnl1.mps` sometimes never finished. Measured, same source, same flags:
 
-| machine | result | iterations |
+| machine | `-ffast-math` | strict IEEE |
 |---|---|---|
-| Intel Xeon Platinum 8573C | optimal, ~280 ms | 328 / 381 / 444 |
-| AMD EPYC 9V45 96-core | optimal, 233 ms | 397 |
-| AMD EPYC 9V74 80-core | **never converges** | -- |
-| dev box (Windows, 32 core) | optimal, ~60 ms | 598 |
+| AMD EPYC 9V74 80-core | **never converges** | optimal 264 ms, 439 it |
+| AMD EPYC 7763 64-core | **never converges** | optimal 247 ms, 439 it |
+| Intel Xeon 6973P-C | optimal 201 ms, 328 it | optimal 202 ms, 439 it |
+| Intel Xeon Platinum 8573C | optimal 268 ms, 328 it | optimal 286 ms, 439 it |
 
-Note the iteration counts: the solve takes a *different path* on every
-machine, and on one of them that path does not terminate. Under strace the
-hang is 44 seconds of pure userspace work with zero syscalls, and glpsol is
-never spawned -- so this is the simplex spinning, not I/O, not the harness,
-and not the reference solver, which solves bnl1 alone in 0.035 s.
+Under strace the hang was 44 seconds of pure userspace work with zero
+syscalls, and glpsol was never spawned -- the simplex spinning, not I/O, not
+the harness, and not the reference solver, which does bnl1 alone in 0.035 s.
 
-The mechanism is the one the bore3d entry above describes. `CC_ARCH` defaults
-to `-march=native` and `CC_FP_FASTMATH` to `-ffast-math`, so the compiler is
-free to use whatever the host CPU offers and to reassociate as it likes. The
-resulting floating-point differences change pivot selection, and a solve that
-is close to the edge lands on a different side of it per machine. bnl1 is
-close to the edge.
+The mechanism is the one the bore3d entry above describes. `-ffast-math` let
+the compiler use whatever the host CPU offered and reassociate freely; the
+resulting floating-point differences changed pivot selection, and a solve near
+the edge landed on a different side of it per machine. Note the iteration
+counts: under `-ffast-math` the solve took a different path on every CPU,
+while strict IEEE gives an identical 439 everywhere.
 
-This is not a regression from the out-of-process work (#122, #123): the hang
-is pure computation that neither touches, and the same HEAD build converges
-on two of the three CPUs above.
+Fixed by dropping `-ffast-math` and turning off FP contraction across the
+build (`mk/toolchain.mk`), which cost nothing: over the 26 problems in
+`required_coverage`, total solve time went 651 ms to 635 ms for 2.8% more
+iterations and zero status changes.
 
-**What was done about it.** The nightly gate now builds with
-`CC_ARCH=-march=x86-64-v3` rather than `-march=native`. That does not fix the
-fragility; it makes the gate reproducible, so a failure means the solver
-changed rather than that GitHub handed out a different machine. A gate whose
-answer depends on the runner lottery cannot tell you anything.
-
-**What is still open.** Why the simplex fails to terminate on that path at
-all. A time limit ought to stop it regardless -- `--hard-cap` did not, which
-is worth understanding separately from the numerics. Fixing the convergence
-itself is bore3d-shaped work: find the state it gets stuck in, and gate on it.
+**Still open, and separate.** `--hard-cap 20` did not stop the runaway solve;
+it ran until the external 50-second wrapper killed it. Strict FP means Ralph
+no longer takes that path on bnl1, but a time limit that does not fire is a
+live defect on whatever path goes bad next.
 
 ### Still open: nothing runs the gate
 
