@@ -513,14 +513,23 @@ static int pal_program_name_ok(const char *program)
 
 int sh_pal_program_on_path(const char *program)
 {
-    char cmd[512];
+    char found[MAX_PATH];
+    DWORD n;
 
     if (!pal_program_name_ok(program)) return 0;
-    /* NUL, not /dev/null, and `where`, not `which`: this runs under cmd.exe. */
-    if (snprintf(cmd, sizeof(cmd), "where %s >NUL 2>NUL", program) >= (int)sizeof(cmd)) {
-        return 0;
-    }
-    return system(cmd) == 0;
+
+    /*
+     * SearchPathA looks in the same places cmd's `where` does -- the
+     * application directory, the current directory, the system and Windows
+     * directories, then PATH -- without spawning a shell to ask. The ".exe"
+     * default extension is applied only when `program` has none of its own.
+     *
+     * A return of 0 means not found. A return >= sizeof(found) means it *was*
+     * found but the path did not fit, which is still a yes to the question
+     * being asked.
+     */
+    n = SearchPathA(NULL, program, ".exe", (DWORD)sizeof(found), found, NULL);
+    return n > 0;
 }
 
 

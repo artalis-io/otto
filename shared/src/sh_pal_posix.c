@@ -13,6 +13,7 @@
 #include "sh_pal.h"
 
 #include <errno.h>
+#include <limits.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <fcntl.h>
@@ -394,15 +395,57 @@ static int pal_program_name_ok(const char *program)
     return 1;
 }
 
+#if defined(PATH_MAX)
+  #define SH_PAL_PATH_CAP PATH_MAX
+#else
+  #define SH_PAL_PATH_CAP 4096
+#endif
+
 int sh_pal_program_on_path(const char *program)
 {
-    char cmd[512];
+    const char *path;
+    const char *seg;
 
     if (!pal_program_name_ok(program)) return 0;
-    if (snprintf(cmd, sizeof(cmd), "which %s >/dev/null 2>&1", program) >= (int)sizeof(cmd)) {
-        return 0;
+
+    path = getenv("PATH");
+    if (!path || !path[0]) return 0;
+
+    /* Walk PATH ourselves rather than asking a shell to run `which`. Same
+     * answer, no process spawned, and nothing of ours ends up on a command
+     * line. */
+    for (seg = path; ; ) {
+        const char *colon = strchr(seg, ':');
+        size_t len = colon ? (size_t)(colon - seg) : strlen(seg);
+        /* PATH_MAX is optional in POSIX and absent on some libcs. A path that
+         * does not fit is reported not-found by the length check below, which
+         * is the safe direction. */
+        char candidate[SH_PAL_PATH_CAP];
+        struct stat st;
+        int n;
+
+        /* An empty element means the current directory, which is how the
+         * shell reads it too. */
+        if (len == 0) {
+            n = snprintf(candidate, sizeof(candidate), "./%s", program);
+        } else {
+            n = snprintf(candidate, sizeof(candidate), "%.*s/%s",
+                         (int)len, seg, program);
+        }
+
+        if (n > 0 && (size_t)n < sizeof(candidate) &&
+            stat(candidate, &st) == 0 &&
+            S_ISREG(st.st_mode) &&
+            access(candidate, X_OK) == 0) {
+            /* S_ISREG matters: access(X_OK) succeeds on a directory, so a
+             * directory named like the program would otherwise answer yes. */
+            return 1;
+        }
+
+        if (!colon) break;
+        seg = colon + 1;
     }
-    return system(cmd) == 0;
+    return 0;
 }
 
 
