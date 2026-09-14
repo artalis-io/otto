@@ -23,6 +23,21 @@
 #define OOP_LINE_BUF_SIZE 4096
 #define OOP_IO_BUF_SIZE 1024
 
+/*
+ * Most read chunks to take before returning to the poll loop.
+ *
+ * The timeout, cancellation and exit checks all live *after* the drain, so a
+ * child that writes faster than we read would keep the drain fed and starve
+ * them -- cancel latency unbounded, which is the same shape as the basis
+ * repair loop that let a one-second limit run for forty-five seconds.
+ *
+ * Bounding it costs at most one extra poll interval per drain and caps
+ * throughput at this many KiB per interval, which is far above anything a
+ * solver's progress output produces. 0 means drain until empty, which is what
+ * the final pass after the child exits wants.
+ */
+#define OOP_DRAIN_CHUNKS_PER_POLL 256
+
 static double oop_now_ms(void) {
     return (double)sh_monotonic_ns() / 1.0e6;
 }
@@ -243,10 +258,16 @@ static int oop_win_drain(const LPExternalOOPRunRequest *req,
                          char *line_buf,
                          size_t *line_len,
                          int *cancelled_by_line,
-                         int *eof) {
+                         int *eof,
+                         unsigned max_chunks) {
+    unsigned taken = 0;
+
     for (;;) {
         DWORD avail = 0;
         DWORD got = 0;
+
+        if (max_chunks != 0 && taken >= max_chunks) return 0;
+        taken++;
 
         if (!PeekNamedPipe(read_h, NULL, 0, NULL, &avail, NULL)) {
             /* ERROR_BROKEN_PIPE: the child closed or exited. Not an error. */
@@ -376,7 +397,7 @@ int lp_external_oop_run(const LPExternalOOPRunRequest *req,
         if (!pipe_eof) {
             (void)oop_win_drain(req, read_h, io_buf, sizeof(io_buf),
                                 line_buf, &line_len, &cancelled_by_line,
-                                &pipe_eof);
+                                &pipe_eof, OOP_DRAIN_CHUNKS_PER_POLL);
         }
 
         if (cancelled_by_line) {
@@ -417,7 +438,7 @@ int lp_external_oop_run(const LPExternalOOPRunRequest *req,
     if (!pipe_eof) {
         (void)oop_win_drain(req, read_h, io_buf, sizeof(io_buf),
                             line_buf, &line_len, &cancelled_by_line,
-                            &pipe_eof);
+                            &pipe_eof, 0);
     }
     oop_flush_line(req, line_buf, &line_len, &cancelled_by_line);
 
@@ -493,8 +514,13 @@ int lp_external_oop_run(const LPExternalOOPRunRequest *req,
     while (!child_done) {
         int wait_rc;
         ssize_t nread;
+        unsigned taken = 0;
 
+        /* Bounded for the same reason as the Windows drain: the timeout
+         * and cancel checks are below this loop, and a chatty child would
+         * otherwise keep it fed and starve them. */
         do {
+            if (taken++ >= OOP_DRAIN_CHUNKS_PER_POLL) break;
             nread = read(pipefd[0], io_buf, sizeof(io_buf));
             if (nread > 0) {
                 (void)oop_handle_stream_chunk(req,

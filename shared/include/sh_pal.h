@@ -233,15 +233,21 @@ int sh_pal_setenv(const char *name, const char *value);
 /*
  * Is `program` runnable from PATH? Returns 1 if it is, 0 if not.
  *
- * POSIX asks `which`; Windows asks `where`. That difference is the whole
- * reason this exists: system() on Windows runs cmd.exe, which has neither
- * `which` nor /dev/null, so the POSIX spelling fails there whether or not the
- * program is installed. Seven call sites had copied that spelling, and every
- * one of them reported "missing" on every Windows box -- silently skipping
- * tests and failing benchmark harnesses that had nothing wrong with them.
+ * This exists because seven call sites had each written
+ * system("which prog >/dev/null 2>&1"), which cannot work on Windows: there
+ * system() runs cmd.exe, which has neither `which` nor /dev/null, so it
+ * answered "missing" whether or not the program was installed -- silently
+ * skipping tests and failing benchmark harnesses that had nothing wrong with
+ * them.
  *
- * `program` is interpolated into a shell command, so it must be a plain
- * program name: anything with shell metacharacters is rejected as not found.
+ * No shell is involved now. Windows asks SearchPathA; POSIX walks PATH and
+ * stats each candidate. That keeps shell execution out of the shared library
+ * entirely (see docs/internals/security-model.md) and is faster than spawning
+ * a shell per probe besides.
+ *
+ * `program` must still be a plain program name -- letters, digits and
+ * `. - _ +`. Anything else is reported not-found rather than searched for,
+ * which stops a caller passing a path and expecting it to be resolved.
  */
 int sh_pal_program_on_path(const char *program);
 
