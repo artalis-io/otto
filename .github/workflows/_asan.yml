@@ -35,7 +35,7 @@ jobs:
       - name: Install dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y build-essential libomp-dev
+          sudo apt-get install -y build-essential libomp-dev valgrind
 
       # Sanitizers need the whole thing built with them, so the libraries are
       # rebuilt rather than reusing a normal build.
@@ -56,5 +56,20 @@ jobs:
           export ASAN_OPTIONS=abort_on_error=0:detect_leaks=0:print_stacktrace=1
           export UBSAN_OPTIONS=print_stacktrace=1
           set +e
-          /tmp/repro_cfl 6 14 40 2>&1 | tail -60
+          PROBE_ONLY=12 /tmp/repro_cfl cfl 6 40 2>&1 | tail -30
           echo "exit=$?"
+
+      # Valgrind, not ASan, is the tool for this: the crash vanishes under
+      # ASan on both platforms without a report, which is what an
+      # uninitialised read looks like. memcheck sees those.
+      - name: Build without sanitizers and run under valgrind
+        run: |
+          make -C shared clean && make -C ralph clean
+          make -C shared CC_OPT='-O1 -g'
+          make -C ralph libralph.a CC_OPT='-O1 -g'
+          gcc -O1 -g -I ralph/include -I shared/include \
+            ralph/tests/_repro_cfl.c ralph/libralph.a shared/libshared.a \
+            -lm -fopenmp -o /tmp/repro_vg
+          set +e
+          PROBE_ONLY=12 valgrind --error-exitcode=0 --track-origins=yes \
+            --num-callers=20 /tmp/repro_vg cfl 6 40 2>&1 | tail -70
