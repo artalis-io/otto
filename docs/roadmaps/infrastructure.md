@@ -403,9 +403,21 @@ across `shared lib`, `shared test`, `ralph lib` and `ralph test`.
 
 ### Floating point: `/fp:precise`, on evidence
 
-GCC builds Ralph with `-ffast-math -fno-finite-math-only`: aggressive FP, NaN and
-Inf still honoured. `/fp:fast` has no such carve-out — it assumes NaN and Inf do
-not occur, which in a simplex is exactly the assumption that fails.
+`/fp:fast` assumes NaN and Inf do not occur, which in a simplex is exactly the
+assumption that fails, so `/fp:precise` was chosen on the evidence below.
+
+**That evidence has since been overtaken, in the same direction.** When this was
+written, GCC built Ralph with `-ffast-math -fno-finite-math-only` and the
+argument was that MSVC had no equivalent carve-out. GCC no longer builds it that
+way: `-ffast-math` was removed entirely and `-ffp-contract=off` added, because
+aggressive FP made the solver take a different path per CPU and fail to
+terminate at all on two AMD families. See the FP block in `mk/toolchain.mk` for
+the measurements.
+
+So the two toolchains now agree rather than merely resembling each other: IEEE,
+no reassociation, no contraction. The reasoning below still holds for why
+`/fp:fast` is wrong here — it is now simply the same conclusion the GNU side
+reached independently, and expensively.
 
 Both modes were built and the full Ralph suite run under each. **Both pass with
 zero failures**, so pass/fail alone would have said "either is fine". It is not:
