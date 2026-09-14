@@ -1,10 +1,22 @@
 /*
- * Does the corruption need capacitated facility location, or does any model
- * that branches enough do it? Same loop, three generators.
+ * repro_cfl_crash.c -- reproduction for the capacitated facility location
+ * crash documented in docs/KNOWN_ISSUES.md.
  *
- *   probe_multi <kind> <size> <trials>
- *     kind: cfl | setcover | knapmulti
+ * Build (not part of `make test`, because it is expected to crash):
+ *
+ *     make -C ralph repro-cfl-crash
+ *     ./ralph/repro_cfl_crash cfl 6 40
+ *
+ * Usage: repro_cfl_crash <kind> <size> <trials>
+ *   kind: cfl | setcover | knapmulti
+ *
+ * On Windows/MinGW the cfl run segfaults around trial 22. setcover and
+ * knapmulti complete 40/40, which is how the problem class was narrowed.
+ * PROBE_ONLY=<n> runs a single trial; note that no single trial crashes on
+ * its own, so the sequence matters. PROBE_NO_DETECT=1 disables special-case
+ * model detection, which does not change the outcome.
  */
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>

@@ -101,6 +101,70 @@
 - Problems requiring many branching iterations
 - Numerical edge cases (very large/small coefficients)
 
+## MIP: repeated capacitated-facility-location solves crash on Windows
+
+- **Severity**: High. A wrong optimal objective is returned before the crash.
+- **Status**: reproducible and narrowed, root cause NOT found.
+
+Solving many capacitated facility location (CFL) instances in one process
+corrupts memory on Windows. The crash is in `bb_node_pool_copy()` reached from
+`compute_branch_children()`, and it is preceded by at least one silently wrong
+answer.
+
+```
+make -C ralph repro-cfl-crash
+./ralph/repro_cfl_crash cfl 6 40      # segfaults around trial 22
+./ralph/repro_cfl_crash setcover 6 40 # completes 40/40
+./ralph/repro_cfl_crash knapmulti 6 40 # completes 40/40
+```
+
+### What is established
+
+- **Only CFL.** Set covering and multidimensional knapsack complete 40 out of
+  40. CFL is the one class with equality rows *and* capacity rows carrying a
+  negative coefficient.
+- **It is the sequence, not an instance.** No single trial crashes alone;
+  trial 22 of 40 does. Something accumulates across solves.
+- **A wrong answer comes first.** In one 40-trial run the objective at trial 21
+  was 207 where Linux gave 209, and the crash followed at trial 22.
+- **Windows only.** Linux is clean over the same sequence under ASan+UBSan and
+  under valgrind (0 errors).
+- **Sanitizers hide it.** MSVC `/fsanitize=address` completes all 40 on Windows
+  and reports nothing, which is why the usual tool did not close this out.
+
+### What has been ruled out
+
+| Hypothesis | Result |
+|---|---|
+| free_list overflow in `bb_node_pool_return` | Real (observed 10x) and fixed in a branch, but the crash survives it |
+| Node returned to the pool twice | Instrumented; never fired |
+| `offset` arithmetic misidentifying pool membership | `&nodes[offset] == node` always held |
+| `num_vars` mismatch between pool and `bb_node_pool_copy` | Both are `original_model->num_vars` |
+| Allocation failure in `bb_node_create` | Handled; callers check for NULL |
+| Pooled node freed as standalone | Only `node_queue_free()` would, and nothing calls it |
+| SCP/SPP special-case path | `detect_special=0` crashes identically |
+| Optimisation level | Crashes at -O3; -O0/-O1/-O2 also crash on a full sequence |
+| Stack exhaustion | `-Wl,--stack,8388608` changes nothing |
+
+### Two things worth fixing regardless
+
+`bb_node_pool_return()` pushes onto `free_list` with no bound check, so a
+pool that is somehow over-returned writes past the end of the array. That was
+observed firing. It is a real out-of-bounds write even though repairing it does
+not cure this crash.
+
+`node_queue_free()` calls `node_queue_free_with_pool(queue, NULL)`, and with a
+NULL pool `bb_node_pool_return()` falls through to `bb_node_free()`. For a
+pooled node that frees three interior pointers -- `lb` into `lb_pool`, `ub` into
+`ub_pool`, and the node itself into `nodes`. Nothing calls `node_queue_free()`
+today, so it is a loaded gun rather than a live bug.
+
+### Suggested next step
+
+A Windows-side heap debugger -- Application Verifier or Dr. Memory -- on the
+40-trial sequence. ASan has been tried on both platforms and does not see it,
+so more ASan is not the answer.
+
 ## Platform-Specific Issues
 
 ### macOS
