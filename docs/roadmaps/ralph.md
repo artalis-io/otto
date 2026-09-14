@@ -187,26 +187,56 @@ and objective. Rare in general LP, but common in structured problems.
 
 Root LP relaxation matches GLPK. The remaining gap is in tree search quality.
 
-### M1: Cover Cuts (~400 lines, High Impact)
+Status below was re-derived from the code in Sep 2026, because M1 was listed
+as pending work after it had shipped.
 
-FuelWise MILPs have knapsack-like constraints (tank capacity, fuel balance).
-Cover cuts are the standard technique — find minimal covers, lift coefficients.
-Expected: milp15 gap from ~25% to <5%.
+### M1: Cover Cuts -- DONE
 
-### M2: Node-Level Cut Generation (~200 lines, High Impact)
+Implemented and wired: `generate_cover_cuts()` and `generate_single_cover_cut()`
+in `cuts.c`, called from `solve_root_node()` (`mip.c`), plus
+`generate_lifted_cover_cuts()` reached through `generate_scp_cuts()`. On by
+default (`enable_root_cover_cuts = 1`), round limit `RALPH_ROOT_COVER_MAX_ROUNDS`,
+and instrumented via `root_cover_cuts_generated` and `time_root_cover`.
+`test_lifted_cover_validity` fuzzes 50,000 random knapsack rows against the
+lifted generator.
 
-Currently cuts only at root. Add cut rounds at promising B&B nodes (depth < 10,
-fractional solution with tight gap). Expected: tighter per-node bounds.
+The original success criterion -- "milp15 gap from ~25% to <5%" -- cannot be
+evaluated: there is no milp15 in the repository. The number came from
+`docs/archive/ralph-roadmap-pre-r4.md`, and `bench_mip` generates set covering,
+set partitioning, assignment, network flow and facility location, none of them
+knapsack-shaped. **Anyone reviving this should add a knapsack generator to
+`bench_mip` first**, or the effect of cover cuts cannot be measured at all.
 
-### M3: Cut Pool Management (~300 lines, High Impact)
+Known gap: no test asserts that cover cuts are *generated* on a real model. The
+fuzzer proves the cuts that are produced are valid; nothing proves any are.
 
-Efficacy-based purging after N nodes. Age-out cuts not tight for 50+ nodes.
-Cap total cuts at 2x original constraints. Expected: milp100+ speed 2-3x.
+### M2: Node-Level Cut Generation (~200 lines, High Impact) -- NOT STARTED
 
-### M4: Feasibility Pump (~300 lines, Medium Impact)
+Premise verified: every generator -- Gomory, MIR, cover, SCP -- is called from
+`solve_root_node()` in `mip.c`. Cuts really are root-only.
+
+Add cut rounds at promising B&B nodes (depth < 10, fractional solution with a
+tight gap). Expected: tighter per-node bounds.
+
+### M3: Cut Pool Management (~300 lines, High Impact) -- PARTIALLY DONE
+
+Age-out exists and is wired: `cut_pool_age()` and `cut_pool_cleanup(pool,
+max_age)` in `cuts.c`, called from `mip.c` at three points with max ages of 5,
+3 and 2 (the last when the root is stalling).
+
+Not found in the code: efficacy-based purging, and the "cap total cuts at 2x
+original constraints" rule. `max_cuts_per_round` is 50; `pool->capacity` bounds
+the pool's allocation, which is a different thing from a model-relative cap.
+
+### M4: Feasibility Pump (~300 lines, Medium Impact) -- NOT STARTED
 
 Find incumbents before tree search via LP/rounding alternation. Complements
 RINS (which needs an existing incumbent).
+
+Note: `mip.h` declares `int heuristic_feasibility_pump(MIPSolver *, double *)`
+but nothing defines or calls it. That prototype is a dangling declaration --
+anyone calling it today gets a link error. Either implement it here or delete
+the declaration.
 
 ### M5: FuelWise True Benders (Planned)
 
