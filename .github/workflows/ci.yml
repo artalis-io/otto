@@ -759,15 +759,18 @@ jobs:
       # end to end. The suites are cheap: 110 assertions across the six, about
       # 25 seconds total. The fixtures cost more than the tests do.
       #
-      # bench_pbf is the PBF->.vlg builder and is not part of `make velo`. It
-      # builds under cl like everything else here, so this job still needs no
-      # gcc.
+      # bench_pbf is the PBF->.vlg builder and is not part of `make velo`. Every
+      # command here carries CC=cl, including the .vlg one: that target has an
+      # order-only prerequisite on `velo`, so without it make would build the
+      # velo module with gcc -- which this job does not install. That is also
+      # why it must not be left to the default: the failure would be a missing
+      # compiler, not a wrong one.
       - name: Fetch Monaco fixtures
         run: |
           source scripts/msvc-env.sh
           mingw32-make data/monaco-latest.osm.pbf
           mingw32-make -C velo bench_pbf CC=cl
-          mingw32-make data/monaco.vlg
+          mingw32-make data/monaco.vlg CC=cl
 
       # Each script starts its own server, picks its own port and exits
       # non-zero on failure. Four run from the repo root and two from their own
