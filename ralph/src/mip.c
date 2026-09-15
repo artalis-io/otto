@@ -2202,6 +2202,8 @@ static int generate_node_cuts(MIPSolver *solver, BBNode *node)
     int rows_before;
     int generated;
     int applied;
+    CutPool *pool;
+    Cut **applied_cuts = NULL;
 
     if (!solver || !node || !solver->enable_node_cuts) return 0;
     if (!solver->cut_pool || !solver->working_model) return 0;
@@ -2226,15 +2228,31 @@ static int generate_node_cuts(MIPSolver *solver, BBNode *node)
         }
     }
 
+    /*
+     * A round-local cut pool, not solver->cut_pool.
+     *
+     * apply_cuts() walks the whole pool and appends every cut that the current
+     * LP point violates, with no check for whether that cut is already a row in
+     * the model. solver->cut_pool persists across rounds, so sharing it here
+     * re-applied earlier rounds' cuts as fresh duplicate rows at every node:
+     * 4,012 cuts generated turned into 26,743 applications, the working model
+     * grew from ~24 rows to ~700, and the run took 8.5x longer than with node
+     * cuts off. A pool that lives for one round can only offer that round's
+     * cuts.
+     */
+    pool = cut_pool_create(solver->max_cuts_per_round > 0
+                           ? solver->max_cuts_per_round : 64);
+    if (!pool) return 0;
+
     t_start = mip_cpu_time_now();
     rows_before = solver->working_model->num_cons;
 
-    generated = generate_cover_cuts(solver, solver->cut_pool);
+    generated = generate_cover_cuts(solver, pool);
     solver->node_cut_cuts_generated += generated;
 
     applied = 0;
     if (generated > 0) {
-        applied = apply_cuts(solver, solver->cut_pool, solver->max_cuts_per_round, NULL);
+        applied = apply_cuts(solver, pool, solver->max_cuts_per_round, &applied_cuts);
         solver->node_cut_cuts_applied += applied;
     }
 
@@ -2251,17 +2269,24 @@ static int generate_node_cuts(MIPSolver *solver, BBNode *node)
          * solving without this is a segfault, not a wrong answer, which is how
          * it was found.
          *
-         * The root path has an incremental equivalent
-         * (mip_try_incremental_root_lp_resolve). It is not reused here: it
-         * assumes root context, and a full rebuild is the honest cost of
-         * changing the model mid-tree. That cost is exactly why node cuts are
-         * gated and off by default.
+         * Prefer the incremental path. Despite the name it is not root-specific:
+         * it extends the current basis with a slack for each new row and dual
+         * re-optimises, which is far cheaper than discarding and rebuilding the
+         * whole tableau. It does bump the root_lp_* counters, so those read as
+         * "LP resolves after cuts" rather than "root LP resolves" once node cuts
+         * are on. Full rebuild stays as the fallback.
          */
-        if (lp_model_finalize(solver->working_model) != 0 ||
-            mip_create_lp_solver_for_working_model(solver) != 0) {
-            solver->time_node_cuts += mip_cpu_time_now() - t_start;
-            return -1;
+        if (mip_try_incremental_root_lp_resolve(solver, applied_cuts, applied) != 0) {
+            if (lp_model_finalize(solver->working_model) != 0 ||
+                mip_create_lp_solver_for_working_model(solver) != 0) {
+                free(applied_cuts);
+                cut_pool_free(pool);
+                solver->time_node_cuts += mip_cpu_time_now() - t_start;
+                return -1;
+            }
         }
+        free(applied_cuts);
+        applied_cuts = NULL;
 
         /* Re-solve so this node's bound reflects the cuts it just paid for.
          * solve_node_lp re-applies this node's bounds to the rebuilt LP. */
@@ -2269,11 +2294,12 @@ static int generate_node_cuts(MIPSolver *solver, BBNode *node)
             /* The tightened LP is infeasible: the node is pruned, which is a
              * legitimate and good outcome. Report it as no cuts applied so the
              * caller's existing infeasible handling is not bypassed. */
+            cut_pool_free(pool);
             solver->time_node_cuts += mip_cpu_time_now() - t_start;
             return -1;
         }
     }
-
+    free(applied_cuts);
     solver->time_node_cuts += mip_cpu_time_now() - t_start;
     return applied;
 }

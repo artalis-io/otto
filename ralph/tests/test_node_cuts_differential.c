@@ -17,14 +17,23 @@
  * MIR) without building cut scoping first, the objectives below start
  * disagreeing.
  *
- * Why capacitated facility location rather than knapsacks. The obvious
- * generator here is a random knapsack, and it is useless: Ralph closes those at
- * the root, so the branch-and-bound loop is never entered and the test compares
- * two identical runs. Measured while writing this -- binary knapsacks from 8 to
- * 60 variables, including strongly correlated ones, produced zero calls to
- * process_node(). CFL branches (hundreds of nodes on a 6x14 instance) and its
- * capacity rows are knapsack-shaped, so cover cuts have something to find. That
- * combination is what makes this test exercise anything at all.
+ * Model class: multidimensional knapsack, and the choice is load-bearing twice
+ * over.
+ *
+ * A single-row knapsack is useless here -- Ralph closes those at the root, so
+ * the branch-and-bound loop is never entered and both sides are identical runs.
+ * Multi-row knapsacks branch on every instance below.
+ *
+ * Capacitated facility location is equally useless, for a less obvious reason.
+ * It branches heavily, so it looks like the right choice, but its capacity rows
+ * are `sum_j d_j x_ij - cap_i y_i <= 0` -- a negative coefficient and a
+ * zero right-hand side, which is not a knapsack. generate_cover_cuts() finds
+ * nothing in it, at the root or at a node: measured, 0 cover cuts against 2063
+ * Gomory cuts over 40 instances. An earlier version of this test used CFL and
+ * passed while exercising nothing at all.
+ *
+ * Hence the two guards at the bottom. Comparing nothing is a failure, and
+ * comparing runs in which no node cut was ever generated is also a failure.
  *
  * Part of `make -C ralph test`.
  */
@@ -36,7 +45,11 @@
 #include <string.h>
 
 #include "ralph_mip.h"
+#include "lp.h"
+#include "mip.h"
 #include "sh_pal.h"
+
+MIPSolver* ralph_get_mip_solver(const RalphModel *model);
 
 /*
  * uint64_t, not unsigned long: on Windows unsigned long is 32 bits, so the
@@ -51,128 +64,86 @@ static unsigned int lcg(void) {
 static int ri(int lo, int hi) { return lo + (int)(lcg() % (unsigned)(hi - lo + 1)); }
 
 #define SEED_BASE 0xC0FFEE11ULL
-
-#define MAX_FAC 7
-#define MAX_CUST 14
-#define MAX_VARS (MAX_FAC + MAX_FAC * MAX_CUST)
+#define NVARS  48
+#define NROWS   6
 #define TRIALS 40
 
-typedef struct {
-    int nf, nc;
-    double open_cost[MAX_FAC];
-    double assign_cost[MAX_FAC][MAX_CUST];
-    int demand[MAX_CUST];
-    int cap[MAX_FAC];
-} Spec;
-
-static void gen_spec(Spec *s, long trial)
+/*
+ * max  sum_j p_j x_j        (expressed as a minimisation with negative costs)
+ * s.t. sum_j a_ij x_j <= 0.4 * sum_j a_ij     for each row i
+ *      x binary
+ *
+ * Every row is a genuine knapsack: positive coefficients, positive right-hand
+ * side, binary variables. That is what generate_cover_cuts() needs.
+ */
+static void build_knapmulti(RalphMIPModel *m, long trial)
 {
-    int i, j;
+    int i, j, k;
+    int idx[NVARS];
+    double val[NVARS];
 
     g_rng = SEED_BASE + (uint64_t)trial;
-    s->nf = ri(4, MAX_FAC);
-    s->nc = ri(9, MAX_CUST);
 
-    for (i = 0; i < s->nf; i++) {
-        s->open_cost[i] = (double)ri(20, 60);
-        s->cap[i] = ri(40, 80);
-        for (j = 0; j < MAX_CUST; j++) {
-            s->assign_cost[i][j] = (double)ri(1, 20);
+    for (j = 0; j < NVARS; j++)
+        ralph_lp_add_var(m, 0.0, 1.0, -(double)ri(1, 30), RALPH_LP_VAR_BINARY);
+
+    for (i = 0; i < NROWS; i++) {
+        double total = 0.0;
+        k = 0;
+        for (j = 0; j < NVARS; j++) {
+            idx[k] = j;
+            val[k] = (double)ri(1, 20);
+            total += val[k];
+            k++;
         }
+        ralph_lp_add_constraint(m, k, idx, val, RALPH_LP_SENSE_LESS_EQUAL, total * 0.4);
     }
-    for (j = 0; j < s->nc; j++) s->demand[j] = ri(5, 20);
 }
 
-/*
- * min  sum_i f_i y_i + sum_ij c_ij x_ij
- * s.t. sum_i x_ij = 1                    for each customer j
- *      sum_j d_j x_ij - cap_i y_i <= 0   for each facility i  (knapsack-shaped)
- *      x, y binary
- *
- * Variable layout: y_i at i, x_ij at nf + i*nc + j.
- */
-static int solve_spec(const Spec *s, int node_cuts, int *status, double *obj)
+static int solve_trial(long trial, int node_cuts_on,
+                       int *status, double *obj, long *cuts_generated)
 {
-    RalphMIPModel *m;
-    int idx[MAX_VARS];
-    double val[MAX_VARS];
-    int i, j, k;
+    RalphMIPModel *m = ralph_mip_create();
+    MIPSolver *s;
 
-    /* Read when the MIP solver is created, so it must be set before
-     * ralph_mip_optimize(), not merely before the process starts. */
-    sh_pal_setenv("RALPH_ENABLE_NODE_CUTS", node_cuts ? "1" : "");
-
-    m = ralph_mip_create();
     if (!m) return 0;
 
-    for (i = 0; i < s->nf; i++) {
-        ralph_lp_add_var(m, 0.0, 1.0, s->open_cost[i], RALPH_LP_VAR_BINARY);
-    }
-    for (i = 0; i < s->nf; i++) {
-        for (j = 0; j < s->nc; j++) {
-            ralph_lp_add_var(m, 0.0, 1.0, s->assign_cost[i][j], RALPH_LP_VAR_BINARY);
-        }
-    }
-
-    for (j = 0; j < s->nc; j++) {
-        k = 0;
-        for (i = 0; i < s->nf; i++) {
-            idx[k] = s->nf + i * s->nc + j;
-            val[k] = 1.0;
-            k++;
-        }
-        ralph_lp_add_constraint(m, k, idx, val, RALPH_LP_SENSE_EQUAL, 1.0);
-    }
-    for (i = 0; i < s->nf; i++) {
-        k = 0;
-        for (j = 0; j < s->nc; j++) {
-            idx[k] = s->nf + i * s->nc + j;
-            val[k] = (double)s->demand[j];
-            k++;
-        }
-        idx[k] = i;
-        val[k] = -(double)s->cap[i];
-        k++;
-        ralph_lp_add_constraint(m, k, idx, val, RALPH_LP_SENSE_LESS_EQUAL, 0.0);
-    }
-
+    sh_pal_setenv("RALPH_ENABLE_NODE_CUTS", node_cuts_on ? "1" : "");
+    build_knapmulti(m, trial);
     ralph_mip_optimize(m);
+
+    s = ralph_get_mip_solver((const RalphModel *)m);
+    *cuts_generated = s ? (long)s->node_cut_cuts_generated : 0;
     *status = (int)ralph_mip_get_status(m);
     *obj = ralph_mip_get_objval(m);
+
     ralph_mip_free(m);
     return 1;
 }
 
-static void print_spec(const Spec *s)
-{
-    int i, j;
-    printf("    facilities=%d customers=%d\n", s->nf, s->nc);
-    for (i = 0; i < s->nf; i++) {
-        printf("    f%-2d open=%g cap=%d assign:", i, s->open_cost[i], s->cap[i]);
-        for (j = 0; j < s->nc; j++) printf(" %g", s->assign_cost[i][j]);
-        printf("\n");
-    }
-    printf("    demand:");
-    for (j = 0; j < s->nc; j++) printf(" %d", s->demand[j]);
-    printf("\n");
-}
-
 int main(void)
 {
-    long compared = 0, mismatches = 0;
+    long compared = 0, mismatches = 0, total_node_cuts = 0;
     long t;
 
     printf("Ralph Node-Cut Differential (node cuts must not change the answer)\n");
     printf("=================================================================\n");
 
     for (t = 0; t < TRIALS; t++) {
-        Spec s;
         int st_off = 0, st_on = 0;
         double obj_off = 0.0, obj_on = 0.0;
+        long gen_off = 0, gen_on = 0;
 
-        gen_spec(&s, t);
-        if (!solve_spec(&s, 0, &st_off, &obj_off)) continue;
-        if (!solve_spec(&s, 1, &st_on, &obj_on)) continue;
+        if (!solve_trial(t, 0, &st_off, &obj_off, &gen_off)) continue;
+        if (!solve_trial(t, 1, &st_on, &obj_on, &gen_on)) continue;
+
+        total_node_cuts += gen_on;
+
+        if (gen_off != 0) {
+            printf("\n  BUG at trial %ld: %ld node cuts generated with the "
+                   "feature off\n", t, gen_off);
+            mismatches++;
+        }
 
         /* Only compare definitive verdicts; a limit or an error on either side
          * says nothing about cut validity. */
@@ -188,8 +159,7 @@ int main(void)
                 mismatches++;
                 printf("\n  MISMATCH at trial %ld: node cuts changed the optimum\n", t);
                 printf("    off: obj=%.10g\n", obj_off);
-                printf("    on : obj=%.10g\n", obj_on);
-                print_spec(&s);
+                printf("    on : obj=%.10g  (%ld node cuts generated)\n", obj_on, gen_on);
                 if (mismatches >= 3) { printf("\n(stopping after 3)\n"); break; }
             }
         }
@@ -198,8 +168,9 @@ int main(void)
     sh_pal_setenv("RALPH_ENABLE_NODE_CUTS", "");
 
     printf("\n-----------------------------------------------------------------\n");
-    printf("Compared:   %ld\n", compared);
-    printf("Mismatches: %ld\n", mismatches);
+    printf("Compared:            %ld\n", compared);
+    printf("Node cuts generated: %ld\n", total_node_cuts);
+    printf("Mismatches:          %ld\n", mismatches);
 
     /*
      * A run that compared nothing proves nothing. The first version of this
@@ -209,6 +180,17 @@ int main(void)
     if (compared == 0) {
         printf("RESULT: no model produced a definitive optimum on both sides.\n");
         printf("        Nothing was actually compared. FAIL\n");
+        return 1;
+    }
+    /*
+     * And a run in which no node cut was ever generated proves nothing either.
+     * The second version of this file passed that way: it used capacitated
+     * facility location, whose rows are not knapsacks, so the cover generator
+     * returned nothing at every node and both sides were again identical.
+     */
+    if (total_node_cuts == 0) {
+        printf("RESULT: node cuts never fired, so the two sides ran identical\n");
+        printf("        code. Nothing was actually exercised. FAIL\n");
         return 1;
     }
     if (mismatches == 0) {
