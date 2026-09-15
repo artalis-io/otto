@@ -49,7 +49,7 @@ static const CsAllocator g_default_allocator = {
 };
 
 /* Thread-local allocator (NULL means use default) */
-static CS_THREAD_LOCAL const CsAllocator *tls_allocator = NULL;
+static SH_THREAD_LOCAL const CsAllocator *tls_allocator = NULL;
 
 void cs_set_allocator(const CsAllocator *allocator) {
     tls_allocator = allocator;
@@ -88,7 +88,7 @@ void cs_free(void *ptr) {
  * Global State (Thread-Local)
  * ============================================================================ */
 
-static CS_THREAD_LOCAL CsState tls_state = {
+static SH_THREAD_LOCAL CsState tls_state = {
     .focused_id = 0,
     .pending_click = false,
 };
@@ -605,8 +605,8 @@ CS_EXPORT int cs_focusable_count(void) {
  * Error Tracking (Thread-Local)
  * ============================================================================ */
 
-static CS_THREAD_LOCAL CsErrorCode tls_last_error = CS_ERR_NONE;
-static CS_THREAD_LOCAL int tls_error_count = 0;
+static SH_THREAD_LOCAL CsErrorCode tls_last_error = CS_ERR_NONE;
+static SH_THREAD_LOCAL int tls_error_count = 0;
 
 void cs_record_error(CsErrorCode code) {
     tls_last_error = code;

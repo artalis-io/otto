@@ -64,10 +64,10 @@ const CsMarkerStyle CS_MARKER_STYLE_DEFAULT = {
  * ============================================================================ */
 
 /* Hash table for per-map state - each thread has its own maps */
-static CS_THREAD_LOCAL CsMapState tls_map_states[CS_MAP_STATE_CAPACITY];
+static SH_THREAD_LOCAL CsMapState tls_map_states[CS_MAP_STATE_CAPACITY];
 
 /* Current active map in begin/end context */
-static CS_THREAD_LOCAL CsMapState *tls_active_map = NULL;
+static SH_THREAD_LOCAL CsMapState *tls_active_map = NULL;
 
 CsMapState* cs_map_get_state(uint32_t id) {
     if (id == 0) return NULL;

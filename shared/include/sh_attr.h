@@ -67,4 +67,38 @@
   #define SH_NOINLINE
 #endif
 
+/* Thread-local storage.
+ *
+ * Unlike the rest of this header, this one is NOT cosmetic -- the same caveat
+ * SH_PACKED carries. Every other macro here can expand to nothing and the code
+ * still behaves identically; an empty SH_THREAD_LOCAL turns a per-thread
+ * variable into a shared one, which is a data race rather than a missing
+ * optimisation. That is why the last branch warns instead of failing silently.
+ *
+ * C11 spells it _Thread_local and both GCC/Clang and MSVC predate that with
+ * their own spellings. Prefer the standard one where the compiler claims C11
+ * with threads.
+ *
+ * Consolidated from three identical ladders that had drifted apart:
+ * FW_THREAD_LOCAL (fuelwise/src/fw_refuel.c), CS_THREAD_LOCAL
+ * (clayshards/clay-shards/src/cs_internal.h) and SH_THREAD_LOCAL
+ * (shared/src/sh_httpserver.c). The ClayShards copy was the only one that
+ * warned on the no-TLS fallback; that behaviour is kept here for all callers.
+ */
+#if defined(__STDC_VERSION__) && __STDC_VERSION__ >= 201112L && !defined(__STDC_NO_THREADS__)
+  #define SH_THREAD_LOCAL _Thread_local
+#elif defined(__GNUC__) || defined(__clang__)
+  #define SH_THREAD_LOCAL __thread
+#elif defined(_MSC_VER)
+  #define SH_THREAD_LOCAL __declspec(thread)
+#else
+  #define SH_THREAD_LOCAL
+  #define SH_NO_TLS 1
+  #if defined(__GNUC__) || defined(__clang__)
+    #warning "No TLS support: variables tagged SH_THREAD_LOCAL are shared across threads"
+  #elif defined(_MSC_VER)
+    #pragma message("No TLS support: variables tagged SH_THREAD_LOCAL are shared across threads")
+  #endif
+#endif
+
 #endif /* SH_ATTR_H */

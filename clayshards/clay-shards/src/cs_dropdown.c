@@ -39,7 +39,7 @@ const CsDropdownStyle CS_DROPDOWN_STYLE_DEFAULT = {
  * If hierarchical dropdowns are needed in the future, this could be refactored
  * to use a stack of open dropdown IDs instead of a single ID.
  */
-static CS_THREAD_LOCAL uint32_t tls_open_dropdown_id = 0;
+static SH_THREAD_LOCAL uint32_t tls_open_dropdown_id = 0;
 
 bool cs_dropdown_is_open(uint32_t id) {
     return tls_open_dropdown_id == id && id != 0;
