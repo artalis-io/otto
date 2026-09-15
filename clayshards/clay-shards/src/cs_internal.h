@@ -9,34 +9,12 @@
 #define CS_INTERNAL_H
 
 #include "cs_common.h"
+#include "sh_attr.h"   /* SH_THREAD_LOCAL */
 
 /* ============================================================================
  * Thread-Local Storage
  * ============================================================================ */
 
-/* Cross-platform thread-local storage macro.
- * Each thread gets its own copy of UI state for thread safety. */
-#if defined(__STDC_VERSION__) && __STDC_VERSION__ >= 201112L && !defined(__STDC_NO_THREADS__)
-    /* C11 with threads support */
-    #define CS_THREAD_LOCAL _Thread_local
-#elif defined(__GNUC__) || defined(__clang__)
-    /* GCC/Clang extension */
-    #define CS_THREAD_LOCAL __thread
-#elif defined(_MSC_VER)
-    /* MSVC */
-    #define CS_THREAD_LOCAL __declspec(thread)
-#else
-    /* No TLS support - single-threaded only.
-     * WARNING: ClayShards will NOT be thread-safe in this configuration.
-     * All UI calls must happen on a single thread. */
-    #define CS_THREAD_LOCAL
-    #define CS_NO_TLS 1
-    #if defined(__GNUC__) || defined(__clang__)
-        #warning "ClayShards: No TLS support - UI state is not thread-safe"
-    #elif defined(_MSC_VER)
-        #pragma message("ClayShards: No TLS support - UI state is not thread-safe")
-    #endif
-#endif
 
 /* ============================================================================
  * Internal Constants
