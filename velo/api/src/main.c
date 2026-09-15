@@ -25,10 +25,7 @@
 #include <math.h>
 #include <stdint.h>
 #include <limits.h>
-#include <pthread.h>
-#include <sys/time.h>
 #include <errno.h>
-#include <unistd.h>
 #include <keel/keel.h>
 #include <stddef.h>
 #include "velo.h"
@@ -45,6 +42,7 @@
 #include "sh_query.h" /* For query-string parameter parsing */
 #include "sh_arena.h" /* Arena for the JSON body parser */
 #include "sh_geo.h"   /* For sh_parse_coord */
+#include "sh_perf.h"  /* Portable millisecond clock (replaces gettimeofday) */
 
 /* ============================================================================
  * Configuration
@@ -303,17 +301,16 @@ static void record_metrics(ShMetricsTimer timer, const char *endpoint) {
 static int velo_metered_handler(void *ctx, const ShApiRequest *req,
                                 ShApiResponse *resp)
 {
-    struct timeval t0, t1;
+    double t0, t1;
     int rc;
 
-    gettimeofday(&t0, NULL);
+    t0 = sh_perf_now_ms();
     rc = vl_api_handle(ctx, req, resp);
-    gettimeofday(&t1, NULL);
+    t1 = sh_perf_now_ms();
 
     if (s_adaptive_tracker) {
         ShCapacityParams np;
-        double ms = (t1.tv_sec - t0.tv_sec) * 1000.0 +
-                    (t1.tv_usec - t0.tv_usec) / 1000.0;
+        double ms = t1 - t0;
         sh_adaptive_record(s_adaptive_tracker, ms);
         if (sh_adaptive_update(s_adaptive_tracker, &np) && s_rate_limiter) {
             sh_ratelimit_update_rate(s_rate_limiter,

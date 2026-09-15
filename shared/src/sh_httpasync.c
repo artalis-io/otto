@@ -7,7 +7,7 @@
  *   on_cancel and on_deadline never free -- work_fn may still be running on a
  *   worker -- they only set `detached`. It is written on the event loop thread
  *   and read on the worker (work_fn's early-out), so all accesses go through
- *   __atomic_{load,store}_n with acquire/release ordering.
+ *   C11 atomic_{load,store}_explicit with acquire/release ordering.
  *
  * See docs/roadmaps/transport.md.
  */
@@ -19,6 +19,7 @@
 #include <keel/http_sse.h>
 #include <keel/clock.h>
 
+#include <stdatomic.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -43,7 +44,13 @@ typedef struct {
     ShApiResponse resp;             /* filled by the handler on the worker */
     int handler_rc;
 
-    int detached;                   /* conn died, or we already replied 504 */
+    /* Written on the event loop thread, read on a worker. C11 atomics rather
+     * than __atomic_* builtins: those are a GCC/Clang extension and MSVC has
+     * no equivalent, which is what kept the API servers out of the MSVC build.
+     * mk/toolchain.mk passes /experimental:c11atomics for this. Plain
+     * assignment under an #ifdef would compile but drop the acquire/release
+     * ordering this handoff depends on. */
+    _Atomic int detached;           /* conn died, or we already replied 504 */
 } KeelCall;
 
 /* ------------------------------------------------------------------------ */
@@ -194,7 +201,7 @@ static void call_work_fn(void *user_data)
      * CPU-heavy handler: done_fn will free the context and the reply is already
      * sent. This sheds expired work under queue backlog instead of running a
      * full job whose result is discarded, which would amplify overload. */
-    if (__atomic_load_n(&c->detached, __ATOMIC_ACQUIRE)) return;
+    if (atomic_load_explicit(&c->detached, memory_order_acquire)) return;
 
     memset(&req, 0, sizeof(req));
     req.method   = c->method;
@@ -216,7 +223,7 @@ static void call_done_fn(void *user_data)
     if (c->cfg->stats) c->cfg->stats->popped++;
 
     /* Connection gone, or on_deadline already replied. Nothing to write. */
-    if (__atomic_load_n(&c->detached, __ATOMIC_ACQUIRE)) {
+    if (atomic_load_explicit(&c->detached, memory_order_acquire)) {
         call_free(c);
         return;
     }
@@ -267,7 +274,7 @@ static void call_on_cancel(KlAsyncOp *op, void *ud)
 {
     KeelCall *c = (KeelCall *)((char *)op - offsetof(KeelCall, op));
     (void)ud;
-    __atomic_store_n(&c->detached, 1, __ATOMIC_RELEASE);
+    atomic_store_explicit(&c->detached, 1, memory_order_release);
 }
 
 /* Deadline exceeded: reply 504 now, let done_fn free the context later. */
@@ -276,8 +283,8 @@ static void call_on_deadline(KlAsyncOp *op, void *ud)
     KeelCall *c = (KeelCall *)((char *)op - offsetof(KeelCall, op));
     (void)ud;
 
-    if (__atomic_load_n(&c->detached, __ATOMIC_ACQUIRE)) return;
-    __atomic_store_n(&c->detached, 1, __ATOMIC_RELEASE);
+    if (atomic_load_explicit(&c->detached, memory_order_acquire)) return;
+    atomic_store_explicit(&c->detached, 1, memory_order_release);
     if (c->cfg->stats) c->cfg->stats->expired++;
 
     sh_http_reply_error(kl_http_conn_response(op->conn), 504,
@@ -389,7 +396,7 @@ void sh_http_async_dispatch(const ShHttpAsync *cfg,
             /* Queue full: backpressure. The op is suspended, so complete it
              * before freeing -- and mark detached so nothing else replies. */
             if (cfg->stats) cfg->stats->dropped++;
-            __atomic_store_n(&c->detached, 1, __ATOMIC_RELEASE);
+            atomic_store_explicit(&c->detached, 1, memory_order_release);
             sh_http_reply_error(res, 503, cfg->cors, NULL,
                               "Service unavailable - queue full");
             kl_async_complete(cfg->server, &c->op);
