@@ -84,10 +84,18 @@ CODE=$(curl -s -o /tmp/carta_tile.png -w '%{http_code}' -m 30 \
     "http://127.0.0.1:$PORT/tiles/$Z/$X/$Y.png")
 check_code "PNG tile returns 200" "$CODE" "200"
 
-if head -c 8 /tmp/carta_tile.png | grep -q 'PNG'; then
+# Compare the signature bytes rather than grepping for the substring "PNG".
+# A PNG starts 89 50 4E 47, and 0x89 is not valid UTF-8, so on macOS in a
+# UTF-8 locale BSD grep does not match inside a line carrying an invalid
+# multibyte sequence -- this assertion failed there while carta's own unit
+# test, which checks the same four bytes in C, passed. od is POSIX and has
+# no locale or binary-input behaviour to trip over. It also makes the check
+# stricter: the old one would accept any response containing "PNG".
+PNG_SIG=$(head -c 4 /tmp/carta_tile.png | od -An -tx1 | tr -d '[:space:]')
+if [ "$PNG_SIG" = "89504e47" ]; then
     pass "PNG tile has a PNG signature"
 else
-    fail "PNG tile has a PNG signature"
+    fail "PNG tile has a PNG signature" "first four bytes: $PNG_SIG"
 fi
 
 CODE=$(curl -s -o /dev/null -w '%{http_code}' -m 30 \
