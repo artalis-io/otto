@@ -337,6 +337,7 @@ BENCH_SIZES_EXEC = bench_sizes
 COMPARE_GLPK_EXEC = compare_glpk
 BENCH_VS_GLPK_EXEC = bench_vs_glpk
 BENCH_MIP_EXEC = bench_mip
+REPRO_CFL_EXEC = repro_cfl_crash
 PROFILE_BENCH_EXEC = profile_bench
 BENCH_LAP_EXEC = bench_lap
 BENCH_LAP_PERF_EXEC = bench_lap_perf
@@ -1116,6 +1117,13 @@ bench-glpk-quick: $(BENCH_VS_GLPK_EXEC)
 # Build MIP benchmark
 $(BENCH_MIP_EXEC): $(BENCH_DIR)/bench_mip.c $(LIB_NAME) $(SHARED_LIB)
 	$(CC) $(CFLAGS) $(INCLUDES) $(GLPK_INCLUDES) $< $(call link_lib,.,ralph) $(call link_lib,../shared,shared) $(GLPK_LIBS) $(LDFLAGS) $(EXE_OUT)$@
+$(REPRO_CFL_EXEC): $(BENCH_DIR)/repro_cfl_crash.c $(LIB_NAME) $(SHARED_LIB)
+	$(CC) $(CFLAGS) $(INCLUDES) $< $(call link_lib,.,ralph) $(call link_lib,../shared,shared) $(LDFLAGS) $(EXE_OUT)$@
+
+# Reproduction for the CFL crash; see docs/KNOWN_ISSUES.md. Not in
+# `make test` -- it is expected to crash.
+repro-cfl-crash: $(REPRO_CFL_EXEC)
+
 
 # Run MIP benchmark
 bench-mip: $(BENCH_MIP_EXEC)
