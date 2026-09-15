@@ -218,6 +218,7 @@ Premise verified: every generator -- Gomory, MIR, cover, SCP -- is called from
 Add cut rounds at promising B&B nodes (depth < 10, fractional solution with a
 tight gap). Expected: tighter per-node bounds.
 
+
 **Blocker cleared (Sep 2026).** The node pool crash that made this untestable --
 validating node cuts needs models that branch, and the model class that branches
 was the one that crashed -- is fixed. See the CFL entry in
@@ -225,11 +226,18 @@ was the one that crashed -- is fixed. See the CFL entry in
 with a pointer difference between unrelated objects, which `-O3` was entitled to
 optimise away.
 
-**Do M-Gomory first.** Cross-checking that fix against GLPK surfaced a separate
-defect: root Gomory cuts remove the true optimum on some CFL instances, and
-Ralph reports the suboptimal answer as OPTIMAL (also in `KNOWN_ISSUES.md`). M2
-multiplies how often the cut generators run, so shipping it on top of an invalid
-generator would spread a correctness bug rather than tighten bounds.
+**Cut validity also fixed (Sep 2026).** Cross-checking that fix against GLPK
+surfaced a second defect, now closed: root Gomory cut generation substituted
+artificial variables out of the cut as though they were their row's slack,
+injecting a spurious linear term and removing integer optima from the second cut
+round onward. M2 multiplies how often the generators run, so it needed to land
+first. Both `generate_gmi_cut_from_row()` and `cmir_extract_source_row()` now
+skip artificials; `ralph/tests/test_gmi_cut_validity.c` guards it.
+
+Note for M2's own validation: the natural self-consistency check on a generated
+cut -- that its violation equals `f_0` -- cannot detect a bad nonbasic term,
+because every nonbasic deviation is zero at the point the cut is generated from.
+Validating node cuts needs a reference optimum, not an internal invariant.
 
 ### M3: Cut Pool Management (~300 lines, High Impact) -- PARTIALLY DONE
 

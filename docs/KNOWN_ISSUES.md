@@ -50,6 +50,58 @@
   it should be re-examined on its own terms.
 - **Note**: c-MIR remains opt-in behind `RALPH_ENABLE_MIR_ROOT_CUTS`.
 
+### Root Gomory Cuts Substituted Artificial Variables (cuts.c) — FIXED
+
+- **Severity**: High — Ralph reported a suboptimal solution as OPTIMAL.
+- **Status**: Fixed. Artificial variables are now skipped by GMI and c-MIR
+  source-row extraction.
+- **Trigger**: any model where a `>=` row (including a previously added `>=`
+  cut row) contributes an artificial variable to the tableau, from the second
+  root cut round onward.
+- **Root cause**: GMI cut generation substituted every auxiliary variable out
+  of the cut with
+
+  ```
+  s = aux_coef * (b - A x)
+  ```
+
+  That identity holds only when the auxiliary is its row's *only* one. In
+  non-dual mode a `>=` row carries both a surplus (coef -1) and an artificial
+  (coef +1):
+
+  ```
+  A x - surplus + artificial = b
+  ```
+
+  so the artificial is `b - A x + surplus`, not `b - A x`. Substituting it
+  dropped the surplus and injected a spurious linear term into the cut. The
+  same applies to the artificial a `<=` row gains when it starts infeasible.
+- **Why it took until round 2**: round 1 has no `>=` cut rows in the tableau,
+  so no such artificial is nonbasic yet. GMI cuts are themselves `>=` rows, so
+  once round 1's cuts are applied, round 2 has them.
+- **Why nothing downstream flagged it**: the bad term is invisible at the LP
+  point the cut is generated from. Every nonbasic deviation is zero there, so
+  the cut still satisfies `violation == f_0` exactly — the natural
+  self-consistency check passes. The term only bites at other points, where it
+  removes integer optima.
+- **Evidence**: on `./ralph/repro_cfl_crash cfl 6 40`, 38 of 40 objectives
+  matched GLPK and two did not — 154 vs 152 (trial 1) and 174 vs 173
+  (trial 26), both minimisations, so Ralph was returning a feasible but worse
+  solution and calling it optimal. Instrumenting the cut loop showed the
+  offending nonbasic to be the artificial of a cut row, with a *negative*
+  deviation at the true optimum (`t = -2.142857`); GMI requires every nonbasic
+  deviation to be non-negative.
+- **Fix**: `generate_gmi_cut_from_row()` and `cmir_extract_source_row()` skip
+  `tab->is_artificial_var[j]`. An artificial is fixed at zero in any feasible
+  LP, so its term is identically zero — dropping it is exact, not merely
+  conservative.
+- **Result**: all 40 objectives now match GLPK, with c-MIR both off (default)
+  and on.
+- **Regression test**: `ralph/tests/test_gmi_cut_validity.c`, wired in as
+  `make -C ralph test-gmi-cut-validity` and part of `make -C ralph test`. It
+  solves the two instances above and asserts the GLPK-verified optima. Against
+  the unfixed generator it fails with 154 and 174.
+
 ### No Recovery When LP Becomes Infeasible After Cuts (mip.c:1146-1154)
 - **Severity**: Medium — compounded the c-MIR bug above; still worth fixing on its own
 - **Root cause**: When the LP becomes infeasible after adding cuts, `mip.c` blindly sets `solver->status = solver->lp_solver->status` (INFEASIBLE) and returns immediately, without checking `solver->has_incumbent`. If the diving heuristic already found a valid integer solution, the solver should report OPTIMAL.
@@ -73,6 +125,14 @@
 - Sparse triangular solves use reach-based algorithms which can accumulate rounding errors
 
 ## API Issues
+
+### MPS Writer Emits Invalid Fixed-Format MPS
+
+- `ralph_lp_write_mps()` starts `ROWS` entries in column 1 and writes an
+  `OBJSENSE` section. GLPK 5.0 rejects both, in fixed and free format alike
+  (`invalid indicator record`), so written models cannot be handed to it
+  without post-processing. Found while cross-checking MIP objectives against
+  GLPK; not yet fixed.
 
 ### Return Value Confusion
 - `ralph_optimize()` returns 0 for success, -1 for error (not the solve status)
@@ -181,50 +241,6 @@ directly and then replays 23 CFL solves in one process. Against the old
 The standalone reproduction is still available as
 `make -C ralph repro-cfl-crash`; `./ralph/repro_cfl_crash cfl 6 40` now
 completes 40 of 40.
-
-## MIP: root Gomory cuts remove the true optimum on some facility location models
-
-- **Severity**: High — Ralph reports a suboptimal solution as OPTIMAL.
-- **Status**: reproducible and localised to the Gomory family, not yet fixed.
-
-Found while cross-checking the CFL crash fix against GLPK. Over the 40
-instances of `./ralph/repro_cfl_crash cfl 6 40`, 38 objectives match GLPK
-exactly and two do not:
-
-| Instance | Ralph | GLPK (proved optimal) |
-|---|---|---|
-| trial 1 | 154 | 152 |
-| trial 26 | 174 | 173 |
-
-Both are minimisations, so Ralph is returning a feasible but worse solution and
-calling it optimal — the optimum was cut off. Disabling the Gomory family alone
-recovers the true optimum in both cases; disabling cover cuts alone does not:
-
-```
-RALPH_DISABLE_GOMORY_ROOT_CUTS=1   -> 152 / 173   (matches GLPK)
-RALPH_DISABLE_COVER_ROOT_CUTS=1    -> 154 / 174   (still wrong)
-```
-
-This is independent of the node pool crash above: trial 1 solves in 221 nodes
-and never exhausts the pool, and it reported 154 before that fix as well.
-
-`generate_gmi_cut()` in `cuts.c` already rejects GMI cuts with significant
-positive slack coefficients for this class of reason; this looks like a case
-the existing guard does not cover. Same failure shape as the c-MIR bug recorded
-above — a rounding step applied where its integrality justification does not
-hold — so that entry is the place to start.
-
-To reproduce, dump the instance and compare:
-
-```
-make -C ralph repro-cfl-crash
-PROBE_ONLY=1 ./ralph/repro_cfl_crash cfl 6 40                      # 154
-PROBE_ONLY=1 RALPH_DISABLE_GOMORY_ROOT_CUTS=1 ./ralph/repro_cfl_crash cfl 6 40  # 152
-```
-
-Note for anyone exporting these models: `ralph_lp_write_mps()` emits `ROWS`
-entries starting in column 1 and writes an `OBJSENSE` section, and GLPK rejects
-both. That is a separate writer bug.
 
 ## Platform-Specific Issues
 
