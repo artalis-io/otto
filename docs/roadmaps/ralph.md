@@ -210,34 +210,69 @@ knapsack-shaped. **Anyone reviving this should add a knapsack generator to
 Known gap: no test asserts that cover cuts are *generated* on a real model. The
 fuzzer proves the cuts that are produced are valid; nothing proves any are.
 
-### M2: Node-Level Cut Generation (~200 lines, High Impact) -- NOT STARTED
+### M2: Node-Level Cut Generation -- IMPLEMENTED, OFF BY DEFAULT
 
-Premise verified: every generator -- Gomory, MIR, cover, SCP -- is called from
-`solve_root_node()` in `mip.c`. Cuts really are root-only.
+Implemented as `generate_node_cuts()` in `mip.c`, behind
+`RALPH_ENABLE_NODE_CUTS`. It is off by default because it is measurably slower,
+and the measurement below says why. Keep it off until node-scoped cuts exist.
 
-Add cut rounds at promising B&B nodes (depth < 10, fractional solution with a
-tight gap). Expected: tighter per-node bounds.
+**Only globally-valid families run at nodes.** `apply_cuts()` appends rows to
+`working_model` and nothing removes them, so a cut applied at a node is in
+force for every node solved afterwards, including unrelated subtrees. Cover
+cuts are built from the original rows and original right-hand sides and are
+valid everywhere. Gomory and MIR read the node tableau under local bounds, so
+applying them permanently would cut the optimum out of a sibling -- returning a
+wrong answer with no diagnostic. Supporting them needs cut scoping: per-node
+add and remove via `lp_model_delete_constraint()`, plus basis lifetime
+management across the row-count change.
 
+**Correctness holds.** Over 40 multidimensional knapsack instances, node cuts
+on and off agree on all 40 optima, with 3,874 node cuts generated.
+`tests/test_node_cuts_differential.c` is the guard, and it fails if node cuts
+ever change an answer.
 
-**Blocker cleared (Sep 2026).** The node pool crash that made this untestable --
-validating node cuts needs models that branch, and the model class that branches
-was the one that crashed -- is fixed. See the CFL entry in
-`docs/KNOWN_ISSUES.md`: `bb_node_pool_return()` was deciding pool membership
-with a pointer difference between unrelated objects, which `-O3` was entitled to
-optimise away.
+**It does not pay.** Multidimensional knapsack, 40 instances:
 
-**Cut validity also fixed (Sep 2026).** Cross-checking that fix against GLPK
-surfaced a second defect, now closed: root Gomory cut generation substituted
-artificial variables out of the cut as though they were their row's slack,
-injecting a spurious linear term and removing integer optima from the second cut
-round onward. M2 multiplies how often the generators run, so it needed to land
-first. Both `generate_gmi_cut_from_row()` and `cmir_extract_source_row()` now
-skip artificials; `ralph/tests/test_gmi_cut_validity.c` guards it.
+| Configuration | Nodes | Wall |
+|---|---|---|
+| off | 12,314 | 1.72s |
+| depth 10, 50 rounds (default gating) | 11,728 | 2.62s |
+| depth 20, 200 rounds | 10,536 | 5.33s |
+| depth 3, 50 rounds | 12,246 | 1.94s |
+| depth 2, 5 rounds | 12,267 | 1.79s |
 
-Note for M2's own validation: the natural self-consistency check on a generated
-cut -- that its violation equals `f_0` -- cannot detect a bad nonbasic term,
-because every nonbasic deviation is zero at the point the cut is generated from.
-Validating node cuts needs a reference optimum, not an internal invariant.
+The trade is monotonic: more cutting buys fewer nodes and costs more time, and
+no setting is a net win. The cause is not cut generation. At the default
+gating, only 0.33s of the 0.90s overhead is inside `generate_node_cuts()`. The
+rest is downstream -- 1,346 applications each changed the working model's row
+count, and `solve_node_lp()` rejects a warm-start basis whose size no longer
+matches the tableau, so every queued node cold-starts. Routing the re-solve
+through `mip_try_incremental_root_lp_resolve()` instead of a full tableau
+rebuild was tried and is worth about 2%: the rebuild was never the dominant
+cost.
+
+**What would change the verdict.** Node-scoped cuts, so a cut applied at a node
+is removed when the search leaves that subtree. That removes both problems at
+once: the permanent-row hazard that restricts the family to cover cuts, and the
+warm-start invalidation that makes the current design cost more than it saves.
+It is a substantially larger change than this one, and it is the actual
+prerequisite for node cuts being worth enabling.
+
+**One trap recorded for whoever does that work.** The obvious self-consistency
+check on a generated cut -- that its violation equals `f_0` -- cannot validate
+a node cut. Every nonbasic deviation is zero at the point the cut is generated
+from, so a term that is wrong everywhere else still passes. That is exactly how
+the artificial-variable defect fixed in the same week went unnoticed. Validating
+node cuts needs a reference optimum, not an internal invariant.
+
+**A second trap.** The differential test must be checked for whether it
+exercises anything. Two earlier versions of it passed while comparing identical
+runs -- the first because single-row knapsacks are solved at the root and never
+branch, the second because capacitated facility location branches heavily but
+its capacity rows (`sum_j d_j x_ij - cap_i y_i <= 0`, negative coefficient,
+zero right-hand side) are not knapsacks, so the cover generator returns nothing
+at any node: 0 cover cuts against 2,063 Gomory cuts over 40 instances. The test
+now fails if nothing was compared, and fails if no node cut was generated.
 
 ### M3: Cut Pool Management (~300 lines, High Impact) -- PARTIALLY DONE
 

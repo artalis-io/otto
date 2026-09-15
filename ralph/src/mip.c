@@ -680,6 +680,32 @@ MIPSolver* mip_create(LPModel *model, int detect_special, int pool_capacity) {
     if (solver->root_mir_max_rounds <= 0) solver->enable_root_mir_cuts = 0;
     if (solver->root_cover_max_rounds <= 0) solver->enable_root_cover_cuts = 0;
 
+    /* Node-level cuts (M2). Off by default: every cut applied at a node
+     * changes the working model's row count, and mip.c rejects a warm-start
+     * basis whose size no longer matches the tableau, so each application
+     * costs every queued node its cached basis. That trade is worth making
+     * on some models and not others, so it is opt-in until there is a
+     * benchmark that says otherwise. RALPH_ENABLE_NODE_CUTS=1 turns it on. */
+    solver->enable_node_cuts = 0;
+    solver->node_cut_max_depth = 10;
+    solver->node_cut_max_rounds = 50;
+    solver->node_cut_gap_frac = 0.10;
+    solver->node_cut_rounds = 0;
+    solver->node_cut_cuts_generated = 0;
+    solver->node_cut_cuts_applied = 0;
+    solver->node_cut_basis_invalidations = 0;
+    solver->time_node_cuts = 0.0;
+    if (mip_env_flag_enabled("RALPH_ENABLE_NODE_CUTS")) {
+        solver->enable_node_cuts = 1;
+    }
+    solver->node_cut_max_depth =
+        mip_env_int_or_default("RALPH_NODE_CUT_MAX_DEPTH", solver->node_cut_max_depth);
+    solver->node_cut_max_rounds =
+        mip_env_int_or_default("RALPH_NODE_CUT_MAX_ROUNDS", solver->node_cut_max_rounds);
+    if (solver->node_cut_max_depth <= 0 || solver->node_cut_max_rounds <= 0) {
+        solver->enable_node_cuts = 0;
+    }
+
     if (detect_special && is_scp_model(model)) {
         solver->use_scp_solver = 1;
         if (solver->verbose) {
@@ -2140,6 +2166,144 @@ node_lp_done:
  * Process a Single Node
  * ============================================================================ */
 
+/*
+ * A cut round at a branch-and-bound node (M2).
+ *
+ * Only globally-valid families run here, and that restriction is the design,
+ * not a simplification. apply_cuts() appends rows to working_model and nothing
+ * ever removes them, so a cut applied at a node is in force for every node
+ * solved afterwards -- including nodes in unrelated subtrees.
+ *
+ * Cover cuts are safe under that rule. generate_cover_cuts() reads
+ * solver->original_model and model->b[], never the node's tableau or its
+ * branching bounds; the node's LP solution only decides which violated cover
+ * is worth emitting. A cover cut found at depth 7 is just as true at the root.
+ *
+ * Gomory and MIR are deliberately NOT generated here. Both read the node
+ * tableau, which carries this node's local bounds, so their cuts are valid
+ * only inside this subtree. Applied permanently they would cut the true
+ * optimum out of a sibling and the solver would return a wrong answer with no
+ * diagnostic at all. Supporting them needs cut scoping -- per-node add and
+ * remove through lp_model_delete_constraint(), plus basis lifetime management
+ * across the change in row count -- which is a much larger change than this.
+ *
+ * Cost worth knowing: applying a cut changes the working model's row count,
+ * and solve_node_lp() rejects a warm-start basis whose size no longer matches
+ * the tableau. Every node already on the queue therefore loses its cached
+ * basis and cold-starts. That is counted in node_cut_basis_invalidations so
+ * the price is visible rather than inferred.
+ *
+ * Returns the number of cuts applied; the node LP has been re-solved when that
+ * is positive.
+ */
+static int generate_node_cuts(MIPSolver *solver, BBNode *node)
+{
+    double t_start;
+    int rows_before;
+    int generated;
+    int applied;
+    CutPool *pool;
+    Cut **applied_cuts = NULL;
+
+    if (!solver || !node || !solver->enable_node_cuts) return 0;
+    if (!solver->cut_pool || !solver->working_model) return 0;
+
+    /* The root runs its own rounds; this is for the tree. */
+    if (node->depth <= 0) return 0;
+    if (node->depth > solver->node_cut_max_depth) return 0;
+    if (solver->node_cut_rounds >= solver->node_cut_max_rounds) return 0;
+
+    /*
+     * Only nodes close enough to the incumbent to be worth tightening. A node
+     * whose bound is miles from the incumbent will be pruned or will branch
+     * many times regardless, and cutting there spends the warm starts of every
+     * queued node for very little.
+     */
+    if (solver->has_incumbent) {
+        double bound = solver->lp_solver->obj_value;
+        double denom = fabs(solver->best_obj);
+        if (denom < 1.0) denom = 1.0;
+        if (fabs(solver->best_obj - bound) / denom > solver->node_cut_gap_frac) {
+            return 0;
+        }
+    }
+
+    /*
+     * A round-local cut pool, not solver->cut_pool.
+     *
+     * apply_cuts() walks the whole pool and appends every cut that the current
+     * LP point violates, with no check for whether that cut is already a row in
+     * the model. solver->cut_pool persists across rounds, so sharing it here
+     * re-applied earlier rounds' cuts as fresh duplicate rows at every node:
+     * 4,012 cuts generated turned into 26,743 applications, the working model
+     * grew from ~24 rows to ~700, and the run took 8.5x longer than with node
+     * cuts off. A pool that lives for one round can only offer that round's
+     * cuts.
+     */
+    pool = cut_pool_create(solver->max_cuts_per_round > 0
+                           ? solver->max_cuts_per_round : 64);
+    if (!pool) return 0;
+
+    t_start = mip_cpu_time_now();
+    rows_before = solver->working_model->num_cons;
+
+    generated = generate_cover_cuts(solver, pool);
+    solver->node_cut_cuts_generated += generated;
+
+    applied = 0;
+    if (generated > 0) {
+        applied = apply_cuts(solver, pool, solver->max_cuts_per_round, &applied_cuts);
+        solver->node_cut_cuts_applied += applied;
+    }
+
+    solver->node_cut_rounds++;
+
+    if (applied > 0 && solver->working_model->num_cons != rows_before) {
+        /* Every queued node's saved basis is now the wrong size. */
+        solver->node_cut_basis_invalidations++;
+
+        /*
+         * apply_cuts() converts the working model back to editable row form and
+         * clears model->A, and the live tableau is still sized for the old row
+         * count. Both have to be rebuilt before anything solves against them --
+         * solving without this is a segfault, not a wrong answer, which is how
+         * it was found.
+         *
+         * Prefer the incremental path. Despite the name it is not root-specific:
+         * it extends the current basis with a slack for each new row and dual
+         * re-optimises, which is far cheaper than discarding and rebuilding the
+         * whole tableau. It does bump the root_lp_* counters, so those read as
+         * "LP resolves after cuts" rather than "root LP resolves" once node cuts
+         * are on. Full rebuild stays as the fallback.
+         */
+        if (mip_try_incremental_root_lp_resolve(solver, applied_cuts, applied) != 0) {
+            if (lp_model_finalize(solver->working_model) != 0 ||
+                mip_create_lp_solver_for_working_model(solver) != 0) {
+                free(applied_cuts);
+                cut_pool_free(pool);
+                solver->time_node_cuts += mip_cpu_time_now() - t_start;
+                return -1;
+            }
+        }
+        free(applied_cuts);
+        applied_cuts = NULL;
+
+        /* Re-solve so this node's bound reflects the cuts it just paid for.
+         * solve_node_lp re-applies this node's bounds to the rebuilt LP. */
+        if (solve_node_lp(solver, node) != 0) {
+            /* The tightened LP is infeasible: the node is pruned, which is a
+             * legitimate and good outcome. Report it as no cuts applied so the
+             * caller's existing infeasible handling is not bypassed. */
+            cut_pool_free(pool);
+            solver->time_node_cuts += mip_cpu_time_now() - t_start;
+            return -1;
+        }
+    }
+    free(applied_cuts);
+    solver->time_node_cuts += mip_cpu_time_now() - t_start;
+    return applied;
+}
+
 static int process_node(MIPSolver *solver, BBNode *node) {
     LPModel *model = solver->original_model;
 
@@ -2168,6 +2332,27 @@ static int process_node(MIPSolver *solver, BBNode *node) {
 
     double lp_obj = solver->lp_solver->obj_value;
     double *lp_sol = solver->lp_solver->solution;
+
+    /*
+     * Node cut round (M2), before the prune and integrality checks below so
+     * both see the tightened LP -- a cut that closes the gap should prune here
+     * rather than one node later. Only run when the relaxation is fractional;
+     * an integral node needs no cuts.
+     */
+    if (solver->enable_node_cuts && !check_integer_feasibility(solver, lp_sol)) {
+        int node_cuts = generate_node_cuts(solver, node);
+        if (node_cuts < 0) {
+            if (solver->verbose) {
+                LP_LOG_STDOUT("  [process_node] Pruned: infeasible after node cuts\n");
+            }
+            return 0;
+        }
+        if (node_cuts > 0) {
+            lp_obj = solver->lp_solver->obj_value;
+            lp_sol = solver->lp_solver->solution;
+            save_basis_to_node(solver->lp_solver, node, model->num_vars);
+        }
+    }
 
     /* Check if node can be pruned by bound */
     if (solver->has_incumbent) {
