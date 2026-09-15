@@ -395,6 +395,31 @@ static Cut* generate_gmi_cut_from_row(MIPSolver *solver,
     for (int j = 0; j < n; j++) {
         if (tab->var_status[j] == RALPH_BASIC) continue;
 
+        /*
+         * Artificial variables carry no GMI term.
+         *
+         * An artificial is fixed at zero in any feasible LP, so its deviation
+         * from its bound is identically zero and alpha_j * t_j vanishes. It
+         * must be skipped rather than substituted away, because the
+         * substitution below assumes each auxiliary satisfies
+         *
+         *     s = aux_coef * (b - A x)
+         *
+         * which holds only when the auxiliary is the row's *only* one. A '>='
+         * row carries both a surplus (coef -1) and an artificial (coef +1):
+         *
+         *     A x - surplus + artificial = b
+         *
+         * so artificial = b - A x + surplus. Substituting it as b - A x drops
+         * the surplus and injects a spurious linear term into the cut. The
+         * term is invisible at the current LP point -- every nonbasic
+         * deviation is zero there, so the cut still shows violation == f_0 --
+         * but it removes integer optima elsewhere. Same applies to the
+         * artificial that a '<=' row gains when it starts infeasible.
+         * See docs/KNOWN_ISSUES.md.
+         */
+        if (tab->is_artificial_var && tab->is_artificial_var[j]) continue;
+
         /* Get tableau coefficient a_ij = row' * A_j */
         double a_ij = 0.0;
         for (int p = tab->A_ext->colptr[j]; p < tab->A_ext->colptr[j + 1]; p++) {
@@ -873,6 +898,14 @@ static int cmir_extract_source_row(
         /* For each non-basic variable, compute tableau coefficient */
         for (int j = 0; j < n; j++) {
             if (tab->var_status[j] == RALPH_BASIC) continue;
+
+            /* Artificial variables are fixed at zero, so a_ij * s vanishes.
+             * They must be skipped rather than substituted, for the reason
+             * spelled out in generate_gmi_cut_from_row(): a row carrying both
+             * a surplus and an artificial does not satisfy
+             * s = aux_coef * (b - A x), so substituting the artificial injects
+             * a spurious linear term into the extracted source row. */
+            if (tab->is_artificial_var && tab->is_artificial_var[j]) continue;
 
             double a_ij = 0.0;
             for (int p = tab->A_ext->colptr[j]; p < tab->A_ext->colptr[j + 1]; p++) {
