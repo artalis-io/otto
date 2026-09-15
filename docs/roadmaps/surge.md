@@ -4243,12 +4243,26 @@ The previous GPL HTTP server has been removed. See
 (including the `sh_keelserver`/`sh_keelasync` → `sh_httpserver`/`sh_httpasync`
 rename).
 
-### Known issue (upstream, not blocking)
+### Windows async path: resolved in Keel v3.1.1
 
-Keel v3.0.0-rc.3's async path does not work on Windows: `examples/async_thread_pool`
-hangs on WSAPoll and returns no valid response on IOCP, while sync routes work on
-both. Reproduced with Keel's own unmodified example, so it is not OTTO code.
-Linux (the deploy and CI target) is unaffected; it only means the Surge API server
-cannot be smoke-tested on a Windows dev box.
+Keel v3.0.0-rc.3's async path did not work on Windows -- `examples/async_thread_pool`
+hung on WSAPoll and returned no valid response on IOCP, while sync routes worked
+on both. It was reproduced with Keel's own unmodified example, so it was never
+OTTO code, and it meant the Surge API server could not be smoke-tested on a
+Windows dev box.
 
-Tracked upstream: [artalis-io/keel#262](https://github.com/artalis-io/keel/issues/262).
+Re-checked against v3.1.1 with that same example, both backends, and it is
+fixed:
+
+| Backend | `GET /fast` | `GET /slow` |
+|---|---|---|
+| WSAPoll (default) | 200, `{"work_ms":10,"result":10}`, 0.019s | 200, `{"work_ms":200,"result":200}`, 0.210s |
+| IOCP (`BACKEND=iocp`) | 200, 0.016s | 200, 0.207s |
+
+`ralph/api/test_api.sh` also passes 15/15 on Windows against v3.1.1, exercising
+the async solve queue through `sh_httpasync.c`.
+
+Nothing in the 3.0.1 / 3.1.0 / 3.1.1 changelogs names
+[keel#262](https://github.com/artalis-io/keel/issues/262), so the fix was
+incidental rather than announced -- most likely the PAL socket-runtime seam
+added in 3.1.0. Worth knowing if the symptom ever returns.

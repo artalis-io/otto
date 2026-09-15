@@ -331,7 +331,7 @@ Client Request
 ## HTTP Server: Keel v3 — Complete
 
 The previous GPL-licensed HTTP server has been removed. All six API servers now
-run on Keel (`vendor/keel`, MIT, git submodule pinned to v3.0.0-rc.3), through a
+run on Keel (`vendor/keel`, MIT, git submodule pinned to v3.1.1), through a
 thin shared helper layer in `shared/src/sh_httpserver.c` + `sh_httpasync.c`.
 
 ### Why this mattered
