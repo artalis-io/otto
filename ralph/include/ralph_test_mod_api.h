@@ -89,6 +89,9 @@ int ralph_test_write_solution_buf(const RalphModel *model, char *buf, size_t buf
 double ralph_test_get_best_bound(const RalphModel *model);
 double ralph_test_get_mip_gap(const RalphModel *model);
 int ralph_test_get_node_count(const RalphModel *model);
+/* Root cover cuts generated on the last solve. Exposed for bench_mip's
+ * --cover-effect report: M1 shipped cover cuts with no way to measure them. */
+int ralph_test_get_root_cover_cuts(const RalphModel *model);
 int ralph_test_set_branch_priorities(RalphModel *model, const int *priorities);
 int ralph_test_set_branch_directions(RalphModel *model, const int *directions);
 int ralph_test_set_mip_start(RalphModel *model, const double *x);
