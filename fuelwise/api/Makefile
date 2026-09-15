@@ -71,14 +71,19 @@ $(BUILD_DIR)/%.o: $(SHARED_DIR)/src/%.c | $(BUILD_DIR)
 	$(CC) $(CFLAGS) $(INCLUDES) -c $< $(OBJ_OUT)$@
 
 # Ensure dependencies are built
+# `lib`, not the default goal. A bare $(MAKE) -C .. builds each module's
+# whole default target -- tests included -- so building this server pulled in
+# fuelwise's test binary, which needs ../ralph/libralph.a and fails on a tree
+# where ralph has not been built yet. The other five API Makefiles all name
+# the lib goal; this one did not.
 $(FUELWISE_LIB):
-	$(MAKE) -C ..
+	$(MAKE) -C .. lib
 
 $(RALPH_LIB):
-	$(MAKE) -C ../../ralph
+	$(MAKE) -C ../../ralph lib
 
 $(SHARED_LIB):
-	$(MAKE) -C ../../shared
+	$(MAKE) -C ../../shared lib
 
 # Run the server
 run: $(TARGET)
