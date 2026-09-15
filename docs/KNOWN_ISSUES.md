@@ -270,10 +270,12 @@ A first-class target, built and tested on every push by three jobs.
 
 The nightly NETLIB regression gate also runs on Windows as well as Linux.
 
-Two gaps worth naming. The API servers are built on Windows but their test
-suites are not run there. And MSVC does not build them at all, because Keel is
-MinGW-targeted -- that is upstream work on a submodule. See
-docs/roadmaps/infrastructure.md.
+One gap worth naming. The API servers are built on Windows under both
+compilers, but their live-server test suites are not run there under either.
+That is not an MSVC gap -- nobody runs them on Windows with GCC either.
+Three of the six (ralph, surge, fuelwise) do pass locally on Windows and need
+no fixtures, so wiring them into CI is tractable; carta, locus and velo need
+OSM data. See docs/roadmaps/infrastructure.md.
 
 ## Workarounds
 

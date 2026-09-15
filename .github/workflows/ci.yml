@@ -586,11 +586,11 @@ jobs:
   # going red. mk/toolchain.mk carries the whole compiler difference; this is
   # what keeps it honest.
   #
-  # The API servers are deliberately absent: they need Keel, which is MinGW-only
-  # (13 of its 56 sources are on POSIX sockets). Everything that does build with
-  # MSVC is here, and it is the same target list Windows Core runs, so a
-  # divergence between the two compilers shows up as one job red and the other
-  # green rather than as a mystery.
+  # The API servers are here too, since Keel v3.1.0 gave it a native MSVC build
+  # path. Before that this job stopped at the libraries, and "OTTO builds the
+  # servers with MSVC" was simply not true. The target list is Windows Core's
+  # plus Arbor and ClayShards, so a divergence between the two compilers shows
+  # up as one job red and the other green rather than as a mystery.
   #
   # mingw32-make, not MSYS's make: /usr/bin/make strips TMPDIR/TMP/TEMP from the
   # environment, and cl.exe needs them for its intermediates.
@@ -712,6 +712,44 @@ jobs:
           mingw32-make -C clayshards/demos/tty CC=cl all
           ./clayshards/demos/tty/build/demo_tui_tty.exe --headless > /dev/null
           mingw32-make -C clayshards/clay-shards-soft CC=cl demo DEMO_ARGS="--frames 3"
+
+      # The six API servers, the last thing MSVC could not build. They need
+      # Keel, which grew a native MSVC path in v3.1.0; before that this job
+      # stopped at the libraries. Build only here, matching Windows Core --
+      # the live-server curl suites are a bigger CI surface than this job needs.
+      - name: Build the API servers
+        run: |
+          source scripts/msvc-env.sh
+          mingw32-make -C ralph/api CC=cl
+          mingw32-make -C fuelwise/api CC=cl
+          mingw32-make -C surge/api CC=cl
+          mingw32-make -C velo/api CC=cl
+          mingw32-make -C carta/api CC=cl
+          mingw32-make -C locus/api CC=cl
+
+      # The point of a native MSVC build is a binary with no MinGW runtime
+      # underneath it. Keel asserts this for itself with check-msvc-no-mingw;
+      # this is the same assertion for OTTO's servers. Without it the job would
+      # still pass if a MinGW-built archive crept onto a link line.
+      - name: Assert no MinGW runtime in the server binaries
+        run: |
+          source scripts/msvc-env.sh
+          status=0
+          for b in ralph/api/ralph-solver-server.exe \
+                   fuelwise/api/fuelwise-api.exe \
+                   surge/api/surge-solver.exe \
+                   velo/api/velo-route-server.exe \
+                   carta/api/carta-tile-server.exe \
+                   locus/api/locus-geocoder.exe; do
+            if [ ! -f "$b" ]; then echo "missing: $b"; status=1; continue; fi
+            imports=$(dumpbin /nologo /dependents "$b" | grep -oiE '[A-Za-z0-9_.-]+\.dll' | sort -u | tr '\n' ' ')
+            echo "$b: $imports"
+            if echo "$imports" | grep -qiE 'libgcc|libwinpthread|libstdc|libgomp|msys-'; then
+              echo "  ERROR: MinGW runtime import in $b"
+              status=1
+            fi
+          done
+          exit $status
 
   # ==========================================================================
   sanitizers:

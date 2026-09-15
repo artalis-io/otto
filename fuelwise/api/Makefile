@@ -1,44 +1,24 @@
 # FuelWise REST API Makefile
 
-CC = gcc
-
-# Platform-specific RELRO (Linux only)
-UNAME_S := $(shell uname -s)
-ifeq ($(UNAME_S),Linux)
-    RELRO_FLAGS = -Wl,-z,relro,-z,now
-else
-    RELRO_FLAGS =
-endif
-
-# Windows: Keel talks to winsock, and libshared reaches bcrypt through
-# sh_pal_random_bytes. iphlpapi comes with Keel's adapter enumeration.
-ifneq (,$(findstring MINGW,$(UNAME_S)))
-    PLATFORM_LIBS = -lws2_32 -lbcrypt -liphlpapi
-else
-    PLATFORM_LIBS =
-endif
+# Toolchain mapping. Every compiler and linker difference lives in that one
+# file, which is what lets this server build under both MinGW and native MSVC
+# (`source scripts/msvc-env.sh; make CC=cl`). Never define LIB, INCLUDE, LINK
+# or CL here -- make re-exports them and they are MSVC's environment contract.
+include ../../mk/toolchain.mk
 
 # Production build (with hardening)
-CFLAGS = -Wall -Wextra -O2 -g \
-         -fstack-protector-strong -D_FORTIFY_SOURCE=2 -fPIE -fno-common
-LDFLAGS_EXTRA = -pie $(RELRO_FLAGS)
+CFLAGS = $(strip $(CC_WARN) $(CC_OPT_O2) $(CC_STD_BASELINE) $(CC_DEFS) $(CC_PORT_DEFS) \
+                 $(CC_HARDEN))
 
 # Debug build (with sanitizers)
-DEBUG_CFLAGS = -Wall -Wextra -g -O0 -DDEBUG \
-               -fsanitize=address,undefined -fno-omit-frame-pointer
-DEBUG_LDFLAGS = -fsanitize=address,undefined
+DEBUG_CFLAGS = $(strip $(CC_WARN) $(CC_DEBUG_OPT) $(CC_STD_BASELINE) $(CC_DEFS) \
+                       $(CC_PORT_DEFS) -DDEBUG $(CC_SANITIZE))
+DEBUG_LDFLAGS = $(strip $(LD_SANITIZE))
 
 INCLUDES = -I../include -I../../ralph/include -I$(KEEL_DIR)/include -I../../shared/include
 
 # OpenMP support (required when linking against libralph.a which uses OpenMP)
 UNAME_S := $(shell uname -s)
-ifeq ($(UNAME_S),Darwin)
-    # macOS with Homebrew libomp
-    OPENMP_LDFLAGS = -L/opt/homebrew/opt/libomp/lib -lomp
-else
-    # Linux - native GCC OpenMP
-    OPENMP_LDFLAGS = -fopenmp
-endif
 
 # Source files
 SRC_DIR = src
@@ -71,7 +51,7 @@ $(BUILD_DIR):
 
 # Build the API server
 $(TARGET): $(OBJS) $(HTTPSERVER_OBJ) $(FUELWISE_LIB) $(RALPH_LIB) $(SHARED_LIB) $(KEEL_LIB)
-	$(CC) $(CFLAGS) $(INCLUDES) -o $@ $(OBJS) $(HTTPSERVER_OBJ) $(FUELWISE_LIB) $(RALPH_LIB) $(SHARED_LIB) $(KEEL_LIB) -lm -lpthread $(OPENMP_LDFLAGS) $(PLATFORM_LIBS)
+	$(CC) $(CFLAGS) $(INCLUDES) $(OBJS) $(HTTPSERVER_OBJ) $(FUELWISE_LIB) $(RALPH_LIB) $(SHARED_LIB) $(KEEL_LIB) $(LD_OMP) $(LD_MATH) $(LD_THREAD) $(LD_KEEL_PLATFORM) $(LD_PIE) $(LD_RELRO) $(LD_STACK) $(EXE_OUT)$@
 
 # Build vendored Keel. Core only (no mbedTLS/nghttp2 integrations), so
 # this needs no external libraries.
@@ -84,11 +64,11 @@ $(KEEL_LIB):
 
 # Compile source files
 $(SRC_DIR)/%.o: $(SRC_DIR)/%.c
-	$(CC) $(CFLAGS) $(INCLUDES) -c $< -o $@
+	$(CC) $(CFLAGS) $(INCLUDES) -c $< $(OBJ_OUT)$@
 
 # Compile shared Keel HTTP helpers (require Keel includes)
 $(BUILD_DIR)/%.o: $(SHARED_DIR)/src/%.c | $(BUILD_DIR)
-	$(CC) $(CFLAGS) $(INCLUDES) -c $< -o $@
+	$(CC) $(CFLAGS) $(INCLUDES) -c $< $(OBJ_OUT)$@
 
 # Ensure dependencies are built
 $(FUELWISE_LIB):

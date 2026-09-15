@@ -174,6 +174,19 @@ LD_RELRO  :=
 # bcrypt: sh_pal_random_bytes. ws2_32: the StatsD sink in sh_metrics.
 LD_PLATFORM := bcrypt.lib ws2_32.lib
 
+# Keel's own Windows link set, for the API servers that link libkeel.a.
+#
+# Wider than LD_PLATFORM on purpose. LD_PLATFORM covers what libshared itself
+# reaches for; Keel additionally uses mswsock (AcceptEx/ConnectEx), iphlpapi
+# (adapter enumeration), advapi32 (ACL/SID/token APIs in the AF_UNIX node) and
+# shell32 (SHGetFolderPath). Kept verbatim in step with
+# vendor/keel/mk/toolchain.mk LD_WIN_PLATFORM -- if a Keel bump adds a library
+# there, it has to be added here too, or the API servers fail to link with an
+# unresolved symbol and no hint as to which dependency moved.
+#
+# Only the spelling is toolchain-dependent; the list is the same on both.
+LD_KEEL_PLATFORM := ws2_32.lib mswsock.lib bcrypt.lib iphlpapi.lib advapi32.lib shell32.lib
+
 # MSVC gives an executable a 1 MB stack; Linux gives 8 MB and MinGW 2 MB. Code
 # written against the larger default overflows on entry, before its first
 # statement runs, so it dies with no output at all and an exit code that says
@@ -271,6 +284,7 @@ ifeq ($(UNAME_S),Darwin)
   LD_PIE    :=
   LD_RELRO  :=
   LD_PLATFORM :=
+  LD_KEEL_PLATFORM :=
 else ifneq (,$(findstring MINGW,$(UNAME_S)))
   # Windows/MinGW: -z relro/now are ELF-only and MinGW ld rejects them outright.
   # bcrypt and ws2_32 come from libshared's use of sh_pal.
@@ -282,6 +296,7 @@ else ifneq (,$(findstring MINGW,$(UNAME_S)))
   LD_PIE    :=
   LD_RELRO  :=
   LD_PLATFORM := -lbcrypt -lws2_32
+  LD_KEEL_PLATFORM := -lws2_32 -lmswsock -lbcrypt -liphlpapi -ladvapi32 -lshell32
 else
   CC_OMP      := -fopenmp
   # Velo asks for the SIMD half explicitly; Ralph does not.
@@ -292,6 +307,7 @@ else
   LD_PIE    := -pie
   LD_RELRO  := -Wl,-z,relro,-z,now
   LD_PLATFORM :=
+  LD_KEEL_PLATFORM :=
 endif
 
 CC_DEPFLAGS := -MMD -MP

@@ -1,32 +1,19 @@
 # Ralph LP/MIP Solver - HTTP Server Makefile
 
-CC = gcc
-
-# Platform-specific RELRO (Linux only)
-UNAME_S := $(shell uname -s)
-ifeq ($(UNAME_S),Linux)
-    RELRO_FLAGS = -Wl,-z,relro,-z,now
-else
-    RELRO_FLAGS =
-endif
-
-# Windows: Keel talks to winsock, and libshared reaches bcrypt through
-# sh_pal_random_bytes. iphlpapi comes with Keel's adapter enumeration.
-ifneq (,$(findstring MINGW,$(UNAME_S)))
-    PLATFORM_LIBS = -lws2_32 -lbcrypt -liphlpapi
-else
-    PLATFORM_LIBS =
-endif
+# Toolchain mapping. Every compiler and linker difference lives in that one
+# file, which is what lets this server build under both MinGW and native MSVC
+# (`source scripts/msvc-env.sh; make CC=cl`). Never define LIB, INCLUDE, LINK
+# or CL here -- make re-exports them and they are MSVC's environment contract.
+include ../../mk/toolchain.mk
 
 # Production build (with hardening)
-CFLAGS = -Wall -Wextra -O2 -std=c11 -D_POSIX_C_SOURCE=200809L \
-         -fstack-protector-strong -D_FORTIFY_SOURCE=2 -fPIE -fno-common
-LDFLAGS_EXTRA = -pie $(RELRO_FLAGS)
+CFLAGS = $(strip $(CC_WARN) $(CC_OPT_O2) $(CC_STD) $(CC_DEFS) $(CC_PORT_DEFS) \
+                 $(CC_HARDEN))
 
 # Debug build (with sanitizers)
-DEBUG_CFLAGS = -Wall -Wextra -g -O0 -std=c11 -D_POSIX_C_SOURCE=200809L -DDEBUG \
-               -fsanitize=address,undefined -fno-omit-frame-pointer
-DEBUG_LDFLAGS = -fsanitize=address,undefined
+DEBUG_CFLAGS = $(strip $(CC_WARN) $(CC_DEBUG_OPT) $(CC_STD) $(CC_DEFS) \
+                       $(CC_PORT_DEFS) -DDEBUG $(CC_SANITIZE))
+DEBUG_LDFLAGS = $(strip $(LD_SANITIZE))
 
 # Include paths
 INCLUDES = -I../include -I../../shared/include -I$(KEEL_DIR)/include -Isrc
@@ -34,15 +21,17 @@ INCLUDES = -I../include -I../../shared/include -I$(KEEL_DIR)/include -Isrc
 # Shared library path
 SHARED_DIR = ../../shared
 
-# OpenMP (required for Ralph's LAP solver)
-ifeq ($(shell uname -s),Darwin)
-    OPENMP_LDFLAGS = -L/opt/homebrew/opt/libomp/lib -lomp
-else
-    OPENMP_LDFLAGS = -fopenmp
-endif
-
-# Library paths (link shared library for arena allocator)
-LDFLAGS = -L.. -lralph -L$(SHARED_DIR) -lshared $(OPENMP_LDFLAGS) -lm -lpthread $(PLATFORM_LIBS)
+# Library paths. LD_KEEL_PLATFORM is wider than LD_PLATFORM: Keel reaches for
+# mswsock, iphlpapi, advapi32 and shell32 on top of what libshared uses.
+# LD_OMP carries OpenMP (Ralph's LAP solver) and is empty under MSVC, which has
+# no equivalent.
+#
+# LD_PIE/LD_RELRO were previously computed into an LDFLAGS_EXTRA that nothing
+# ever referenced, so the hardening the comments advertised was absent from the
+# link line entirely. They are on it now.
+LDFLAGS = $(strip $(call link_lib,..,ralph) $(call link_lib,$(SHARED_DIR),shared) \
+                  $(LD_OMP) $(LD_MATH) $(LD_THREAD) $(LD_KEEL_PLATFORM) \
+                  $(LD_PIE) $(LD_RELRO) $(LD_STACK))
 
 # Source files
 SRCS = src/main.c
@@ -67,7 +56,8 @@ deps: $(KEEL_LIB)
 	$(MAKE) -C $(SHARED_DIR) lib
 
 # Build vendored Keel. Core only (no mbedTLS/nghttp2 integrations), so
-# this needs no external libraries.
+# this needs no external libraries. CC carries through, so `make CC=cl` builds
+# Keel with MSVC too -- supported since Keel v3.1.0.
 $(KEEL_LIB):
 	@if [ ! -f $(KEEL_DIR)/Makefile ]; then \
 		echo "vendor/keel is empty - run: git submodule update --init vendor/keel"; \
@@ -76,20 +66,21 @@ $(KEEL_LIB):
 	$(MAKE) -C $(KEEL_DIR) CC=$(CC)
 
 $(TARGET): $(OBJS) $(HTTPSERVER_OBJ) $(KEEL_LIB)
-	$(CC) $(CFLAGS) -o $@ $(OBJS) $(HTTPSERVER_OBJ) $(KEEL_LIB) $(LDFLAGS)
+	$(CC) $(CFLAGS) $(OBJS) $(HTTPSERVER_OBJ) $(KEEL_LIB) $(LDFLAGS) $(EXE_OUT)$@
 
 build/%.o: src/%.c | build
-	$(CC) $(CFLAGS) $(INCLUDES) -c $< -o $@
+	$(CC) $(CFLAGS) $(INCLUDES) -c $< $(OBJ_OUT)$@
 
 # Compile shared Keel HTTP helpers (require Keel includes).
 build/%.o: $(SHARED_DIR)/src/%.c | build
-	$(CC) $(CFLAGS) $(INCLUDES) -c $< -o $@
+	$(CC) $(CFLAGS) $(INCLUDES) -c $< $(OBJ_OUT)$@
 
 build:
 	mkdir -p build
 
+# MSVC drops a .lib import library and a .exp export file beside the binary.
 clean:
-	rm -rf build $(TARGET)
+	rm -rf build $(TARGET) $(TARGET).exe $(TARGET).lib $(TARGET).exp
 
 debug: CFLAGS = $(DEBUG_CFLAGS)
 debug: LDFLAGS += $(DEBUG_LDFLAGS)

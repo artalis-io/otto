@@ -1,32 +1,19 @@
 # Locus API Server Makefile
 
-CC ?= gcc
-
-# Platform-specific RELRO (Linux only)
-UNAME_S := $(shell uname -s)
-ifeq ($(UNAME_S),Linux)
-    RELRO_FLAGS = -Wl,-z,relro,-z,now
-else
-    RELRO_FLAGS =
-endif
-
-# Windows: Keel talks to winsock, and libshared reaches bcrypt through
-# sh_pal_random_bytes. iphlpapi comes with Keel's adapter enumeration.
-ifneq (,$(findstring MINGW,$(UNAME_S)))
-    PLATFORM_LIBS = -lws2_32 -lbcrypt -liphlpapi
-else
-    PLATFORM_LIBS =
-endif
+# Toolchain mapping. Every compiler and linker difference lives in this one
+# file, which is what lets the server build under both MinGW and native MSVC
+# (`source scripts/msvc-env.sh; make CC=cl`). Never define LIB, INCLUDE, LINK or
+# CL here -- make re-exports those and they are MSVC's environment contract.
+include ../../mk/toolchain.mk
 
 # Production build (with hardening)
-CFLAGS = -Wall -Wextra -O2 -std=c11 -D_GNU_SOURCE \
-         -fstack-protector-strong -D_FORTIFY_SOURCE=2 -fPIE -fno-common
-LDFLAGS_EXTRA = -pie $(RELRO_FLAGS)
+CFLAGS = $(strip $(CC_WARN) $(CC_OPT_O2) $(CC_STD) $(CC_DEFS) $(CC_PORT_DEFS) \
+                 $(CC_HARDEN))
 
 # Debug build (with sanitizers)
-DEBUG_CFLAGS = -Wall -Wextra -g -O0 -std=c11 -D_GNU_SOURCE -DDEBUG \
-               -fsanitize=address,undefined -fno-omit-frame-pointer
-DEBUG_LDFLAGS = -fsanitize=address,undefined
+DEBUG_CFLAGS = $(strip $(CC_WARN) $(CC_DEBUG_OPT) $(CC_STD) $(CC_DEFS) \
+                       $(CC_PORT_DEFS) -DDEBUG $(CC_SANITIZE))
+DEBUG_LDFLAGS = $(strip $(LD_SANITIZE))
 
 # Directories
 SRC_DIR = src
@@ -35,6 +22,10 @@ LOCUS_DIR = ..
 SHARED_DIR = ../../shared
 VENDOR_DIR = ../../vendor
 
+# Keel static library (vendored git submodule, MIT)
+KEEL_DIR = $(VENDOR_DIR)/keel
+KEEL_LIB = $(KEEL_DIR)/libkeel.a
+
 # Include paths
 INCLUDES = -I$(SRC_DIR) \
            -I$(LOCUS_DIR)/include \
@@ -42,15 +33,16 @@ INCLUDES = -I$(SRC_DIR) \
            -I$(KEEL_DIR)/include \
            -I$(VENDOR_DIR)/miniz
 
-# Libraries
-LIBS = -L$(LOCUS_DIR) -llocus \
-       -L$(SHARED_DIR) -lshared \
-       -lm -lpthread $(PLATFORM_LIBS)
+# Libraries. LD_KEEL_PLATFORM is wider than LD_PLATFORM because Keel reaches
+# for mswsock, iphlpapi, advapi32 and shell32 on top of what libshared uses.
+LIBS = $(call link_lib,$(LOCUS_DIR),locus) \
+       $(call link_lib,$(SHARED_DIR),shared) \
+       $(LD_MATH) $(LD_THREAD) $(LD_KEEL_PLATFORM)
 
-# Keel library
-# Keel static library (vendored git submodule, MIT)
-KEEL_DIR = $(VENDOR_DIR)/keel
-KEEL_LIB = $(KEEL_DIR)/libkeel.a
+# Link-time hardening. This used to be assigned to LDFLAGS_EXTRA and then never
+# referenced, so the PIE/RELRO the comment advertised was absent from the link
+# line entirely. It is on the link line now.
+LDFLAGS = $(strip $(LD_PIE) $(LD_RELRO) $(LD_STACK))
 
 # Shared Keel HTTP helpers (need Keel headers, so not in libshared)
 HTTPSERVER_OBJ = $(BUILD_DIR)/sh_httpserver.o $(BUILD_DIR)/sh_httpasync.o
@@ -72,7 +64,8 @@ deps: $(KEEL_LIB)
 	$(MAKE) -C $(SHARED_DIR) lib
 
 # Build vendored Keel. Core only (no mbedTLS/nghttp2 integrations), so
-# this needs no external libraries.
+# this needs no external libraries. CC carries through, so `make CC=cl` here
+# builds Keel with MSVC too -- supported since Keel v3.1.0.
 $(KEEL_LIB):
 	@if [ ! -f $(KEEL_DIR)/Makefile ]; then \
 		echo "vendor/keel is empty - run: git submodule update --init vendor/keel"; \
@@ -84,15 +77,15 @@ $(BUILD_DIR):
 	mkdir -p $(BUILD_DIR)
 
 $(BUILD_DIR)/%.o: $(SRC_DIR)/%.c | $(BUILD_DIR)
-	$(CC) $(CFLAGS) $(INCLUDES) -c $< -o $@
+	$(CC) $(CFLAGS) $(INCLUDES) -c $< $(OBJ_OUT)$@
 
 # Compile shared Keel HTTP helpers (require Keel includes)
 $(BUILD_DIR)/%.o: $(SHARED_DIR)/src/%.c | $(BUILD_DIR)
-	$(CC) $(CFLAGS) $(INCLUDES) -c $< -o $@
+	$(CC) $(CFLAGS) $(INCLUDES) -c $< $(OBJ_OUT)$@
 
 # Build server
 $(TARGET): $(OBJS) $(KEEL_LIB)
-	$(CC) $(CFLAGS) -o $@ $(OBJS) $(KEEL_LIB) $(LIBS)
+	$(CC) $(CFLAGS) $(OBJS) $(KEEL_LIB) $(LIBS) $(LDFLAGS) $(EXE_OUT)$@
 
 # Run server
 run: $(TARGET)
@@ -100,7 +93,7 @@ run: $(TARGET)
 
 # Clean
 clean:
-	rm -rf $(BUILD_DIR) $(TARGET)
+	rm -rf $(BUILD_DIR) $(TARGET) $(TARGET).exe
 
 # Test API endpoints
 # The heavy lifting lives in test_api.sh, which starts its own server, asserts
