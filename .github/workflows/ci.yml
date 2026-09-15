@@ -494,14 +494,37 @@ jobs:
       - name: Build and test Nexus
         run: make -C nexus test
 
+      # `make api` rather than six copy-pasted lines; that aggregate target
+      # exists now precisely because this block was duplicated here and in
+      # Windows Core.
       - name: Build the API servers
+        run: make api
+      # The API e2e suites. macOS is the only platform where Keel's kqueue event
+      # backend runs -- Linux takes epoll and Windows takes WSAPoll -- and until
+      # now this job built the six servers and stopped, so kqueue was exercised
+      # at runtime nowhere in CI. That is the reason these are here and not just
+      # a wish for symmetry.
+      #
+      # bench_pbf is the PBF->.vlg builder and is not part of `make velo`.
+      - name: Fetch Monaco fixtures
         run: |
-          make -C ralph/api
-          make -C fuelwise/api
-          make -C surge/api
-          make -C velo/api
-          make -C carta/api
-          make -C locus/api
+          make data/monaco-latest.osm.pbf
+          make -C velo bench_pbf
+          make data/monaco.vlg
+
+      # Each script starts its own server, picks its own port and exits non-zero
+      # on failure. Four run from the repo root and two from their own
+      # directory; that split is the scripts' own convention. None of them uses
+      # a GNU-only tool, which is what makes this portable to BSD userland --
+      # checked rather than assumed.
+      - name: Test the API servers
+        run: |
+          bash ralph/api/test_api.sh
+          (cd surge/api && bash test_api.sh)
+          (cd fuelwise/api && bash test_api.sh)
+          bash velo/api/test_api.sh
+          bash carta/api/test_api.sh
+          bash locus/api/test_api.sh
 
   # ==========================================================================
   # Windows Suites
