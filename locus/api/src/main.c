@@ -24,9 +24,6 @@
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
-#include <unistd.h>
-#include <pthread.h>
-#include <sys/time.h>
 #include <math.h>
 
 /* Shared library includes */
@@ -39,6 +36,7 @@
 #include "sh_completion.h"
 #include "sh_worker_pool.h"
 #include "sh_json.h"
+#include "sh_perf.h"
 #include "sh_query.h"
 
 /* ============================================================================
@@ -205,17 +203,16 @@ static void record_metrics(ShMetricsTimer timer, const char *endpoint) {
 static int locus_metered_handler(void *ctx, const ShApiRequest *req,
                                  ShApiResponse *resp)
 {
-    struct timeval t0, t1;
+    double t0, t1;
     int rc;
 
-    gettimeofday(&t0, NULL);
+    t0 = sh_perf_now_ms();
     rc = lc_api_handle(ctx, req, resp);
-    gettimeofday(&t1, NULL);
+    t1 = sh_perf_now_ms();
 
     if (s_adaptive_tracker) {
         ShCapacityParams np;
-        double ms = (t1.tv_sec - t0.tv_sec) * 1000.0 +
-                    (t1.tv_usec - t0.tv_usec) / 1000.0;
+        double ms = t1 - t0;
         sh_adaptive_record(s_adaptive_tracker, ms);
         if (sh_adaptive_update(s_adaptive_tracker, &np) && s_rate_limiter) {
             sh_ratelimit_update_rate(s_rate_limiter,
@@ -557,8 +554,8 @@ int main(int argc, char *argv[]) {
         return 1;
     }
 
-    struct timeval load_start, load_end;
-    gettimeofday(&load_start, NULL);
+    double load_start, load_end;
+    load_start = sh_perf_now_ms();
 
     /* Check if input is a binary index or PBF */
     if (lc_is_binary_index(s_config.data_file)) {
@@ -606,9 +603,8 @@ int main(int argc, char *argv[]) {
         }
     }
 
-    gettimeofday(&load_end, NULL);
-    double load_time = (load_end.tv_sec - load_start.tv_sec) +
-                       (load_end.tv_usec - load_start.tv_usec) / 1e6;
+    load_end = sh_perf_now_ms();
+    double load_time = (load_end - load_start) / 1000.0;
 
     printf("Loaded: %u entities (%.1f MB) in %.3fs\n",
             lc_index_entity_count(g_index),

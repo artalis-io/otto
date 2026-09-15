@@ -24,11 +24,8 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <strings.h>  /* For strcasecmp */
 #include <ctype.h>
-#include <unistd.h>   /* For sleep, sysconf */
 #include "sh_pal.h"
-#include <sys/time.h> /* For gettimeofday */
 #include <errno.h>    /* For ETIMEDOUT */
 #include <keel/keel.h>
 #include <stddef.h>
@@ -46,6 +43,15 @@
 #include "sh_json.h"        /* For JSON building */
 #include "sh_hash.h"        /* For sh_fnv1a_64 (ETag hashing) */
 #include "sh_query.h"       /* For query-string parameter parsing */
+/* strcasecmp. POSIX puts it in <strings.h>, and macOS/BSD declare it ONLY
+ * there -- glibc and MinGW also pull it in via <string.h>, which is why
+ * dropping this include built fine on Windows and broke macOS. MSVC has no
+ * <strings.h>; it gets the name through CC_PORT_DEFS (/Dstrcasecmp=_stricmp),
+ * which is set only in the MSVC branch of mk/toolchain.mk. */
+#ifndef _MSC_VER
+#include <strings.h>
+#endif
+#include "sh_perf.h"        /* Portable millisecond clock (replaces gettimeofday) */
 
 /* ============================================================================
  * Configuration
@@ -226,7 +232,7 @@ static int carta_cached_handler(void *ctx, const ShApiRequest *req,
     CTTileCache *cache = NULL;
     int z, x, y, rc;
     char ext[8];
-    struct timeval t0, t1;
+    double t0, t1;
 
     /* Only /tiles/{z}/{x}/{y}.{png,mvt,pbf} are cached. ASCII varies with four
      * query parameters, and the cache is keyed on z/x/y alone. */
@@ -261,9 +267,9 @@ static int carta_cached_handler(void *ctx, const ShApiRequest *req,
         cache_unlock();
     }
 
-    gettimeofday(&t0, NULL);
+    t0 = sh_perf_now_ms();
     rc = ct_api_handle(ctx, req, resp);
-    gettimeofday(&t1, NULL);
+    t1 = sh_perf_now_ms();
 
     if (rc == 0 && cache && resp->status_code == 200 && resp->body) {
         cache_lock();
@@ -275,8 +281,7 @@ static int carta_cached_handler(void *ctx, const ShApiRequest *req,
      * limiter. It has no business inside a handler that also runs in WASM. */
     if (s_adaptive_tracker) {
         ShCapacityParams np;
-        double ms = (t1.tv_sec - t0.tv_sec) * 1000.0 +
-                    (t1.tv_usec - t0.tv_usec) / 1000.0;
+        double ms = t1 - t0;
         sh_adaptive_record(s_adaptive_tracker, ms);
         if (sh_adaptive_update(s_adaptive_tracker, &np) && s_rate_limiter) {
             sh_ratelimit_update_rate(s_rate_limiter,
@@ -1435,12 +1440,8 @@ int main(int argc, char *argv[]) {
     /* Determine number of worker threads */
     int num_threads = s_config.server.worker_threads;
     if (num_threads <= 0) {
-#ifdef _SC_NPROCESSORS_ONLN
-        long n = sysconf(_SC_NPROCESSORS_ONLN);
-        num_threads = (n > 0) ? (int)n : 4;
-#else
-        num_threads = 4;
-#endif
+        int n = sh_cpu_count();
+        num_threads = (n > 0) ? n : 4;
     }
     if (num_threads > 64) num_threads = 64;
 

@@ -85,19 +85,38 @@ static const char *sh_http_header_dup(const KlHttpRequest *req, const char *name
     return NULL;
 }
 
+
+/* Cross-platform thread-local storage. These header-scratch buffers are
+ * per-thread so two connections being served concurrently cannot overwrite
+ * each other's copy. `__thread` alone is a GCC/Clang extension and MSVC
+ * rejects it outright (C2143 at the declaration), which is what kept the API
+ * servers out of the MSVC build. Same ladder as FW_THREAD_LOCAL in
+ * fuelwise/src/fw_refuel.c and CS_THREAD_LOCAL in
+ * clayshards/clay-shards/src/cs_internal.h -- a third copy, so promoting one
+ * of them into a shared header is worth doing on its own. */
+#if defined(__STDC_VERSION__) && __STDC_VERSION__ >= 201112L && !defined(__STDC_NO_THREADS__)
+    #define SH_THREAD_LOCAL _Thread_local
+#elif defined(__GNUC__) || defined(__clang__)
+    #define SH_THREAD_LOCAL __thread
+#elif defined(_MSC_VER)
+    #define SH_THREAD_LOCAL __declspec(thread)
+#else
+    #define SH_THREAD_LOCAL   /* no TLS: single-threaded only */
+#endif
+
 /* ============================================================================
  * Request Helpers
  * ============================================================================ */
 
 const char *sh_http_origin(const KlHttpRequest *req)
 {
-    static __thread char origin_buf[256];
+    static SH_THREAD_LOCAL char origin_buf[256];
     return sh_http_header_dup(req, "Origin", origin_buf, sizeof(origin_buf));
 }
 
 const char *sh_http_trace_header_getter(const char *name, void *ctx)
 {
-    static __thread char hdr_buf[128];
+    static SH_THREAD_LOCAL char hdr_buf[128];
     return sh_http_header_dup((const KlHttpRequest *)ctx, name,
                             hdr_buf, sizeof(hdr_buf));
 }
