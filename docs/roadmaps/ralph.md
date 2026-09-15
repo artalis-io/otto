@@ -190,25 +190,59 @@ Root LP relaxation matches GLPK. The remaining gap is in tree search quality.
 Status below was re-derived from the code in Sep 2026, because M1 was listed
 as pending work after it had shipped.
 
-### M1: Cover Cuts -- DONE
+### M1: Cover Cuts -- DONE, and now measurable
 
 Implemented and wired: `generate_cover_cuts()` and `generate_single_cover_cut()`
 in `cuts.c`, called from `solve_root_node()` (`mip.c`), plus
 `generate_lifted_cover_cuts()` reached through `generate_scp_cuts()`. On by
 default (`enable_root_cover_cuts = 1`), round limit `RALPH_ROOT_COVER_MAX_ROUNDS`,
 and instrumented via `root_cover_cuts_generated` and `time_root_cover`.
-`test_lifted_cover_validity` fuzzes 50,000 random knapsack rows against the
-lifted generator.
 
-The original success criterion -- "milp15 gap from ~25% to <5%" -- cannot be
-evaluated: there is no milp15 in the repository. The number came from
-`docs/archive/ralph-roadmap-pre-r4.md`, and `bench_mip` generates set covering,
-set partitioning, assignment, network flow and facility location, none of them
-knapsack-shaped. **Anyone reviving this should add a knapsack generator to
-`bench_mip` first**, or the effect of cover cuts cannot be measured at all.
+**Both gaps recorded here are now closed (Sep 2026).**
 
-Known gap: no test asserts that cover cuts are *generated* on a real model. The
-fuzzer proves the cuts that are produced are valid; nothing proves any are.
+`bench_mip` has knapsack generators. It previously had none -- set covering,
+set partitioning, assignment, network flow and facility location are none of
+them knapsack-shaped -- so cover cuts had nothing to separate on anywhere in
+the suite and their effect could not be measured at all. `generate_knapsack()`
+(single row, strongly correlated) and `generate_multiknapsack()` supply rows
+with positive coefficients, a positive right-hand side and binary variables,
+which is what `generate_cover_cuts()` looks for.
+
+`tests/test_cover_cuts_generated.c` asserts cuts are actually produced. The
+lifted-cover fuzzer proves that the cuts which are produced are valid; nothing
+proved any were. The new test does both halves: 46 cover cuts over five
+multidimensional knapsack instances, and zero on capacitated facility location,
+whose capacity rows (`sum_j d_j x_ij - cap_i y_i <= 0`, negative coefficient,
+zero right-hand side) are not knapsacks. The negative control is what keeps the
+positive assertion honest.
+
+**What the measurement says: cover cuts do not reliably pay.**
+`make -C ralph bench-mip-cover-effect` solves each instance twice, with the root
+cover family on and off:
+
+| Instance | Nodes off | Nodes on | Root cover cuts |
+|---|---|---|---|
+| Knapsack, 56 items, 1 row | 1,123 | 1,993 | 1 |
+| MultiKnapsack, 48 items, 5 rows | 75 | 75 | 7 |
+| MultiKnapsack, 48 items, 10 rows | 163 | 161 | 4 |
+| MultiKnapsack, 28 items, 5 rows (quick) | 49 | 31 | 9 |
+| MultiKnapsack, 28 items, 10 rows (quick) | 477 | 507 | 8 |
+
+Cuts are separated on every instance, objectives are unchanged throughout, and
+the node count moves in both directions -- 1.6x fewer in the best case, 1.8x
+more in the worst. There is no case here for turning the family up, and a real
+question about whether it earns its place at the default settings. The old
+success criterion ("milp15 gap from ~25% to <5%") remains unevaluable: there is
+no milp15 in the repository, and the number came from
+`docs/archive/ralph-roadmap-pre-r4.md`.
+
+**Separate finding worth its own work.** Ralph is weak on single-row knapsacks.
+On 32 strongly correlated items it takes 14,705 nodes and 0.58s where GLPK takes
+0.012s -- 48x slower -- and at around 90 to 110 items it exceeds the 100,000
+node limit entirely while GLPK still solves in milliseconds. The family jumps
+from closing at the root to not finishing over a span of roughly twenty items.
+That is a branching and bounding problem, not a cut problem, and cover cuts as
+they stand do not touch it.
 
 ### M2: Node-Level Cut Generation -- IMPLEMENTED, OFF BY DEFAULT
 

@@ -2,6 +2,10 @@
 
 #include "ralph_lp.h"
 #include "ralph_mip.h"
+#include "lp.h"
+#include "mip.h"
+
+MIPSolver* ralph_get_mip_solver(const RalphModel *model);
 
 static int ralph_test_model_is_mip(const RalphModel *model) {
     return ralph_lp_get_num_integer_vars((const RalphLPModel *)model) > 0;
@@ -273,6 +277,11 @@ double ralph_test_get_mip_gap(const RalphModel *model) {
 
 int ralph_test_get_node_count(const RalphModel *model) {
     return ralph_mip_get_node_count((const RalphMIPModel *)model);
+}
+
+int ralph_test_get_root_cover_cuts(const RalphModel *model) {
+    const MIPSolver *solver = ralph_get_mip_solver(model);
+    return solver ? solver->root_cover_cuts_generated : 0;
 }
 
 int ralph_test_set_branch_priorities(RalphModel *model, const int *priorities) {

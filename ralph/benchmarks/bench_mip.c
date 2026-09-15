@@ -33,10 +33,19 @@
  * Random number generator (deterministic for reproducibility)
  * ============================================================================ */
 
-/* Internal benchmark hook */
+/* Internal benchmark hook.
+ *
+ * Deliberately an opaque forward declaration rather than an include of mip.h:
+ * that header exports mip_create()/mip_free(), which collide with this file's
+ * own problem-builder helpers of the same names. The cover cut count is read
+ * through ralph_test_get_root_cover_cuts() instead. */
 typedef struct MIPSolver MIPSolver;
 MIPSolver* ralph_get_mip_solver(const RalphModel *model);
 void mip_print_stats(const MIPSolver *solver);
+#include "sh_pal.h"
+
+/* Set by solve_with_ralph() on every call; read by run_cover_effect(). */
+static long g_last_root_cover_cuts = 0;
 
 static unsigned int g_seed = 42;
 
@@ -147,6 +156,105 @@ static void mip_free(MIPProblem *prob) {
     free(prob->rhs);
     free(prob->sense_con);
     free(prob);
+}
+
+/* ============================================================================
+ * 0-1 Knapsack Problem Generator
+ *
+ * Maximize sum(p[j] * x[j])
+ * Subject to: sum(w[j] * x[j]) <= capacity
+ *             x[j] in {0,1}
+ *
+ * Expressed as a minimisation with negated profits, matching the rest of this
+ * file.
+ *
+ * This is the canonical target for cover cuts: a single row with positive
+ * coefficients, a positive right-hand side and binary variables is exactly the
+ * shape generate_cover_cuts() looks for. Until this generator existed the
+ * benchmark had no such row anywhere -- set covering, set partitioning,
+ * assignment, network flow and facility location are none of them
+ * knapsack-shaped -- so the effect of cover cuts could not be measured at all.
+ * See the M1 entry in docs/roadmaps/ralph.md.
+ *
+ * Weights are correlated with profits (p = w + spread). Uncorrelated knapsacks
+ * are trivially solved by the LP bound; correlated ones are the family that
+ * actually resists.
+ * ============================================================================ */
+
+static MIPProblem* generate_knapsack(int num_items, unsigned int seed) {
+    seed_random(seed);
+
+    MIPProblem *prob = mip_create("Knapsack", num_items, 1, num_items);
+    if (!prob) return NULL;
+
+    prob->num_integers = num_items;
+
+    double total_weight = 0.0;
+    for (int j = 0; j < num_items; j++) {
+        double w = (double)rand_int(10, 100);
+        /* Strongly correlated: profit tracks weight, so the LP relaxation is a
+         * poor guide and the solver has to work. */
+        prob->obj[j] = -(w + 10.0);
+        prob->lb[j] = 0.0;
+        prob->ub[j] = 1.0;
+        prob->vtype[j] = 'B';
+
+        mip_add_coef(prob, 0, j, w);
+        total_weight += w;
+    }
+
+    /* Half the total weight is the classic hard ratio. */
+    prob->rhs[0] = total_weight * 0.5;
+    prob->sense_con[0] = 'L';
+
+    return prob;
+}
+
+/* ============================================================================
+ * Multidimensional Knapsack Problem Generator
+ *
+ * Minimize -sum(p[j] * x[j])
+ * Subject to: sum(w[i,j] * x[j]) <= c[i]   for each resource i
+ *             x[j] in {0,1}
+ *
+ * Every row is a knapsack, so cover cuts have m rows to separate on rather than
+ * one. Unlike the single-row case this branches: measured over 40 instances at
+ * 48 items and 6 rows, every one entered branch and bound, where a single-row
+ * knapsack of the same size is closed at the root. That makes this the variant
+ * that exercises cover cuts inside the tree as well as at the root.
+ * ============================================================================ */
+
+static MIPProblem* generate_multiknapsack(int num_items, int num_resources,
+                                          unsigned int seed) {
+    seed_random(seed);
+
+    MIPProblem *prob = mip_create("MultiKnapsack", num_items, num_resources,
+                                  num_items * num_resources);
+    if (!prob) return NULL;
+
+    prob->num_integers = num_items;
+
+    for (int j = 0; j < num_items; j++) {
+        prob->obj[j] = -(double)rand_int(1, 30);
+        prob->lb[j] = 0.0;
+        prob->ub[j] = 1.0;
+        prob->vtype[j] = 'B';
+    }
+
+    for (int i = 0; i < num_resources; i++) {
+        double total = 0.0;
+        for (int j = 0; j < num_items; j++) {
+            double w = (double)rand_int(1, 20);
+            mip_add_coef(prob, i, j, w);
+            total += w;
+        }
+        /* 0.4 of the row total: tight enough that the capacity binds, loose
+         * enough that the instance stays feasible on every row at once. */
+        prob->rhs[i] = total * 0.4;
+        prob->sense_con[i] = 'L';
+    }
+
+    return prob;
 }
 
 /* ============================================================================
@@ -593,6 +701,7 @@ static SolveResult solve_with_ralph(MIPProblem *prob, double time_limit, int use
     result.solve_time = (double)(end - start) / CLOCKS_PER_SEC;
     result.objective = ralph_test_get_objval(model);
     result.nodes = ralph_test_get_node_count(model);
+    g_last_root_cover_cuts = (long)ralph_test_get_root_cover_cuts(model);
     result.iterations = ralph_test_get_iterations(model);
 
     /* Get status via ralph_test_get_status, not return value of ralph_test_optimize */
@@ -753,6 +862,64 @@ typedef enum {
     BENCH_MODE_COMPARE_ALL   /* All three: generic, specialized, and GLPK */
 } BenchMode;
 
+/* ============================================================================
+ * Cover cut effect measurement
+ *
+ * The reason the knapsack generators above exist. M1 shipped cover cuts whose
+ * effect nobody could measure, because no benchmark problem had a knapsack row
+ * for the generator to separate on. This runs the same instance twice, once
+ * with the root cover family on and once with it off, and prints what changed.
+ *
+ * The toggle is the same env var the solver already reads
+ * (RALPH_DISABLE_COVER_ROOT_CUTS), set here rather than plumbed as a parameter
+ * so the measured path is exactly the shipping one.
+ * ============================================================================ */
+
+static void run_cover_effect(MIPProblem *prob, double time_limit) {
+    SolveResult on, off;
+    long cuts_on = 0;
+
+    printf("\n");
+    printf("Problem: %s (cover cut effect)\n", prob->name);
+    printf("  %d variables (%d integer), %d constraints, %d non-zeros\n",
+           prob->num_vars, prob->num_integers, prob->num_cons, prob->nnz);
+
+    sh_pal_setenv("RALPH_DISABLE_COVER_ROOT_CUTS", "");
+    on = solve_with_ralph(prob, time_limit, 0);
+    cuts_on = g_last_root_cover_cuts;
+
+    sh_pal_setenv("RALPH_DISABLE_COVER_ROOT_CUTS", "1");
+    off = solve_with_ralph(prob, time_limit, 0);
+    sh_pal_setenv("RALPH_DISABLE_COVER_ROOT_CUTS", "");
+
+    printf("  %-14s %-8s %12s %10s %8s\n", "Cover cuts", "Status", "Objective", "Time(s)", "Nodes");
+    printf("  %-14s %-8s %12s %10s %8s\n", "----------", "------", "---------", "-------", "-----");
+    printf("  %-14s %-8s %12.2f %10.4f %8d\n", "off",
+           off.status == 0 ? "OPT" : (off.status == 1 ? "INF" : "LIM"),
+           off.objective, off.solve_time, off.nodes);
+    printf("  %-14s %-8s %12.2f %10.4f %8d\n", "on",
+           on.status == 0 ? "OPT" : (on.status == 1 ? "INF" : "LIM"),
+           on.objective, on.solve_time, on.nodes);
+
+    printf("  Root cover cuts generated: %ld\n", cuts_on);
+
+    if (on.status == 0 && off.status == 0) {
+        double diff = fabs(on.objective - off.objective);
+        double scale = fmax(1.0, fabs(off.objective));
+        if (diff / scale > 1e-4) {
+            /* Cover cuts are globally valid, so this is a bug, not a tradeoff. */
+            printf("  WARNING: objective changed with cover cuts (diff = %.6f)\n", diff);
+        } else if (cuts_on == 0) {
+            printf("  No cover cuts were separated on this instance.\n");
+        } else if (off.nodes > 0) {
+            double node_ratio = (double)on.nodes / (double)off.nodes;
+            printf("  Nodes: %.2fx %s with cover cuts\n",
+                   node_ratio <= 1.0 ? 1.0 / fmax(node_ratio, 1e-9) : node_ratio,
+                   node_ratio <= 1.0 ? "fewer" : "more");
+        }
+    }
+}
+
 static void run_mip_benchmark(MIPProblem *prob, double time_limit, BenchMode mode) {
     printf("\n");
     printf("Problem: %s\n", prob->name);
@@ -881,6 +1048,7 @@ int main(int argc, char **argv) {
     int size_override = 0;
     double time_limit = 60.0;
     BenchMode mode = BENCH_MODE_GENERIC;
+    int cover_effect = 0;
 
     for (int i = 1; i < argc; i++) {
         if (strcmp(argv[i], "--quick") == 0) {
@@ -889,6 +1057,8 @@ int main(int argc, char **argv) {
             mode = BENCH_MODE_SPECIALIZED;
         } else if (strcmp(argv[i], "--compare-all") == 0) {
             mode = BENCH_MODE_COMPARE_ALL;
+        } else if (strcmp(argv[i], "--cover-effect") == 0) {
+            cover_effect = 1;
         } else if (strcmp(argv[i], "--problem") == 0 && i + 1 < argc) {
             problem_filter = argv[++i];
         } else if (strcmp(argv[i], "--size") == 0 && i + 1 < argc) {
@@ -930,6 +1100,48 @@ int main(int argc, char **argv) {
 
     /* Run benchmarks */
     MIPProblem *prob;
+
+    /* Knapsack (single row) and multidimensional knapsack.
+     *
+     * The only knapsack-shaped rows in the suite, and therefore the only
+     * problems where cover cuts have anything to separate on.
+     *
+     * Sized absolutely rather than from small/medium/large. Knapsack hardness
+     * does not scale the way the other families do: strongly correlated
+     * single-row instances jump from closing at the root to exceeding the
+     * 100,000 node limit over a span of about twenty items, so a size that
+     * tracks the generic knobs would give either a trivial measurement or a
+     * benchmark that never finishes. These sizes branch and terminate.
+     */
+    if (!problem_filter || strstr(problem_filter, "knapsack")) {
+        int knap_items  = quick_mode ? 32 : 56;
+        int mknap_items = quick_mode ? 28 : 48;
+
+        printf("\n");
+        printf("--------------------------------------------------------------------------------\n");
+        printf("  KNAPSACK PROBLEMS\n");
+        printf("--------------------------------------------------------------------------------\n");
+
+        prob = generate_knapsack(knap_items, 42);
+        if (cover_effect) run_cover_effect(prob, time_limit);
+        else run_mip_benchmark(prob, time_limit, mode);
+        mip_free(prob);
+
+        printf("\n");
+        printf("--------------------------------------------------------------------------------\n");
+        printf("  MULTIDIMENSIONAL KNAPSACK PROBLEMS\n");
+        printf("--------------------------------------------------------------------------------\n");
+
+        prob = generate_multiknapsack(mknap_items, 5, 42);
+        if (cover_effect) run_cover_effect(prob, time_limit);
+        else run_mip_benchmark(prob, time_limit, mode);
+        mip_free(prob);
+
+        prob = generate_multiknapsack(mknap_items, 10, 123);
+        if (cover_effect) run_cover_effect(prob, time_limit);
+        else run_mip_benchmark(prob, time_limit, mode);
+        mip_free(prob);
+    }
 
     /* Set Covering */
     if (!problem_filter || strstr(problem_filter, "setcover")) {
