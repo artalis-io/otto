@@ -218,6 +218,19 @@ Premise verified: every generator -- Gomory, MIR, cover, SCP -- is called from
 Add cut rounds at promising B&B nodes (depth < 10, fractional solution with a
 tight gap). Expected: tighter per-node bounds.
 
+**Blocker cleared (Sep 2026).** The node pool crash that made this untestable --
+validating node cuts needs models that branch, and the model class that branches
+was the one that crashed -- is fixed. See the CFL entry in
+`docs/KNOWN_ISSUES.md`: `bb_node_pool_return()` was deciding pool membership
+with a pointer difference between unrelated objects, which `-O3` was entitled to
+optimise away.
+
+**Do M-Gomory first.** Cross-checking that fix against GLPK surfaced a separate
+defect: root Gomory cuts remove the true optimum on some CFL instances, and
+Ralph reports the suboptimal answer as OPTIMAL (also in `KNOWN_ISSUES.md`). M2
+multiplies how often the cut generators run, so shipping it on top of an invalid
+generator would spread a correctness bug rather than tighten bounds.
+
 ### M3: Cut Pool Management (~300 lines, High Impact) -- PARTIALLY DONE
 
 Age-out exists and is wired: `cut_pool_age()` and `cut_pool_cleanup(pool,

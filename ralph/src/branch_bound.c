@@ -45,10 +45,6 @@ NodeQueue* node_queue_create(int capacity, NodeSelectStrategy strategy, int obj_
     return queue;
 }
 
-void node_queue_free(NodeQueue *queue) {
-    node_queue_free_with_pool(queue, NULL);
-}
-
 void node_queue_free_with_pool(NodeQueue *queue, BBNodePool *pool) {
     if (!queue) return;
 
@@ -463,13 +459,32 @@ void bb_node_pool_return(BBNodePool *pool, BBNode *node) {
         return;
     }
 
-    /* Verify node belongs to this pool */
-    ptrdiff_t offset = node - pool->nodes;
-    if (offset < 0 || offset >= pool->capacity) {
+    /*
+     * Decide pool membership by integer address comparison, never by forming
+     * `node - pool->nodes`.
+     *
+     * When the tree outgrows the pool, bb_node_pool_get() falls back to
+     * bb_node_create(), and those standalone nodes come back through here.
+     * Subtracting two pointers that do not point into the same array is
+     * undefined behaviour, and the compiler is entitled to assume it never
+     * happens -- at -O3 GCC used that licence to delete the `offset < 0`
+     * half of the old range check. A standalone node then produced a garbage
+     * offset that "passed", and that garbage was pushed onto free_list; a
+     * later get() popped it and returned &pool->nodes[garbage], which is a
+     * wild pointer. See docs/KNOWN_ISSUES.md.
+     */
+    uintptr_t base = (uintptr_t)pool->nodes;
+    uintptr_t addr = (uintptr_t)node;
+    uintptr_t span = (uintptr_t)pool->capacity * sizeof(BBNode);
+
+    if (addr < base || addr >= base + span ||
+        ((addr - base) % sizeof(BBNode)) != 0) {
         /* Node not from this pool - fall back to regular free */
         bb_node_free(node);
         return;
     }
+
+    ptrdiff_t offset = (ptrdiff_t)((addr - base) / sizeof(BBNode));
 
     /* Free basis info (not pooled - varies per node) */
     free(node->basis);
@@ -478,6 +493,13 @@ void bb_node_pool_return(BBNodePool *pool, BBNode *node) {
     node->var_status = NULL;
     node->basis_size = 0;
     node->var_status_size = 0;
+
+    /*
+     * Refuse to push when the free list is already full. A full free list
+     * means every node is accounted for, so this is a double return; writing
+     * anyway would run off the end of free_list.
+     */
+    if (pool->free_count >= pool->capacity) return;
 
     /* Push to free list */
     pool->free_list[pool->free_count++] = (int)offset;

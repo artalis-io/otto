@@ -101,69 +101,130 @@
 - Problems requiring many branching iterations
 - Numerical edge cases (very large/small coefficients)
 
-## MIP: repeated capacitated-facility-location solves crash on Windows
+## MIP: repeated capacitated-facility-location solves crash on Windows — FIXED
 
-- **Severity**: High. A wrong optimal objective is returned before the crash.
-- **Status**: reproducible and narrowed, root cause NOT found.
+- **Severity**: was High. A wrong optimal objective was returned before the crash.
+- **Status**: Fixed. Root cause was undefined pointer arithmetic in
+  `bb_node_pool_return()` (`branch_bound.c`).
 
 Solving many capacitated facility location (CFL) instances in one process
-corrupts memory on Windows. The crash is in `bb_node_pool_copy()` reached from
-`compute_branch_children()`, and it is preceded by at least one silently wrong
-answer.
+corrupted memory on Windows. The crash landed in `bb_node_pool_copy()` reached
+from `compute_branch_children()`, and was preceded by at least one silently
+wrong answer.
+
+### Root cause
+
+`bb_node_pool_get()` falls back to a standalone `bb_node_create()` whenever the
+tree outgrows the pool. Those standalone nodes come back through
+`bb_node_pool_return()`, which decided pool membership like this:
+
+```c
+ptrdiff_t offset = node - pool->nodes;
+if (offset < 0 || offset >= pool->capacity) { bb_node_free(node); return; }
+```
+
+Subtracting two pointers that do not point into the same array is undefined
+behaviour. The compiler is entitled to assume the subtraction is well defined —
+that `node` really is in `pool->nodes[]` — and therefore that `offset` is
+already in range. At `-O3` GCC used that licence and deleted the `offset < 0`
+half of the check. Instrumentation caught it directly:
+
+```
+[DBG] POOL EXHAUSTED #1 (cap=1024)
+[DBG] EXTERNAL RETURN #1 offset=27401
+[DBG] EXTERNAL RETURN #2 offset=6148914691236544597
+[DBG] OFFSET CHECK MISMATCH truly_in=0 passes=1 offset=-6148914691236489781 cap=1024
+[DBG] BAD GET idx=-1431628341 free_count=1 cap=1024
+```
+
+A standalone node therefore pushed a garbage index onto `free_list`. A later
+`bb_node_pool_get()` popped that index and returned `&pool->nodes[garbage]` —
+a wild pointer, dereferenced in `bb_node_pool_copy()`. Where the garbage index
+happened to land inside the pool, a live node was handed out a second time,
+which is where the wrong objectives came from.
+
+This also explains the properties that made the bug look mysterious:
+
+- **Only CFL.** It is the only one of the three generated classes whose trees
+  outgrow the 1024-node pool, so it is the only one that ever creates a
+  standalone node. Instrumented, `setcover` reports zero pool exhaustions.
+  The equality rows and negative capacity coefficients were a red herring.
+- **The sequence matters.** Whether the garbage offset lands in `[0, capacity)`
+  depends on where malloc puts the standalone node relative to the pool block,
+  which depends on heap history.
+- **Sanitizers hide it.** ASan changes allocation layout and adds redzones, so
+  the garbage offset falls outside the range and the elided check stops
+  mattering. The overflow is also intra-allocation once the bogus index is in
+  range, which ASan cannot see at all.
+
+### Fix
+
+`bb_node_pool_return()` now decides membership by comparing addresses as
+`uintptr_t`, never by forming a pointer difference, and additionally checks
+that the address is correctly aligned within the pool block. The push onto
+`free_list` is refused when the list is already full, which closes the
+unbounded `pool->free_list[pool->free_count++]` write that was flagged
+separately.
+
+`node_queue_free()` was deleted. It called
+`node_queue_free_with_pool(queue, NULL)`, and a NULL pool sent every pooled
+node to `bb_node_free()`, which would have freed three interior pointers.
+Nothing called it.
+
+### Regression test
+
+`ralph/tests/test_bb_node_pool.c`, wired in as `make -C ralph test-bb-node-pool`
+and part of `make -C ralph test`. It exercises the standalone-return path
+directly and then replays 23 CFL solves in one process. Against the old
+`bb_node_pool_return()` the suite segfaults; against the fix it passes.
+
+The standalone reproduction is still available as
+`make -C ralph repro-cfl-crash`; `./ralph/repro_cfl_crash cfl 6 40` now
+completes 40 of 40.
+
+## MIP: root Gomory cuts remove the true optimum on some facility location models
+
+- **Severity**: High — Ralph reports a suboptimal solution as OPTIMAL.
+- **Status**: reproducible and localised to the Gomory family, not yet fixed.
+
+Found while cross-checking the CFL crash fix against GLPK. Over the 40
+instances of `./ralph/repro_cfl_crash cfl 6 40`, 38 objectives match GLPK
+exactly and two do not:
+
+| Instance | Ralph | GLPK (proved optimal) |
+|---|---|---|
+| trial 1 | 154 | 152 |
+| trial 26 | 174 | 173 |
+
+Both are minimisations, so Ralph is returning a feasible but worse solution and
+calling it optimal — the optimum was cut off. Disabling the Gomory family alone
+recovers the true optimum in both cases; disabling cover cuts alone does not:
+
+```
+RALPH_DISABLE_GOMORY_ROOT_CUTS=1   -> 152 / 173   (matches GLPK)
+RALPH_DISABLE_COVER_ROOT_CUTS=1    -> 154 / 174   (still wrong)
+```
+
+This is independent of the node pool crash above: trial 1 solves in 221 nodes
+and never exhausts the pool, and it reported 154 before that fix as well.
+
+`generate_gmi_cut()` in `cuts.c` already rejects GMI cuts with significant
+positive slack coefficients for this class of reason; this looks like a case
+the existing guard does not cover. Same failure shape as the c-MIR bug recorded
+above — a rounding step applied where its integrality justification does not
+hold — so that entry is the place to start.
+
+To reproduce, dump the instance and compare:
 
 ```
 make -C ralph repro-cfl-crash
-./ralph/repro_cfl_crash cfl 6 40      # segfaults around trial 22
-./ralph/repro_cfl_crash setcover 6 40 # completes 40/40
-./ralph/repro_cfl_crash knapmulti 6 40 # completes 40/40
+PROBE_ONLY=1 ./ralph/repro_cfl_crash cfl 6 40                      # 154
+PROBE_ONLY=1 RALPH_DISABLE_GOMORY_ROOT_CUTS=1 ./ralph/repro_cfl_crash cfl 6 40  # 152
 ```
 
-### What is established
-
-- **Only CFL.** Set covering and multidimensional knapsack complete 40 out of
-  40. CFL is the one class with equality rows *and* capacity rows carrying a
-  negative coefficient.
-- **It is the sequence, not an instance.** No single trial crashes alone;
-  trial 22 of 40 does. Something accumulates across solves.
-- **A wrong answer comes first.** In one 40-trial run the objective at trial 21
-  was 207 where Linux gave 209, and the crash followed at trial 22.
-- **Windows only.** Linux is clean over the same sequence under ASan+UBSan and
-  under valgrind (0 errors).
-- **Sanitizers hide it.** MSVC `/fsanitize=address` completes all 40 on Windows
-  and reports nothing, which is why the usual tool did not close this out.
-
-### What has been ruled out
-
-| Hypothesis | Result |
-|---|---|
-| free_list overflow in `bb_node_pool_return` | Real (observed 10x) and fixed in a branch, but the crash survives it |
-| Node returned to the pool twice | Instrumented; never fired |
-| `offset` arithmetic misidentifying pool membership | `&nodes[offset] == node` always held |
-| `num_vars` mismatch between pool and `bb_node_pool_copy` | Both are `original_model->num_vars` |
-| Allocation failure in `bb_node_create` | Handled; callers check for NULL |
-| Pooled node freed as standalone | Only `node_queue_free()` would, and nothing calls it |
-| SCP/SPP special-case path | `detect_special=0` crashes identically |
-| Optimisation level | Crashes at -O3; -O0/-O1/-O2 also crash on a full sequence |
-| Stack exhaustion | `-Wl,--stack,8388608` changes nothing |
-
-### Two things worth fixing regardless
-
-`bb_node_pool_return()` pushes onto `free_list` with no bound check, so a
-pool that is somehow over-returned writes past the end of the array. That was
-observed firing. It is a real out-of-bounds write even though repairing it does
-not cure this crash.
-
-`node_queue_free()` calls `node_queue_free_with_pool(queue, NULL)`, and with a
-NULL pool `bb_node_pool_return()` falls through to `bb_node_free()`. For a
-pooled node that frees three interior pointers -- `lb` into `lb_pool`, `ub` into
-`ub_pool`, and the node itself into `nodes`. Nothing calls `node_queue_free()`
-today, so it is a loaded gun rather than a live bug.
-
-### Suggested next step
-
-A Windows-side heap debugger -- Application Verifier or Dr. Memory -- on the
-40-trial sequence. ASan has been tried on both platforms and does not see it,
-so more ASan is not the answer.
+Note for anyone exporting these models: `ralph_lp_write_mps()` emits `ROWS`
+entries starting in column 1 and writes an `OBJSENSE` section, and GLPK rejects
+both. That is a separate writer bug.
 
 ## Platform-Specific Issues
 
