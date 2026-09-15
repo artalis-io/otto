@@ -43,6 +43,14 @@
 #include "sh_json.h"        /* For JSON building */
 #include "sh_hash.h"        /* For sh_fnv1a_64 (ETag hashing) */
 #include "sh_query.h"       /* For query-string parameter parsing */
+/* strcasecmp. POSIX puts it in <strings.h>, and macOS/BSD declare it ONLY
+ * there -- glibc and MinGW also pull it in via <string.h>, which is why
+ * dropping this include built fine on Windows and broke macOS. MSVC has no
+ * <strings.h>; it gets the name through CC_PORT_DEFS (/Dstrcasecmp=_stricmp),
+ * which is set only in the MSVC branch of mk/toolchain.mk. */
+#ifndef _MSC_VER
+#include <strings.h>
+#endif
 #include "sh_perf.h"        /* Portable millisecond clock (replaces gettimeofday) */
 
 /* ============================================================================
