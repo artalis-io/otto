@@ -65,10 +65,13 @@ SRCS = src/sh_pal_posix.c \
        src/sh_fs.c \
        src/sh_eov.c
 
-# Keel HTTP helpers (require Keel headers - compiled separately by API servers)
+# Keel HTTP helpers. Deliberately not in libshared.a: that would put a transport
+# vendor underneath Ralph and Shared and drag Keel into WASM builds that have no
+# server (see docs/roadmaps/transport.md). Each API server compiles them itself,
+# which is why both are named here but neither is in SRCS.
 # Usage: $(CC) $(CFLAGS) -I../shared/include -I../vendor/keel/include \
-#            src/sh_httpserver.c
-HTTPSERVER_SRC = src/sh_httpserver.c
+#            src/sh_httpserver.c src/sh_httpasync.c
+HTTPSERVER_SRC = src/sh_httpserver.c src/sh_httpasync.c
 
 MINIZ_SRCS = $(VENDOR_DIR)/miniz.c \
              $(VENDOR_DIR)/miniz_tdef.c \

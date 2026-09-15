@@ -42,8 +42,15 @@ OMP_MODE := $(if $(NOMP),nomp,omp)
 OMP_STAMP = .omp-mode
 
 ifdef NOMP
-CFLAGS = -Wall -Wextra -O3 -std=c11 -D_GNU_SOURCE $(SIMD_FLAGS)
-LDFLAGS = -lm
+# Same intent as the default CFLAGS above, minus the two OpenMP knobs. It used
+# to spell the flags out in GCC syntax, which silently overrode the
+# toolchain-derived line above -- so `make NOMP=1 CC=cl` handed cl.exe
+# `-Wall -Wextra -O3` and died on D8021. Only velo/api builds with NOMP, so the
+# MSVC build never reached this path until the API servers did.
+CFLAGS = $(strip $(CC_WARN) $(CC_OPT) $(CC_STD) $(CC_DEFS) $(CC_PORT_DEFS) \
+                 $(CC_ARCH) $(CC_VECTORIZE) $(CC_FP_MODE) $(CC_FP_FASTMATH) \
+                 $(CC_HARDEN) $(SIMD_FLAGS))
+LDFLAGS = $(strip $(LD_MATH) $(LD_PLATFORM) $(LD_PIE) $(LD_RELRO) $(LD_STACK))
 OPENMP_INCLUDES =
 endif
 

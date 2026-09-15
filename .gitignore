@@ -184,3 +184,6 @@ nexus/schemas/gls-hu-pudo-pdf-v2.json
 *.pdb
 *.ilk
 *.exp
+# MSVC emits an import library beside every linked binary. *.a and *.exp were
+# already ignored; this was not, so an MSVC build left it as an untracked file.
+*.lib

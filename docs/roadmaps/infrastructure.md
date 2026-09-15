@@ -511,9 +511,9 @@ the same assertions.
   is a PAL design change, not a header swap.
 - `ralph-benchmark` (the NETLIB harness) uses `dirent.h` to enumerate problems,
   so `test-netlib` does not yet run under MSVC. It is not part of `make test`.
-- The API servers, which need Keel to build under MSVC first. Keel is
-  MinGW-targeted (`CC = cc`, no CMake/sln, `_MSC_VER` nowhere in its own source)
-  and is a submodule, so that is upstream work.
+- (done, later) The API servers. This was right at the time: Keel was
+  MinGW-targeted and is a submodule, so it was upstream work. Keel v3.1.0
+  added a native MSVC path and the servers were wired up against it.
 
 ### Velo on MSVC
 
@@ -675,11 +675,13 @@ whitespace-normalised sets before and after.
 
 ### What is left
 
-- The API servers, which need Keel to support MSVC. Keel is MinGW-targeted and
-  is a submodule, so that is upstream work.
+- (done) The API servers build under MSVC. Keel gained a native MSVC path in
+  v3.1.0, which was the blocker; three further blockers were in OTTO's own
+  sources (GCC atomic builtins, `__thread`, POSIX-only headers).
 - ralph-benchmark's bore3d case still times out under MSVC where GCC solves it
   in 14.9 ms, in both floating-point modes. Unexplained.
-- api/, wasm/ and clayshards/ Makefiles are unwired. None is on a library
+- wasm/ Makefiles are unwired. api/ is now on mk/toolchain.mk; clayshards/ is
+  wired. Neither wasm/ nor the rest is on a library
   `test` path.
 ## Nexus on Windows, and a vendored regex engine
 

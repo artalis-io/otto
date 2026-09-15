@@ -1,32 +1,19 @@
 # Surge API Server Makefile
 
-CC ?= gcc
-
-# Platform-specific RELRO (Linux only)
-UNAME_S := $(shell uname -s)
-ifeq ($(UNAME_S),Linux)
-    RELRO_FLAGS = -Wl,-z,relro,-z,now
-else
-    RELRO_FLAGS =
-endif
-
-# Windows: Keel talks to winsock, and libshared reaches bcrypt through
-# sh_pal_random_bytes. iphlpapi comes with Keel's adapter enumeration.
-ifneq (,$(findstring MINGW,$(UNAME_S)))
-    PLATFORM_LIBS = -lws2_32 -lbcrypt -liphlpapi
-else
-    PLATFORM_LIBS =
-endif
+# Toolchain mapping. Every compiler and linker difference lives in that one
+# file, which is what lets this server build under both MinGW and native MSVC
+# (`source scripts/msvc-env.sh; make CC=cl`). Never define LIB, INCLUDE, LINK
+# or CL here -- make re-exports them and they are MSVC's environment contract.
+include ../../mk/toolchain.mk
 
 # Production build (with hardening)
-CFLAGS = -Wall -Wextra -O2 -std=c11 -D_GNU_SOURCE \
-         -fstack-protector-strong -D_FORTIFY_SOURCE=2 -fPIE -fno-common
-LDFLAGS_EXTRA = -pie $(RELRO_FLAGS)
+CFLAGS = $(strip $(CC_WARN) $(CC_OPT_O2) $(CC_STD) $(CC_DEFS) $(CC_PORT_DEFS) \
+                 $(CC_HARDEN))
 
 # Debug build (with sanitizers)
-DEBUG_CFLAGS = -Wall -Wextra -g -O0 -std=c11 -D_GNU_SOURCE -DDEBUG \
-               -fsanitize=address,undefined -fno-omit-frame-pointer
-DEBUG_LDFLAGS = -fsanitize=address,undefined
+DEBUG_CFLAGS = $(strip $(CC_WARN) $(CC_DEBUG_OPT) $(CC_STD) $(CC_DEFS) \
+                       $(CC_PORT_DEFS) -DDEBUG $(CC_SANITIZE))
+DEBUG_LDFLAGS = $(strip $(LD_SANITIZE))
 
 # Directories
 SRC_DIR = src
@@ -45,11 +32,17 @@ INCLUDES = -I$(SRC_DIR) \
            -I$(KEEL_DIR)/include
 
 # Libraries
-LIBS = -L$(SURGE_DIR) -lsurge \
-       -L$(ARBOR_DIR) -larbor \
-       -L$(SHARED_DIR) -lshared \
+# Libraries. LD_KEEL_PLATFORM is wider than LD_PLATFORM: Keel reaches for
+# mswsock, iphlpapi, advapi32 and shell32 on top of what libshared uses.
+LIBS = $(call link_lib,$(SURGE_DIR),surge) \
+       $(call link_lib,$(ARBOR_DIR),arbor) \
+       $(call link_lib,$(SHARED_DIR),shared) \
        $(KEEL_LIB) \
-       -lm -lpthread $(PLATFORM_LIBS)
+       $(LD_MATH) $(LD_THREAD) $(LD_KEEL_PLATFORM)
+
+# Link-time hardening. Previously computed into an LDFLAGS_EXTRA that nothing
+# referenced, so it never reached the link line.
+LDFLAGS = $(strip $(LD_PIE) $(LD_RELRO) $(LD_STACK))
 
 # Keel static library (vendored git submodule, MIT)
 KEEL_LIB = $(KEEL_DIR)/libkeel.a
@@ -86,15 +79,15 @@ $(BUILD_DIR):
 	mkdir -p $(BUILD_DIR)
 
 $(BUILD_DIR)/%.o: $(SRC_DIR)/%.c | $(BUILD_DIR)
-	$(CC) $(CFLAGS) $(INCLUDES) -c $< -o $@
+	$(CC) $(CFLAGS) $(INCLUDES) -c $< $(OBJ_OUT)$@
 
 # Compile shared Keel HTTP helpers (require Keel includes)
 $(BUILD_DIR)/%.o: $(SHARED_DIR)/src/%.c | $(BUILD_DIR)
-	$(CC) $(CFLAGS) $(INCLUDES) -c $< -o $@
+	$(CC) $(CFLAGS) $(INCLUDES) -c $< $(OBJ_OUT)$@
 
 # Build server
 $(TARGET): $(OBJS) $(KEEL_LIB)
-	$(CC) $(CFLAGS) -o $@ $(OBJS) $(LIBS)
+	$(CC) $(CFLAGS) $(OBJS) $(LIBS) $(LDFLAGS) $(EXE_OUT)$@
 
 # Run server
 run: $(TARGET)
@@ -102,7 +95,7 @@ run: $(TARGET)
 
 # Clean
 clean:
-	rm -rf $(BUILD_DIR) $(TARGET)
+	rm -rf $(BUILD_DIR) $(TARGET) $(TARGET).exe $(TARGET).lib $(TARGET).exp
 
 # Test API endpoints
 # The heavy lifting lives in test_api.sh, which starts its own server, asserts
