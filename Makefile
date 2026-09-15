@@ -335,7 +335,14 @@ clean-all: clean
 # Download Monaco PBF if missing
 data/monaco-latest.osm.pbf:
 	@echo "Downloading Monaco OSM data..."
-	@./scripts/data-download-osm.sh monaco
+# `bash script`, not `./script`. mingw32-make is a native Windows make and
+# cannot honour a shebang, so `./scripts/...sh` falls through to whatever
+# Windows has associated with .sh -- on a GitHub runner that is wsl.exe, which
+# answers "Windows Subsystem for Linux has no installed distributions" and
+# fails the target. scripts/test-benchmark.sh and scripts/ci-pipeline.sh are
+# invoked the same way and carry the same latent trap; they are left alone
+# because nothing here exercises them.
+	@bash ./scripts/data-download-osm.sh monaco
 
 # Build Velo graph index from PBF
 # The graph format may change when velo/ sources change, so rebuild when sources change

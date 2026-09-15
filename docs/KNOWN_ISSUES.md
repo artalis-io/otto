@@ -270,12 +270,16 @@ A first-class target, built and tested on every push by three jobs.
 
 The nightly NETLIB regression gate also runs on Windows as well as Linux.
 
-One gap worth naming. The API servers are built on Windows under both
-compilers, but their live-server test suites are not run there under either.
-That is not an MSVC gap -- nobody runs them on Windows with GCC either.
-Three of the six (ralph, surge, fuelwise) do pass locally on Windows and need
-no fixtures, so wiring them into CI is tractable; carta, locus and velo need
-OSM data. See docs/roadmaps/infrastructure.md.
+All six API servers' live-server suites now run on Windows, in the
+`Windows MSVC` job, against MSVC-built binaries: 110 assertions in about 25
+seconds. They had run on no Windows job under either compiler before that --
+`Windows Core` and `macOS Core` build the six servers and stop.
+
+The remaining gap is narrower: they are not run against the MinGW binaries on
+Windows, nor on macOS. Adding them to `Windows Core` is a handful of lines now
+that the fixture steps exist and are known to work; it was left out to avoid
+paying for the Monaco download twice per run. See
+docs/roadmaps/infrastructure.md.
 
 ## Workarounds
 
