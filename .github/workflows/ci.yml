@@ -616,6 +616,7 @@ jobs:
           update: false
           install: >-
             mingw-w64-ucrt-x86_64-make
+            mingw-w64-ucrt-x86_64-curl
             jq
 
       - name: Report the MSVC toolchain
@@ -750,6 +751,43 @@ jobs:
             fi
           done
           exit $status
+
+      # The API e2e suites, which until now ran on no Windows job under either
+      # compiler -- Windows Core and macOS Core build the six servers and stop.
+      # They run here rather than in Windows Core because this is the job that
+      # only just gained the server builds, so running them closes that loop
+      # end to end. The suites are cheap: 110 assertions across the six, about
+      # 25 seconds total. The fixtures cost more than the tests do.
+      #
+      # bench_pbf is the PBF->.vlg builder and is not part of `make velo`. It
+      # builds under cl like everything else here, so this job still needs no
+      # gcc.
+      - name: Fetch Monaco fixtures
+        run: |
+          source scripts/msvc-env.sh
+          mingw32-make data/monaco-latest.osm.pbf
+          mingw32-make -C velo bench_pbf CC=cl
+          mingw32-make data/monaco.vlg
+
+      # Each script starts its own server, picks its own port and exits
+      # non-zero on failure. Four run from the repo root and two from their own
+      # directory; that split is the scripts' own convention, not this job's.
+      #
+      # Deliberately does NOT source scripts/msvc-env.sh. Nothing here compiles
+      # -- the binaries already exist -- and that script exports
+      # MSYS2_ARG_CONV_EXCL='*' so MSYS stops rewriting /Fo and /std:c11 for
+      # cl.exe. With conversion off, the `curl -s -o /dev/null` these suites use
+      # everywhere reaches Windows curl as a literal path it cannot write, and
+      # curl exits 23 mid-suite. Sourcing it here fails surge, fuelwise and
+      # carta; not sourcing it passes all six.
+      - name: Test the API servers
+        run: |
+          bash ralph/api/test_api.sh
+          (cd surge/api && bash test_api.sh)
+          (cd fuelwise/api && bash test_api.sh)
+          bash velo/api/test_api.sh
+          bash carta/api/test_api.sh
+          bash locus/api/test_api.sh
 
   # ==========================================================================
   sanitizers:
