@@ -381,7 +381,6 @@ int mip_recover_root_relaxation(MIPSolver *solver);
 
 /* Node management */
 NodeQueue* node_queue_create(int capacity, NodeSelectStrategy strategy, int obj_sense);
-void node_queue_free(NodeQueue *queue);
 void node_queue_free_with_pool(NodeQueue *queue, BBNodePool *pool);
 int node_queue_push(NodeQueue *queue, BBNode *node);
 BBNode* node_queue_pop(NodeQueue *queue);
