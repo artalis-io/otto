@@ -358,6 +358,25 @@ typedef struct {
     int root_gomory_max_rounds;  /* Max root rounds where Gomory is active (env-gated, 0=off) */
     int root_mir_max_rounds;     /* Max root rounds where MIR is active (env-gated, 0=off) */
     int root_cover_max_rounds;   /* Max root rounds where cover is active (env-gated, 0=off) */
+
+    /* Node-level cuts (M2).
+     *
+     * Only globally-valid families run here. A cut applied at a node goes
+     * into working_model permanently, exactly as a root cut does, so a cut
+     * whose validity depends on that node's local bounds would silently cut
+     * the optimum out of sibling subtrees. Cover cuts derived from the
+     * ORIGINAL rows are valid everywhere; Gomory and MIR read the node
+     * tableau under local bounds and are deliberately not generated here.
+     * See generate_node_cuts() in mip.c. */
+    int enable_node_cuts;        /* Node cut family toggle (env-gated) */
+    int node_cut_max_depth;      /* Only nodes shallower than this are eligible */
+    int node_cut_max_rounds;     /* Cap on node cut rounds across the whole tree */
+    double node_cut_gap_frac;    /* Node must be within this fraction of the incumbent */
+    int node_cut_rounds;         /* Node cut rounds actually run */
+    int node_cut_cuts_generated; /* Cuts generated at nodes */
+    int node_cut_cuts_applied;   /* Of those, how many reached the LP */
+    int node_cut_basis_invalidations; /* Queued-node warm starts lost to a row-count change */
+    double time_node_cuts;       /* Node cut generation + application time */
     SPPContext *spp_ctx;         /* Exact-cover context for partitioning heuristics/cuts */
     int scp_cuts_generated;      /* Number of SCP-specific cuts generated */
     double lagrangian_bound;     /* Best Lagrangian dual bound (if computed) */
