@@ -36,6 +36,7 @@
 
 #include <stdint.h>
 #include <stddef.h>
+#include <stdatomic.h>
 
 #ifdef __cplusplus
 extern "C" {
@@ -54,7 +55,11 @@ typedef struct {
     size_t data_len;      /* Data length in bytes */
     void *user_ctx;       /* User context (connection handle, etc.) - NOT owned */
     double enqueue_time;  /* When item was queued (set by sh_workqueue_push) */
-    volatile int cancelled; /* Set to 1 when HTTP handler times out */
+    /* Set to 1 when the HTTP handler times out. Written on the handler
+     * thread, read on a worker, so it is a real atomic rather than a
+     * volatile int: volatile orders nothing between threads. Read it with
+     * sh_workqueue_item_cancelled() rather than directly. */
+    _Atomic int cancelled;
 } ShWorkItem;
 
 /*

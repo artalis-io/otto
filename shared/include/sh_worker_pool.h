@@ -59,7 +59,7 @@ extern "C" {
  *
  * The callback is responsible for:
  * - Extracting server-specific data from item->user_ctx
- * - Checking sh_workqueue_item_expired() or item->cancelled
+ * - Checking sh_workqueue_item_expired() or sh_workqueue_item_cancelled()
  * - Processing the work (if not expired/cancelled)
  * - Signaling completion to any waiting thread
  *

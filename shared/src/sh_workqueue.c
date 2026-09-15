@@ -338,14 +338,11 @@ void sh_workqueue_item_cancel(ShWorkQueue *queue, ShWorkItem *item)
 {
     if (!item) return;
 
-    /* Use atomic store for thread safety (volatile + direct assignment is
-     * sufficient for single-word writes on most architectures, but we use
-     * __atomic_store_n for portability and explicit memory ordering) */
-#if defined(__GNUC__) || defined(__clang__)
-    __atomic_store_n(&item->cancelled, 1, __ATOMIC_RELEASE);
-#else
-    item->cancelled = 1;
-#endif
+    /* C11 atomics rather than __atomic_* builtins: those are a GCC/Clang
+     * extension, and the #else branch this used to carry was a plain
+     * assignment -- which compiles everywhere and orders nothing, so on
+     * MSVC the release side of this handoff simply was not there. */
+    atomic_store_explicit(&item->cancelled, 1, memory_order_release);
 
     /* Update stats if queue provided */
     if (queue) {
@@ -358,11 +355,7 @@ void sh_workqueue_item_cancel(ShWorkQueue *queue, ShWorkItem *item)
 int sh_workqueue_item_cancelled(const ShWorkItem *item)
 {
     if (!item) return 0;
-#if defined(__GNUC__) || defined(__clang__)
-    return __atomic_load_n(&item->cancelled, __ATOMIC_ACQUIRE);
-#else
-    return item->cancelled;
-#endif
+    return atomic_load_explicit(&item->cancelled, memory_order_acquire);
 }
 
 void sh_workqueue_item_free(ShWorkItem *item)
