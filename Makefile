@@ -21,13 +21,14 @@
 
 .PHONY: all lib clean test help
 .PHONY: ralph fuelwise velo carta locus shared arbor surge surge-api nexus
-.PHONY: fuelwise-api carta-api velo-api
+.PHONY: fuelwise-api carta-api velo-api locus-api ralph-api api
 .PHONY: wasm wasm-fuelwise wasm-velo wasm-carta wasm-locus wasm-types wasm-test wasm-api-demos
 .PHONY: fuelwise-ui fuelwise-ui-dev carta-ui carta-ui-dev clay-map clay-map-serve site-build site-serve
 .PHONY: tui-demo-tty tui-demo-wasm tui-demo-serve tui-wasm test-tui
 .PHONY: run-fuelwise-api run-carta-api run-velo-api run-ralph-api
 .PHONY: benchmark ci api-docs api-docs-check test-api-docs test-api-docs-install download-monaco
 .PHONY: test-fuelwise-regression
+.PHONY: test-api test-ralph-api test-surge-api test-locus-api
 
 # =============================================================================
 # Default Targets
@@ -92,8 +93,12 @@ surge: arbor shared
 # API Servers
 # =============================================================================
 
-# FuelWise REST API server (depends on FuelWise)
-fuelwise-api: fuelwise
+# FuelWise REST API server (api/Makefile handles deps, as the other five do)
+# Every API server. The same six lines were copy-pasted into ci.yml's Windows
+# and macOS jobs because there was nothing to call; there is now.
+api: ralph-api fuelwise-api surge-api velo-api carta-api locus-api
+
+fuelwise-api:
 	$(MAKE) -C fuelwise/api
 
 # Carta tile server (api/Makefile handles deps)
@@ -276,8 +281,18 @@ test-velo-api: velo-api
 test-carta-api: carta-api
 	$(MAKE) -C carta/api test
 
-# Test all API endpoints (requires OSM data in data/)
-test-api: test-fuelwise-api test-velo-api test-carta-api
+test-locus-api: locus-api
+	$(MAKE) -C locus/api test
+
+test-ralph-api: ralph-api
+	$(MAKE) -C ralph/api test
+
+test-surge-api: surge-api
+	$(MAKE) -C surge/api test
+
+# Test all API endpoints. ralph and surge need no fixtures; fuelwise, velo,
+# carta and locus do (see download-monaco).
+test-api: test-ralph-api test-surge-api test-fuelwise-api test-velo-api test-carta-api test-locus-api
 
 # =============================================================================
 # Cleanup
@@ -298,6 +313,9 @@ clean:
 	-$(MAKE) -C carta/api clean 2>/dev/null || true
 	-$(MAKE) -C carta/wasm clean 2>/dev/null || true
 	-$(MAKE) -C velo/api clean 2>/dev/null || true
+	-$(MAKE) -C ralph/api clean 2>/dev/null || true
+	-$(MAKE) -C locus/api clean 2>/dev/null || true
+	-$(MAKE) -C surge/api clean 2>/dev/null || true
 	-$(MAKE) -C velo/wasm clean 2>/dev/null || true
 	-$(MAKE) -C clayshards/clay-shards-demo clean 2>/dev/null || true
 	-$(MAKE) -C clayshards/clay-shards-tui clean 2>/dev/null || true
