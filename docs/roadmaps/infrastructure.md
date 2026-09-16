@@ -692,8 +692,16 @@ whitespace-normalised sets before and after.
 - (done) The API servers build under MSVC. Keel gained a native MSVC path in
   v3.1.0, which was the blocker; three further blockers were in OTTO's own
   sources (GCC atomic builtins, `__thread`, POSIX-only headers).
-- ralph-benchmark's bore3d case still times out under MSVC where GCC solves it
-  in 14.9 ms, in both floating-point modes. Unexplained.
+- (done) ralph-benchmark's bore3d case timed out under MSVC where GCC solved
+  it in 14.9 ms. Not an MSVC defect in the end: MSVC has neither
+  `-march=native` nor `-ffast-math`, and every build without them failed the
+  same way. Phase 1 could reach a basis ill-conditioned enough that `B^-1 b`
+  was meaningless, and a DIR_SKIP full recompute would adopt that point.
+  `simplex_phase1_zones.c` now declines the recompute above a condition limit.
+  bore3d sits in the gate's `required_coverage` rather than its known-timeout
+  allowlist, and the MSVC nightly reports it covered with no timeout. See
+  "bore3d does not converge under plain IEEE arithmetic" in
+  docs/KNOWN_ISSUES.md for the diagnosis.
 - wasm/ Makefiles are unwired. api/ is now on mk/toolchain.mk; clayshards/ is
   wired. Neither wasm/ nor the rest is on a library
   `test` path.
