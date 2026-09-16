@@ -193,3 +193,8 @@ nexus/schemas/gls-hu-pudo-pdf-v2.json
 # ~3.5M of per-problem JSON and stderr, so this keeps a local run from being
 # staged by accident.
 netlib-gate-*/
+
+# NETLIB emps decompressor: download_netlib.sh curls emps.c from netlib.org
+# into this directory and builds it there. It is a cache, and the copy that
+# was tracked got overwritten on every run.
+ralph/benchmarks/.emps/

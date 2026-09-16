@@ -14,6 +14,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 NETLIB_DIR="$SCRIPT_DIR/netlib"
 EMPS_DIR="$SCRIPT_DIR/.emps"
 EMPS_BIN="$EMPS_DIR/emps"
+EMPS_SRC="$SCRIPT_DIR/emps.c"
 NETLIB_URL="https://www.netlib.org/lp/data"
 
 # Full list of ~90 NETLIB LP problems
@@ -128,11 +129,16 @@ build_emps() {
     echo "Building emps decompressor..."
     mkdir -p "$EMPS_DIR"
 
-    # Download emps.c from netlib.org
-    if ! curl -sfL "$NETLIB_URL/emps.c" -o "$EMPS_DIR/emps.c"; then
-        echo "  ERROR: Failed to download emps.c from $NETLIB_URL/emps.c"
+    # emps.c is vendored alongside this script. It used to be downloaded from
+    # netlib.org on every run, which made the decompressor -- and so the whole
+    # NETLIB corpus -- depend on that host being reachable, and quietly
+    # overwrote a copy of the same file that was tracked in git. Building the
+    # vendored source removes both problems and makes the result reproducible.
+    if [ ! -f "$EMPS_SRC" ]; then
+        echo "  ERROR: vendored emps.c missing at $EMPS_SRC"
         return 1
     fi
+    cp "$EMPS_SRC" "$EMPS_DIR/emps.c"
 
     # Compile it
     if cc -O2 -o "$EMPS_BIN" "$EMPS_DIR/emps.c" -lm 2>/dev/null; then

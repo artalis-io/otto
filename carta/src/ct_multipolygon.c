@@ -258,10 +258,25 @@ static int ensure_scratch_capacity(void **buffer, size_t *capacity,
 {
     if (needed <= *capacity) return 1;
 
+    if (elem_size == 0) return 0;
+
     size_t new_cap = *capacity ? *capacity : MP_SCRATCH_INITIAL_CAPACITY;
     while (new_cap < needed) {
+        /* Doubling past half of SIZE_MAX wraps, and a wrap to 0 never reaches
+         * `needed`, so the loop would not terminate. Clamp instead: the
+         * allocation below then fails honestly on a size this large. */
+        if (new_cap > SIZE_MAX / 2) {
+            new_cap = needed;
+            break;
+        }
         new_cap *= 2;
     }
+
+    /* Same guard sh_pool_ensure_capacity() and sh_pqueue_push() apply before
+     * the identical call. Reaching it needs a relation member count near
+     * SIZE_MAX, which memory exhaustion beats to it -- this keeps the check
+     * where the rest of the codebase puts it rather than relying on that. */
+    if (new_cap > SIZE_MAX / elem_size) return 0;
 
     void *new_buf = realloc(*buffer, new_cap * elem_size);
     if (!new_buf) return 0;
