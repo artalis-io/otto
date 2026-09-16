@@ -267,6 +267,8 @@ typedef struct {
     int strong_branch_probes;      /* Strong-branch probe calls */
     int strong_branch_failures;    /* Strong-branch probe calls that failed */
     int strong_branch_recoveries;  /* Failed probes that recovered LP state */
+    int root_cut_purged;         /* Root cut rows dropped as non-binding */
+    int root_cut_purge_reverts;  /* Purges undone because the bound moved */
     int cut_recovery_attempts;     /* Root cut-loop LP recovery attempts */
     int cut_recovery_success;      /* Root cut-loop recoveries that succeeded */
     int cut_recovery_failures;     /* Root cut-loop recoveries that failed */
