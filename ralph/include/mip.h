@@ -574,7 +574,6 @@ int generate_scp_cuts(MIPSolver *solver, CutPool *pool);
 
 /* Primal heuristics */
 int heuristic_rounding(MIPSolver *solver, const double *lp_solution, double *int_solution);
-int heuristic_feasibility_pump(MIPSolver *solver, double *solution);
 
 /* SCP-specific primal heuristics (Phase 4) */
 

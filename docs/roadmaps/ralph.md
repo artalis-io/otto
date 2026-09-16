@@ -323,10 +323,10 @@ the pool's allocation, which is a different thing from a model-relative cap.
 Find incumbents before tree search via LP/rounding alternation. Complements
 RINS (which needs an existing incumbent).
 
-Note: `mip.h` declares `int heuristic_feasibility_pump(MIPSolver *, double *)`
-but nothing defines or calls it. That prototype is a dangling declaration --
-anyone calling it today gets a link error. Either implement it here or delete
-the declaration.
+Note: `mip.h` used to declare `int heuristic_feasibility_pump(MIPSolver *, double *)`
+with nothing defining or calling it, so anyone calling it got a link error
+rather than a compile error. The declaration has been removed; implementing
+the pump here means adding the prototype back alongside the definition.
 
 ### M5: FuelWise True Benders (Planned)
 

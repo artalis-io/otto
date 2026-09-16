@@ -332,6 +332,111 @@ static void test_write_mps_roundtrip(void) {
 }
 
 /* ============================================================================
+ * Test: MPS output is something other tools will actually read
+ *
+ * The round-trip test above passes Ralph's own reader, which is lenient about
+ * where a record starts. GLPK is not, and for a while nothing here noticed
+ * that every data record was being written in column 1 -- where MPS reserves
+ * space for section indicators -- so glpsol rejected every file Ralph wrote
+ * with "invalid indicator record" and the models needed hand-editing before
+ * they could be used as a cross-check.
+ *
+ * This asserts the two format properties directly, so the guarantee does not
+ * depend on having glpsol installed to notice.
+ * ============================================================================ */
+
+static int mps_is_section_line(const char *line) {
+    static const char *sections[] = {
+        "NAME", "ROWS", "COLUMNS", "RHS", "RANGES", "BOUNDS", "OBJSENSE",
+        "ENDATA", NULL
+    };
+    for (int i = 0; sections[i]; i++) {
+        size_t n = strlen(sections[i]);
+        if (strncmp(line, sections[i], n) == 0 &&
+            (line[n] == '\0' || line[n] == ' ' || line[n] == '\r' || line[n] == '\n')) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+static void test_write_mps_format(void) {
+    printf("\n=== Test: MPS Fixed-Format Validity ===\n");
+
+    /* --- a MIN model: must come out as plain MPS, no extensions --- */
+    RalphModel *model = ralph_test_create();
+    ASSERT(model != NULL, "Model created");
+    ralph_test_set_obj_sense(model, RALPH_MINIMIZE);
+    ralph_test_add_var(model, 0.0, 2.0, 1.0, RALPH_CONTINUOUS);
+    ralph_test_add_var(model, 0.0, 3.0, 2.0, RALPH_INTEGER);
+    ralph_test_add_var(model, 0.0, 1.0, 3.0, RALPH_BINARY);
+    int idx[] = {0, 1, 2};
+    double val[] = {1.0, 1.0, 1.0};
+    ralph_test_add_constraint(model, 3, idx, val, RALPH_GREATER_EQUAL, 2.0);
+
+    char path[320];
+    ASSERT(ralph_tmp_path(path, sizeof(path), "format.mps") != NULL,
+           "Resolved a temp path");
+    ASSERT(ralph_test_write_mps(model, path) == 0, "MPS written");
+
+    FILE *f = fopen(path, "r");
+    ASSERT(f != NULL, "MPS reopened for inspection");
+
+    char line[1024];
+    int col1_offenders = 0;
+    int saw_objsense = 0;
+    int data_records = 0;
+    while (f && fgets(line, sizeof(line), f)) {
+        if (line[0] == '\n' || line[0] == '\r') continue;
+        if (strncmp(line, "OBJSENSE", 8) == 0) saw_objsense = 1;
+        if (mps_is_section_line(line)) continue;
+        data_records++;
+        /* A data record must not begin in column 1: a reader that sees one
+         * there treats it as an indicator record. */
+        if (line[0] != ' ' && line[0] != '\t') col1_offenders++;
+    }
+    if (f) fclose(f);
+
+    ASSERT(data_records > 0, "MPS contains data records to check");
+    ASSERT(col1_offenders == 0, "No data record starts in column 1");
+    ASSERT(saw_objsense == 0, "A MIN model emits no OBJSENSE extension");
+    ralph_test_free(model);
+}
+
+/* Split out from the format test above rather than folded into it: ASSERT
+ * returns on the first failure, so a structural problem in the MIN file would
+ * otherwise hide whether the objective sense still survives at all. */
+static void test_write_mps_max_sense(void) {
+    printf("\n=== Test: MPS MAX Objective Sense ===\n");
+
+    RalphModel *mx = ralph_test_create();
+    ASSERT(mx != NULL, "MAX model created");
+    ralph_test_set_obj_sense(mx, RALPH_MAXIMIZE);
+    ralph_test_add_var(mx, 0.0, 10.0, 1.0, RALPH_CONTINUOUS);
+    int mi[] = {0};
+    double mv[] = {1.0};
+    ralph_test_add_constraint(mx, 1, mi, mv, RALPH_LESS_EQUAL, 5.0);
+
+    char mpath[320];
+    ASSERT(ralph_tmp_path(mpath, sizeof(mpath), "format_max.mps") != NULL,
+           "Resolved a temp path for the MAX model");
+    ASSERT(ralph_test_write_mps(mx, mpath) == 0, "MAX model written");
+
+    RalphModel *back = ralph_test_create();
+    ASSERT(ralph_test_read_mps(back, mpath) == 0, "MAX model read back");
+    ralph_test_set_int_param(back, "verbose", 0);
+    ASSERT(ralph_test_optimize(back) == 0, "MAX model solve call succeeds");
+    ASSERT(ralph_test_get_status(back) == RALPH_STATUS_OPTIMAL, "MAX model optimal");
+    /* 5.0 if the sense survived; 0.0 if it silently became a minimization. */
+    ASSERT_EQ_DBL(ralph_test_get_objval(back), 5.0,
+                  "MAX objective survives the round-trip");
+
+    ralph_test_free(mx);
+    ralph_test_free(back);
+}
+
+
+/* ============================================================================
  * Test: Name management API
  * ============================================================================ */
 
@@ -469,6 +574,8 @@ int main(int argc, char **argv) {
     test_write_lp();
     test_roundtrip();
     test_write_mps_roundtrip();
+    test_write_mps_format();
+    test_write_mps_max_sense();
     test_name_api();
     test_solution_buf();
     test_invalid_file();
