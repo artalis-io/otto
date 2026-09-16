@@ -67,6 +67,27 @@ jobs:
           - name: Ralph Netlib
             build: make ralph
             test: make -C ralph test-netlib
+          # These suites existed and were reachable only through targets no
+          # workflow invoked -- `make -C ralph test-regression-suites` and
+          # friends. They had never run in CI, which is the same shape of gap
+          # that let the MPS writer ship invalid output behind a passing
+          # `test_write_mps_roundtrip`. All pass today; gating them is what
+          # keeps that true.
+          - name: Ralph Regression Suites
+            build: make ralph
+            test: make -C ralph test-regression-suites
+          - name: Ralph Benders
+            build: make ralph
+            test: make -C ralph test-benders
+          - name: Ralph Optim
+            build: make ralph
+            test: make -C ralph test-optim
+          - name: Ralph Edge Cases
+            build: make ralph
+            test: make -C ralph test-edge
+          - name: Shared pdf2struc
+            build: make shared
+            test: make -C shared test-pdf2struc
           - name: Ralph Detect
             build: make ralph
             test: make -C ralph test-detect
