@@ -605,6 +605,128 @@ static char **mps_build_unique_names(const LPModel *lp, int count, int is_var) {
     return names;
 }
 
+/* Range reconstruction.
+ *
+ * mps_reader.c expands a ranged row into two constraints -- Ax >= lo and
+ * Ax <= hi -- because the model carries no range concept. Writing those back
+ * out as two rows is correct but lossy in a way that matters: nesm.mps becomes
+ * 751 rows instead of 663, and an L row with rhs 58.799988 and range 33.099991
+ * turns into a G row whose rhs is the computed difference 25.699996999999996,
+ * which needs 18 characters to round-trip and so cannot fit field 4 at all.
+ * No fixed-format file can hold that number; the fix is to stop producing it.
+ *
+ * The two rows the reader emits are adjacent and share a coefficient vector,
+ * so they can be recognised and folded back into one row plus a RANGES entry.
+ * The pair is merged only when hi - |hi - lo| reproduces lo exactly: floating
+ * point does not guarantee that in general, and a merge that shifted the
+ * constraint by an ulp would be a worse defect than a long line. Where it does
+ * not hold, both rows are written as before.
+ */
+typedef struct {
+    char   *skip;     /* row is the second half of a merged pair */
+    char   *merged;   /* row carries a RANGES entry */
+    double *range;    /* the range value, when merged */
+    double *rhs;      /* rhs to write (hi for a merged row) */
+} MpsRanges;
+
+/* The range only has to satisfy hi - |r| == lo, and many decimals do. Writing
+ * the raw difference can need 18 characters (nesm has ranges that come out as
+ * 50.800003000000004), where the shortest decimal meeting that condition is
+ * the source's own 50.800003. Searched rather than computed, so the value both
+ * fits field 4 and reproduces lo bit-for-bit on the way back in. */
+static void mps_fmt_range(char *buf, size_t n, double hi, double range) {
+    double lo = hi - fabs(range);
+    for (int prec = 1; prec < 17; prec++) {
+        snprintf(buf, n, "%.*g", prec, range);
+        if ((hi - fabs(strtod(buf, NULL))) == lo) return;
+    }
+    snprintf(buf, n, "%.17g", range);
+}
+
+static void mps_ranges_free(MpsRanges *r) {
+    if (!r) return;
+    free(r->skip); free(r->merged); free(r->range); free(r->rhs);
+    r->skip = NULL; r->merged = NULL; r->range = NULL; r->rhs = NULL;
+}
+
+/* Row-major view of the CSC matrix, so two rows can be compared directly. */
+static int mps_build_rowwise(const LPModel *lp, int **start, int **cols, double **vals) {
+    int m = lp->num_cons, n = lp->num_vars;
+    int nnz = (m > 0 && lp->A) ? lp->A->colptr[n] : 0;
+    int *st = calloc((size_t)m + 1, sizeof(int));
+    int *cl = nnz ? malloc((size_t)nnz * sizeof(int)) : NULL;
+    double *vl = nnz ? malloc((size_t)nnz * sizeof(double)) : NULL;
+    if (!st || (nnz && (!cl || !vl))) { free(st); free(cl); free(vl); return -1; }
+
+    for (int j = 0; j < n; j++)
+        for (int p = lp->A->colptr[j]; p < lp->A->colptr[j + 1]; p++)
+            st[lp->A->rowidx[p] + 1]++;
+    for (int i = 0; i < m; i++) st[i + 1] += st[i];
+
+    int *fill = calloc((size_t)m + 1, sizeof(int));
+    if (!fill) { free(st); free(cl); free(vl); return -1; }
+    for (int j = 0; j < n; j++) {
+        for (int p = lp->A->colptr[j]; p < lp->A->colptr[j + 1]; p++) {
+            int i = lp->A->rowidx[p];
+            int at = st[i] + fill[i]++;
+            cl[at] = j;
+            vl[at] = lp->A->values[p];
+        }
+    }
+    free(fill);
+    *start = st; *cols = cl; *vals = vl;
+    return 0;
+}
+
+static int mps_rows_equal(const int *st, const int *cols, const double *vals,
+                          int a, int b) {
+    int na = st[a + 1] - st[a], nb = st[b + 1] - st[b];
+    if (na != nb) return 0;
+    for (int k = 0; k < na; k++) {
+        if (cols[st[a] + k] != cols[st[b] + k]) return 0;
+        if (vals[st[a] + k] != vals[st[b] + k]) return 0;
+    }
+    return 1;
+}
+
+/* Returns 0 on success (r is populated), -1 on allocation failure. */
+static int mps_find_ranges(const LPModel *lp, MpsRanges *r) {
+    int m = lp->num_cons;
+    memset(r, 0, sizeof(*r));
+    if (m <= 0) return 0;
+
+    r->skip   = calloc((size_t)m, 1);
+    r->merged = calloc((size_t)m, 1);
+    r->range  = calloc((size_t)m, sizeof(double));
+    r->rhs    = calloc((size_t)m, sizeof(double));
+    if (!r->skip || !r->merged || !r->range || !r->rhs) { mps_ranges_free(r); return -1; }
+
+    for (int i = 0; i < m; i++) r->rhs[i] = lp->b ? lp->b[i] : 0.0;
+    if (!lp->sense || !lp->b || !lp->A) return 0;
+
+    int *st = NULL, *cols = NULL; double *vals = NULL;
+    if (mps_build_rowwise(lp, &st, &cols, &vals) != 0) { mps_ranges_free(r); return -1; }
+
+    for (int i = 0; i + 1 < m; i++) {
+        if (lp->sense[i] != 'G' || lp->sense[i + 1] != 'L') continue;
+        double lo = lp->b[i], hi = lp->b[i + 1];
+        if (!(lo <= hi)) continue;
+        double range = hi - lo;
+        if (range <= 0.0) continue;
+        if ((hi - fabs(range)) != lo) continue;      /* must round-trip exactly */
+        if (!mps_rows_equal(st, cols, vals, i, i + 1)) continue;
+
+        r->merged[i] = 1;
+        r->range[i]  = range;
+        r->rhs[i]    = hi;
+        r->skip[i + 1] = 1;
+        i++;                                          /* consume the pair */
+    }
+
+    free(st); free(cols); free(vals);
+    return 0;
+}
+
 int ralph_core_write_mps(const RalphLPModel *model, const char *filename) {
     if (!model || !filename) return -1;
 
@@ -628,15 +750,24 @@ int ralph_core_write_mps(const RalphLPModel *model, const char *filename) {
         return -1;
     }
 
-    FILE *f = fopen(filename, "w");
-    if (!f) {
+    MpsRanges ranges;
+    if (mps_find_ranges(lp, &ranges) != 0) {
         mps_free_names(var_names, lp->num_vars);
         mps_free_names(con_names, lp->num_cons);
         return -1;
     }
 
+    FILE *f = fopen(filename, "w");
+    if (!f) {
+        mps_free_names(var_names, lp->num_vars);
+        mps_free_names(con_names, lp->num_cons);
+        mps_ranges_free(&ranges);
+        return -1;
+    }
+
     const char *obj_row = "OBJ";
     const char *rhs_name = "RHS1";
+    const char *rng_name = "RNG1";
     const char *bnd_name = "BND1";
     char prob_name[LP_MAX_NAME];
     mps_make_name(lp->name, "PROB", 0, prob_name, sizeof(prob_name));
@@ -664,10 +795,14 @@ int ralph_core_write_mps(const RalphLPModel *model, const char *filename) {
     fprintf(f, "ROWS\n");
     fprintf(f, MPS_REC_TYPE_NAME, "N", obj_row);
     for (int i = 0; i < lp->num_cons; i++) {
+        if (ranges.skip[i]) continue;
         char sense_buf[2] = {'E', '\0'};
         if (lp->sense && (lp->sense[i] == 'L' || lp->sense[i] == 'G' || lp->sense[i] == 'E')) {
             sense_buf[0] = lp->sense[i];
         }
+        /* A merged pair is written as its upper half: L with rhs hi, plus a
+         * RANGES entry carrying hi - lo. */
+        if (ranges.merged[i]) sense_buf[0] = 'L';
         fprintf(f, MPS_REC_TYPE_NAME, sense_buf, con_names[i]);
     }
 
@@ -698,6 +833,7 @@ int ralph_core_write_mps(const RalphLPModel *model, const char *filename) {
             int i = lp->A->rowidx[p];
             double val = lp->A->values[p];
             if (fabs(val) <= 1e-15) continue;
+            if (ranges.skip[i]) continue;   /* duplicate of the merged row */
 
             char vbuf[MPS_VAL_BUF];
             mps_fmt_value(vbuf, sizeof(vbuf), val);
@@ -715,10 +851,23 @@ int ralph_core_write_mps(const RalphLPModel *model, const char *filename) {
         fprintf(f, MPS_REC_NAME_NAME_VAL, rhs_name, obj_row, vbuf);
     }
     for (int i = 0; i < lp->num_cons; i++) {
-        if (!lp->b || fabs(lp->b[i]) <= 1e-15) continue;
+        if (ranges.skip[i]) continue;
+        if (!lp->b || fabs(ranges.rhs[i]) <= 1e-15) continue;
         char vbuf[MPS_VAL_BUF];
-        mps_fmt_value(vbuf, sizeof(vbuf), lp->b[i]);
+        mps_fmt_value(vbuf, sizeof(vbuf), ranges.rhs[i]);
         fprintf(f, MPS_REC_NAME_NAME_VAL, rhs_name, con_names[i], vbuf);
+    }
+
+    int any_range = 0;
+    for (int i = 0; i < lp->num_cons; i++) if (ranges.merged[i]) { any_range = 1; break; }
+    if (any_range) {
+        fprintf(f, "RANGES\n");
+        for (int i = 0; i < lp->num_cons; i++) {
+            if (!ranges.merged[i]) continue;
+            char vbuf[MPS_VAL_BUF];
+            mps_fmt_range(vbuf, sizeof(vbuf), ranges.rhs[i], ranges.range[i]);
+            fprintf(f, MPS_REC_NAME_NAME_VAL, rng_name, con_names[i], vbuf);
+        }
     }
 
     int write_bounds = 0;
@@ -777,6 +926,7 @@ int ralph_core_write_mps(const RalphLPModel *model, const char *filename) {
     fclose(f);
     mps_free_names(var_names, lp->num_vars);
     mps_free_names(con_names, lp->num_cons);
+    mps_ranges_free(&ranges);
     return 0;
 }
 

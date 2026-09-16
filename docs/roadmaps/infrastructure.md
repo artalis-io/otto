@@ -724,9 +724,9 @@ printed. Triaged rather than left as a number:
 | warning | count | verdict |
 |---|---|---|
 | `-Wunused-function` from `vendor/miniz/miniz.h` | 247 | upstream code, not actionable (below) |
-| `-Wunused-function` in OTTO code | 3 | `simplex.c` x2, `sh_font.c` |
+| `-Wunused-function` in OTTO code | 3 | fixed: dead `tableau_invalidate_rc` and `smoothstepf` removed |
 | `-Wmacro-redefined` | 8 | `sh_inflate.c` redefines miniz's `MINIZ_NO_*` config macros to the same values |
-| `-Wsign-compare` | 6 | `lap.c`, `velo_wasm.c`, and vendored `regexec.c` |
+| `-Wsign-compare` | 6 | 3 fixed in `lap.c` and `velo_wasm.c`, both integer-overflow guards where an `int` was being compared against a `size_t` and a negative value would have wrapped rather than been rejected; 3 remain in vendored `regexec.c` |
 | `-Wshift-count-overflow` | 5 | **a real bug, fixed** |
 | everything else | ~20 | unused variables/parameters, `-Wpointer-sign` in `test_surge.c`, emscripten's own `-Wjs-compiler` |
 
@@ -738,6 +738,15 @@ the shift is by the full width of the type, which is undefined. The preceding
 useless and undefined there; it is now guarded on `SIZE_MAX > 0xFFFFFFFFu`.
 Nothing but a 32-bit build could have found this, and the wasm builds had no
 warning flags, so nothing did.
+
+**Native builds are noisier than the wasm ones.** Counting warnings from a
+`make wasm` run mixes two compilers, because the wasm targets depend on the
+native library builds: 274 of the warnings come from emcc inside a `*/wasm`
+build, and a further 63 from gcc building the prerequisites -- 23
+`-Wtype-limits`, 7 `-Wmaybe-uninitialized`, mostly in `vl_graph.c`,
+`vl_route.c` and `sg_concat.c`. Those are pre-existing and nothing to do with
+the wasm work; they are listed here so the next person counting does not
+attribute them to emcc.
 
 **Why 247 stay.** The vendored headers are now taken with `$(CC_SYSINC)`, the
 same way the native Makefiles take them -- upstream code held to upstream's

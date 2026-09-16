@@ -3914,7 +3914,13 @@ static RalphLapStatus lap_solve_standard_unified(
             if (has_priorities) {
                 /* Copy sparse values and apply priorities */
                 /* Check for integer overflow before allocation */
-                if (prob->sparse.nnz > SIZE_MAX / sizeof(double)) {
+                /* nnz is int: comparing it against a size_t converts it,
+                 * so a negative value would wrap to something enormous and
+                 * trip this guard by accident rather than by intent. Rejected
+                 * explicitly instead, which is also what silences the
+                 * sign-compare warning the wasm build surfaced. */
+                if (prob->sparse.nnz < 0 ||
+                    (size_t)prob->sparse.nnz > SIZE_MAX / sizeof(double)) {
                     status = RALPH_LAP_MEMORY_ERROR;
                     break;
                 }

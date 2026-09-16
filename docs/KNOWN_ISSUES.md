@@ -207,17 +207,41 @@
   forplan now reads back as 163 rows and **421 columns**, matching its source
   name count exactly.
 
-### MPS Writer Cannot Express Some Values in Fixed Format
+### MPS Writer Cannot Express Some Values in Fixed Format -- FIXED
 
-- A value needing more than 12 characters to round-trip exactly cannot fit
-  field 4 (columns 25-36), and the record then overflows into 37-39, which
-  strict fixed format reserves. `nesm.mps` is the one NETLIB case: a computed
-  RHS of `25.699996999999996`, which is not in the source file at any
-  precision, so it arises inside Ralph rather than being read in.
+- **Status**: Fixed, by removing the cause rather than the symptom.
 
-  The file stays valid free-format MPS and glpsol reads it with `--freemps`.
-  Precision is deliberately preferred over column compliance here -- silently
-  rounding a coefficient to fit a column is the worse failure.
+  `nesm.mps` produced a right-hand side of `25.699996999999996`, which needs 18
+  characters to read back as the same double. Field 4 of a fixed-format record
+  is 12 columns, and **no shorter decimal maps to that double** -- checked, not
+  assumed -- so the file could not be made valid by any change to how the value
+  was printed.
+
+  The value was never in nesm. `mps_reader.c` expands a ranged row into two
+  constraints, `Ax >= b - |r|` and `Ax <= b`, because the model carries no range
+  concept; nesm's `AP1P21` has `b = 58.799988` and `r = 33.099991`, and
+  `58.799988 - 33.099991` is exactly `25.699996999999996`. Writing the expansion
+  back out is correct but lossy: nesm became 751 rows instead of 663, and the
+  computed difference was unrepresentable.
+
+  The writer now folds that pair back into one row plus a `RANGES` entry. Two
+  properties make it safe:
+
+  - **Merge only when it round-trips exactly.** The pair is recognised by
+    adjacency, opposite senses and an identical coefficient vector, and merged
+    only if `hi - |hi - lo|` reproduces `lo` bit-for-bit. Floating point does
+    not guarantee that in general, and a merge that shifted a constraint by an
+    ulp would be a worse defect than a long line. Where it fails, both rows are
+    written as before.
+  - **The range is searched, not computed.** Only `hi - |r| == lo` has to hold,
+    and many decimals satisfy it. The raw difference can itself need 18
+    characters (nesm has ranges that come out as `50.800003000000004`) where
+    the shortest qualifying decimal is the source's own `50.800003`.
+
+  nesm now writes 663 rows -- matching its source exactly -- and the whole
+  NETLIB set round-trips: **84 of 84 accepted in strict fixed format, 84 of 84
+  objectives identical**. `test_write_mps_ranges` pins the behaviour and was
+  checked against the previous writer, where it fails.
 
 ### Return Value Confusion
 - `ralph_optimize()` returns 0 for success, -1 for error (not the solve status)

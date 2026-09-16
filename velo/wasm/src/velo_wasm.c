@@ -129,7 +129,10 @@ WasmRoute* wasm_route(VLGraph* graph,
 
         // Copy coordinates (with overflow check)
         if (route.num_coords > 0 && route.coords) {
-            if (route.num_coords <= SIZE_MAX / (2 * sizeof(double))) {
+            /* num_coords is int and already known positive above; the
+             * cast makes the comparison signed-to-signed explicit rather than
+             * relying on the implicit conversion. */
+            if ((size_t)route.num_coords <= SIZE_MAX / (2 * sizeof(double))) {
                 result->coords = malloc((size_t)route.num_coords * 2 * sizeof(double));
                 if (result->coords) {
                     for (int i = 0; i < route.num_coords; i++) {

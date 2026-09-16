@@ -373,16 +373,6 @@ static inline float lerpf(float a, float b, float t)
 }
 
 /*
- * Smoothstep for anti-aliased edges.
- * Returns smooth interpolation between 0 and 1.
- */
-static inline float smoothstepf(float edge0, float edge1, float x)
-{
-    float t = clampf((x - edge0) / (edge1 - edge0), 0.0f, 1.0f);
-    return t * t * (3.0f - 2.0f * t);
-}
-
-/*
  * Median of three floats (for MSDF).
  * Formula: max(min(a,b), min(max(a,b), c))
  */
