@@ -126,13 +126,67 @@
 
 ## API Issues
 
-### MPS Writer Emits Invalid Fixed-Format MPS
+### MPS Writer Emits Invalid Fixed-Format MPS -- FIXED
 
-- `ralph_lp_write_mps()` starts `ROWS` entries in column 1 and writes an
-  `OBJSENSE` section. GLPK 5.0 rejects both, in fixed and free format alike
-  (`invalid indicator record`), so written models cannot be handed to it
-  without post-processing. Found while cross-checking MIP objectives against
-  GLPK; not yet fixed.
+- **Status**: Fixed. `ralph_lp_write_mps()` wrote every data record starting in
+  column 1, where MPS reserves space for section indicators, and emitted an
+  `OBJSENSE` section. GLPK 5.0 rejected the file on the second line
+  (`invalid indicator record`) before reading any data, so written models could
+  not be handed to it without post-processing.
+
+  Three things were wrong, and only the first two were in the original report:
+
+  1. Data records began in column 1. They now sit at the fixed-format field
+     columns (field 1 at 2-3, field 2 at 5-12, field 3 at 15-22, field 4 at
+     25-36), which is simultaneously valid free-format.
+  2. `OBJSENSE` is a CPLEX extension GLPK rejects in every spelling tried --
+     as a section, with the value on the following line, and inline. It is now
+     written only for a MAX model, where the alternative is silently turning
+     the model into its own opposite; a MIN model, the default, comes out as
+     plain MPS.
+  3. Not in the report and found while verifying: `%.17g` runs to 24
+     characters, overflowing field 4 into columns 37-39, which glpsol rejects
+     with `positions 37-39 must be blank`. Values are now written at the
+     shortest precision that reads back bit-identical, which is a few
+     characters for ordinary coefficients and never rounds one away.
+
+  Verified by reading each NETLIB problem with Ralph, writing it back out, and
+  having glpsol solve both: **82 of 84 are accepted in strict fixed format**
+  and agree with the original objective to every digit printed. The two
+  exceptions are separate defects, below.
+
+  `test_write_mps_format` and `test_write_mps_max_sense` in `ralph/tests/test_lp.c`
+  assert the format properties directly, so the guarantee does not depend on
+  having glpsol installed. Both were confirmed to fail against the old writer.
+
+### MPS Writer Collides Names Containing Spaces
+
+- Fixed-format MPS delimits fields by column, so a name may contain spaces, and
+  real models use that: `forplan.mps` has columns named `M012T1 #`, `M012T1 )`,
+  `M012T1 +` and four more. The writer replaces every character outside
+  `[A-Za-z0-9_.$]` with `_`, so all seven become `M012T1__`.
+
+  Distinct variables are merged: forplan has 421 distinct column names and the
+  written file has 408, across 3 colliding groups. glpsol refuses the result
+  (`duplicate coefficient in row 'OBJ'`), which at least makes it loud, but
+  Ralph's own reader would accept the merged model.
+
+  Fixing it means guaranteeing uniqueness rather than sanitising each name
+  independently -- disambiguating a collision against the set of names already
+  written. Not attempted here; it is a behaviour change to name generation
+  rather than a format fix.
+
+### MPS Writer Cannot Express Some Values in Fixed Format
+
+- A value needing more than 12 characters to round-trip exactly cannot fit
+  field 4 (columns 25-36), and the record then overflows into 37-39, which
+  strict fixed format reserves. `nesm.mps` is the one NETLIB case: a computed
+  RHS of `25.699996999999996`, which is not in the source file at any
+  precision, so it arises inside Ralph rather than being read in.
+
+  The file stays valid free-format MPS and glpsol reads it with `--freemps`.
+  Precision is deliberately preferred over column compliance here -- silently
+  rounding a coefficient to fit a column is the worse failure.
 
 ### Return Value Confusion
 - `ralph_optimize()` returns 0 for success, -1 for error (not the solve status)

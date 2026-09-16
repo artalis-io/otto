@@ -447,6 +447,51 @@ error:
     return -1;
 }
 
+/* Fixed-format MPS field columns, 1-based: field 1 at 2-3, field 2 at 5-12,
+ * field 3 at 15-22, field 4 at 25-36, field 5 at 40-47. Column 1 is reserved
+ * for section indicators, which is the whole point -- a data record starting
+ * in column 1 is read as an indicator record and rejected.
+ *
+ * A name longer than its field widens the record instead of being truncated.
+ * That is no longer strict fixed format, but it stays valid free-format MPS
+ * (which only requires that data records not start in column 1), and a name
+ * that does not fit was never expressible in fixed format anyway. Truncating
+ * would silently merge two different columns into one.
+ *
+ * Values are written at the shortest precision that still reads back as the
+ * same double (mps_fmt_value). A fixed %.17g is up to 24 characters, which
+ * runs past field 4's last column and into 37-39; glpsol rejects that outright
+ * with "in fixed MPS format positions 37-39 must be blank", so the obvious
+ * "just use full precision" costs strict-format validity on real models. The
+ * shortest exact form is 1-3 characters for the coefficients actual models are
+ * built from, and never loses a bit. A value that genuinely needs more than 12
+ * characters still overflows the field and makes that record free-format-only;
+ * precision is the thing worth keeping there.
+ */
+#define MPS_REC_TYPE_NAME          " %-2s %s\n"
+#define MPS_REC_TYPE_NAME_NAME     " %-2s %-8s  %s\n"
+#define MPS_REC_TYPE_NAME_NAME_VAL " %-2s %-8s  %-8s  %s\n"
+#define MPS_REC_NAME_NAME_VAL      "    %-8s  %-8s  %s\n"
+
+/* Shortest decimal that reads back bit-identical, so field 4 stays inside its
+ * 12 columns for ordinary coefficients without ever rounding one away. */
+#define MPS_VAL_BUF 32
+static void mps_fmt_value(char *buf, size_t n, double v) {
+    for (int prec = 1; prec < 17; prec++) {
+        snprintf(buf, n, "%.*g", prec, v);
+        if (strtod(buf, NULL) == v) return;
+    }
+    snprintf(buf, n, "%.17g", v);
+}
+
+/* Field 2 is the marker's own name, field 3 the literal 'MARKER', field 5 the
+ * 'INTORG'/'INTEND' verb; field 4 is empty. */
+static void mps_write_marker(FILE *f, int seq, const char *verb) {
+    char marker[LP_MAX_NAME];
+    snprintf(marker, sizeof(marker), "MARK%04d", seq);
+    fprintf(f, "    %-8s  %-8s  %-12s   %-8s\n", marker, "'MARKER'", "", verb);
+}
+
 int ralph_core_write_mps(const RalphLPModel *model, const char *filename) {
     if (!model || !filename) return -1;
 
@@ -470,19 +515,35 @@ int ralph_core_write_mps(const RalphLPModel *model, const char *filename) {
     mps_make_name(lp->name, "PROB", 0, prob_name, sizeof(prob_name));
 
     fprintf(f, "NAME          %s\n", prob_name);
-    fprintf(f, "OBJSENSE\n");
-    fprintf(f, " %s\n", lp->obj_sense == -1 ? "MAX" : "MIN");
+
+    /* OBJSENSE is a CPLEX extension, not part of MPS, and GLPK 5.0 rejects
+     * it outright -- as a bare section, with the value on the next line, and
+     * inline, all three give "invalid indicator record" before anything else
+     * is read. MPS has no way to say "maximize": a reader that sees no
+     * OBJSENSE minimizes, which is what mps_reader.c does as well.
+     *
+     * So it is written only when it carries information. A MIN model is the
+     * default and comes out as plain MPS that GLPK reads. A MAX model still
+     * gets the section, because dropping it would turn the model into its
+     * own opposite on the way back in, and losing a model objective sense
+     * silently is worse than emitting a section GLPK declines to read.
+     * Negating the objective instead would flip the sign of every objective
+     * value computed from it, which is no better. */
+    if (lp->obj_sense == -1) {
+        fprintf(f, "OBJSENSE\n");
+        fprintf(f, "    MAX\n");
+    }
 
     fprintf(f, "ROWS\n");
-    fprintf(f, "N %s\n", obj_row);
+    fprintf(f, MPS_REC_TYPE_NAME, "N", obj_row);
     for (int i = 0; i < lp->num_cons; i++) {
         char row_name[LP_MAX_NAME];
-        char sense = 'E';
+        char sense_buf[2] = {'E', '\0'};
         if (lp->sense && (lp->sense[i] == 'L' || lp->sense[i] == 'G' || lp->sense[i] == 'E')) {
-            sense = lp->sense[i];
+            sense_buf[0] = lp->sense[i];
         }
         mps_get_con_name(lp, i, row_name, sizeof(row_name));
-        fprintf(f, "%c %s\n", sense, row_name);
+        fprintf(f, MPS_REC_TYPE_NAME, sense_buf, row_name);
     }
 
     fprintf(f, "COLUMNS\n");
@@ -494,17 +555,19 @@ int ralph_core_write_mps(const RalphLPModel *model, const char *filename) {
         int is_integer = (var_type == 'I' || var_type == 'B');
 
         if (is_integer && !in_integer) {
-            fprintf(f, "MARK%04d 'MARKER' 'INTORG'\n", marker_count++);
+            mps_write_marker(f, marker_count++, "'INTORG'");
             in_integer = 1;
         } else if (!is_integer && in_integer) {
-            fprintf(f, "MARK%04d 'MARKER' 'INTEND'\n", marker_count++);
+            mps_write_marker(f, marker_count++, "'INTEND'");
             in_integer = 0;
         }
 
         mps_get_var_name(lp, j, col_name, sizeof(col_name));
 
         if (lp->c && fabs(lp->c[j]) > 1e-15) {
-            fprintf(f, "%s %s %.17g\n", col_name, obj_row, lp->c[j]);
+            char vbuf[MPS_VAL_BUF];
+            mps_fmt_value(vbuf, sizeof(vbuf), lp->c[j]);
+            fprintf(f, MPS_REC_NAME_NAME_VAL, col_name, obj_row, vbuf);
         }
 
         for (int p = lp->A->colptr[j]; p < lp->A->colptr[j + 1]; p++) {
@@ -514,22 +577,28 @@ int ralph_core_write_mps(const RalphLPModel *model, const char *filename) {
 
             char row_name[LP_MAX_NAME];
             mps_get_con_name(lp, i, row_name, sizeof(row_name));
-            fprintf(f, "%s %s %.17g\n", col_name, row_name, val);
+            char vbuf[MPS_VAL_BUF];
+            mps_fmt_value(vbuf, sizeof(vbuf), val);
+            fprintf(f, MPS_REC_NAME_NAME_VAL, col_name, row_name, vbuf);
         }
     }
     if (in_integer) {
-        fprintf(f, "MARK%04d 'MARKER' 'INTEND'\n", marker_count++);
+        mps_write_marker(f, marker_count++, "'INTEND'");
     }
 
     fprintf(f, "RHS\n");
     if (fabs(lp->obj_offset) > 1e-15) {
-        fprintf(f, "%s %s %.17g\n", rhs_name, obj_row, lp->obj_offset);
+        char vbuf[MPS_VAL_BUF];
+        mps_fmt_value(vbuf, sizeof(vbuf), lp->obj_offset);
+        fprintf(f, MPS_REC_NAME_NAME_VAL, rhs_name, obj_row, vbuf);
     }
     for (int i = 0; i < lp->num_cons; i++) {
         if (!lp->b || fabs(lp->b[i]) <= 1e-15) continue;
         char row_name[LP_MAX_NAME];
         mps_get_con_name(lp, i, row_name, sizeof(row_name));
-        fprintf(f, "%s %s %.17g\n", rhs_name, row_name, lp->b[i]);
+        char vbuf[MPS_VAL_BUF];
+        mps_fmt_value(vbuf, sizeof(vbuf), lp->b[i]);
+        fprintf(f, MPS_REC_NAME_NAME_VAL, rhs_name, row_name, vbuf);
     }
 
     int write_bounds = 0;
@@ -554,28 +623,34 @@ int ralph_core_write_mps(const RalphLPModel *model, const char *filename) {
             mps_get_var_name(lp, j, col_name, sizeof(col_name));
 
             if (var_type == 'B') {
-                fprintf(f, "BV %s %s\n", bnd_name, col_name);
+                fprintf(f, MPS_REC_TYPE_NAME_NAME, "BV", bnd_name, col_name);
                 continue;
             }
 
             if (mps_is_neg_inf(lb) && mps_is_pos_inf(ub)) {
-                fprintf(f, "FR %s %s\n", bnd_name, col_name);
+                fprintf(f, MPS_REC_TYPE_NAME_NAME, "FR", bnd_name, col_name);
                 continue;
             }
 
             if (!mps_is_neg_inf(lb) && !mps_is_pos_inf(ub) && fabs(lb - ub) <= 1e-15) {
-                fprintf(f, "FX %s %s %.17g\n", bnd_name, col_name, lb);
+                char vbuf_fx[MPS_VAL_BUF];
+                mps_fmt_value(vbuf_fx, sizeof(vbuf_fx), lb);
+                fprintf(f, MPS_REC_TYPE_NAME_NAME_VAL, "FX", bnd_name, col_name, vbuf_fx);
                 continue;
             }
 
             if (mps_is_neg_inf(lb)) {
-                fprintf(f, "MI %s %s\n", bnd_name, col_name);
+                fprintf(f, MPS_REC_TYPE_NAME_NAME, "MI", bnd_name, col_name);
             } else if (fabs(lb) > 1e-15) {
-                fprintf(f, "LO %s %s %.17g\n", bnd_name, col_name, lb);
+                char vbuf_lo[MPS_VAL_BUF];
+                mps_fmt_value(vbuf_lo, sizeof(vbuf_lo), lb);
+                fprintf(f, MPS_REC_TYPE_NAME_NAME_VAL, "LO", bnd_name, col_name, vbuf_lo);
             }
 
             if (!mps_is_pos_inf(ub)) {
-                fprintf(f, "UP %s %s %.17g\n", bnd_name, col_name, ub);
+                char vbuf_up[MPS_VAL_BUF];
+                mps_fmt_value(vbuf_up, sizeof(vbuf_up), ub);
+                fprintf(f, MPS_REC_TYPE_NAME_NAME_VAL, "UP", bnd_name, col_name, vbuf_up);
             }
         }
     }
