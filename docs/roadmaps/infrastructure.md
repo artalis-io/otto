@@ -687,6 +687,42 @@ the search order or the library order that matters.
 GCC command lines are unchanged for all five newly wired modules, compared as
 whitespace-normalised sets before and after.
 
+### Suites that run in no CI path
+
+Prompted by finding that `test_lp` was built and run by nothing, which is how
+the MPS writer shipped invalid output for months behind a `test_write_mps_roundtrip`
+that covered exactly the broken function and passed. A test nothing runs is not
+a test, so the same question was asked of every module.
+
+Method: ask `make -n` which binaries each target would execute, for the module
+`test` target and for every target any workflow actually names, then compare
+against `tests/test_*.c` on disk. Guessing from Makefile text does not survive
+contact -- `test_main.c` builds as `test_ralph`, and `test_fuelwise` is run by
+`test-unit` rather than `test`, both of which read as orphans until checked.
+
+Findings, after discarding those two false positives:
+
+| suite | reachable only via | now |
+|---|---|---|
+| ralph `test-regression-suites` (SPP, LU Markowitz/supernode, GLPK-strict) | a target no workflow named | gated |
+| ralph `test-benders` (4 suites) | same | gated |
+| ralph `test-optim` | same | gated |
+| ralph `test-edge` | same | gated |
+| shared `test-pdf2struc` | same | gated |
+| ralph `test-phase1-oracle-glpk` | deliberate -- shells out to glpsol | unchanged |
+| ralph `test-beaconfd` | deliberate -- Makefile says "not in the main test gate until ratio test pivot threshold is fixed" | unchanged, but it passes today |
+| velo `test-osrm` | deliberate -- needs an external OSRM | unchanged |
+
+All five newly gated targets passed on the first run, so this buys regression
+cover rather than fixing anything.
+
+One genuine orphan: `locus/tests/test_pbf_parse.c` is referenced nowhere in
+`locus/Makefile` and has not been compiled since the commit that added it
+(`82a913fd`, Locus Phase 1). It still compiles clean. It is a manual harness --
+it takes a PBF path and prints -- rather than an assertion-bearing suite, so it
+was left alone rather than gated; wiring it would drag a fixture into locus's
+unit tests for no assertions gained.
+
 ### What is left
 
 - (done) The API servers build under MSVC. Keel gained a native MSVC path in
@@ -702,22 +738,39 @@ whitespace-normalised sets before and after.
   allowlist, and the MSVC nightly reports it covered with no timeout. See
   "bore3d does not converge under plain IEEE arithmetic" in
   docs/KNOWN_ISSUES.md for the diagnosis.
-- wasm/ Makefiles are unwired. api/ is now on mk/toolchain.mk; clayshards/ is
-  wired. Neither wasm/ nor the rest is on a library
-  `test` path.
-- (done) The six API e2e suites now run on every platform that builds the
-  servers: `Windows Core` (MinGW), `Windows MSVC` (cl), `macOS Core` (clang)
-  and the Linux `Test * API` jobs. Before this they ran on Linux only, and the
-  Windows and macOS jobs built the servers without ever starting one. The
-  stated reason for leaving Windows Core out -- paying for the Monaco fixture
-  twice per run -- measures 6.2s end to end on the MSVC job, which is less than
-  any mechanism for sharing it would cost to maintain.
-- (done) `scripts/msys-path-guard.sh` stops a harness running in a shell where
-  `MSYS2_ARG_CONV_EXCL='*'` has switched off MSYS2 path conversion. Sourced by
-  `netlib_regression_gate.sh` and `surge/scripts/tune_matrix.sh`, the two that
-  pass absolute POSIX paths as arguments to a native binary. The gate also
-  aborts on the first problem file it cannot open rather than repeating the
-  same deterministic failure 84 times.
+- (done, partly) wasm/ Makefiles are wired. All seven now include
+  `mk/toolchain.mk` and take `CC_WARN` from it. They had
+  `CFLAGS = -O3 -s WASM=1 ...` and no warning flags at all, so the build that
+  ships in the browser compiled OTTO's C with every diagnostic off; turning
+  them on surfaces roughly 200 warnings that nothing had ever printed (63 in
+  carta and velo each, 60 in locus, 19 in nexus). None are errors, and none are
+  triaged yet.
+
+  `emcc` needs no branch of its own -- it is clang underneath and is detected
+  as GNU -- but only the flags that mean something for a WebAssembly build are
+  consumed: the GNU branch's `-march=native`, PIE and stack-protector settings
+  describe a native link that does not happen here. Deeper adoption (`CC_STD`,
+  `CC_OPT`) is left alone deliberately; the native builds do not agree on
+  `-std=` either, so matching them would be a change of meaning, not of form.
+
+  **Three wasm builds were broken before this and two still are.** `make wasm`
+  builds four modules -- fuelwise, velo, carta, locus -- behind a CI step
+  called "Build **all** WASM modules". The three it omits are ralph, nexus and
+  surge, and all three failed to link, which is what omitting them concealed.
+  The same shape as the `test_lp` finding: a target whose name claims more than
+  it does, and the uncovered part rotted.
+
+  - surge is fixed here: `sh_heap.c` was missing from its source list.
+  - ralph and nexus are not. Each missing symbol resolved to another absent
+    shared source (`sh_api.c`, `sh_json.c`, the PAL, then `sh_parse_int`,
+    `sh_log`, `sh_perf_now_ms`; nexus additionally needs the vendored TRE
+    sources compiled in). Assembling a complete list is its own task, and a
+    half-populated one is worse than a Makefile that fails honestly, so the
+    partial edits were reverted rather than left in.
+
+  Adding ralph and nexus to `make wasm` should wait until they link; adding
+  them now would only turn the CI step red. Renaming the step, or fixing the
+  two builds, is the next move.
 
 ## Nexus on Windows, and a vendored regex engine
 
