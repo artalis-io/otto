@@ -540,6 +540,7 @@ static int parse_objective(LPStringParser *p) {
         LPToken tok2;
         if (next_token(p, &tok2) > 0 && tok2.type == TOK_COLON) {
             strncpy(p->obj_name, tok.text, LP_MAX_NAME - 1);
+            p->obj_name[LP_MAX_NAME - 1] = '\0';
         } else {
             if (tok2.type != TOK_EOF) pushback_token(p, &tok2);
             pushback_token(p, &tok);
@@ -609,6 +610,7 @@ static int parse_constraint(LPStringParser *p) {
         LPToken tok2;
         if (next_token(p, &tok2) > 0 && tok2.type == TOK_COLON) {
             strncpy(con->name, tok.text, LP_MAX_NAME - 1);
+            con->name[LP_MAX_NAME - 1] = '\0';
         } else {
             if (tok2.type != TOK_EOF) pushback_token(p, &tok2);
             pushback_token(p, &tok);

@@ -839,7 +839,10 @@ static SGStatus sg_solve_route_model(SGContext *ctx) {
     SGRouteSolution initial;
     SGRouteSolution *p1_best = NULL;
     SGRouteSolution *p2_best = NULL;
-    ARStatus ar_status;
+    /* Assigned only inside the phase-1 and phase-2 blocks, and read at the end
+     * to decide whether to report SG_STATUS_LIMIT. A run where neither phase
+     * executes would otherwise decide that on an uninitialised value. */
+    ARStatus ar_status = AR_STATUS_OK;
     ARALNSStats ar_stats;
     ARStatus init_status;
     const SGRouteSolution *final_sol;

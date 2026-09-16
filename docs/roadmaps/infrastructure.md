@@ -716,6 +716,53 @@ runs nothing -- the same failure as the aggregates, in a different dress. All
 15 are declared now, and the two overlapping `.PHONY` lines for the wasm
 targets were folded into one.
 
+### Native build warnings, triaged
+
+The wasm triage noted in passing that a `make wasm` run mixes two compilers and
+that 63 of its warnings came from gcc building the prerequisites. Counted
+properly, a clean `make all` emits **136**. Four of those were real.
+
+**`sg_solve.c`: an uninitialised value decided a return status.** `ar_status`
+was declared without an initialiser and assigned only inside the phase-1 and
+phase-2 blocks, then read at the end to decide whether to report
+`SG_STATUS_LIMIT`. A run where neither phase executed returned a status chosen
+by whatever was on the stack. Now initialised to `AR_STATUS_OK`. The second
+`ar_status` in the same file was left alone: it is assigned before every read,
+so initialising it would have added a comment that was not true of it.
+
+**`sg_concat.c`: an early return skipped the memset.** `sg_seg_init_single()`
+checked `!ctx || !stop || !seg` and returned *before* zeroing the segment.
+Callers keep the segment on the stack and read it immediately after, so that
+path handed them an uninitialised struct. The `seg` check now comes first, the
+memset follows it, and the remaining arguments are checked after -- so a
+non-NULL `seg` is always written.
+
+**`ralph_parse_lp.c`: `strncpy` without a terminator.** Two sites copied
+`LP_MAX_NAME - 1` bytes into a name buffer and did not terminate. For a name of
+exactly that length the result is unterminated unless the buffer happened to be
+zeroed. Both now terminate explicitly, matching what `ralph_api.c` already did.
+
+**`cuts.c`: unvalidated counts reaching `calloc`.** `conflict_graph_create()`
+took `num_sets` and `num_elements` as `int` and passed them straight to
+`calloc`. gcc reported the argument range as `[2^64 - 2^31, 2^64 - 1]`, which is
+what a negative `int` looks like widened to `size_t` -- it had proven the values
+could be negative. The allocation would have failed rather than overflowed, but
+failing for an unreadable reason is worse than rejecting the input, so
+non-positive counts now return NULL.
+
+Result: `-Wmaybe-uninitialized` 7 to 0, `-Walloc-size-larger-than` 4 to 0,
+`-Wstringop-truncation` 4 to 2, total 136 to 121.
+
+**What is left, and why.** 76 of the remainder are `miniz.h`'s static functions
+and 3 are TRE fallthroughs -- vendor code, upstream's bar. Of the 36 in OTTO
+code, 25 are `-Wtype-limits` on **deliberate** 32-bit overflow guards: checks
+like `graph->num_nodes > SIZE_MAX / sizeof(VLNode)` that are tautologically
+false on a 64-bit target and necessary on wasm32, with comments already saying
+so. Silencing them would mean either deleting a guard that matters on 32-bit or
+wrapping each in a preprocessor conditional; they are left as documented
+intent. The rest are unused variables and parameters, plus two `-Wpointer-sign`
+in `test_surge.c`.
+
 ### WASM warnings, triaged
 
 Giving the wasm builds warning flags surfaced 307 warnings that had never been
