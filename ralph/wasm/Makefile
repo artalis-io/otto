@@ -29,7 +29,15 @@ INCLUDES = -I../include -I../../shared/include
 RALPH_SRC = $(wildcard ../src/*.c) $(wildcard ../src/optim/*.c)
 
 # Source files - Shared library
-SHARED_SRC = ../../shared/src/sh_arena.c ../../shared/src/sh_query.c
+# Resolved by linking, not by guesswork: the list was two files and the
+# build had never succeeded. sh_api/sh_json back the API-shaped entry
+# points, sh_log and sh_perf are pulled in by lp_log.c and the telemetry
+# TUs, sh_pal_posix supplies the mutex and once wrappers lp_external_adapter
+# calls, and sh_args supplies sh_parse_int for sh_query.
+SHARED_SRC = ../../shared/src/sh_arena.c ../../shared/src/sh_query.c \
+             ../../shared/src/sh_api.c ../../shared/src/sh_json.c \
+             ../../shared/src/sh_log.c ../../shared/src/sh_perf.c \
+             ../../shared/src/sh_pal_posix.c ../../shared/src/sh_args.c
 
 # =============================================================================
 # API Demo build (self-contained)

@@ -22,6 +22,7 @@
 .PHONY: all lib clean test help
 .PHONY: ralph fuelwise velo carta locus shared arbor surge surge-api nexus
 .PHONY: fuelwise-api carta-api velo-api locus-api ralph-api api
+.PHONY: wasm wasm-fuelwise wasm-velo wasm-carta wasm-locus wasm-ralph wasm-nexus wasm-surge
 .PHONY: wasm wasm-fuelwise wasm-velo wasm-carta wasm-locus wasm-types wasm-test wasm-api-demos
 .PHONY: fuelwise-ui fuelwise-ui-dev carta-ui carta-ui-dev clay-map clay-map-serve site-build site-serve
 .PHONY: tui-demo-tty tui-demo-wasm tui-demo-serve tui-wasm test-tui
@@ -145,11 +146,27 @@ run-ralph-api: ralph-api
 # =============================================================================
 
 # Build all WASM modules
-wasm: wasm-fuelwise wasm-velo wasm-carta wasm-locus
+#
+# This said "all" while building four of the seven, and the three it left out
+# -- ralph, nexus, surge -- had all stopped linking without anything noticing.
+# Each was short a few source files rather than broken in any deep way: ralph
+# wanted the PAL and the log/perf/args helpers, nexus the vendored TRE engine,
+# surge sh_heap.c. They are in the list now, so the name is true and the next
+# one to rot says so.
+wasm: wasm-fuelwise wasm-velo wasm-carta wasm-locus wasm-ralph wasm-nexus wasm-surge
 
 # Individual WASM builds
 wasm-fuelwise: fuelwise
 	$(MAKE) -C fuelwise/wasm
+
+wasm-ralph: ralph
+	$(MAKE) -C ralph/wasm
+
+wasm-nexus: nexus
+	$(MAKE) -C nexus/wasm
+
+wasm-surge: surge
+	$(MAKE) -C surge/wasm
 
 wasm-velo: velo
 	$(MAKE) -C velo/wasm
@@ -160,7 +177,9 @@ wasm-carta: carta
 wasm-locus: locus
 	$(MAKE) -C locus/wasm
 
-# Generate TypeScript declarations for all WASM modules
+# Generate TypeScript declarations for the WASM modules that emit them.
+# ralph, nexus and surge define no `types` target, so they are deliberately
+# absent rather than forgotten.
 wasm-types:
 	$(MAKE) -C fuelwise/wasm types
 	$(MAKE) -C velo/wasm types
@@ -168,11 +187,18 @@ wasm-types:
 	$(MAKE) -C locus/wasm types
 
 # Test WASM builds
+#
+# The module list is the set that actually defines a `test` target, which is
+# not the same set as `wasm` builds. fuelwise/wasm has none, so this target
+# failed at its first line -- "No rule to make target 'test'" -- and had done
+# for as long as fuelwise was listed. ralph and nexus do have one and were
+# simply never called.
 wasm-test: wasm
-	$(MAKE) -C fuelwise/wasm test
 	$(MAKE) -C velo/wasm test
 	$(MAKE) -C carta/wasm test
 	$(MAKE) -C locus/wasm test
+	$(MAKE) -C ralph/wasm test
+	$(MAKE) -C nexus/wasm test
 
 # =============================================================================
 # UI (requires Node.js)

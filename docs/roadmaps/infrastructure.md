@@ -738,7 +738,7 @@ unit tests for no assertions gained.
   allowlist, and the MSVC nightly reports it covered with no timeout. See
   "bore3d does not converge under plain IEEE arithmetic" in
   docs/KNOWN_ISSUES.md for the diagnosis.
-- (done, partly) wasm/ Makefiles are wired. All seven now include
+- (done) wasm/ Makefiles are wired. All seven now include
   `mk/toolchain.mk` and take `CC_WARN` from it. They had
   `CFLAGS = -O3 -s WASM=1 ...` and no warning flags at all, so the build that
   ships in the browser compiled OTTO's C with every diagnostic off; turning
@@ -753,24 +753,43 @@ unit tests for no assertions gained.
   `CC_OPT`) is left alone deliberately; the native builds do not agree on
   `-std=` either, so matching them would be a change of meaning, not of form.
 
-  **Three wasm builds were broken before this and two still are.** `make wasm`
-  builds four modules -- fuelwise, velo, carta, locus -- behind a CI step
-  called "Build **all** WASM modules". The three it omits are ralph, nexus and
-  surge, and all three failed to link, which is what omitting them concealed.
-  The same shape as the `test_lp` finding: a target whose name claims more than
-  it does, and the uncovered part rotted.
+  **Three wasm builds were broken, and all three are fixed.** `make wasm` built
+  four modules -- fuelwise, velo, carta, locus -- behind a CI step called
+  "Build **all** WASM modules". The three it omitted were ralph, nexus and
+  surge, and every one of them failed to link, which is exactly what omitting
+  them concealed. The same shape as the `test_lp` finding: a target whose name
+  claims more than it does, and the uncovered part rots.
 
-  - surge is fixed here: `sh_heap.c` was missing from its source list.
-  - ralph and nexus are not. Each missing symbol resolved to another absent
-    shared source (`sh_api.c`, `sh_json.c`, the PAL, then `sh_parse_int`,
-    `sh_log`, `sh_perf_now_ms`; nexus additionally needs the vendored TRE
-    sources compiled in). Assembling a complete list is its own task, and a
-    half-populated one is worse than a Makefile that fails honestly, so the
-    partial edits were reverted rather than left in.
+  None was broken deeply; each was short a few sources:
 
-  Adding ralph and nexus to `make wasm` should wait until they link; adding
-  them now would only turn the CI step red. Renaming the step, or fixing the
-  two builds, is the next move.
+  - **surge**: `sh_heap.c`.
+  - **ralph**: `sh_api.c` and `sh_json.c` behind the API entry points,
+    `sh_log.c` and `sh_perf.c` pulled in by `lp_log.c` and the telemetry TUs,
+    `sh_pal_posix.c` for the mutex/once wrappers `lp_external_adapter.c` calls,
+    and `sh_args.c` for `sh_parse_int`.
+  - **nexus**: `sh_args.c`, plus the four vendored TRE sources and their
+    include path. TRE defines plain `regcomp()` and renames it through
+    `tre_posix_compat.h`, so the symbol the linker wants -- `tre_regcomp` --
+    appears nowhere in the sources, which is what makes it confusing to chase
+    by grep.
+
+  The lists were resolved by iterating the linker rather than by reading code:
+  build, collect `undefined symbol`, find the `.c` that defines it, repeat.
+  Ralph settled in three rounds. Command-line variables override a Makefile's
+  own assignment, so nothing had to be edited until the list was final.
+
+  All seven now build, and both rebuilt modules were loaded in node to confirm
+  the artifacts work rather than merely link: `ralph_wasm_api_version()`
+  returns `1.0.0`, and nexus's exports are callable.
+
+  Two sibling targets were wrong in the same way and are corrected here:
+
+  - `wasm-test` listed fuelwise, which defines no `test` target, so the target
+    died on its first line with "No rule to make target 'test'" and had done
+    for as long as fuelwise was listed. It now runs the five modules that do
+    define one -- velo, carta, locus, ralph and nexus -- and passes.
+  - `wasm-types` keeps its four, since ralph, nexus and surge define no `types`
+    target; the comment now says so, so their absence reads as deliberate.
 
 ## Nexus on Windows, and a vendored regex engine
 

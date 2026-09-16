@@ -26,7 +26,8 @@ include ../../mk/toolchain.mk
 CFLAGS += $(CC_WARN)
 
 # Include paths
-INCLUDES = -I../../nexus/include -I../../shared/include -I../../vendor/miniz
+INCLUDES = -I../../nexus/include -I../../shared/include -I../../vendor/miniz \
+           -I../../vendor/tre
 
 # WASM wrapper
 WASM_SRC = src/nx_wasm.c
@@ -59,7 +60,8 @@ SHARED_SRC = ../../shared/src/sh_arena.c \
              ../../shared/src/sh_hash_sha256.c \
              ../../shared/src/sh_hashmap.c \
              ../../shared/src/sh_pdf2struc.c \
-             ../../shared/src/sh_pdf2struc_text.c
+             ../../shared/src/sh_pdf2struc_text.c \
+             ../../shared/src/sh_args.c
 
 # Vendor (miniz for XLSX ZIP reading)
 MINIZ_SRC = ../../vendor/miniz/miniz.c \
@@ -68,7 +70,14 @@ MINIZ_SRC = ../../vendor/miniz/miniz.c \
             ../../vendor/miniz/miniz_tinfl.c
 
 # All source files
-ALL_SRC = $(WASM_SRC) $(NEXUS_SRC) $(SHARED_SRC) $(MINIZ_SRC)
+# nx_validate.c and nx_xform.c call the regex engine directly. TRE defines
+# plain regcomp() and renames it through tre_posix_compat.h, so the symbol
+# the linker wants is tre_regcomp -- which is why grepping the sources for
+# that name finds nothing. Same four files the native build compiles.
+TRE_SRC = ../../vendor/tre/regcomp.c ../../vendor/tre/regexec.c \
+          ../../vendor/tre/tre-mem.c ../../vendor/tre/regerror.c
+
+ALL_SRC = $(WASM_SRC) $(NEXUS_SRC) $(SHARED_SRC) $(MINIZ_SRC) $(TRE_SRC)
 
 # Exported functions
 EXPORTS = _nx_wasm_version,_nx_wasm_last_error
