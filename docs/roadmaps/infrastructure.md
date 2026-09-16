@@ -509,8 +509,12 @@ the same assertions.
 - **Velo needs a real decision, not a shim:** `vl_graph.c` and `vl_pbf.c` use
   `mmap` for continental-scale graph loading. `CreateFileMapping`/`MapViewOfFile`
   is a PAL design change, not a header swap.
-- `ralph-benchmark` (the NETLIB harness) uses `dirent.h` to enumerate problems,
-  so `test-netlib` does not yet run under MSVC. It is not part of `make test`.
+- (done, later) `ralph-benchmark` (the NETLIB harness) used `dirent.h` to
+  enumerate problems, so `test-netlib` did not run under MSVC. The PAL grew
+  `sh_pal_dir_open`/`_next`/`_close` (POSIX `opendir`, `FindFirstFile` on
+  Windows) and the harness moved onto it. `test-netlib` now runs in the
+  `Windows MSVC` job, and the full 84-problem gate runs nightly under cl in
+  `gate-windows-msvc`.
 - (done, later) The API servers. This was right at the time: Keel was
   MinGW-targeted and is a submodule, so it was upstream work. Keel v3.1.0
   added a native MSVC path and the servers were wired up against it.
@@ -539,7 +543,7 @@ re-exports any variable that also exists in the environment, so each of them
 will fail to link with an error naming `bcrypt.lib` until renamed. Velo is
 renamed here; the other four are waiting.
 
-Two smaller notes for whoever takes the next module:
+Three smaller notes for whoever takes the next module:
 
 - Link lines are not spelled uniformly. Velo used `-L$(SHARED_DIR) -lshared`
   where ralph used a literal `-L../shared -lshared`, so a search-and-replace
@@ -548,6 +552,16 @@ Two smaller notes for whoever takes the next module:
 - Mixing toolchains in one tree does not work: an MSVC `libshared.a` linked by
   gcc, or the reverse, produces undefined references to things that are plainly
   in the archive. `make clean` between compilers, always.
+- `scripts/msvc-env.sh` exports `MSYS2_ARG_CONV_EXCL='*'`, which is what stops
+  MSYS mangling `/Fo:` and `/std:c11` on the way to cl.exe. It is global, not
+  scoped to the compiler, so it also stops POSIX-to-Windows path conversion for
+  every other native program the shell launches -- and Windows cannot open a
+  `/c/...` path. This has cost two debugging sessions: `curl -o /dev/null` exits
+  23 writing to a literal path, and the NETLIB gate, which builds absolute
+  problem paths from `pwd`, failed all 84 as "Problem file not found" while the
+  same binary solved them fine when handed a relative path. The compiler is not
+  involved in either. Source the script for compiling and linking; run test
+  harnesses that hand paths to native binaries from a step that does not.
 
 Verified on Windows 11, full suites, zero failures either way:
 

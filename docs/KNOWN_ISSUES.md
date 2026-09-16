@@ -257,29 +257,36 @@ the API tests, the sanitiser jobs and the WASM build.
 
 ### Windows
 
-A first-class target, built and tested on every push by three jobs.
+A first-class target, built and tested on every push by four jobs.
 
 - **Windows Core** (MinGW/UCRT64): `shared` (including the PAL suite), `velo`,
   `carta`, `locus`, `nexus`, `ralph` (main suite plus detect, lap, netflow and
   netlib), and the FuelWise and Surge transport tests. It also *builds* all
   five API servers -- ralph, fuelwise, surge, velo, carta -- which is what
   proves Keel and the Keel-side shared helpers link here.
-- **Windows Suites**: the full Surge suite and the FuelWise bench regression.
+- **Windows Suites** (MinGW/UCRT64): the full Surge suite and the FuelWise
+  bench regression.
+- **Windows Suites MSVC** (`CC=cl`): the same two suites under cl.exe. Both are
+  numerical rather than structural, and MSVC's libm and FP codegen are not
+  MinGW's, so the pair of jobs is what would catch the two compilers
+  disagreeing on an objective.
 - **Windows MSVC** (`CC=cl`): twenty targets, the above plus `arbor` and four
   ClayShards ones.
 
-The nightly NETLIB regression gate also runs on Windows as well as Linux.
+The nightly NETLIB regression gate runs on Linux and on Windows under both
+compilers -- `gate-windows` (gcc) and `gate-windows-msvc` (cl). All 84 problems
+agree with the shared baseline under MSVC: no status, objective or solution
+validity differences.
 
-All six API servers' live-server suites now run on Windows, in the
-`Windows MSVC` job, against MSVC-built binaries: 110 assertions in about 25
-seconds. They had run on no Windows job under either compiler before that --
-`Windows Core` and `macOS Core` build the six servers and stop.
+All six API servers' live-server suites run on Windows in the `Windows MSVC`
+job against MSVC-built binaries (110 assertions in about 25 seconds), and on
+macOS in `macOS Core` against clang-built ones. They had run on no Windows or
+macOS job under any compiler before that.
 
 The remaining gap is narrower: they are not run against the MinGW binaries on
-Windows, nor on macOS. Adding them to `Windows Core` is a handful of lines now
-that the fixture steps exist and are known to work; it was left out to avoid
-paying for the Monaco download twice per run. See
-docs/roadmaps/infrastructure.md.
+Windows. Adding them to `Windows Core` is a handful of lines now that the
+fixture steps exist and are known to work; it was left out to avoid paying for
+the Monaco download twice per run. See docs/roadmaps/infrastructure.md.
 
 ## Workarounds
 

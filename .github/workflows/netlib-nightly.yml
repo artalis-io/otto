@@ -187,3 +187,79 @@ jobs:
           path: netlib-gate-out
           retention-days: 14
           if-no-files-found: warn
+
+  # ==========================================================================
+  # NETLIB gate (Windows, MSVC)
+  #
+  # The same 84 problems as gate-windows, built with cl.exe instead of gcc.
+  # The point is not that it compiles -- Windows MSVC in ci.yml already proves
+  # that -- but that a second Windows compiler agrees on the numbers. Ralph's
+  # simplex compares nearly equal values to choose pivots, so a difference in
+  # libm or FP codegen can change the pivot sequence and, with it, iteration
+  # counts and final objectives. gcc and cl disagreeing on a NETLIB objective
+  # is a real finding; it can only surface if both are run against the same
+  # baseline.
+  #
+  # glpk comes from MSYS2 even though the compiler does not: the benchmark
+  # shells out to glpsol and never links it, so a MinGW-built oracle is fine.
+  # ==========================================================================
+  gate-windows-msvc:
+    name: NETLIB gate (Windows, MSVC)
+    runs-on: windows-latest
+    timeout-minutes: 120
+
+    defaults:
+      run:
+        shell: msys2 {0}
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Set up MSYS2 (make, glpsol and jq; the compiler is MSVC)
+        uses: msys2/setup-msys2@v2
+        with:
+          msystem: UCRT64
+          update: false
+          install: >-
+            mingw-w64-ucrt-x86_64-make
+            mingw-w64-ucrt-x86_64-glpk
+            jq
+
+      - name: Report the toolchain
+        run: |
+          source scripts/msvc-env.sh
+          cl 2>&1 | head -2
+          glpsol --version | head -1
+          jq --version
+          nproc
+
+      - name: Build ralph-benchmark
+        run: |
+          source scripts/msvc-env.sh
+          mingw32-make -C ralph CC=cl ralph-benchmark
+
+      # Deliberately does NOT source scripts/msvc-env.sh. That script exports
+      # MSYS2_ARG_CONV_EXCL='*' so cl.exe receives its /-prefixed options
+      # unmangled, but it also switches off the POSIX-to-Windows path
+      # conversion MSYS2 does for native children. The gate hands
+      # ralph-benchmark absolute paths from `pwd` (/c/...), which a native
+      # binary cannot open -- every one of the 84 problems fails as
+      # "Problem file not found". No compiler is needed at this point anyway:
+      # --no-build means the binary from the previous step is simply run.
+      - name: Run the NETLIB regression gate
+        run: |
+          bash ralph/benchmarks/netlib_regression_gate.sh \
+            --no-build \
+            --outdir netlib-gate-out
+
+      - name: Upload gate artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: netlib-gate-results-windows-msvc
+          path: netlib-gate-out
+          retention-days: 14
+          if-no-files-found: warn

@@ -17,6 +17,15 @@
 #      arguments to a native binary, mangling `/Fo:`, `/std:c11` and every other
 #      MSVC flag. MSYS2_ARG_CONV_EXCL turns that off.
 #
+#      That switch is global, not scoped to cl.exe, so sourcing this file also
+#      stops POSIX paths being converted for every other native program the
+#      shell launches. Anything that is handed a `/`-rooted path stops working:
+#      `curl -o /dev/null` writes to a literal unwritable path and exits 23, and
+#      ralph-benchmark cannot open the `/c/...` problem paths the NETLIB gate
+#      builds from `pwd`, failing all 84 as "Problem file not found". Source
+#      this file for compiling and linking. Run test harnesses that pass paths
+#      to native binaries in a step that does not.
+#
 # Make still needs MSYS's own tools -- the Makefiles call `uname` and `rm`, and
 # make wants an `sh` for recipes -- so /usr/bin stays on PATH, just behind.
 #
