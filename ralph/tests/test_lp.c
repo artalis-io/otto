@@ -437,6 +437,85 @@ static void test_write_mps_max_sense(void) {
 
 
 /* ============================================================================
+ * Test: names that sanitise alike stay distinct
+ *
+ * Fixed-format MPS delimits fields by column, so a name may contain spaces and
+ * punctuation, and real models do: forplan.mps has seven columns whose names
+ * differ only in a trailing "#", ")", "+" and so on. Mapping each offending
+ * character to '_' independently turned all seven into one name and merged
+ * their coefficients -- a different model, not a malformed file, which is what
+ * made it worth a test rather than a comment.
+ * ============================================================================ */
+
+static void test_write_mps_name_collisions(void) {
+    printf("\n=== Test: MPS Name Collisions ===\n");
+
+    RalphModel *model = ralph_test_create();
+    ASSERT(model != NULL, "Model created");
+    ralph_test_set_obj_sense(model, RALPH_MINIMIZE);
+
+    /* Four names that all sanitise to "COL_X" character-by-character. */
+    const char *raw[4] = { "COL X", "COL#X", "COL)X", "COL+X" };
+    for (int i = 0; i < 4; i++) {
+        ralph_test_add_var(model, 0.0, 10.0, 1.0 + i, RALPH_CONTINUOUS);
+        ralph_test_set_var_name(model, i, raw[i]);
+    }
+    int idx[4] = {0, 1, 2, 3};
+    double val[4] = {1.0, 1.0, 1.0, 1.0};
+    ralph_test_add_constraint(model, 4, idx, val, RALPH_GREATER_EQUAL, 2.0);
+
+    char path[320];
+    ASSERT(ralph_tmp_path(path, sizeof(path), "collide.mps") != NULL,
+           "Resolved a temp path");
+    ASSERT(ralph_test_write_mps(model, path) == 0, "MPS written");
+
+    /* Collect the column names actually emitted: field 2, columns 5-12. */
+    FILE *f = fopen(path, "r");
+    ASSERT(f != NULL, "MPS reopened");
+
+    char line[1024];
+    char seen[64][16];
+    int nseen = 0, in_columns = 0, dupes = 0;
+    while (f && fgets(line, sizeof(line), f)) {
+        if (strncmp(line, "COLUMNS", 7) == 0) { in_columns = 1; continue; }
+        if (strncmp(line, "RHS", 3) == 0) break;
+        if (!in_columns || line[0] != ' ') continue;
+        if (strstr(line, "MARKER")) continue;
+
+        char name[16];
+        int n = 0;
+        for (int i = 4; i < 12 && line[i] && line[i] != '\n' && n < 15; i++) {
+            name[n++] = line[i];
+        }
+        while (n > 0 && name[n - 1] == ' ') n--;
+        name[n] = '\0';
+        if (n == 0) continue;
+
+        int found = 0;
+        for (int i = 0; i < nseen; i++) {
+            if (strcmp(seen[i], name) == 0) { found = 1; break; }
+        }
+        if (!found && nseen < 64) {
+            snprintf(seen[nseen], sizeof(seen[0]), "%s", name);
+            nseen++;
+        }
+    }
+    if (f) fclose(f);
+
+    /* Four variables must appear under four different names. Before the fix
+     * all four collapsed to one, so this read 1. */
+    ASSERT(nseen == 4, "Four colliding source names emit four distinct names");
+
+    /* And each must still fit field 2, or the file stops being fixed-format. */
+    for (int i = 0; i < nseen; i++) {
+        if (strlen(seen[i]) > 8) dupes++;
+    }
+    ASSERT(dupes == 0, "Disambiguated names still fit the 8-column field");
+
+    ralph_test_free(model);
+}
+
+/* ============================================================================
  * Test: Name management API
  * ============================================================================ */
 
@@ -576,6 +655,7 @@ int main(int argc, char **argv) {
     test_write_mps_roundtrip();
     test_write_mps_format();
     test_write_mps_max_sense();
+    test_write_mps_name_collisions();
     test_name_api();
     test_solution_buf();
     test_invalid_file();

@@ -102,10 +102,31 @@
   solves the two instances above and asserts the GLPK-verified optima. Against
   the unfixed generator it fails with 154 and 174.
 
-### No Recovery When LP Becomes Infeasible After Cuts (mip.c:1146-1154)
-- **Severity**: Medium — compounded the c-MIR bug above; still worth fixing on its own
-- **Root cause**: When the LP becomes infeasible after adding cuts, `mip.c` blindly sets `solver->status = solver->lp_solver->status` (INFEASIBLE) and returns immediately, without checking `solver->has_incumbent`. If the diving heuristic already found a valid integer solution, the solver should report OPTIMAL.
-- **Fix**: Check for existing incumbent before propagating LP infeasibility. Optionally attempt recovery by removing the last batch of cuts.
+### No Recovery When LP Becomes Infeasible After Cuts -- FIXED
+
+- **Status**: Fixed, and the entry above had gone stale rather than describing
+  live behaviour. It was written in `c67e27c0` (2026-02-12); the recovery landed
+  in `74bd4386` (2026-02-22), ten days later, and nothing updated the record.
+- **What it claimed**: that `mip.c` propagated `solver->lp_solver->status`
+  (INFEASIBLE) and returned without checking `solver->has_incumbent`, so a MIP
+  holding a valid incumbent from the diving heuristic could still be reported
+  infeasible.
+- **What the code does now**: the root cut loop treats a non-optimal LP after
+  cuts as a reason to *discard the cuts*, not to give up -- it logs
+  `LP non-optimal after cuts (status=%d), discarding cuts`, calls
+  `mip_recover_root_relaxation()` to rebuild the relaxation from the original
+  model, and breaks out of the cut rounds. It never assigns INFEASIBLE there.
+  That is exactly the "optionally attempt recovery by removing the last batch
+  of cuts" the entry proposed.
+- **The incumbent check exists too**: final status resolution prefers OPTIMAL
+  whenever `has_incumbent` is set, and only reports INFEASIBLE when the node
+  queue is empty *and* no incumbent was ever found. The two remaining sites
+  that do propagate an infeasible LP status both run before any heuristic has
+  had a chance to produce an incumbent (SPP propagation, and the root LP itself),
+  so there is no path that reports INFEASIBLE while holding a solution.
+- No regression test was added: the recovery branch needs a model whose LP goes
+  infeasible specifically as a result of cut addition, and a test that did not
+  actually drive that path would be worse than none.
 
 ### GMI Slack Variable Projection
 - GMI cuts with significant positive slack coefficients (>0.1) are rejected to prevent cutting off integer feasible points
@@ -159,22 +180,32 @@
   assert the format properties directly, so the guarantee does not depend on
   having glpsol installed. Both were confirmed to fail against the old writer.
 
-### MPS Writer Collides Names Containing Spaces
+### MPS Writer Collides Names Containing Spaces -- FIXED
 
-- Fixed-format MPS delimits fields by column, so a name may contain spaces, and
-  real models use that: `forplan.mps` has columns named `M012T1 #`, `M012T1 )`,
-  `M012T1 +` and four more. The writer replaces every character outside
-  `[A-Za-z0-9_.$]` with `_`, so all seven become `M012T1__`.
+- **Status**: Fixed. Fixed-format MPS delimits fields by column, so a name may
+  contain spaces, and real models use that: `forplan.mps` has columns named
+  `M012T1 #`, `M012T1 )`, `M012T1 +` and four more. The writer replaced every
+  character outside `[A-Za-z0-9_.$]` with `_`, so all seven became `M012T1__`
+  and their coefficients merged -- forplan's 421 distinct column names came out
+  as 408, across 3 colliding groups. glpsol refused the result
+  (`duplicate coefficient in row 'OBJ'`), which made it loud, but Ralph's own
+  reader would have accepted the merged model as if it were the real one.
 
-  Distinct variables are merged: forplan has 421 distinct column names and the
-  written file has 408, across 3 colliding groups. glpsol refuses the result
-  (`duplicate coefficient in row 'OBJ'`), which at least makes it loud, but
-  Ralph's own reader would accept the merged model.
+  Names are now allocated as a set rather than sanitised one at a time, against
+  an open-addressed table of everything already issued. Two details matter:
 
-  Fixing it means guaranteeing uniqueness rather than sanitising each name
-  independently -- disambiguating a collision against the set of names already
-  written. Not attempted here; it is a behaviour change to name generation
-  rather than a format fix.
+  - Uniqueness is decided against **every** name handed out so far, not within
+    a group of identical ones. A disambiguated `M012T1_1` can collide with a
+    source column that was genuinely called that, and resolving each group on
+    its own regenerates the same string indefinitely.
+  - The suffix **replaces the tail** rather than extending it. Field 2 is 8
+    columns wide, so appending to an already-8-character name just moves the
+    complaint to `positions 13-14 must be blank`. Names that were longer than
+    the field to begin with are widened freely, since such a model was never
+    fixed-format representable anyway.
+
+  forplan now reads back as 163 rows and **421 columns**, matching its source
+  name count exactly.
 
 ### MPS Writer Cannot Express Some Values in Fixed Format
 
