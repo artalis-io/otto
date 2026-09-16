@@ -10,6 +10,17 @@ CFLAGS = -O3 -s WASM=1 -s ALLOW_MEMORY_GROWTH=1
 CFLAGS += -s EXPORTED_RUNTIME_METHODS='["cwrap","ccall","getValue","setValue","UTF8ToString","stringToUTF8","lengthBytesUTF8"]'
 CFLAGS += -s MODULARIZE=1 -s EXPORT_NAME='Locus'
 CFLAGS += -s INITIAL_MEMORY=67108864
+# mk/toolchain.mk supplies the warning set. Included after CC is fixed to emcc,
+# which it detects as GNU -- emcc is clang underneath and takes GNU spellings,
+# so no separate branch is needed. Only the flags that mean something for a
+# WebAssembly build are consumed: the GNU branch's -march=native, PIE and
+# stack-protector settings describe a native link that does not happen here.
+#
+# The point is the warnings. These builds compiled OTTO's C with none enabled
+# at all, so anything the native build would have flagged went unseen on the
+# path that actually ships in the browser.
+include ../../mk/toolchain.mk
+CFLAGS += $(CC_WARN)
 
 # Include paths
 INCLUDES = -I../include -I../../shared/include -I../../vendor/miniz

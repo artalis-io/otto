@@ -9,6 +9,17 @@ CC = emcc
 CFLAGS = -O3 -s WASM=1 -s ALLOW_MEMORY_GROWTH=1
 CFLAGS += -s EXPORTED_RUNTIME_METHODS='["cwrap","ccall","getValue","setValue","allocateUTF8","UTF8ToString"]'
 CFLAGS += -s MODULARIZE=1 -s EXPORT_NAME='Surge'
+# mk/toolchain.mk supplies the warning set. Included after CC is fixed to emcc,
+# which it detects as GNU -- emcc is clang underneath and takes GNU spellings,
+# so no separate branch is needed. Only the flags that mean something for a
+# WebAssembly build are consumed: the GNU branch's -march=native, PIE and
+# stack-protector settings describe a native link that does not happen here.
+#
+# The point is the warnings. These builds compiled OTTO's C with none enabled
+# at all, so anything the native build would have flagged went unseen on the
+# path that actually ships in the browser.
+include ../../mk/toolchain.mk
+CFLAGS += $(CC_WARN)
 
 # Include paths
 INCLUDES = -I../include -I../../arbor/include -I../../shared/include
@@ -17,7 +28,7 @@ INCLUDES = -I../include -I../../arbor/include -I../../shared/include
 SURGE_SRC = $(wildcard ../src/*.c)
 ARBOR_SRC = $(wildcard ../../arbor/src/*.c)
 # Shared sources needed by Surge
-SHARED_SRC = ../../shared/src/sh_json.c ../../shared/src/sh_arena.c \
+SHARED_SRC = ../../shared/src/sh_json.c ../../shared/src/sh_arena.c ../../shared/src/sh_heap.c \
              ../../shared/src/sh_hashmap.c ../../shared/src/sh_dist.c \
              ../../shared/src/sh_pal_posix.c ../../shared/src/sh_pal_windows.c \
              ../../shared/src/sh_stepfunc.c ../../shared/src/sh_piecewise.c
