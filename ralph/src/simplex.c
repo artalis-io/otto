@@ -2537,7 +2537,7 @@ int simplex_pivot(SimplexTableau *tab,
                     goto basis_update_done;
                 }
                 lu_update_status = -2;
-                lu_reason = (tab->lu) ? lu_get_last_failure_reason(tab->lu) : lu_reason;
+                lu_reason = (tab->lu) ? (int)lu_get_last_failure_reason(tab->lu) : lu_reason;
                 growth_factor = (tab->lu) ? lu_get_growth_factor(tab->lu) : growth_factor;
                 lu_num_updates = (tab->lu) ? lu_get_num_updates(tab->lu) : lu_num_updates;
                 action = lp_refactor_policy_choose_basis_action(
@@ -2558,7 +2558,7 @@ int simplex_pivot(SimplexTableau *tab,
                     goto basis_update_done;
                 }
                 lu_update_status = -3;
-                lu_reason = (tab->lu) ? lu_get_last_failure_reason(tab->lu) : lu_reason;
+                lu_reason = (tab->lu) ? (int)lu_get_last_failure_reason(tab->lu) : lu_reason;
                 growth_factor = (tab->lu) ? lu_get_growth_factor(tab->lu) : growth_factor;
                 lu_num_updates = (tab->lu) ? lu_get_num_updates(tab->lu) : lu_num_updates;
                 action = lp_refactor_policy_choose_basis_action(

@@ -295,10 +295,15 @@ void sg_seg_init_single(const SGContext *ctx, const SGRouteStop *stop,
                         SGSegSummary *seg)
 {
     const SGTaskRecord *task;
-    if (!ctx || !stop || !seg) return;
+    if (!seg) return;
+
+    /* Zeroed before the remaining arguments are checked: callers keep the
+     * segment on the stack and read it straight after, so returning early
+     * without writing it leaves them reading an uninitialised struct. */
+    memset(seg, 0, sizeof(*seg));
+    if (!ctx || !stop) return;
 
     task = &ctx->tasks[stop->task_id];
-    memset(seg, 0, sizeof(*seg));
 
     seg->earliest_start = task->has_time_window ? (double)task->tw_early : 0.0;
     seg->latest_start   = task->has_time_window ? (double)task->tw_late  : INFINITY;

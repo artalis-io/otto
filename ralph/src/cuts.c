@@ -2326,6 +2326,12 @@ ConflictGraph *conflict_graph_create(const LPModel *model, const SetCoverSignatu
     int n = sig->num_sets;
     int m = sig->num_elements;
 
+    /* Both reach calloc below. A negative count widens to a size_t near
+     * 2^64, which is what the -Walloc-size-larger-than diagnostic is
+     * reporting; the allocation would fail rather than overflow, but failing
+     * for an unreadable reason is worse than rejecting the input here. */
+    if (n <= 0 || m <= 0) return NULL;
+
     ConflictGraph *graph = (ConflictGraph *)calloc(1, sizeof(ConflictGraph));
     if (!graph) return NULL;
 
