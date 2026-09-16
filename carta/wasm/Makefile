@@ -23,7 +23,12 @@ include ../../mk/toolchain.mk
 CFLAGS += $(CC_WARN)
 
 # Include paths
-INCLUDES = -I../include -I../../shared/include -I../../vendor/miniz
+# Vendored headers come in as system headers, the same way the native
+# Makefiles take them: upstream code held to upstream's warning bar, not
+# OTTO's. miniz.h alone accounts for 266 of the 307 warnings these builds
+# emit otherwise, all of them static functions it defines in the header and
+# most translation units do not call.
+INCLUDES = -I../include -I../../shared/include $(CC_SYSINC)../../vendor/miniz
 
 # Source files - Carta library
 CARTA_SRC = $(wildcard ../src/*.c)

@@ -6,6 +6,7 @@
  */
 
 #include "sh_hashmap.h"
+#include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -47,7 +48,15 @@ static size_t next_power_of_two(size_t n)
     n |= n >> 4;
     n |= n >> 8;
     n |= n >> 16;
+#if SIZE_MAX > 0xFFFFFFFFu
+    /* Only reachable where size_t is wider than 32 bits. Unguarded, this is a
+     * shift by the full width of the type on any 32-bit target -- undefined,
+     * and wasm32 is such a target. The preceding shifts have already filled
+     * every bit there, so the guard costs nothing. Native builds are 64-bit,
+     * which is why this went unseen until the wasm builds were given warning
+     * flags. */
     n |= n >> 32;
+#endif
     n++;
     return n < SH_HASHMAP_MIN_CAPACITY ? SH_HASHMAP_MIN_CAPACITY : n;
 }

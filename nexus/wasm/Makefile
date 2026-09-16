@@ -26,8 +26,13 @@ include ../../mk/toolchain.mk
 CFLAGS += $(CC_WARN)
 
 # Include paths
-INCLUDES = -I../../nexus/include -I../../shared/include -I../../vendor/miniz \
-           -I../../vendor/tre
+# Vendored headers come in as system headers, the same way the native
+# Makefiles take them: upstream code held to upstream's warning bar, not
+# OTTO's. miniz.h alone accounts for 266 of the 307 warnings these builds
+# emit otherwise, all of them static functions it defines in the header and
+# most translation units do not call.
+INCLUDES = -I../../nexus/include -I../../shared/include $(CC_SYSINC)../../vendor/miniz \
+           $(CC_SYSINC)../../vendor/tre
 
 # WASM wrapper
 WASM_SRC = src/nx_wasm.c
