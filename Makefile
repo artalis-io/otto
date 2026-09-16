@@ -23,13 +23,21 @@
 .PHONY: ralph fuelwise velo carta locus shared arbor surge surge-api nexus
 .PHONY: fuelwise-api carta-api velo-api locus-api ralph-api api
 .PHONY: wasm wasm-fuelwise wasm-velo wasm-carta wasm-locus wasm-ralph wasm-nexus wasm-surge
-.PHONY: wasm wasm-fuelwise wasm-velo wasm-carta wasm-locus wasm-types wasm-test wasm-api-demos
+.PHONY: wasm-types wasm-test wasm-api-demos
 .PHONY: fuelwise-ui fuelwise-ui-dev carta-ui carta-ui-dev clay-map clay-map-serve site-build site-serve
 .PHONY: tui-demo-tty tui-demo-wasm tui-demo-serve tui-wasm test-tui
 .PHONY: run-fuelwise-api run-carta-api run-velo-api run-ralph-api
 .PHONY: benchmark ci api-docs api-docs-check test-api-docs test-api-docs-install download-monaco
 .PHONY: test-fuelwise-regression
 .PHONY: test-api test-ralph-api test-surge-api test-locus-api
+# Every module test target was missing from .PHONY. Harmless until a file or directory
+# of one of these names appears, at which point make quietly decides the target is
+# up to date and runs nothing -- the same failure the wasm and test aggregates hit,
+# in a different dress.
+.PHONY: test-ralph test-fuelwise test-velo test-carta test-locus test-shared
+.PHONY: test-arbor test-surge test-nexus
+.PHONY: test-fuelwise-api test-velo-api test-carta-api
+.PHONY: run-locus-api clean-all strategy-pdf
 
 # =============================================================================
 # Default Targets

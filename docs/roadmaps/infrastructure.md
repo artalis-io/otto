@@ -687,6 +687,68 @@ the search order or the library order that matters.
 GCC command lines are unchanged for all five newly wired modules, compared as
 whitespace-normalised sets before and after.
 
+### Aggregate targets whose membership drifted
+
+Three targets in one session claimed more than they covered -- `make test`
+omitting `test_lp`, `make wasm` omitting three modules, `wasm-test` naming a
+module that defines no such target -- and in every case the uncovered part had
+rotted. That is a pattern, not three accidents, so the rest were swept.
+
+Checked: `all`, `lib`, `test`, `clean`, `api`, `test-api`, `wasm`, `wasm-test`,
+`wasm-types` against the directories that actually exist; every module against
+the workflows, for both a build and a test; every api directory against its
+`test_api.sh` and that script's presence in CI.
+
+Clean, with two false positives worth recording so the next sweep does not
+re-raise them:
+
+- `site` is not a C module. It has a Makefile and its own `site-build` /
+  `site-serve` targets, and its absence from `all`/`lib`/`test`/`clean` is
+  deliberate.
+- fuelwise and surge run their e2e suites as `cd <mod>/api && bash
+  test_api.sh`, not by path, so a grep for `<mod>/api/test_api.sh` misses them.
+  That split is the scripts' own convention, documented in the CI step.
+
+One real finding: **15 phony targets were never declared `.PHONY`**, among them
+every `test-<module>` target. Harmless until a file or directory of one of
+those names appears, at which point make decides the target is up to date and
+runs nothing -- the same failure as the aggregates, in a different dress. All
+15 are declared now, and the two overlapping `.PHONY` lines for the wasm
+targets were folded into one.
+
+### WASM warnings, triaged
+
+Giving the wasm builds warning flags surfaced 307 warnings that had never been
+printed. Triaged rather than left as a number:
+
+| warning | count | verdict |
+|---|---|---|
+| `-Wunused-function` from `vendor/miniz/miniz.h` | 247 | upstream code, not actionable (below) |
+| `-Wunused-function` in OTTO code | 3 | `simplex.c` x2, `sh_font.c` |
+| `-Wmacro-redefined` | 8 | `sh_inflate.c` redefines miniz's `MINIZ_NO_*` config macros to the same values |
+| `-Wsign-compare` | 6 | `lap.c`, `velo_wasm.c`, and vendored `regexec.c` |
+| `-Wshift-count-overflow` | 5 | **a real bug, fixed** |
+| everything else | ~20 | unused variables/parameters, `-Wpointer-sign` in `test_surge.c`, emscripten's own `-Wjs-compiler` |
+
+**The real one.** `next_power_of_two()` in `shared/src/sh_hashmap.c` ended with
+`n |= n >> 32`. `size_t` is 64 bits on every native target OTTO builds for, so
+that shift is correct and necessary there. On wasm32 `size_t` is 32 bits and
+the shift is by the full width of the type, which is undefined. The preceding
+`n >> 16` has already filled every bit on a 32-bit target, so the line is both
+useless and undefined there; it is now guarded on `SIZE_MAX > 0xFFFFFFFFu`.
+Nothing but a 32-bit build could have found this, and the wasm builds had no
+warning flags, so nothing did.
+
+**Why 247 stay.** The vendored headers are now taken with `$(CC_SYSINC)`, the
+same way the native Makefiles take them -- upstream code held to upstream's
+warning bar. That silences miniz.h when *OTTO's* sources include it, worth 19
+warnings. The remaining 247 come from compiling miniz's own translation units,
+where `#include "miniz.h"` resolves relative to the source file and never
+consults the system include path at all. No include-flag change can reach them,
+and the alternative -- `-Wno-unused-function` across the whole emcc invocation
+-- would also blind the OTTO sources compiled in the same command. They are
+left, and counted, rather than suppressed.
+
 ### Suites that run in no CI path
 
 Prompted by finding that `test_lp` was built and run by nothing, which is how
