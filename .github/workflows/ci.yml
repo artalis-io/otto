@@ -588,6 +588,64 @@ jobs:
         run: make -C fuelwise test-bench
 
   # ==========================================================================
+  # Windows Suites (MSVC)
+  #
+  # The same two suites as Windows Suites, under cl.exe. Both are numerical --
+  # Surge's solver behaviour, and Ralph's MILP objectives compared against
+  # glpsol -- and MSVC's libm and FP codegen are not MinGW's. A disagreement
+  # between the two compilers is exactly the finding worth having, and it is
+  # only visible if both actually run. Windows MSVC covers the transport
+  # invariants under cl.exe; this covers the arithmetic.
+  #
+  # glpk comes from MSYS2 even though the compiler does not: glpsol is invoked
+  # as a subprocess and never linked, so a MinGW-built glpsol is a fine oracle
+  # for an MSVC-built caller.
+  #
+  # mingw32-make, not MSYS's make: /usr/bin/make strips TMPDIR/TMP/TEMP from the
+  # environment, and cl.exe needs them for its intermediates.
+  # ==========================================================================
+  windows-suites-msvc:
+    name: Windows Suites MSVC
+    runs-on: windows-latest
+
+    defaults:
+      run:
+        shell: msys2 {0}
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Set up MSYS2 (make, glpsol and jq; the compiler is MSVC)
+        uses: msys2/setup-msys2@v2
+        with:
+          msystem: UCRT64
+          update: false
+          install: >-
+            mingw-w64-ucrt-x86_64-make
+            mingw-w64-ucrt-x86_64-glpk
+            jq
+
+      - name: Report the toolchain
+        run: |
+          source scripts/msvc-env.sh
+          cl 2>&1 | head -2
+          glpsol --version | head -1
+          jq --version
+
+      - name: Build and test Surge
+        run: |
+          source scripts/msvc-env.sh
+          mingw32-make -C surge CC=cl test
+
+      - name: Build and run the FuelWise bench regression
+        run: |
+          source scripts/msvc-env.sh
+          mingw32-make -C fuelwise CC=cl test-bench
+
+  # ==========================================================================
   # Sanitizers
   #
   # A c-audit of the Phase 1 transport code found two heap overflows and an

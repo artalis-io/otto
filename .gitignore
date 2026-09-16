@@ -187,3 +187,9 @@ nexus/schemas/gls-hu-pudo-pdf-v2.json
 # MSVC emits an import library beside every linked binary. *.a and *.exp were
 # already ignored; this was not, so an MSVC build left it as an untracked file.
 *.lib
+
+# NETLIB regression gate output. --outdir defaults to netlib-gate-out; the
+# nightly uploads it as an artifact rather than committing it. A full run is
+# ~3.5M of per-problem JSON and stderr, so this keeps a local run from being
+# staged by accident.
+netlib-gate-*/
