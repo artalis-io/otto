@@ -697,6 +697,20 @@ whitespace-normalised sets before and after.
 - wasm/ Makefiles are unwired. api/ is now on mk/toolchain.mk; clayshards/ is
   wired. Neither wasm/ nor the rest is on a library
   `test` path.
+- (done) The six API e2e suites now run on every platform that builds the
+  servers: `Windows Core` (MinGW), `Windows MSVC` (cl), `macOS Core` (clang)
+  and the Linux `Test * API` jobs. Before this they ran on Linux only, and the
+  Windows and macOS jobs built the servers without ever starting one. The
+  stated reason for leaving Windows Core out -- paying for the Monaco fixture
+  twice per run -- measures 6.2s end to end on the MSVC job, which is less than
+  any mechanism for sharing it would cost to maintain.
+- (done) `scripts/msys-path-guard.sh` stops a harness running in a shell where
+  `MSYS2_ARG_CONV_EXCL='*'` has switched off MSYS2 path conversion. Sourced by
+  `netlib_regression_gate.sh` and `surge/scripts/tune_matrix.sh`, the two that
+  pass absolute POSIX paths as arguments to a native binary. The gate also
+  aborts on the first problem file it cannot open rather than repeating the
+  same deterministic failure 84 times.
+
 ## Nexus on Windows, and a vendored regex engine
 
 Nexus was the last library outside the top-level Makefile and outside CI. It was
