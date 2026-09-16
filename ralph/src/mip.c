@@ -80,6 +80,165 @@ static int mip_create_lp_solver_for_working_model(MIPSolver *solver) {
     return 0;
 }
 
+/*
+ * Drop root cuts that are not binding once the cut rounds have settled.
+ *
+ * apply_cuts() appends a row to working_model for every cut it accepts and
+ * nothing ever removes one, so a cut that contributed nothing is still carried
+ * by every node LP for the rest of the search. cut_pool_update_efficacy()
+ * already computes which cuts are binding; until now it only logged the count.
+ *
+ * The cost is not the row itself so much as what it does to the search. On a
+ * strongly correlated single-row knapsack the root reaches the same bound with
+ * or without cover cuts -- the Gomory cut gets there alone -- but the extra
+ * cover row changes which variable looks most attractive to branch on, and the
+ * tree grew from 1123 nodes to 1993. Over 15 seeds at 56 items the cuts cost
+ * 56% more nodes in aggregate.
+ *
+ * Removing a row the optimum does not touch cannot move that optimum, so the
+ * bound is verified afterwards and the unpurged model restored if it moved.
+ * That is a guard against a mistake here, not an expected path.
+ *
+ * A cut non-binding at the root can become binding deeper in the tree. There is
+ * no re-add path yet, so this trades a possible future cut for a smaller LP at
+ * every node; the measurement above is what justifies that trade.
+ */
+static int mip_purge_nonbinding_root_cuts(MIPSolver *solver) {
+    if (!solver || !solver->working_model || !solver->lp_solver) return 0;
+    if (mip_env_flag_enabled("RALPH_DISABLE_ROOT_CUT_PURGE")) return 0;
+
+    LPModel *model = solver->working_model;
+    SimplexSolver *lp = solver->lp_solver;
+    if (!model->A || !model->con_origin || !lp->solution) return 0;
+    if (lp->status != RALPH_STATUS_OPTIMAL) return 0;
+
+    int m = model->num_cons;
+    int n = model->num_vars;
+    if (m <= 0 || n <= 0) return 0;
+
+    /* Row activity at the settled root solution. */
+    double *act = (double *)calloc((size_t)m, sizeof(double));
+    if (!act) return 0;
+    for (int j = 0; j < n; j++) {
+        double xj = lp->solution[j];
+        if (xj == 0.0) continue;
+        for (int k = model->A->colptr[j]; k < model->A->colptr[j + 1]; k++) {
+            int i = model->A->rowidx[k];
+            if (i >= 0 && i < m) act[i] += model->A->values[k] * xj;
+        }
+    }
+
+    char *keep = (char *)malloc((size_t)m);
+    if (!keep) { free(act); return 0; }
+
+    int cut_rows = 0, drop_rows = 0;
+    for (int i = 0; i < m; i++) {
+        keep[i] = 1;
+        int is_cut = (i < model->con_origin_capacity && model->con_origin[i] == -1);
+        if (!is_cut) continue;
+        cut_rows++;
+
+        double slack;
+        char sense = model->sense ? model->sense[i] : 'L';
+        double rhs = model->b ? model->b[i] : 0.0;
+        if (sense == 'L')      slack = rhs - act[i];
+        else if (sense == 'G') slack = act[i] - rhs;
+        else                   slack = fabs(act[i] - rhs);
+
+        if (slack > RALPH_FEAS_TOL) { keep[i] = 0; drop_rows++; }
+    }
+    free(act);
+
+    if (drop_rows == 0 || drop_rows == cut_rows + 1) {
+        free(keep);
+        return 0;
+    }
+
+    /* Row-major view, so a kept cut row can be handed back to
+     * lp_model_add_constraint in the form it was built from. */
+    int nnz_total = model->A->colptr[n];
+    int *rstart = (int *)calloc((size_t)m + 1, sizeof(int));
+    int *rcols  = nnz_total ? (int *)malloc((size_t)nnz_total * sizeof(int)) : NULL;
+    double *rvals = nnz_total ? (double *)malloc((size_t)nnz_total * sizeof(double)) : NULL;
+    int *fill = (int *)calloc((size_t)m + 1, sizeof(int));
+    if (!rstart || !fill || (nnz_total && (!rcols || !rvals))) {
+        free(rstart); free(rcols); free(rvals); free(fill); free(keep);
+        return 0;
+    }
+    for (int j = 0; j < n; j++)
+        for (int k = model->A->colptr[j]; k < model->A->colptr[j + 1]; k++)
+            rstart[model->A->rowidx[k] + 1]++;
+    for (int i = 0; i < m; i++) rstart[i + 1] += rstart[i];
+    for (int j = 0; j < n; j++) {
+        for (int k = model->A->colptr[j]; k < model->A->colptr[j + 1]; k++) {
+            int i = model->A->rowidx[k];
+            int at = rstart[i] + fill[i]++;
+            rcols[at] = j;
+            rvals[at] = model->A->values[k];
+        }
+    }
+    free(fill);
+
+    LPModel *saved = solver->working_model;
+    double saved_bound = lp->obj_value;
+
+    LPModel *fresh = lp_model_copy(solver->original_model);
+    if (!fresh) {
+        free(rstart); free(rcols); free(rvals); free(keep);
+        return 0;
+    }
+    for (int i = 0; i < m; i++) {
+        if (!keep[i]) continue;
+        if (!(i < model->con_origin_capacity && model->con_origin[i] == -1)) continue;
+        int cnt = rstart[i + 1] - rstart[i];
+        if (cnt <= 0) continue;
+        int row = lp_model_add_constraint(fresh, cnt, &rcols[rstart[i]], &rvals[rstart[i]],
+                                          model->sense ? model->sense[i] : 'L',
+                                          model->b ? model->b[i] : 0.0);
+        if (row >= 0 && fresh->con_origin && row < fresh->con_origin_capacity) {
+            fresh->con_origin[row] = -1;
+        }
+    }
+    free(rstart); free(rcols); free(rvals); free(keep);
+
+    simplex_free(solver->lp_solver);
+    solver->lp_solver = NULL;
+    solver->working_model = fresh;
+    if (mip_create_lp_solver_for_working_model(solver) != 0) {
+        lp_model_free(fresh);
+        solver->working_model = saved;
+        if (mip_create_lp_solver_for_working_model(solver) != 0) return -1;
+        simplex_solve(solver->lp_solver);
+        return 0;
+    }
+    simplex_solve(solver->lp_solver);
+
+    int ok = (solver->lp_solver->status == RALPH_STATUS_OPTIMAL) &&
+             (fabs(solver->lp_solver->obj_value - saved_bound) <=
+              1e-6 * (1.0 + fabs(saved_bound)));
+    if (!ok) {
+        /* Should not happen: only rows the optimum did not touch were removed. */
+        simplex_free(solver->lp_solver);
+        solver->lp_solver = NULL;
+        lp_model_free(fresh);
+        solver->working_model = saved;
+        if (mip_create_lp_solver_for_working_model(solver) != 0) return -1;
+        simplex_solve(solver->lp_solver);
+        solver->root_cut_purge_reverts++;
+        return 0;
+    }
+
+    lp_model_free(saved);
+    solver->cuts_applied -= drop_rows;
+    if (solver->cuts_applied < 0) solver->cuts_applied = 0;
+    solver->root_cut_purged += drop_rows;
+    if (solver->verbose) {
+        LP_LOG_STDOUT("Root cut purge: dropped %d of %d cut rows (bound %.6f unchanged)\n",
+                      drop_rows, cut_rows, saved_bound);
+    }
+    return 0;
+}
+
 int mip_recover_root_relaxation(MIPSolver *solver) {
     if (!solver || !solver->original_model) return -1;
 
@@ -3074,6 +3233,9 @@ static int solve_root_node(MIPSolver *solver) {
 
         cut_rounds++;
     }
+
+    /* Rows that contributed nothing are still carried by every node LP. */
+    mip_purge_nonbinding_root_cuts(solver);
 
     /* Final cleanup of cut pool */
     cut_pool_clear(solver->cut_pool);

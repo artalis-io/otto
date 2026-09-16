@@ -318,6 +318,47 @@ Not found in the code: efficacy-based purging, and the "cap total cuts at 2x
 original constraints" rule. `max_cuts_per_round` is 50; `pool->capacity` bounds
 the pool's allocation, which is a different thing from a model-relative cap.
 
+### M3b: Root cut purging -- DONE
+
+`apply_cuts()` appends a row to `working_model` for every cut it accepts, and
+nothing ever removed one. `cut_pool_update_efficacy()` already computed which
+cuts were binding; it only logged the count. So a cut that contributed nothing
+was still carried by every node LP for the rest of the search.
+
+Found by asking why cover cuts make single-row knapsacks slower. They do, and
+the reason is not that the cut is wrong: on the reference instance the root
+reaches the same bound either way -- `-1911.857` to `-1909.500` -- because the
+Gomory cut gets there alone. The cover cut is violated, not parallel to
+anything, and contributes zero. It still changes which variable looks best to
+branch on, and the tree went from 1123 nodes to 1993.
+
+`mip_purge_nonbinding_root_cuts()` drops cut rows whose slack exceeds the
+feasibility tolerance once the rounds have settled, rebuilds the working model
+from the original plus the survivors, and verifies the bound did not move.
+Removing a row the optimum does not touch cannot move that optimum, so the
+check is a guard against a mistake here rather than an expected path.
+
+Measured over 64 strongly correlated knapsacks (8 sizes x 8 seeds):
+
+| | with purge | without |
+|---|---|---|
+| total nodes | 2,172,370 | 3,223,177 |
+| total time | 474s | 801s |
+
+**The effect is not uniform, and the aggregate hides that.** Per instance it is
+better on 30, worse on 17, unchanged on 17 -- removing a row perturbs branching,
+and the perturbation is close to a coin flip. What makes it worth having is
+where the wins land: at n=32-40 it is slightly worse on instances that finish in
+under a second, and at n=44-56 it is 35-45% faster on instances that take
+minutes. An early measurement at a single size (n=56) suggested a clean 36% win;
+sweeping sizes showed that was not the whole picture.
+
+`RALPH_DISABLE_ROOT_CUT_PURGE=1` turns it off.
+
+A cut that is non-binding at the root can become binding deeper in the tree, and
+there is no re-add path -- the pool is cleared after the root rounds. Adding one
+is the obvious follow-up if node-level cut quality ever becomes the bottleneck.
+
 ### M4: Feasibility Pump (~300 lines, Medium Impact) -- NOT STARTED
 
 Find incumbents before tree search via LP/rounding alternation. Complements

@@ -7,8 +7,28 @@
 - **Dual simplex stability**: Dual simplex can accumulate reduced cost errors, sometimes falling back to primal simplex (see `dual_simplex.c`)
 
 ### MIP Solver
-- **Set partitioning problems**: Very slow on equality-constrained MIP problems (e.g., 37s vs 0.0002s for GLPK on 30-variable problems)
-- **Large facility location**: Times out on medium-sized problems (210 variables, 10 integer)
+
+Measured against GLPK 5.0 with `bench_mip`, every objective matching:
+
+| problem | Ralph vs GLPK |
+|---|---|
+| Knapsack (single row, strongly correlated) | GLPK 33x faster |
+| MultiKnapsack | GLPK 8-15x faster |
+| FacilityLocation | GLPK 5x faster |
+| SetPartitioning, SetCovering, LinearAssignment, NetworkFlow | parity |
+
+- **Knapsack is the outlier.** The generator builds strongly correlated
+  instances (profit tracks weight) at the classic hard capacity ratio, which is
+  among the hardest knapsack families for branch and bound; Ralph explores
+  hundreds of thousands of nodes where GLPK needs milliseconds. The gap is
+  bounding strength, not per-node cost -- strong branching is under 5% of solve
+  time and the node count is the whole story.
+- **Two earlier entries here were stale** and are removed rather than carried
+  forward. "Set partitioning: 37s vs 0.0002s on 30-variable problems" and
+  "Large facility location: times out at 210 variables" were both written on
+  2026-01-20, before the `optim/spp_*` work landed. Re-measured at exactly those
+  sizes: set partitioning is at parity, and the 210-variable facility location
+  solves in 0.014s with a matching objective.
 - **Limited presolve for MIP**: Lightweight presolve (mask 0x110F) is enabled by default for MIP but aggressive techniques (singleton cols, probing, proportional rows) cause slowdowns
 
 ## Cut Generation Bugs
