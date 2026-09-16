@@ -278,15 +278,16 @@ compilers -- `gate-windows` (gcc) and `gate-windows-msvc` (cl). All 84 problems
 agree with the shared baseline under MSVC: no status, objective or solution
 validity differences.
 
-All six API servers' live-server suites run on Windows in the `Windows MSVC`
-job against MSVC-built binaries (110 assertions in about 25 seconds), and on
-macOS in `macOS Core` against clang-built ones. They had run on no Windows or
-macOS job under any compiler before that.
+All six API servers' live-server suites run everywhere the servers are built:
+`Windows Core` (MinGW), `Windows MSVC` (cl), `macOS Core` (clang) and the six
+Linux `Test * API` jobs. Until recently they ran on no Windows or macOS job
+under any compiler -- those jobs built the servers and stopped, so "it links"
+was the whole claim. Each suite starts a real server, drives it with curl and
+exits non-zero on failure; about 110 assertions in 25 seconds per platform.
 
-The remaining gap is narrower: they are not run against the MinGW binaries on
-Windows. Adding them to `Windows Core` is a handful of lines now that the
-fixture steps exist and are known to work; it was left out to avoid paying for
-the Monaco download twice per run. See docs/roadmaps/infrastructure.md.
+Every Windows job duplicates a Monaco fixture step to get there. That looked
+like a reason to skip it, but it measures 6.2s end to end -- download and
+graph build included -- which is cheaper than any scheme for sharing it.
 
 ## Workarounds
 

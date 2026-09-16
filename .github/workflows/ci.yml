@@ -359,6 +359,7 @@ jobs:
           install: >-
             make
             mingw-w64-ucrt-x86_64-gcc
+            mingw-w64-ucrt-x86_64-curl
             jq
 
       - name: Build and run the PAL tests
@@ -427,10 +428,6 @@ jobs:
       - name: Build and test Surge
         run: make -C surge test-transport
 
-      # Servers only build here -- their suites drive a live HTTP server with
-      # curl, which is a bigger CI surface than this job needs today. Building
-      # them proves Keel and the Keel-side shared helpers compile and link on
-      # Windows, which is what was actually unknown.
       - name: Build the API servers
         run: |
           make -C ralph/api
@@ -439,6 +436,38 @@ jobs:
           make -C velo/api
           make -C carta/api
           make -C locus/api
+
+      # bench_pbf is the PBF->.vlg builder and is not part of `make velo`.
+      #
+      # This duplicates the same step in Windows MSVC, which is why it was left
+      # out for a while -- it looked like paying for the Monaco download twice
+      # per run. Measured on the Windows MSVC job it is 6.2s end to end,
+      # download and graph build included, so the duplication is cheaper than
+      # any scheme for avoiding it.
+      - name: Fetch Monaco fixtures
+        run: |
+          make data/monaco-latest.osm.pbf
+          make -C velo bench_pbf
+          make data/monaco.vlg
+
+      # The servers were built but never exercised here: Windows MSVC runs
+      # these six suites against MSVC binaries and macOS Core against clang
+      # ones, so the MinGW binaries were the last ones nothing drove. They are
+      # the binaries Windows Core itself produces, and the ones a Windows
+      # contributor builds by hand, so "it links" was the weakest claim in the
+      # matrix.
+      #
+      # Each script starts its own server, picks its own port and exits
+      # non-zero on failure. Four run from the repo root and two from their own
+      # directory; that split is the scripts' own convention.
+      - name: Test the API servers
+        run: |
+          bash ralph/api/test_api.sh
+          (cd surge/api && bash test_api.sh)
+          (cd fuelwise/api && bash test_api.sh)
+          bash velo/api/test_api.sh
+          bash carta/api/test_api.sh
+          bash locus/api/test_api.sh
 
   # ==========================================================================
   # macOS Core
@@ -453,9 +482,11 @@ jobs:
   # via `brew --prefix libomp`); macos-latest is Apple Silicon, so those paths
   # match. glpk supplies glpsol for FuelWise's MILP-objective regression.
   #
-  # The live-server curl e2e suites are left out for the same reason as
-  # Windows -- a bigger CI surface than this job needs. Both the full lib
-  # suites and all six e2e suites were validated locally on macOS.
+  # The six live-server curl e2e suites run here too, against clang-built
+  # binaries. BSD userland is the reason this is not merely a copy of the
+  # Windows step: carta's suite checked its PNG with `head -c 8 | grep PNG`,
+  # which BSD grep rejects as binary because 0x89 is not valid UTF-8. It now
+  # compares the signature bytes with od.
   # ==========================================================================
   macos:
     name: macOS Core
