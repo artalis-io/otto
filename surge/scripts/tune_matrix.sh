@@ -30,6 +30,10 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SURGE_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 BENCH_TUNE="$SURGE_DIR/bench_tune"
+
+# --dir and --bks below are absolute POSIX paths handed to a native binary.
+. "$SCRIPT_DIR/../../scripts/msys-path-guard.sh"
+otto_guard_msys_path_conv "The Surge tuning campaign"
 RESULTS_DIR="$SURGE_DIR/benchmarks/results/matrix"
 
 # --- Helpers ---

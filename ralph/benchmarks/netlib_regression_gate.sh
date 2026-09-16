@@ -364,6 +364,13 @@ if [[ ! -x "$BENCH_EXEC" ]]; then
     exit 2
 fi
 
+# The gate builds absolute problem paths from `pwd` and passes them to a native
+# binary, so it cannot run in a shell that has MSYS2 argument conversion turned
+# off. Checked here rather than left to surface as 84 identical "Problem file
+# not found" failures twenty minutes later.
+. "$SCRIPT_DIR/../../scripts/msys-path-guard.sh"
+otto_guard_msys_path_conv "The NETLIB regression gate"
+
 export OMP_NUM_THREADS="${OMP_NUM_THREADS:-1}"
 export KMP_AFFINITY="${KMP_AFFINITY:-disabled}"
 
@@ -543,6 +550,24 @@ while IFS= read -r f; do
         set -e
         if [[ "$ec" -eq 124 && ! -s "$json" ]]; then
             write_timeout_stub_json "$json" "$name" "$HARD_CAP_SEC" "$OUTER_TIMEOUT_SEC" "$ec"
+        fi
+
+        # A problem file the benchmark cannot open is deterministic, not flaky:
+        # retrying it twice and then doing the same for the other 83 burns the
+        # whole run to reach a conclusion available from the first failure.
+        if [[ "$ec" -ne 0 ]] && grep -q "Problem file not found" "$stderr_file" 2>/dev/null; then
+            {
+                echo "ERROR: the benchmark could not open a problem file:"
+                echo "         $f"
+                sed 's/^/         /' "$stderr_file"
+                echo
+                echo "       Aborting rather than repeating this for every remaining problem."
+                echo "       Either the netlib directory is incomplete, or -- on Windows -- this"
+                echo "       shell has MSYS2 argument conversion switched off and the absolute"
+                echo "       path above never reaches the binary intact. See"
+                echo "       scripts/msys-path-guard.sh."
+            } >&2
+            exit 2
         fi
 
         should_retry=0
