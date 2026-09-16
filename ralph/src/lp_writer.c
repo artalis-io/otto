@@ -492,6 +492,119 @@ static void mps_write_marker(FILE *f, int seq, const char *verb) {
     fprintf(f, "    %-8s  %-8s  %-12s   %-8s\n", marker, "'MARKER'", "", verb);
 }
 
+/* Fixed-format MPS delimits fields by column, so a name may legally contain
+ * spaces, and real models use that: forplan.mps has columns "M012T1 #",
+ * "M012T1 )", "M012T1 +" and four more. mps_make_name maps every character
+ * outside [A-Za-z0-9_.$] to '_', which turns all seven into "M012T1__".
+ *
+ * Sanitising each name on its own is what makes that silent. Writing seven
+ * columns under one name does not produce a broken file so much as a different
+ * model: the coefficients merge. glpsol happens to reject the result
+ * ("duplicate coefficient in row 'OBJ'"), but Ralph's own reader would take it.
+ *
+ * So names are built as a set rather than one at a time, and a collision is
+ * resolved by appending the element's own index -- unique by construction, and
+ * stable for a given model, so two runs produce identical files. The loop
+ * repeats because a disambiguated name can in principle collide with a name
+ * that was already present; it settles immediately in practice and is bounded
+ * regardless.
+ */
+static void mps_free_names(char **names, int count) {
+    if (!names) return;
+    for (int i = 0; i < count; i++) free(names[i]);
+    free(names);
+}
+
+/* A small open-addressed set of the names already handed out. Uniqueness has
+ * to be decided against everything issued so far, not within one group of
+ * identical names: a disambiguated "M012T1_1" can collide with a source column
+ * that was already called that, and resolving groups independently regenerates
+ * the same string forever. Deciding each name once, against the whole set,
+ * makes that impossible by construction. */
+typedef struct {
+    int *slots;       /* index into names[], or -1 */
+    size_t mask;
+    char **names;
+} MpsNameSet;
+
+static size_t mps_name_hash(const char *s) {
+    size_t h = 5381;
+    for (; *s; s++) h = ((h << 5) + h) ^ (size_t)(unsigned char)*s;
+    return h;
+}
+
+static int mps_nameset_contains(const MpsNameSet *set, const char *name) {
+    size_t i = mps_name_hash(name) & set->mask;
+    while (set->slots[i] >= 0) {
+        if (strcmp(set->names[set->slots[i]], name) == 0) return 1;
+        i = (i + 1) & set->mask;
+    }
+    return 0;
+}
+
+static void mps_nameset_add(MpsNameSet *set, int idx) {
+    size_t i = mps_name_hash(set->names[idx]) & set->mask;
+    while (set->slots[i] >= 0) i = (i + 1) & set->mask;
+    set->slots[i] = idx;
+}
+
+/* Returns NULL on allocation failure; caller frees with mps_free_names. */
+static char **mps_build_unique_names(const LPModel *lp, int count, int is_var) {
+    if (count < 0) return NULL;
+    size_t n = (size_t)(count > 0 ? count : 1);
+
+    char **names = calloc(n, sizeof(char *));
+    if (!names) return NULL;
+    for (int i = 0; i < count; i++) {
+        names[i] = malloc(LP_MAX_NAME);
+        if (!names[i]) { mps_free_names(names, count); return NULL; }
+        names[i][0] = '\0';
+    }
+
+    size_t slots_n = 16;
+    while (slots_n < n * 2 + 1) slots_n <<= 1;
+    int *slots = malloc(slots_n * sizeof(int));
+    if (!slots) { mps_free_names(names, count); return NULL; }
+    for (size_t k = 0; k < slots_n; k++) slots[k] = -1;
+
+    MpsNameSet set = { slots, slots_n - 1, names };
+
+    char base[LP_MAX_NAME];
+    for (int i = 0; i < count; i++) {
+        if (is_var) {
+            mps_get_var_name(lp, i, base, sizeof(base));
+        } else {
+            mps_get_con_name(lp, i, base, sizeof(base));
+        }
+        snprintf(names[i], LP_MAX_NAME, "%s", base);
+
+        if (mps_nameset_contains(&set, names[i])) {
+            /* Field 2 of a fixed-format record is 8 columns wide, so the
+             * disambiguated name has to fit where the original did: appending
+             * to an already-8-character name only moves the complaint to
+             * "positions 13-14 must be blank". The suffix replaces the tail
+             * instead, and only for names that were inside the field to begin
+             * with -- a model with longer names was never fixed-format
+             * representable, so widening one of those costs nothing already
+             * available. */
+            int cap = (strlen(base) <= 8) ? 8 : (LP_MAX_NAME - 1);
+            long limit = (long)count * 2 + 16;
+            for (long k = 1; k <= limit; k++) {
+                char suffix[24];
+                snprintf(suffix, sizeof(suffix), "_%ld", k);
+                int keep = cap - (int)strlen(suffix);
+                if (keep < 1) keep = 1;
+                snprintf(names[i], LP_MAX_NAME, "%.*s%s", keep, base, suffix);
+                if (!mps_nameset_contains(&set, names[i])) break;
+            }
+        }
+        mps_nameset_add(&set, i);
+    }
+
+    free(slots);
+    return names;
+}
+
 int ralph_core_write_mps(const RalphLPModel *model, const char *filename) {
     if (!model || !filename) return -1;
 
@@ -505,8 +618,22 @@ int ralph_core_write_mps(const RalphLPModel *model, const char *filename) {
         }
     }
 
+    /* Built before the file is opened so an allocation failure leaves nothing
+     * half-written on disk. */
+    char **var_names = mps_build_unique_names(lp, lp->num_vars, 1);
+    char **con_names = mps_build_unique_names(lp, lp->num_cons, 0);
+    if ((lp->num_vars > 0 && !var_names) || (lp->num_cons > 0 && !con_names)) {
+        mps_free_names(var_names, lp->num_vars);
+        mps_free_names(con_names, lp->num_cons);
+        return -1;
+    }
+
     FILE *f = fopen(filename, "w");
-    if (!f) return -1;
+    if (!f) {
+        mps_free_names(var_names, lp->num_vars);
+        mps_free_names(con_names, lp->num_cons);
+        return -1;
+    }
 
     const char *obj_row = "OBJ";
     const char *rhs_name = "RHS1";
@@ -537,20 +664,17 @@ int ralph_core_write_mps(const RalphLPModel *model, const char *filename) {
     fprintf(f, "ROWS\n");
     fprintf(f, MPS_REC_TYPE_NAME, "N", obj_row);
     for (int i = 0; i < lp->num_cons; i++) {
-        char row_name[LP_MAX_NAME];
         char sense_buf[2] = {'E', '\0'};
         if (lp->sense && (lp->sense[i] == 'L' || lp->sense[i] == 'G' || lp->sense[i] == 'E')) {
             sense_buf[0] = lp->sense[i];
         }
-        mps_get_con_name(lp, i, row_name, sizeof(row_name));
-        fprintf(f, MPS_REC_TYPE_NAME, sense_buf, row_name);
+        fprintf(f, MPS_REC_TYPE_NAME, sense_buf, con_names[i]);
     }
 
     fprintf(f, "COLUMNS\n");
     int in_integer = 0;
     int marker_count = 0;
     for (int j = 0; j < lp->num_vars; j++) {
-        char col_name[LP_MAX_NAME];
         char var_type = lp->var_type ? lp->var_type[j] : 'C';
         int is_integer = (var_type == 'I' || var_type == 'B');
 
@@ -562,7 +686,7 @@ int ralph_core_write_mps(const RalphLPModel *model, const char *filename) {
             in_integer = 0;
         }
 
-        mps_get_var_name(lp, j, col_name, sizeof(col_name));
+        const char *col_name = var_names[j];
 
         if (lp->c && fabs(lp->c[j]) > 1e-15) {
             char vbuf[MPS_VAL_BUF];
@@ -575,11 +699,9 @@ int ralph_core_write_mps(const RalphLPModel *model, const char *filename) {
             double val = lp->A->values[p];
             if (fabs(val) <= 1e-15) continue;
 
-            char row_name[LP_MAX_NAME];
-            mps_get_con_name(lp, i, row_name, sizeof(row_name));
             char vbuf[MPS_VAL_BUF];
             mps_fmt_value(vbuf, sizeof(vbuf), val);
-            fprintf(f, MPS_REC_NAME_NAME_VAL, col_name, row_name, vbuf);
+            fprintf(f, MPS_REC_NAME_NAME_VAL, col_name, con_names[i], vbuf);
         }
     }
     if (in_integer) {
@@ -594,11 +716,9 @@ int ralph_core_write_mps(const RalphLPModel *model, const char *filename) {
     }
     for (int i = 0; i < lp->num_cons; i++) {
         if (!lp->b || fabs(lp->b[i]) <= 1e-15) continue;
-        char row_name[LP_MAX_NAME];
-        mps_get_con_name(lp, i, row_name, sizeof(row_name));
         char vbuf[MPS_VAL_BUF];
         mps_fmt_value(vbuf, sizeof(vbuf), lp->b[i]);
-        fprintf(f, MPS_REC_NAME_NAME_VAL, rhs_name, row_name, vbuf);
+        fprintf(f, MPS_REC_NAME_NAME_VAL, rhs_name, con_names[i], vbuf);
     }
 
     int write_bounds = 0;
@@ -615,12 +735,10 @@ int ralph_core_write_mps(const RalphLPModel *model, const char *filename) {
     if (write_bounds) {
         fprintf(f, "BOUNDS\n");
         for (int j = 0; j < lp->num_vars; j++) {
-            char col_name[LP_MAX_NAME];
             char var_type = lp->var_type ? lp->var_type[j] : 'C';
             double lb = lp->lb ? lp->lb[j] : 0.0;
             double ub = lp->ub ? lp->ub[j] : RALPH_LP_INFINITY;
-
-            mps_get_var_name(lp, j, col_name, sizeof(col_name));
+            const char *col_name = var_names[j];
 
             if (var_type == 'B') {
                 fprintf(f, MPS_REC_TYPE_NAME_NAME, "BV", bnd_name, col_name);
@@ -657,6 +775,8 @@ int ralph_core_write_mps(const RalphLPModel *model, const char *filename) {
 
     fprintf(f, "ENDATA\n");
     fclose(f);
+    mps_free_names(var_names, lp->num_vars);
+    mps_free_names(con_names, lp->num_cons);
     return 0;
 }
 
