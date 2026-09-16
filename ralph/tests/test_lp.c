@@ -516,6 +516,80 @@ static void test_write_mps_name_collisions(void) {
 }
 
 /* ============================================================================
+ * Test: a ranged row survives the MPS round-trip as a range
+ *
+ * mps_reader.c expands a ranged row into two constraints, because the model
+ * carries no range concept. Writing them back as two rows is correct but
+ * lossy in a way that bites: nesm.mps came out as 751 rows instead of 663, and
+ * one of the computed right-hand sides needed 18 characters to round-trip,
+ * which no fixed-format field 4 can hold. The writer now folds the pair back
+ * into a row plus a RANGES entry.
+ * ============================================================================ */
+
+static void test_write_mps_ranges(void) {
+    printf("\n=== Test: MPS RANGES Reconstruction ===\n");
+
+    RalphModel *model = ralph_test_create();
+    ASSERT(model != NULL, "Model created");
+    ralph_test_set_obj_sense(model, RALPH_MINIMIZE);
+    ralph_test_add_var(model, 0.0, 10.0, 1.0, RALPH_CONTINUOUS);
+    ralph_test_add_var(model, 0.0, 10.0, 1.0, RALPH_CONTINUOUS);
+
+    /* The shape mps_reader.c produces for a ranged row: same coefficients,
+     * G with the lower bound then L with the upper. */
+    int idx[2] = {0, 1};
+    double val[2] = {1.0, 1.0};
+    ralph_test_add_constraint(model, 2, idx, val, RALPH_GREATER_EQUAL, 2.0);
+    ralph_test_add_constraint(model, 2, idx, val, RALPH_LESS_EQUAL, 5.0);
+
+    char path[320];
+    ASSERT(ralph_tmp_path(path, sizeof(path), "ranges.mps") != NULL,
+           "Resolved a temp path");
+    ASSERT(ralph_test_write_mps(model, path) == 0, "MPS written");
+
+    FILE *f = fopen(path, "r");
+    ASSERT(f != NULL, "MPS reopened");
+
+    char line[1024];
+    int saw_ranges = 0, row_entries = 0, in_rows = 0;
+    double range_val = 0.0;
+    while (f && fgets(line, sizeof(line), f)) {
+        if (strncmp(line, "ROWS", 4) == 0)    { in_rows = 1; continue; }
+        if (strncmp(line, "COLUMNS", 7) == 0) { in_rows = 0; continue; }
+        if (in_rows && (line[0] == ' ')) row_entries++;
+        if (strncmp(line, "RANGES", 6) == 0) { saw_ranges = 1; continue; }
+        if (saw_ranges && line[0] == ' ' && range_val == 0.0) {
+            char a[64], b[64];
+            double v = 0.0;
+            if (sscanf(line, "%63s %63s %lf", a, b, &v) == 3) range_val = v;
+        }
+    }
+    if (f) fclose(f);
+
+    /* One N row plus one constraint row, not one N row plus two. */
+    ASSERT(row_entries == 2, "Ranged pair emits one constraint row, not two");
+    ASSERT(saw_ranges == 1, "A RANGES section is written");
+    ASSERT_EQ_DBL(range_val, 3.0, "Range value is hi - lo");
+
+    /* And it has to mean the same thing coming back. */
+    RalphModel *back = ralph_test_create();
+    ASSERT(ralph_test_read_mps(back, path) == 0, "MPS read back");
+    ASSERT(ralph_test_get_num_cons(back) == 2,
+           "Reader re-expands the range into two constraints");
+
+    ralph_test_set_int_param(model, "verbose", 0);
+    ralph_test_set_int_param(back, "verbose", 0);
+    ralph_test_optimize(model);
+    ralph_test_optimize(back);
+    ASSERT(ralph_test_get_status(back) == RALPH_STATUS_OPTIMAL, "Round-trip optimal");
+    ASSERT_EQ_DBL(ralph_test_get_objval(back), ralph_test_get_objval(model),
+                  "Objective survives the range round-trip");
+
+    ralph_test_free(model);
+    ralph_test_free(back);
+}
+
+/* ============================================================================
  * Test: Name management API
  * ============================================================================ */
 
@@ -656,6 +730,7 @@ int main(int argc, char **argv) {
     test_write_mps_format();
     test_write_mps_max_sense();
     test_write_mps_name_collisions();
+    test_write_mps_ranges();
     test_name_api();
     test_solution_buf();
     test_invalid_file();

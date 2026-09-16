@@ -2257,13 +2257,6 @@ double tableau_get_rc(SimplexTableau *tab, int j) {
     return rc;
 }
 
-/* Invalidate reduced costs (call after basis change) */
-static inline void tableau_invalidate_rc(SimplexTableau *tab) {
-    tab->duals_valid = 0;
-    tab->rc_all_valid = 0;
-}
-
-
 /* PHASE1_FORCE_EXTREME_TINY_THETA_RELAX_REFACTOR_* moved to simplex_internal.h */
 /* Failed-stabilize retry + recompute helpers moved to simplex_phase1_stabilize.c (R3.6) */
 /* ============================================================================
