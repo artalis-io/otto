@@ -1,0 +1,35 @@
+{
+  "nx_schema": 2,
+  "version": "reconcile-selftest-good",
+  "output_type": "record",
+  "_comment": "CI fixture (synthetic). Exercises merge-template, regex, conditional, a fractional double, and a validate array so Stage X runs (also guards the precision fix). Reconciler MUST pass.",
+  "multi_transforms": [
+    {"type": "merge", "sources": [4, 3, 2], "template": "{0}, {1} {2}", "target": "address"},
+    {"type": "regex", "source": 6, "pattern": "([0-9]{1,2}:[0-9]{2}) *- *([0-9]{1,2}:[0-9]{2})",
+     "targets": [{"field": "tw_start", "group": 1}, {"field": "tw_end", "group": 2}]},
+    {"type": "conditional", "source": 7,
+     "conditions": [
+       {"match": "liftgate", "set": {"field": "tail_lift", "value": "true"}},
+       {"match": ".*", "set": {"field": "tail_lift", "value": "false"}}
+     ]}
+  ],
+  "columns": [
+    {"source": 0, "target": "id",        "type": "string", "transforms": ["trim"], "required": true},
+    {"source": 1, "target": "name",      "type": "string", "transforms": ["trim"]},
+    {"source": 2, "target": "city",      "type": "string", "transforms": ["trim"]},
+    {"source": 3, "target": "zip",       "type": "string", "transforms": ["trim"]},
+    {"source": 8, "target": "address",   "type": "string"},
+    {"source": 5, "target": "weight",    "type": "double", "precision": 10, "validate": {"min": 0}},
+    {"source": 9, "target": "tw_start",  "type": "string", "default": ""},
+    {"source": 10, "target": "tw_end",   "type": "string", "default": ""},
+    {"source": 6, "target": "window_raw","type": "string", "transforms": ["trim"], "default": ""},
+    {"source": 11, "target": "tail_lift","type": "bool", "default": "false"}
+  ],
+  "derived": [
+    {"target": "source", "value": "reconcile-selftest"}
+  ],
+  "row_id": {"template": "s-{id}", "slugify": true},
+  "validate": [
+    {"type": "unique", "fields": ["id"], "severity": "warning"}
+  ]
+}

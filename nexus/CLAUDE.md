@@ -281,3 +281,21 @@ python3 tools/nx_schema_review.py draft.json --output schemas/
 - Structured output via Claude tool_use for guaranteed valid JSON
 - Few-shot prompting from `schemas/examples/` directory
 - Versioned output: `{domain}-{region}-{entity}-v{N}`
+
+## Reconciliation & Ingest Gate
+
+Provenance (`source_sha256`) and determinism let you tie canonical output to
+exact input bytes, but they don't prove each transformed field derives faithfully
+from raw. `scripts/reconcile.py` closes that gap: it re-executes the schema's
+transform grammar (merge/split/regex/conditional/coalesce) against the raw cells
+and diffs field-by-field against the canonical output.
+
+| Script | Purpose |
+|--------|---------|
+| `scripts/reconcile.py <in> --schema <s>` | Backtrack canonical → raw. Checks provenance; reports what it can't mechanically verify (slug `id`, C compute funcs). Exit 1 on any mismatch. |
+| `scripts/ingest.sh <in> <schema> [out]` | **Ingest gate**: transform + reconcile (hard gate) + semantic summary (advisory). Use instead of calling `nx_pipeline` directly on client data. |
+| `scripts/semantic_checks.py <in> --schema <s>` | Generic per-file sanity: time windows, density, GVW, duplicates. Non-blocking. |
+| `make test-reconcile` | CI self-test on synthetic fixtures (`tests/reconcile/`) with a positive case and a negative control (a truncating schema the reconciler must catch). Chained into `make test`. |
+
+Numeric compares use `rel_tol=1e-6`. Stage X re-serializes doubles at 15 sig
+figs (`nx_validate.c`) so it no longer degrades per-column `precision`.
