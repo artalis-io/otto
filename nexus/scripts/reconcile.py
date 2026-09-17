@@ -130,15 +130,34 @@ def coerce_expect(val, col):
     return ("str", val)
 
 
+def default_nx_path():
+    """Where the built nx_pipeline lives.
+
+    The Makefile writes `nx_pipeline`, and on Windows the compiler appends
+    `.exe` to that, so a bare name is only correct on POSIX. This is why
+    `make -C nexus test-reconcile` failed on Windows and nowhere else: CI runs
+    it on Linux, so nothing ever saw it.
+    """
+    here = os.path.dirname(os.path.abspath(__file__))
+    for name in ("nx_pipeline", "nx_pipeline.exe"):
+        candidate = os.path.join(here, "..", name)
+        if os.path.exists(candidate):
+            return candidate
+    return os.path.join(here, "..", "nx_pipeline")
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("input")
     ap.add_argument("--schema", required=True)
-    ap.add_argument("--nx", default=os.path.join(os.path.dirname(__file__), "..", "nx_pipeline"))
+    ap.add_argument("--nx", default=default_nx_path(),
+                    help="path to the nx_pipeline binary")
     ap.add_argument("--show", type=int, default=40, help="max mismatches to print")
     args = ap.parse_args()
 
     nx = os.path.abspath(args.nx)
+    if not os.path.exists(nx) and os.path.exists(nx + ".exe"):
+        nx += ".exe"          # an explicit --nx may also omit the suffix
     if not os.path.exists(nx):
         print(f"nx_pipeline not found: {nx}", file=sys.stderr); return 2
 

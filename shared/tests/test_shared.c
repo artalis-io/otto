@@ -457,6 +457,11 @@ TEST(pb_svarint_edge)
     ASSERT_EQ(n, 1);
 
     int m = sh_pb_read_svarint(buf, n, &value);
+    /* The byte count matters as much as the value: a decoder that got
+     * -1 right but consumed the wrong number of bytes desynchronises
+     * every field after it in the message. pb_svarint_roundtrip above
+     * checks this; here it was left out, which is why m was unused. */
+    ASSERT_EQ(m, n);
     ASSERT_EQ(value, -1);
 }
 
