@@ -80,6 +80,29 @@ static void collect_blocks(void *user, const ShPdf2strucBlock *block)
  * ============================================================================ */
 
 /* Single page, one "Hello" text run */
+/* Crafted by scratchpad/gen_tests.py -- see the audit notes. */
+static const char XREF_NEGATIVE_W_PDF[] =
+    "%PDF-1.5\n1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj\n2 0 ob"
+    "j\n<< /Type /Pages /Kids [3 0 R] /Count 1 >>\nendobj\n3 0 obj\n<< /T"
+    "ype /Page /Parent 2 0 R >>\nendobj\n4 0 obj\n<< /Type /XRef /Size 5 "
+    "/W [-5 10 10] /Index [0 5] /Root 1 0 R /Filter /FlateDecode /Length "
+    "23 >>\nstream\nx\234c`dbfaec\347\340\344\342\346\341\345\003\000\002"
+    "?\000j\nendstream\nendobj\nstartxref\n162\n%%EOF\n";
+
+static const size_t XREF_NEGATIVE_W_PDF_LEN = 335;
+
+static const char PREDICTOR_HUGE_COLUMNS_PDF[] =
+    "%PDF-1.5\n1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj\n2 0 ob"
+    "j\n<< /Type /Pages /Kids [3 0 R] /Count 1 >>\nendobj\n3 0 obj\n<< /T"
+    "ype /Page /Parent 2 0 R /Contents 4 0 R >>\nendobj\n4 0 obj\n<< /Len"
+    "gth 12 /Filter /FlateDecode /DecodeParms << /Predictor 12 /Columns 2"
+    "147483647 >> >>\nstream\nx\234st\034\331\000\000\243`A\001\nendstrea"
+    "m\nendobj\nxref\n0 5\n0000000000 65535 f \n0000000009 00000 n \n0000"
+    "000058 00000 n \n0000000115 00000 n \n0000000178 00000 n \ntrailer\n"
+    "<< /Size 5 /Root 1 0 R >>\nstartxref\n314\n%%EOF\n";
+
+static const size_t PREDICTOR_HUGE_COLUMNS_PDF_LEN = 477;
+
 static const char MINIMAL_PDF[] =
     "%PDF-1.4\n1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj\n2 0 obj\n<< /"
     "Type /Pages /Kids [3 0 R] /Count 1 >>\nendobj\n3 0 obj\n<< /Type /Page /P"
@@ -187,6 +210,57 @@ static const char EMPTY_PAGE_PDF[] =
 /* ============================================================================
  * API Tests
  * ============================================================================ */
+
+/*
+ * Both of these are crafted inputs from the shared/ audit. They are cheap to
+ * keep and neither is reachable by accident, so a regression here would
+ * otherwise only show up as a sanitizer report on someone's machine.
+ */
+
+/* /W field widths are checked individually, not just as a sum. The read loops
+ * run max(0, w) times each, so a negative width contributes nothing to the
+ * bytes consumed while still lowering entry_size: [-5 10 10] sums to 15,
+ * passed the bound, then consumed 20, advancing past what the guard had
+ * verified. Validated before decompression, so the stream contents do not
+ * matter here. */
+TEST(xref_stream_rejects_negative_w)
+{
+    ShPdf2strucCtx *ctx = sh_pdf2struc_create();
+    ASSERT(ctx != NULL);
+
+    ShPdf2strucOpts opt;
+    sh_pdf2struc_opts_default(&opt);
+
+    ShPdf2strucStatus st = sh_pdf2struc_extract_mem(
+        ctx, (const uint8_t *)XREF_NEGATIVE_W_PDF,
+        XREF_NEGATIVE_W_PDF_LEN, &opt, NULL, NULL);
+
+    ASSERT(st != SH_PDF2STRUC_OK);
+    ASSERT(strstr(sh_pdf2struc_last_error(ctx), "negative field width") != NULL);
+    sh_pdf2struc_destroy(ctx);
+}
+
+/* Columns comes from DecodeParms unbounded, and row_bytes + 1 overflowed for
+ * anything near INT_MAX -- confirmed by UBSan on a 477-byte file before the
+ * bound was added. The parse must simply not perform that arithmetic; whether
+ * the document yields content is beside the point. */
+TEST(predictor_rejects_huge_columns)
+{
+    ShPdf2strucCtx *ctx = sh_pdf2struc_create();
+    ASSERT(ctx != NULL);
+
+    ShPdf2strucOpts opt;
+    sh_pdf2struc_opts_default(&opt);
+
+    ShPdf2strucStatus st = sh_pdf2struc_extract_mem(
+        ctx, (const uint8_t *)PREDICTOR_HUGE_COLUMNS_PDF,
+        PREDICTOR_HUGE_COLUMNS_PDF_LEN, &opt, NULL, NULL);
+
+    /* The document still parses: the predictor is simply declined, rather
+     * than the file being rejected or the arithmetic being performed. */
+    ASSERT(st == SH_PDF2STRUC_OK);
+    sh_pdf2struc_destroy(ctx);
+}
 
 TEST(create_destroy)
 {
@@ -761,6 +835,8 @@ int main(void)
     printf("==================\n\n");
 
     printf("API tests:\n");
+    RUN_TEST(xref_stream_rejects_negative_w);
+    RUN_TEST(predictor_rejects_huge_columns);
     RUN_TEST(create_destroy);
     RUN_TEST(opts_default);
     RUN_TEST(null_inputs);

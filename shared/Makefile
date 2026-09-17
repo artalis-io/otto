@@ -152,7 +152,10 @@ $(TEST_EOV_BIN): tests/test_eov.c $(LIB_FILE)
 	$(CC) $(CFLAGS) $(INCLUDES) $< $(call link_lib,.,shared) $(LDFLAGS) $(EXE_OUT)$@
 
 # Run all tests
-test: $(TEST_BIN) $(TEST_FONT_BIN) $(TEST_JSON_BIN) $(TEST_XML_BIN) $(TEST_CSV_BIN) $(TEST_GEOJSON_BIN) $(TEST_FS_BIN) $(TEST_SHA256_BIN) $(TEST_EOV_BIN)
+# test-asan is `clean test`, so anything missing from this list is never seen
+# by a sanitizer. pdf2struc was missing: the parser with the largest untrusted
+# attack surface in shared/ was the one the sanitizer job did not exercise.
+test: $(TEST_BIN) $(TEST_FONT_BIN) $(TEST_JSON_BIN) $(TEST_XML_BIN) $(TEST_CSV_BIN) $(TEST_GEOJSON_BIN) $(TEST_FS_BIN) $(TEST_SHA256_BIN) $(TEST_EOV_BIN) $(TEST_PDF2STRUC_BIN)
 	./$(TEST_BIN)
 	./$(TEST_FONT_BIN)
 	./$(TEST_JSON_BIN)
@@ -162,6 +165,7 @@ test: $(TEST_BIN) $(TEST_FONT_BIN) $(TEST_JSON_BIN) $(TEST_XML_BIN) $(TEST_CSV_B
 	./$(TEST_FS_BIN)
 	./$(TEST_SHA256_BIN)
 	./$(TEST_EOV_BIN)
+	./$(TEST_PDF2STRUC_BIN)
 
 # Run JSON tests only
 test-json: $(TEST_JSON_BIN)
