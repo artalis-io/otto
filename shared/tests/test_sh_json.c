@@ -366,6 +366,52 @@ TEST(number_max_double)
     sh_arena_free(arena);
 }
 
+/* strtod saturates to HUGE_VAL on overflow, so these are syntactically valid
+ * JSON numbers whose value cannot be represented. Accepting them hands the
+ * caller an infinity that passes any range check written as two comparisons,
+ * which is how sh_parse_coord came to reject "inf/NaN from malformed input
+ * like 1e1000" at its own layer. The parser rejects them now. */
+TEST(number_overflow_rejected)
+{
+    SHArena *arena = sh_arena_create(1024);
+    ShJsonValue *root = NULL;
+    ASSERT_EQ(sh_json_parse("1e999", 5, arena, &root), SH_JSON_ERR_INVALID_NUMBER);
+    sh_arena_free(arena);
+}
+
+TEST(number_negative_overflow_rejected)
+{
+    SHArena *arena = sh_arena_create(1024);
+    ShJsonValue *root = NULL;
+    ASSERT_EQ(sh_json_parse("-1e999", 6, arena, &root), SH_JSON_ERR_INVALID_NUMBER);
+    sh_arena_free(arena);
+}
+
+/* A 309-digit integer overflows the same way without an exponent in sight. */
+TEST(number_huge_integer_rejected)
+{
+    SHArena *arena = sh_arena_create(4096);
+    ShJsonValue *root = NULL;
+    const char *big =
+        "17976931348623158079372897140530341507993413271003782693617377898044"
+        "49682927647509466490179775872070963302864166928879109465555478519404"
+        "02630657488671505820681908902000708383676273854845817711531764475730"
+        "27006985557136695962284291481986083493647529271907416844436551070434"
+        "2711559699508093042880177904174497792";
+    ASSERT_EQ(sh_json_parse(big, strlen(big), arena, &root),
+              SH_JSON_ERR_INVALID_NUMBER);
+    sh_arena_free(arena);
+}
+
+/* Underflow is not overflow: it rounds to zero, which is representable. */
+TEST(number_underflow_accepted)
+{
+    SHArena *arena = sh_arena_create(1024);
+    ShJsonValue *v = parse_ok("1e-999", arena);
+    ASSERT(sh_json_as_double(v, -1.0) == 0.0);
+    sh_arena_free(arena);
+}
+
 TEST(number_scientific_upper)
 {
     SHArena *arena = sh_arena_create(1024);
@@ -1502,6 +1548,10 @@ int main(void)
     RUN_TEST(number_large_integer);
     RUN_TEST(number_small_float);
     RUN_TEST(number_max_double);
+    RUN_TEST(number_overflow_rejected);
+    RUN_TEST(number_negative_overflow_rejected);
+    RUN_TEST(number_huge_integer_rejected);
+    RUN_TEST(number_underflow_accepted);
     RUN_TEST(number_scientific_upper);
     RUN_TEST(number_scientific_lower);
     RUN_TEST(number_scientific_positive_exp);

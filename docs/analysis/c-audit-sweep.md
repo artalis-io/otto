@@ -67,11 +67,72 @@ it -- which also takes netlib.org off the critical path for building the NETLIB
 corpus. The vendored file was byte-identical to what that host serves, so the
 binary is unchanged.
 
+## Deep pass: shared/ and the API servers
+
+The mechanical sweep above said where to look next: `shared/` links into all six
+servers, so a defect there has the widest reach. Of its 46k lines, 28k are
+generated font tables, leaving ~18k of logic -- and the file that matters most
+is `sh_json.c`, because all six servers parse request bodies with it.
+
+### Findings
+
+**`sh_json` accepted numbers it could not represent.** `strtod` saturates to
+`HUGE_VAL` on overflow, so `1e999` -- or any integer past ~1.8e308, with no
+exponent in sight -- parsed as a valid JSON number and came back as infinity
+with `SH_JSON_OK`. Verified by harness before fixing: `{"x": 1e999}` yielded
+`inf`, a 309-digit integer yielded `inf`.
+
+An infinity is worse than a rejection because it survives the usual validation
+shape. A range check written as two comparisons passes it in one direction, and
+fails *both* for a NaN. The codebase already knew this where someone had been
+bitten: `sh_parse_coord()` rejects "inf/NaN from malformed input like 1e1000"
+and `lc_api.c` checks `isnan` with a comment explaining that "a NaN fails every
+comparison". `parse_number` now rejects non-finite results, which closes the
+class at the parser instead of at each consumer. Finite values are untouched,
+`DBL_MAX` included.
+
+**`ralph/src/ralph_api.c` cast a request body's double straight to `int`.**
+
+    int parsed_timeout = (int)sh_json_as_double(sh_json_get(root, "timeout_ms"), 0.0);
+
+`(int)` on a value outside `int`'s range is undefined, and `{"timeout_ms":
+1e999}` is a POST body away. `sh_json_as_int()` exists and clamps; this bypassed
+it. In practice the damage was bounded -- the result is range-checked on the next
+line, and on x86 the cast yields something that fails `> 0` -- but undefined is
+undefined. It uses `sh_json_as_int` now. Grepping the pattern found exactly one
+other class of instance, all in nexus tests parsing their own output.
+
+### Checked and sound
+
+Worth recording so the next pass does not redo it:
+
+- **Recursion depth.** `parse_value` -> `parse_array`/`parse_object` ->
+  `parse_value` is bounded by `SH_JSON_MAX_DEPTH` (64), checked in both
+  recursive functions. Deeply nested input cannot exhaust the stack. The
+  unbalanced `p->depth--` on error paths does not matter: the parse aborts.
+- **Two-pass string decoding.** `parse_string` counts the output length, then
+  allocates, then writes. Divergence between passes would be a heap overflow, so
+  each case was compared: both call the same `encode_utf8`, which cannot return
+  0 for any reachable code point (a bare `\uXXXX` is at most 0xFFFF, a surrogate
+  pair at most 0x10FFFF), and pass 1 rejects the control characters and invalid
+  escapes that pass 2 does not re-check.
+- **`parse_hex4`** bounds-checks against the input length before reading 4 digits.
+- **`sh_json_as_int`** clamps at both ends, so an infinity cannot reach the cast;
+  NaN would slip through the comparisons but cannot be produced by
+  `parse_number`, which only accepts JSON number grammar.
+- **Coordinate paths are hardened.** `sh_parse_coord` rejects non-finite values
+  and range-checks lat/lon; locus checks `isnan` explicitly. velo and carta have
+  no such checks in their handlers because they go through `sh_parse_coord`.
+- **Request limits.** All six servers rate-limit. Keel bounds bodies at 1 MB and
+  headers at 8 KB by default, which is what carta and locus rely on.
+
 ## What this sweep did not cover
 
 Everything semantic. Use-after-free, double-free, leak tracing, null-deref
 paths, resource lifetimes and the Keel hardening checklist are per-module work
-and were not attempted. If they are picked up, `shared/` is the place to start
--- it links into all six servers, so anything there has the widest blast radius
--- followed by the six `api/` servers, which are the only code that touches
-untrusted input.
+and were not attempted. `sh_json.c` has now had the deep pass described above, and
+the six servers' request paths were traced for numeric validation. What remains
+unexamined is the rest of shared's parsers -- `sh_csv.c`, `sh_xml.c`,
+`sh_inflate.c`, `sh_protobuf.c` and the 3.1k lines of `sh_pdf2struc*.c` -- all of
+which decode untrusted bytes and none of which were read line by line here.
+`sh_pdf2struc` is the largest and the least exercised; it would be next.

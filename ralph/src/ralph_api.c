@@ -290,7 +290,10 @@ static int handle_solve(RalphAPIContext *ctx, const ShApiRequest *req,
         problem_format[sizeof(problem_format) - 1] = '\0';
 
         /* Get timeout if specified */
-        int parsed_timeout = (int)sh_json_as_double(sh_json_get(root, "timeout_ms"), 0.0);
+        /* sh_json_as_int clamps to INT_MIN/INT_MAX; casting the double
+         * directly is undefined for anything outside int's range, which a
+         * request body could ask for. */
+        int parsed_timeout = sh_json_as_int(sh_json_get(root, "timeout_ms"), 0);
         if (parsed_timeout > 0 && parsed_timeout <= RALPH_API_MAX_TIMEOUT_MS) {
             timeout_ms = parsed_timeout;
         }
