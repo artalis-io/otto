@@ -540,6 +540,70 @@ TEST(pbf_decompress_blob_oob_length)
     sh_pbf_blob_free(&out);
 }
 
+/* Regression: raw_size is a varint straight out of the file and was handed to
+ * malloc() unchecked. A blob claiming 0x7ffffffffff asked the allocator for
+ * eight terabytes from a hundred-byte input -- found by fuzzing carta, which
+ * reaches this through ct_pbf; velo and locus reach it too.
+ *
+ * A huge value fails cleanly on an ordinary allocator, which is why this sat
+ * unnoticed; the damaging case is a value just under whatever the machine will
+ * hand over. Both are refused now, by the format's own 32 MiB bound.
+ *
+ * Field 2 (RAW_SIZE) varint, then field 3 (ZLIB_DATA) with a short payload --
+ * the allocation happens before the payload is looked at. */
+TEST(pbf_decompress_blob_absurd_raw_size)
+{
+    /* raw_size = 0x7ffffffffff, the value the fuzzer produced. */
+    const uint8_t huge[] = {
+        0x10, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0x0F,   /* 2: raw_size */
+        0x1A, 0x02, 0x78, 0x01                            /* 3: zlib_data */
+    };
+    SHPBFBlob out;
+    memset(&out, 0, sizeof(out));
+    SHStatus st = sh_pbf_decompress_blob(huge, sizeof(huge), &out);
+    /* Specifically INVALID_PARAM -- refused by the size cap before allocating.
+     * `!= SH_OK` would not distinguish anything: pre-fix this reached malloc,
+     * which returned NULL for eight terabytes, and the function reported
+     * OUT_OF_MEMORY. That is also not SH_OK, so a looser assertion here passed
+     * against the unfixed source and tested nothing. */
+    ASSERT_EQ(st, SH_ERROR_INVALID_PARAM);
+    ASSERT(out.decompressed == NULL);
+    sh_pbf_blob_free(&out);
+
+    /* And the case that actually hurts: a size an allocator would satisfy. */
+    const uint8_t big[] = {
+        0x10, 0x80, 0x80, 0x80, 0x20,                     /* 2: raw_size = 64MB */
+        0x1A, 0x02, 0x78, 0x01                            /* 3: zlib_data */
+    };
+    memset(&out, 0, sizeof(out));
+    st = sh_pbf_decompress_blob(big, sizeof(big), &out);
+    /* Same reasoning, and this is the case that matters: 64MB is a size the
+     * allocator hands over, so pre-fix this allocated it, failed in inflate on
+     * the bogus payload, and reported that instead. */
+    ASSERT_EQ(st, SH_ERROR_INVALID_PARAM);
+    ASSERT(out.decompressed == NULL);
+    sh_pbf_blob_free(&out);
+
+    /* And a real blob, to show the cap has not simply disabled the path.
+     * Status alone cannot tell "refused by the cap" from "inflate rejected
+     * the payload" -- sh_inflate reports INVALID_PARAM for a truncated stream
+     * too -- so this uses a genuine zlib stream and checks it comes back. */
+    const uint8_t good[] = {
+        0x10, 0x13,                                  /* 2: raw_size = 19 */
+        0x1A, 0x1B,                                  /* 3: zlib_data, 27 bytes */
+        0x78, 0x9C, 0xCB, 0x48, 0xCD, 0xC9, 0xC9, 0x57, 0x28, 0xCF,
+        0x2F, 0xCA, 0x49, 0xD1, 0x51, 0x48, 0x54, 0x48, 0xCA, 0xC9,
+        0x4F, 0x02, 0x00, 0x46, 0x25, 0x06, 0xC9
+    };
+    memset(&out, 0, sizeof(out));
+    st = sh_pbf_decompress_blob(good, sizeof(good), &out);
+    ASSERT_EQ(st, SH_OK);
+    ASSERT_EQ(out.len, (size_t)19);
+    ASSERT(out.data != NULL);
+    ASSERT(memcmp(out.data, "hello world, a blob", 19) == 0);
+    sh_pbf_blob_free(&out);
+}
+
 TEST(pb_delta_decode)
 {
     int64_t arr[] = {100, 5, 10, -3, 7};
@@ -5472,6 +5536,7 @@ int main(void)
     RUN_TEST(pb_svarint_edge);
     RUN_TEST(pb_tag_roundtrip);
     RUN_TEST(pbf_decompress_blob_oob_length);
+    RUN_TEST(pbf_decompress_blob_absurd_raw_size);
     RUN_TEST(pb_fixed32_roundtrip);
     RUN_TEST(pb_fixed64_roundtrip);
     RUN_TEST(pb_packed_svarint);
