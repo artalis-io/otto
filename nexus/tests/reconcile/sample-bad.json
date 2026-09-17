@@ -9,7 +9,7 @@
      "targets": [{"field": "tw_start", "group": 1}, {"field": "tw_end", "group": 2}]},
     {"type": "conditional", "source": 7,
      "conditions": [
-       {"match": "emelőhátfal", "set": {"field": "tail_lift", "value": "true"}},
+       {"match": "liftgate", "set": {"field": "tail_lift", "value": "true"}},
        {"match": ".*", "set": {"field": "tail_lift", "value": "false"}}
      ]}
   ],
