@@ -67,11 +67,119 @@ it -- which also takes netlib.org off the critical path for building the NETLIB
 corpus. The vendored file was byte-identical to what that host serves, so the
 binary is unchanged.
 
+## Deep pass: shared/ and the API servers
+
+The mechanical sweep above said where to look next: `shared/` links into all six
+servers, so a defect there has the widest reach. Of its 46k lines, 28k are
+generated font tables, leaving ~18k of logic -- and the file that matters most
+is `sh_json.c`, because all six servers parse request bodies with it.
+
+### Findings
+
+**`sh_json` accepted numbers it could not represent.** `strtod` saturates to
+`HUGE_VAL` on overflow, so `1e999` -- or any integer past ~1.8e308, with no
+exponent in sight -- parsed as a valid JSON number and came back as infinity
+with `SH_JSON_OK`. Verified by harness before fixing: `{"x": 1e999}` yielded
+`inf`, a 309-digit integer yielded `inf`.
+
+An infinity is worse than a rejection because it survives the usual validation
+shape. A range check written as two comparisons passes it in one direction, and
+fails *both* for a NaN. The codebase already knew this where someone had been
+bitten: `sh_parse_coord()` rejects "inf/NaN from malformed input like 1e1000"
+and `lc_api.c` checks `isnan` with a comment explaining that "a NaN fails every
+comparison". `parse_number` now rejects non-finite results, which closes the
+class at the parser instead of at each consumer. Finite values are untouched,
+`DBL_MAX` included.
+
+**`ralph/src/ralph_api.c` cast a request body's double straight to `int`.**
+
+    int parsed_timeout = (int)sh_json_as_double(sh_json_get(root, "timeout_ms"), 0.0);
+
+`(int)` on a value outside `int`'s range is undefined, and `{"timeout_ms":
+1e999}` is a POST body away. `sh_json_as_int()` exists and clamps; this bypassed
+it. In practice the damage was bounded -- the result is range-checked on the next
+line, and on x86 the cast yields something that fails `> 0` -- but undefined is
+undefined. It uses `sh_json_as_int` now. Grepping the pattern found exactly one
+other class of instance, all in nexus tests parsing their own output.
+
+### Checked and sound
+
+Worth recording so the next pass does not redo it:
+
+- **Recursion depth.** `parse_value` -> `parse_array`/`parse_object` ->
+  `parse_value` is bounded by `SH_JSON_MAX_DEPTH` (64), checked in both
+  recursive functions. Deeply nested input cannot exhaust the stack. The
+  unbalanced `p->depth--` on error paths does not matter: the parse aborts.
+- **Two-pass string decoding.** `parse_string` counts the output length, then
+  allocates, then writes. Divergence between passes would be a heap overflow, so
+  each case was compared: both call the same `encode_utf8`, which cannot return
+  0 for any reachable code point (a bare `\uXXXX` is at most 0xFFFF, a surrogate
+  pair at most 0x10FFFF), and pass 1 rejects the control characters and invalid
+  escapes that pass 2 does not re-check.
+- **`parse_hex4`** bounds-checks against the input length before reading 4 digits.
+- **`sh_json_as_int`** clamps at both ends, so an infinity cannot reach the cast;
+  NaN would slip through the comparisons but cannot be produced by
+  `parse_number`, which only accepts JSON number grammar.
+- **Coordinate paths are hardened.** `sh_parse_coord` rejects non-finite values
+  and range-checks lat/lon; locus checks `isnan` explicitly. velo and carta have
+  no such checks in their handlers because they go through `sh_parse_coord`.
+- **Request limits.** All six servers rate-limit. Keel bounds bodies at 1 MB and
+  headers at 8 KB by default, which is what carta and locus rely on.
+
+### sh_pdf2struc
+
+The largest parser in shared and the least exercised. Two defects, both
+reachable from a crafted file, both confirmed with a sanitizer rather than
+argued from the code.
+
+**PNG predictor: signed overflow on an attacker-chosen width.** `Columns` comes
+straight from the stream's `DecodeParms` and was unbounded, so
+`int stride = row_bytes + 1` overflowed for anything near `INT_MAX`. Confirmed
+with clang's signed-integer-overflow sanitizer on a 477-byte file:
+
+    sh_pdf2struc.c:688:28: runtime error: signed integer overflow:
+    2147483647 + 1 cannot be represented in type 'int'
+
+`columns` is now bounded by the decompressed length -- a row cannot be larger
+than the data it describes, and `len` is capped at `PDF_MAX_DECOMPRESS`, which
+keeps the stride arithmetic well inside `int`.
+
+**xref stream: negative `/W` field widths.** `entry_size = w0 + w1 + w2` was
+checked against (0, 20], but the three read loops each run `max(0, w)` times. A
+negative width lowers the sum without lowering the bytes consumed: `/W [-5 10
+10]` sums to 15, passes the bound, then reads 20 -- so `pos` advances five bytes
+past what the guard verified, per entry. Each width is now rejected on its own.
+
+The over-read lands inside the decompression buffer in the common case, because
+that buffer is sized at ten times the compressed length, which is why ASan stays
+quiet on an ordinary file. It is not bounded by anything structural: a payload
+compressing at better than 10:1 puts `actual` against `decomp_cap` and the
+overshoot leaves the allocation. Fixed rather than argued down.
+
+**Neither the sanitizer job nor MSVC was looking at this file.**
+`shared/test-asan` is `clean test`, and the `test` target's list of binaries did
+not include `test_pdf2struc` -- so the parser with the largest untrusted attack surface in
+shared/ was the one the sanitizer never ran. It is in the list now, which is
+also what makes the predictor regression test worth keeping: without a
+sanitizer that test cannot fail, since the overflow does not change the result
+this compiler produces.
+
+Adding it immediately turned the Windows MSVC job red, which is the other half
+of the same gap. `$(TEST_PDF2STRUC_BIN)`'s link rule still spelled its inputs
+`-L. -lsh_pdf2struc -lshared`, from before `mk/toolchain.mk` existed. `cl`
+ignores those with a D9002 warning per flag and then fails with six unresolved
+externals, so that suite had never built under MSVC -- it was only ever reached
+by the Linux `test-pdf2struc` job. It uses `$(call link_lib,...)` like every
+other test binary in the file now, and passes 30/30 under both toolchains.
+
 ## What this sweep did not cover
 
 Everything semantic. Use-after-free, double-free, leak tracing, null-deref
 paths, resource lifetimes and the Keel hardening checklist are per-module work
-and were not attempted. If they are picked up, `shared/` is the place to start
--- it links into all six servers, so anything there has the widest blast radius
--- followed by the six `api/` servers, which are the only code that touches
-untrusted input.
+and were not attempted. `sh_json.c` has now had the deep pass described above, and
+the six servers' request paths were traced for numeric validation. `sh_pdf2struc` has now had the pass
+described above, though it was targeted at the highest-risk routines -- the
+predictor, the xref stream decoders, the decompression sizing -- rather than
+read end to end; its text-extraction half (1.7k lines) was not examined at all.
+What remains untouched is `sh_csv.c`, `sh_xml.c`, `sh_inflate.c` and
+`sh_protobuf.c`, all of which decode untrusted bytes.

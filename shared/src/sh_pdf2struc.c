@@ -683,7 +683,13 @@ static PdfObj *pdf_parse_at_offset(ShPdf2strucCtx *ctx, size_t offset)
 
 static int pdf_apply_png_predictor(uint8_t *data, size_t len, int columns)
 {
-    if (columns <= 0) return -1;
+    /* Columns comes straight from the PDF's DecodeParms and is otherwise
+     * unbounded, so `row_bytes + 1` below overflows for anything near INT_MAX
+     * -- undefined, and reachable with a 477-byte file. A row also cannot be
+     * larger than the data it claims to describe; len is capped at
+     * PDF_MAX_DECOMPRESS, so this bound also keeps the stride arithmetic well
+     * inside int. */
+    if (columns <= 0 || (size_t)columns > len) return -1;
     int row_bytes = columns;
     int stride = row_bytes + 1; /* 1 byte predictor tag per row */
     int nrows = (int)(len / (size_t)stride);
@@ -1005,6 +1011,15 @@ static int pdf_parse_xref_stream(ShPdf2strucCtx *ctx, size_t offset)
     int w0 = (int)pdf_obj_as_num(pdf_array_get(w_arr, 0), 0);
     int w1 = (int)pdf_obj_as_num(pdf_array_get(w_arr, 1), 0);
     int w2 = (int)pdf_obj_as_num(pdf_array_get(w_arr, 2), 0);
+    /* Each width is checked on its own, not just the sum. The read loops below
+     * run max(0, w) times each, so a negative width contributes nothing to the
+     * bytes consumed while still lowering entry_size -- /W [-5 10 10] sums to
+     * 15, passes the bound, and then consumes 20. The guard in the decode loop
+     * reserves entry_size, so pos would advance past what it verified. */
+    if (w0 < 0 || w1 < 0 || w2 < 0) {
+        pdf_set_error(ctx, "xref stream /W has a negative field width");
+        return -1;
+    }
     int entry_size = w0 + w1 + w2;
     if (entry_size <= 0 || entry_size > 20) {
         pdf_set_error(ctx, "xref stream entry size invalid");

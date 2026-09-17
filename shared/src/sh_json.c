@@ -359,6 +359,23 @@ static ShJsonValue *parse_number(ShJsonParser *p)
         return NULL;
     }
 
+    /* strtod saturates to +/-HUGE_VAL on overflow, so "1e999" -- and any
+     * integer past ~1.8e308 -- parses as a syntactically valid JSON number and
+     * comes back as infinity. RFC 8259 leaves numbers outside the
+     * implementation's range undefined, and handing callers an infinity they
+     * did not ask for is the worse reading: it survives every range check
+     * written as a pair of comparisons, since those are all false for a NaN
+     * and true in one direction for an infinity.
+     *
+     * The codebase already treats this as a hazard where it was noticed --
+     * sh_parse_coord() rejects "inf/NaN from malformed input like 1e1000" --
+     * so this closes the class at the parser instead of at each consumer.
+     * Finite values are untouched, DBL_MAX included. */
+    if (!isfinite(val)) {
+        p->status = SH_JSON_ERR_INVALID_NUMBER;
+        return NULL;
+    }
+
     ShJsonValue *v = alloc_value(p);
     if (!v) return NULL;
 
