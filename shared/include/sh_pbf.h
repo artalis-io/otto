@@ -35,6 +35,22 @@ extern "C" {
 #define SH_PBF_BLOB_RAW_SIZE       2
 #define SH_PBF_BLOB_ZLIB_DATA      3
 
+/*
+ * Largest uncompressed blob this will allocate for.
+ *
+ * raw_size is a varint read straight out of the file, and it was passed to
+ * malloc() unchecked: a blob claiming 0x7ffffffffff asked for eight terabytes
+ * from a hundred-byte input. On a normal allocator that returns NULL and the
+ * call fails cleanly, which is why it went unnoticed -- but a value chosen
+ * just under the limit instead asks for a couple of gigabytes and gets them,
+ * which is memory exhaustion from a file that fits in a packet.
+ *
+ * 32 MiB is the format's own bound. The OSM PBF specification says an
+ * uncompressed blob should be under 16 MiB and must be under 32 MiB, so this
+ * rejects nothing a conforming writer produces.
+ */
+#define SH_PBF_MAX_BLOB_SIZE (32u * 1024u * 1024u)
+
 /* PrimitiveBlock */
 #define SH_PBF_PRIMBLOCK_STRINGTABLE   1
 #define SH_PBF_PRIMBLOCK_PRIMITIVEGROUP 2

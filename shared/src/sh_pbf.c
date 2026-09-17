@@ -215,7 +215,15 @@ SHStatus sh_pbf_decompress_blob(const uint8_t *data, size_t len, SHPBFBlob *out)
         out->len = raw_len;
         out->decompressed = NULL;
     } else if (zlib_data && raw_size > 0) {
-        /* Compressed blob - decompress */
+        /* Compressed blob - decompress.
+         *
+         * raw_size is attacker-controlled: it is a varint out of the file and
+         * nothing below it is bounded by the input length, unlike zlib_len.
+         * Found by fuzzing carta, as an 8TB malloc from a 100-byte file. */
+        if (raw_size > SH_PBF_MAX_BLOB_SIZE) {
+            return SH_ERROR_INVALID_PARAM;
+        }
+
         out->decompressed = malloc(raw_size);
         if (!out->decompressed) return SH_ERROR_OUT_OF_MEMORY;
 
