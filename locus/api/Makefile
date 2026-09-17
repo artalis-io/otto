@@ -124,6 +124,13 @@ test: $(TARGET)
 	# repo root (SERVER=./locus/api/..., data/monaco...), so it has to run
 	# from there. Without the cd this target could never work -- CI has been
 	# invoking the script directly from the root and never used it.
+	# The suite needs data/monaco-latest.osm.pbf, whose rule lives in the root
+	# Makefile. Asking for it here is what makes this target -- and
+	# `make test-locus-api`, which delegates to it -- work from a clean
+	# checkout. Previously it failed and told the reader to go and build
+	# the file by hand. A no-op once the file exists, so CI, which
+	# fetches it in an earlier step, pays nothing.
+	@cd ../.. && $(MAKE) data/monaco-latest.osm.pbf
 	@cd ../.. && bash locus/api/test_api.sh
 
 # Help

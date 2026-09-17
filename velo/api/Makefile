@@ -115,5 +115,12 @@ test: all
 	# repo root (SERVER=./velo/api/..., data/monaco...), so it has to run
 	# from there. Without the cd this target could never work -- CI has been
 	# invoking the script directly from the root and never used it.
+	# The suite needs data/monaco.vlg, whose rule lives in the root
+	# Makefile. Asking for it here is what makes this target -- and
+	# `make test-velo-api`, which delegates to it -- work from a clean
+	# checkout. Previously it failed and told the reader to go and build
+	# the file by hand. A no-op once the file exists, so CI, which
+	# fetches it in an earlier step, pays nothing.
+	@cd ../.. && $(MAKE) data/monaco.vlg
 	@cd ../.. && bash velo/api/test_api.sh
 

@@ -383,6 +383,12 @@ data/monaco-latest.osm.pbf:
 VELO_SOURCES = $(wildcard velo/src/*.c) $(wildcard velo/include/*.h)
 data/monaco.vlg: data/monaco-latest.osm.pbf $(VELO_SOURCES) | velo
 	@echo "Building Velo graph index from PBF..."
+	# The order-only `| velo` builds the library, not this tool, so the
+	# recipe was invoking a binary the rule never produced. Anyone running
+	# `make data/monaco.vlg` on a clean checkout got "cannot find the file
+	# specified"; CI worked only because its job runs this same command by
+	# hand in an earlier step.
+	@$(MAKE) -C velo bench_pbf
 	@./velo/bench_pbf data/monaco-latest.osm.pbf data/monaco.vlg
 	@echo "Built: data/monaco.vlg"
 
