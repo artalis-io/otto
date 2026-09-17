@@ -15,6 +15,7 @@
  */
 
 #include "vl_types.h"
+#include "shared.h"   /* sh_mul_would_overflow */
 #include <stdlib.h>
 #include <string.h>
 #include <math.h>
@@ -1114,8 +1115,8 @@ VLStatus vl_route_astar_landmarks(const VLGraph *graph, const VLLandmarks *lm,
     }
 
     /* Integer overflow checks for allocations */
-    if (graph->num_nodes > SIZE_MAX / sizeof(double) ||
-        graph->num_nodes > SIZE_MAX / sizeof(uint32_t)) {
+    if (sh_mul_would_overflow(graph->num_nodes, sizeof(double)) ||
+        sh_mul_would_overflow(graph->num_nodes, sizeof(uint32_t))) {
         return VL_ERROR_OUT_OF_MEMORY;
     }
 
@@ -1297,8 +1298,8 @@ VLStatus vl_route_dijkstra_bucket(const VLGraph *graph, uint32_t source, uint32_
     }
 
     /* Integer overflow checks for allocations */
-    if (graph->num_nodes > SIZE_MAX / sizeof(double) ||
-        graph->num_nodes > SIZE_MAX / sizeof(uint32_t)) {
+    if (sh_mul_would_overflow(graph->num_nodes, sizeof(double)) ||
+        sh_mul_would_overflow(graph->num_nodes, sizeof(uint32_t))) {
         return VL_ERROR_OUT_OF_MEMORY;
     }
 

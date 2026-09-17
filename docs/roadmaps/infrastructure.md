@@ -755,13 +755,22 @@ Result: `-Wmaybe-uninitialized` 7 to 0, `-Walloc-size-larger-than` 4 to 0,
 
 **What is left, and why.** 76 of the remainder are `miniz.h`'s static functions
 and 3 are TRE fallthroughs -- vendor code, upstream's bar. Of the 36 in OTTO
-code, 25 are `-Wtype-limits` on **deliberate** 32-bit overflow guards: checks
+code, 25 were `-Wtype-limits` on **deliberate** 32-bit overflow guards: checks
 like `graph->num_nodes > SIZE_MAX / sizeof(VLNode)` that are tautologically
-false on a 64-bit target and necessary on wasm32, with comments already saying
-so. Silencing them would mean either deleting a guard that matters on 32-bit or
-wrapping each in a preprocessor conditional; they are left as documented
-intent. The rest are unused variables and parameters, plus two `-Wpointer-sign`
-in `test_surge.c`.
+false on a 64-bit target and necessary on wasm32.
+
+**Since resolved.** The reasoning above considered only two options -- delete
+the guard, or wrap each site in a preprocessor conditional -- and both are bad,
+so they were left. There is a third: move the comparison behind a function
+whose parameters are `size_t`. The check survives, is still correct at either
+width, and the warning has nothing to report, because inside
+`sh_mul_would_overflow()` the operands genuinely are `size_t`. 23 sites across
+velo and surge now call it; the 2 that remain are in vendored miniz.
+
+That leaves 10 warnings in OTTO code, down from 36: unused variables and
+parameters, and two `-Wstringop-truncation`. The point was never the count --
+it is that 25 expected warnings are 25 places nobody reads, and a real one
+would have sat unnoticed among them.
 
 ### WASM warnings, triaged
 
