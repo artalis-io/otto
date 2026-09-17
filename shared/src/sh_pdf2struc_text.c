@@ -83,6 +83,36 @@ static int utf8_encode(uint32_t cp, char *out)
     return 0;
 }
 
+/*
+ * Bounded appends.
+ *
+ * Every caller below writes into a buffer sized from the INPUT length, on the
+ * assumption that one input byte yields at most 4 output bytes. A ToUnicode
+ * CMap breaks that assumption: one byte can map to a multi-codepoint sequence
+ * of up to 15 bytes. Mixing the two in one string overran the buffer, so the
+ * output length is now checked at every write rather than at some of them.
+ *
+ * `cap` is the number of writable bytes, NOT counting the terminator, and the
+ * subtraction is done on the remaining space so the check itself cannot wrap.
+ */
+static void append_utf8(char *buf, size_t *out, size_t cap, uint32_t cp)
+{
+    char tmp[4];
+    int n = utf8_encode(cp, tmp);
+    if (n <= 0) return;
+    if ((size_t)n > cap - *out) return;   /* no room: drop the character */
+    memcpy(buf + *out, tmp, (size_t)n);
+    *out += (size_t)n;
+}
+
+static void append_bytes(char *buf, size_t *out, size_t cap,
+                         const char *src, size_t n)
+{
+    if (n > cap - *out) return;
+    memcpy(buf + *out, src, n);
+    *out += n;
+}
+
 /* ============================================================================
  * Matrix Operations
  * ============================================================================ */
@@ -152,9 +182,14 @@ static uint32_t parse_cmap_hex_to_utf8(const uint8_t *data, size_t len,
     /* Single codepoint: up to 4 hex digits (16-bit) */
     if (ndigits <= 4) {
         uint32_t cp = parse_cmap_hex(data, len);
-        int n = utf8_encode(cp, out);           /* <= 4 bytes */
-        if ((size_t)n + 1 <= out_size) out[n] = '\0';
-        else out[0] = '\0';                     /* no room: keep terminated */
+        char tmp[4];
+        int n = utf8_encode(cp, tmp);           /* encode aside, then fit */
+        if (n > 0 && (size_t)n + 1 <= out_size) {
+            memcpy(out, tmp, (size_t)n);
+            out[n] = '\0';
+        } else {
+            out[0] = '\0';                      /* no room: keep terminated */
+        }
         return cp;
     }
 
@@ -254,7 +289,7 @@ static void parse_tounicode(ShPdf2strucCtx *ctx, PdfFont *font,
                 if (p >= end) break;
 
                 /* Check for endbfchar */
-                if (p + 10 <= end && memcmp(p, "endbfchar", 9) == 0) {
+                if (p + 9 <= end && memcmp(p, "endbfchar", 9) == 0) {
                     p += 9;
                     break;
                 }
@@ -297,7 +332,7 @@ static void parse_tounicode(ShPdf2strucCtx *ctx, PdfFont *font,
                     p++;
                 if (p >= end) break;
 
-                if (p + 11 <= end && memcmp(p, "endbfrange", 10) == 0) {
+                if (p + 10 <= end && memcmp(p, "endbfrange", 10) == 0) {
                     p += 10;
                     break;
                 }
@@ -359,7 +394,17 @@ static void parse_tounicode(ShPdf2strucCtx *ctx, PdfFont *font,
 
                     uint32_t base = parse_cmap_hex(d_start, d_len);
 
-                    for (uint32_t gid = lo; gid <= hi; gid++) {
+                    /* srcHi comes straight from the file. <FFFFFFFF> made this
+                     * loop run for ever: gid++ wraps to 0 and `gid <= hi` is
+                     * then always true. Clamp to the entries we could store
+                     * anyway -- past that the body is a no-op. */
+                    if (hi < lo) hi = lo;
+                    uint32_t span = hi - lo;
+                    if (span > (uint32_t)PDF_MAX_TOUNICODE)
+                        span = (uint32_t)PDF_MAX_TOUNICODE;
+
+                    for (uint32_t k = 0; k <= span; k++) {
+                        uint32_t gid = lo + k;
                         if (font->tounicode_count < PDF_MAX_TOUNICODE) {
                             PdfToUnicodeEntry *e = &font->tounicode[font->tounicode_count];
                             e->glyph_id = gid;
@@ -453,11 +498,19 @@ static void parse_cid_widths(ShPdf2strucCtx *ctx, PdfFont *font, PdfObj *w_arr)
             PdfObj *wv = pdf_resolve(ctx, pdf_array_get(w_arr, i));
             double w = wv ? (wv->type == PDF_OBJ_INT ? (double)wv->int_val :
                              wv->type == PDF_OBJ_REAL ? wv->real_val : 1000.0) : 1000.0;
-            for (int c = cid_start; c <= cid_last; c++) {
-                if (font->cid_width_count < cap) {
-                    font->cid_widths[font->cid_width_count].cid = (uint32_t)c;
-                    font->cid_widths[font->cid_width_count].width = w;
-                    font->cid_width_count++;
+            /* cidLast is file-controlled. At INT_MAX the increment is signed
+             * overflow -- undefined, and in practice a loop that never ends.
+             * Only `cap` entries can be stored, so stop there. */
+            if (cid_last >= cid_start) {
+                long span = (long)cid_last - (long)cid_start;
+                if (span > (long)cap) span = (long)cap;
+                for (long k = 0; k <= span; k++) {
+                    if (font->cid_width_count < cap) {
+                        font->cid_widths[font->cid_width_count].cid =
+                            (uint32_t)((long)cid_start + k);
+                        font->cid_widths[font->cid_width_count].width = w;
+                        font->cid_width_count++;
+                    }
                 }
             }
             i++;
@@ -514,7 +567,18 @@ static const uint16_t MACROMAN_TO_UNICODE[256] = {
     0x00AF,0x02D8,0x02D9,0x02DA,0x00B8,0x02DD,0x02DB,0x02C7,
 };
 
-/* Adobe glyph name → Unicode (common entries for /Differences parsing) */
+/* Adobe glyph name -> Unicode, for /Differences parsing.
+ *
+ * This table held a single {NULL, 0} sentinel, so adobe_glyph_to_unicode()
+ * always returned 0 and the `if (cp > 0)` test in resolve_encoding() never
+ * fired. /Differences was parsed, walked, and then thrown away: a font that
+ * remaps codes by glyph name -- which most subset-embedded fonts do -- fell
+ * back to WinAnsi and extracted the wrong characters, silently.
+ *
+ * Restricted to the names reachable from the encodings a PDF can name
+ * (Standard, WinAnsi, MacRoman, PDFDoc); the uniXXXX/uXXXX forms handled in
+ * the lookup below cover the rest. Sorted by name for binary search.
+ */
 typedef struct { const char *name; uint16_t cp; } AdobeGlyphEntry;
 
 static const AdobeGlyphEntry ADOBE_GLYPH_TABLE[] = {
@@ -588,16 +652,63 @@ static const AdobeGlyphEntry ADOBE_GLYPH_TABLE[] = {
     {"underscore",0x005F},{"v",0x0076},{"w",0x0077},{"x",0x0078},
     {"y",0x0079},{"yacute",0x00FD},{"ydieresis",0x00FF},{"yen",0x00A5},
     {"z",0x007A},{"zcaron",0x017E},{"zero",0x0030},
-    {NULL, 0}
 };
+
+#define ADOBE_GLYPH_COUNT \
+    ((int)(sizeof(ADOBE_GLYPH_TABLE) / sizeof(ADOBE_GLYPH_TABLE[0])))
 
 static uint16_t adobe_glyph_to_unicode(const char *name)
 {
-    for (int i = 0; ADOBE_GLYPH_TABLE[i].name; i++) {
-        if (strcmp(ADOBE_GLYPH_TABLE[i].name, name) == 0)
-            return ADOBE_GLYPH_TABLE[i].cp;
+    if (!name || !*name) return 0;
+
+    /* uniXXXX and uXXXX..XXXXXX are algorithmic AGL names. Subsetting tools
+     * emit them heavily, and they cover everything the table does not. */
+    if (name[0] == 'u') {
+        const char *hex;
+        size_t want;
+        if (strncmp(name, "uni", 3) == 0) { hex = name + 3; want = 4; }
+        else                              { hex = name + 1; want = 0; }
+
+        size_t n = strlen(hex);
+        if ((want == 4 && n >= 4) || (want == 0 && n >= 4 && n <= 6)) {
+            size_t take = (want == 4) ? 4 : n;
+            uint32_t v = 0;
+            size_t k;
+            for (k = 0; k < take; k++) {
+                int d = hex_val((uint8_t)hex[k]);
+                if (d < 0) break;
+                v = (v << 4) | (uint32_t)d;
+            }
+            /* Only a clean parse, and only the BMP -- cp is a uint16_t. */
+            if (k == take && v > 0 && v <= 0xFFFF)
+                return (uint16_t)v;
+        }
+    }
+
+    /* The table is sorted by name; test_pdf2struc checks that it stays sorted,
+     * because a misplaced entry would show up as a silently wrong character
+     * rather than as a failure. */
+    int lo = 0, hi = ADOBE_GLYPH_COUNT - 1;
+    while (lo <= hi) {
+        int mid = lo + (hi - lo) / 2;
+        int c = strcmp(ADOBE_GLYPH_TABLE[mid].name, name);
+        if (c == 0) return ADOBE_GLYPH_TABLE[mid].cp;
+        if (c < 0) lo = mid + 1;
+        else hi = mid - 1;
     }
     return 0;
+}
+
+/* Exposed for the test suite's ordering check; not part of the public API. */
+int sh_pdf2struc__glyph_table_count(void);
+const char *sh_pdf2struc__glyph_table_name(int i);
+
+int sh_pdf2struc__glyph_table_count(void) { return ADOBE_GLYPH_COUNT; }
+
+const char *sh_pdf2struc__glyph_table_name(int i)
+{
+    if (i < 0 || i >= ADOBE_GLYPH_COUNT) return NULL;
+    return ADOBE_GLYPH_TABLE[i].name;
 }
 
 /* ============================================================================
@@ -845,10 +956,18 @@ static int find_font_index(ShPdf2strucCtx *ctx, const char *name)
  * Text Decoding
  * ============================================================================ */
 
-/* Get glyph width for a simple (WinAnsi) font */
+/* Get glyph width for a simple (WinAnsi) font.
+ *
+ * font may be NULL: decode_text_simple() is called with whatever /Tf selected,
+ * and /Tf leaves the index at -1 when it names a font the page's /Resources
+ * does not define -- or when the font object itself failed to parse. Every
+ * other use of `font` in that function is guarded; this one was not, so a
+ * content stream that draws text under an unresolvable font dereferenced NULL.
+ * Found by fuzzing, from a mutation that corrupted the font object's header.
+ */
 static double simple_glyph_width(const PdfFont *font, int charcode)
 {
-    if (font->widths && font->widths_count > 0) {
+    if (font && font->widths && font->widths_count > 0) {
         int idx = charcode - font->first_char;
         if (idx >= 0 && idx < font->widths_count)
             return font->widths[idx];
@@ -867,7 +986,8 @@ static const char *decode_text_simple(ShPdf2strucCtx *ctx, const PdfFont *font,
 {
     /* Worst case: 4 UTF-8 bytes per char; check overflow */
     if (len > (SIZE_MAX - 1) / 4) return NULL;
-    char *buf = (char *)sh_arena_alloc(ctx->arena, len * 4 + 1);
+    const size_t cap = len * 4;              /* writable bytes, excl. NUL */
+    char *buf = (char *)sh_arena_alloc(ctx->arena, cap + 1);
     if (!buf) return NULL;
 
     size_t out = 0;
@@ -879,15 +999,11 @@ static const char *decode_text_simple(ShPdf2strucCtx *ctx, const PdfFont *font,
         if (font && font->has_tounicode) {
             const PdfToUnicodeEntry *e = tounicode_find(font, code);
             if (e && e->text[0]) {
-                size_t tlen = strlen(e->text);
-                if (out + tlen < len * 4) {
-                    memcpy(buf + out, e->text, tlen);
-                    out += tlen;
-                }
+                append_bytes(buf, &out, cap, e->text, strlen(e->text));
             } else {
                 uint32_t cp = e ? e->codepoint : 0xFFFD;
                 if (cp > 0 && cp != 0xFFFD)
-                    out += (size_t)utf8_encode(cp, buf + out);
+                    append_utf8(buf, &out, cap, cp);
             }
         } else {
             const uint16_t *enc_table = (font && font->encoding)
@@ -895,7 +1011,7 @@ static const char *decode_text_simple(ShPdf2strucCtx *ctx, const PdfFont *font,
             uint32_t cp = enc_table[code];
             if (cp == 0 && code != 0) cp = code;
             if (cp > 0 && cp != 0xFFFD)
-                out += (size_t)utf8_encode(cp, buf + out);
+                append_utf8(buf, &out, cap, cp);
         }
 
         /* Advance */
@@ -929,7 +1045,8 @@ static const char *decode_text_cid(ShPdf2strucCtx *ctx, const PdfFont *font,
     /* 2 bytes per glyph, 4 UTF-8 bytes per char max; check overflow */
     size_t max_chars = len / 2;
     if (max_chars > (SIZE_MAX - 1) / 4) return NULL;
-    char *buf = (char *)sh_arena_alloc(ctx->arena, max_chars * 4 + 1);
+    const size_t cap = max_chars * 4;        /* writable bytes, excl. NUL */
+    char *buf = (char *)sh_arena_alloc(ctx->arena, cap + 1);
     if (!buf) return NULL;
 
     size_t out = 0;
@@ -942,11 +1059,7 @@ static const char *decode_text_cid(ShPdf2strucCtx *ctx, const PdfFont *font,
         if (font->has_tounicode) {
             const PdfToUnicodeEntry *e = tounicode_find(font, gid);
             if (e && e->text[0]) {
-                size_t tlen = strlen(e->text);
-                if (out + tlen < max_chars * 4) {
-                    memcpy(buf + out, e->text, tlen);
-                    out += tlen;
-                }
+                append_bytes(buf, &out, cap, e->text, strlen(e->text));
                 cp = e->codepoint;
                 goto advance_cid;
             }
@@ -956,7 +1069,7 @@ static const char *decode_text_cid(ShPdf2strucCtx *ctx, const PdfFont *font,
         }
 
         if (cp > 0 && cp != 0xFFFD) {
-            out += (size_t)utf8_encode(cp, buf + out);
+            append_utf8(buf, &out, cap, cp);
         }
 advance_cid:
         ;  /* empty statement after label (C11 compat) */
@@ -1271,12 +1384,14 @@ static void process_content_stream(ShPdf2strucCtx *ctx, int page_idx,
                                 gs.h_scaling, gs.rise, font);
                     }
 
-                    /* Advance text position */
-                    double tx_advance = advance / (gs.font_size * gs.h_scaling / 100.0);
-                    if (gs.font_size * gs.h_scaling != 0) {
-                        PdfMatrix adv = {1, 0, 0, 1, tx_advance, 0};
-                        tm = mat_mul(adv, tm);
-                    }
+                    /* Advance text position. The divisor was computed before
+                     * the zero test, so a /Tf of 0 or a Tz of 0 divided by
+                     * zero first and checked afterwards. TJ, ' and " below
+                     * already guard it in the right order. */
+                    double scale = gs.font_size * gs.h_scaling / 100.0;
+                    double tx_advance = (scale != 0) ? advance / scale : 0;
+                    PdfMatrix adv = {1, 0, 0, 1, tx_advance, 0};
+                    tm = mat_mul(adv, tm);
                 }
             }
             else if (OP_IS("TJ") && in_text) {
@@ -1625,7 +1740,27 @@ ShPdf2strucStatus pdf_group_runs(ShPdf2strucCtx *ctx, const ShPdf2strucOpts *opt
                 double gap = next->x - merged_right;
                 if (gap > x_gap) break;
 
-                /* Append with space if there's a gap, otherwise concatenate */
+                /* Append with space if there's a gap, otherwise concatenate.
+                 * The space the comment promised was written as a NUL and then
+                 * immediately overwritten by the memcpy below, so every merged
+                 * block came out with its words run together -- "DueDate" for
+                 * "Due Date". PDF has no space operator: a space is the absence
+                 * of glyphs, so whether one was intended has to be inferred
+                 * from the gap.
+                 *
+                 * The threshold is taken from the run height rather than from
+                 * merge_x_gap, because merge_x_gap is the caller's idea of
+                 * where a block ends and can be set arbitrarily wide -- the
+                 * two_word_merge test sets 50pt, at which a real 2.8pt space
+                 * would never clear a fraction-of-the-window rule. Run height
+                 * is ascent-to-descent, so roughly one em, and a space in the
+                 * common text faces is about a quarter of that. Kerning and
+                 * runs split inside one word sit near zero.
+                 *
+                 * A heuristic either way: too low splits kerned pairs, too
+                 * high welds short words together. */
+                double space_min = (merged_h > 0.0) ? merged_h * 0.18 : 1.0;
+                int want_space = (gap > space_min);
                 size_t nlen = strlen(next->text);
                 size_t needed = text_len + nlen + 2;
                 if (needed > text_cap) {
@@ -1638,7 +1773,7 @@ ShPdf2strucStatus pdf_group_runs(ShPdf2strucCtx *ctx, const ShPdf2strucOpts *opt
                     text_cap = new_cap;
                 }
 
-                text_buf[text_len] = '\0';
+                if (want_space) text_buf[text_len++] = ' ';
                 memcpy(text_buf + text_len, next->text, nlen);
                 text_len += nlen;
 
