@@ -88,13 +88,32 @@ PBF File → vl_pbf.c → VLPBFContext → vl_graph.c → VLGraph → vl_route.c
 - **VL_WEIGHT_DURATION**: Fastest path (minimizes total time in seconds)
 
 ### Vehicle Profiles
-| Profile | Description | Avoids |
-|---------|-------------|--------|
-| `VL_PROFILE_CAR` | Standard car | Nothing (all roads) |
-| `VL_PROFILE_TRUCK` | HGV/truck | Roads with `hgv=no`, residential, service |
-| `VL_PROFILE_BIKE` | Bicycle | Motorways, trunk roads |
-| `VL_PROFILE_FOOT` | Pedestrian | Motorways, trunk roads, primary roads |
-| `VL_PROFILE_ANY` | No filtering | Nothing (all roads) |
+
+Each profile controls two things independently: which edges are **accessible**
+(`vl_edge_accessible`) and the **speed** used for duration weighting and reported
+ETAs (`vl_edge_duration_s`). Both live in `vl_types.h` so the router and any
+tooling share one definition.
+
+| Profile | Description | Avoids (access) | Speed model (duration) |
+|---------|-------------|-----------------|------------------------|
+| `VL_PROFILE_CAR` | Standard car | `access=no` / `motor_vehicle=no` | Baked road speed (OSM `maxspeed` or class default) |
+| `VL_PROFILE_TRUCK` | HGV/truck | `hgv=no` | `min(road speed, HGV cap)` per class (`VL_TRUCK_SPEED_*`: mw 85, trunk 80, primary 70, secondary 60, tertiary 45, residential 30, service 15) |
+| `VL_PROFILE_BIKE` | Bicycle | Motorways, trunk roads, `bicycle=no` | Flat `VL_BIKE_SPEED` (15 km/h), independent of road |
+| `VL_PROFILE_FOOT` | Pedestrian | Motorways, trunk roads, `foot=no` | Flat `VL_FOOT_SPEED` (5 km/h), independent of road |
+| `VL_PROFILE_ANY` | No filtering | Nothing (all roads) | Baked road speed (same as car) |
+
+Notes:
+- **Access and speed are separate.** The truck profile filters only `hgv=no`
+  edges; it does *not* avoid residential/service roads (it just travels them at
+  the class cap). Foot/bike are blocked from motorways and trunks but not
+  primaries.
+- **Truck caps take the min:** a road already signed below the HGV cap (low OSM
+  `maxspeed`) keeps its slower speed; the cap only bites on faster roads.
+- Speeds only affect `VL_WEIGHT_DURATION`. `VL_WEIGHT_DISTANCE` routing is
+  identical across profiles (subject to access). Bike/foot durations are
+  proportional to distance, so their fastest and shortest paths coincide.
+- Grade and surface are not modelled for bike/foot; speeds are flat-terrain
+  routing defaults.
 
 ### Landmarks (ALT Algorithm)
 Landmarks precompute shortest path distances to/from strategic nodes for tighter A* heuristics.

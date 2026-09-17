@@ -421,6 +421,19 @@ typedef struct {
 #define VL_TRUCK_SPEED_SERVICE     15
 #define VL_TRUCK_SPEED_DEFAULT     45
 
+/*
+ * Bicycle and pedestrian cruising speeds (km/h).
+ *
+ * Unlike motor vehicles, a cyclist or pedestrian moves at roughly their own
+ * pace regardless of the road's posted speed -- a bike does not do 90 on a
+ * trunk road just because cars can. So these profiles ignore the baked (car)
+ * duration entirely and derive time from distance at a flat speed. Values are
+ * conventional routing defaults (OSRM/GraphHopper bicycle ~15 km/h, foot
+ * ~5 km/h) on flat terrain; grade and surface are not modelled.
+ */
+#define VL_BIKE_SPEED  15
+#define VL_FOOT_SPEED   5
+
 /* Truck speed cap (km/h) for an edge's road class, read from its flags. */
 static inline int vl_truck_speed_cap(uint16_t flags)
 {
@@ -439,23 +452,36 @@ static inline int vl_truck_speed_cap(uint16_t flags)
 /*
  * Effective traversal time of an edge in seconds for a given profile.
  *
- * The baked duration reflects the road's (car) speed. Trucks additionally cap
- * their speed per road class, so their time is the slower of the baked time and
- * the class cap -- this preserves any slower OSM maxspeed while enforcing the
- * HGV limit on fast roads. Every other profile returns the baked duration
- * unchanged, so behaviour for cars is bit-for-bit identical. Because the cap
- * only ever makes an edge slower, duration-based heuristics that assume the
- * network's top speed stay admissible for trucks.
+ * The baked duration reflects the road's (car) speed. Profiles adjust it:
+ *
+ *  - TRUCK caps speed per road class, so its time is the slower of the baked
+ *    time and the class cap -- this preserves a slower OSM maxspeed while
+ *    enforcing the HGV limit on fast roads.
+ *  - BIKE and FOOT move at a flat own-pace speed independent of the road, so
+ *    they ignore the baked (car) duration and derive time from distance.
+ *  - CAR / ANY use the baked duration unchanged (bit-for-bit).
+ *
+ * Every profile's effective time is >= geometric-distance / network-top-speed,
+ * so the duration heuristics (haversine and car-cost landmarks) stay admissible
+ * and consistent for all profiles -- optimal paths are still found.
  */
 static inline double vl_edge_duration_s(const VLEdge *edge, VLProfile profile)
 {
-    double baked_s = edge->duration / 10.0;
-    if (profile == VL_PROFILE_TRUCK) {
-        /* dist(m) / (cap_kmh / 3.6) = dist(m) * 3.6 / cap_kmh, in seconds. */
-        double capped_s = (edge->distance / 1000.0) * 3.6 / (double)vl_truck_speed_cap(edge->flags);
-        if (capped_s > baked_s) return capped_s;
+    double dist_m = edge->distance / 1000.0;
+    /* dist(m) / (speed_kmh / 3.6) = dist(m) * 3.6 / speed_kmh, in seconds. */
+    switch (profile) {
+    case VL_PROFILE_TRUCK: {
+        double baked_s  = edge->duration / 10.0;
+        double capped_s = dist_m * 3.6 / (double)vl_truck_speed_cap(edge->flags);
+        return capped_s > baked_s ? capped_s : baked_s;
     }
-    return baked_s;
+    case VL_PROFILE_BIKE:
+        return dist_m * 3.6 / (double)VL_BIKE_SPEED;
+    case VL_PROFILE_FOOT:
+        return dist_m * 3.6 / (double)VL_FOOT_SPEED;
+    default:
+        return edge->duration / 10.0;
+    }
 }
 
 /* ============================================================================
