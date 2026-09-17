@@ -26,7 +26,7 @@ DEBUG_CFLAGS = -Wall -Wextra -Werror -g -O0 -std=c11 -D_GNU_SOURCE -DDEBUG \
                -fsanitize=address,undefined -fno-omit-frame-pointer
 DEBUG_LDFLAGS = -fsanitize=address,undefined
 
-SRCS = src/nx_xlsx.c src/nx_pdf.c src/nx_csv.c src/nx_xform.c src/nx_slug.c src/nx_merge.c src/nx_ingest.c src/nx_compute.c src/nx_validate.c src/nx_discover.c src/nx_emit.c src/nx_issue.c src/nx_diff.c
+SRCS = src/nx_xlsx.c src/nx_pdf.c src/nx_csv.c src/nx_xform.c src/nx_slug.c src/nx_merge.c src/nx_ingest.c src/nx_compute.c src/nx_validate.c src/nx_verify.c src/nx_discover.c src/nx_emit.c src/nx_issue.c src/nx_diff.c
 OBJS = $(SRCS:.c=.o)
 
 LIB_FILE = libnexus.a
@@ -40,6 +40,7 @@ TEST_ISSUE_BIN = test_issue
 TEST_DIFF_BIN = test_diff
 TEST_PIPELINE_BIN = test_pipeline
 TEST_REGEX_BIN = test_regex_differential
+TEST_VERIFY_BIN = test_verify
 
 # CLI tools
 NX_RUN_BIN = nx_run
@@ -69,7 +70,7 @@ LINK_LIBS_PDF = $(call link_lib,.,nexus) $(MINIZ_ZIP_OBJ) $(call link_lib,../sha
 
 .PHONY: all clean test lib debug tools fuzz fuzz-lib fuzz-xlsx fuzz-pdf fuzz-csv fuzz-smoke
 
-all: lib $(TEST_REGEX_BIN) $(TEST_INGEST_BIN) $(TEST_XFORM_BIN) $(TEST_VALIDATE_BIN) $(TEST_DISCOVER_BIN) $(TEST_MERGE_BIN) $(TEST_EMIT_BIN) $(TEST_ISSUE_BIN) $(TEST_DIFF_BIN) $(TEST_PIPELINE_BIN)
+all: lib $(TEST_REGEX_BIN) $(TEST_INGEST_BIN) $(TEST_XFORM_BIN) $(TEST_VALIDATE_BIN) $(TEST_DISCOVER_BIN) $(TEST_MERGE_BIN) $(TEST_EMIT_BIN) $(TEST_ISSUE_BIN) $(TEST_DIFF_BIN) $(TEST_PIPELINE_BIN) $(TEST_VERIFY_BIN)
 
 tools: $(NX_RUN_BIN) $(NX_PDF_RUN_BIN) $(NX_XFORM_RUN_BIN) $(NX_PIPELINE_BIN)
 
@@ -124,6 +125,9 @@ $(TEST_PIPELINE_BIN): tests/test_pipeline.c $(LIB_FILE) $(SHARED_LIB) $(MINIZ_ZI
 $(TEST_REGEX_BIN): tests/test_regex_differential.c $(LIB_FILE) $(SHARED_LIB) $(MINIZ_ZIP_OBJ)
 	$(CC) $(CFLAGS) $(INCLUDES) -Itests $< $(LINK_LIBS) $(EXE_OUT)$@
 
+$(TEST_VERIFY_BIN): tests/test_verify.c $(LIB_FILE) $(SHARED_LIB) $(MINIZ_ZIP_OBJ)
+	$(CC) $(CFLAGS) $(INCLUDES) -Itests $< $(LINK_LIBS) $(EXE_OUT)$@
+
 $(NX_RUN_BIN): tools/nx_run.c $(LIB_FILE) $(SHARED_LIB) $(MINIZ_ZIP_OBJ)
 	$(CC) $(CFLAGS) $(INCLUDES) $< $(LINK_LIBS) $(EXE_OUT)$@
 
@@ -139,7 +143,7 @@ $(PDF2STRUC_LIB):
 $(NX_PIPELINE_BIN): tools/nx_pipeline.c $(LIB_FILE) $(PDF2STRUC_LIB) $(SHARED_LIB) $(MINIZ_ZIP_OBJ)
 	$(CC) $(CFLAGS) $(INCLUDES) $< $(LINK_LIBS_PDF) $(EXE_OUT)$@
 
-test: $(TEST_REGEX_BIN) $(TEST_INGEST_BIN) $(TEST_XFORM_BIN) $(TEST_VALIDATE_BIN) $(TEST_DISCOVER_BIN) $(TEST_MERGE_BIN) $(TEST_EMIT_BIN) $(TEST_ISSUE_BIN) $(TEST_DIFF_BIN) $(TEST_PIPELINE_BIN)
+test: $(TEST_REGEX_BIN) $(TEST_INGEST_BIN) $(TEST_XFORM_BIN) $(TEST_VALIDATE_BIN) $(TEST_DISCOVER_BIN) $(TEST_MERGE_BIN) $(TEST_EMIT_BIN) $(TEST_ISSUE_BIN) $(TEST_DIFF_BIN) $(TEST_PIPELINE_BIN) $(TEST_VERIFY_BIN)
 	./$(TEST_REGEX_BIN)
 	./$(TEST_INGEST_BIN)
 	./$(TEST_XFORM_BIN)
@@ -150,6 +154,7 @@ test: $(TEST_REGEX_BIN) $(TEST_INGEST_BIN) $(TEST_XFORM_BIN) $(TEST_VALIDATE_BIN
 	./$(TEST_ISSUE_BIN)
 	./$(TEST_DIFF_BIN)
 	./$(TEST_PIPELINE_BIN)
+	./$(TEST_VERIFY_BIN)
 	$(MAKE) test-reconcile
 
 # Reconciliation gate self-test: proves the schema-driven reconciler both

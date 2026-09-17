@@ -35,6 +35,7 @@ typedef enum {
     NX_STAGE_M,   /* Merge (continuation rows) */
     NX_STAGE_B,   /* Transform (schema-driven) */
     NX_STAGE_X,   /* Validate (semantic rules) */
+    NX_STAGE_V,   /* Verify (faithfulness of output vs raw input) */
     NX_STAGE_D    /* Emit (GeoJSON/CSV output) */
 } NxStage;
 
