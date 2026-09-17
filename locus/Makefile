@@ -97,6 +97,14 @@ $(BENCH_BIN): benchmarks/bench_locus.c $(LIB_FILE) $(SHARED_DIR)/libshared.a
 bench: $(BENCH_BIN)
 	./$(BENCH_BIN)
 
+# CLI tools
+GEOCODE_BATCH_BIN = geocode_batch
+
+$(GEOCODE_BATCH_BIN): tools/geocode_batch.c $(LIB_FILE) $(SHARED_DIR)/libshared.a
+	$(CC) $(CFLAGS) $(INCLUDES) $< $(call link_lib,.,locus) $(call link_lib,$(SHARED_DIR),shared) $(LDFLAGS) $(EXE_OUT)$@
+
+tools: $(GEOCODE_BATCH_BIN)
+
 # Debug build (with sanitizers)
 debug: CFLAGS = $(DEBUG_CFLAGS)
 debug: LDFLAGS = -lm $(DEBUG_LDFLAGS)
@@ -109,7 +117,7 @@ wasm:
 # Clean
 clean:
 	rm -f $(CORE_OBJS) $(LIB_FILE)
-	rm -f $(TEST_BIN) $(TEST_TRANSPORT_BIN) $(BENCH_BIN)
+	rm -f $(TEST_BIN) $(TEST_TRANSPORT_BIN) $(BENCH_BIN) $(GEOCODE_BATCH_BIN)
 	rm -f $(WASM_OUT) locus.wasm
 
 # Dependencies
