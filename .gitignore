@@ -198,3 +198,8 @@ netlib-gate-*/
 # into this directory and builds it there. It is a cache, and the copy that
 # was tracked got overwritten on every run.
 ralph/benchmarks/.emps/
+
+# libFuzzer writes newly discovered inputs to its first corpus argument.
+# fuzz-smoke points that at shared/build/ so the committed seed corpora
+# stay a curated set rather than accumulating whatever a run turned up.
+shared/build/

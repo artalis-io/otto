@@ -297,7 +297,10 @@ fuzz: fuzz-inflate fuzz-protobuf fuzz-pdf2struc
 fuzz-lib:
 	$(FUZZ_CC) $(FUZZ_CFLAGS) $(INCLUDES) -c $(SRCS)
 	$(FUZZ_CC) $(FUZZ_CFLAGS) $(INCLUDES) -c $(PDF2STRUC_SRCS)
-	ar rcs $(FUZZ_LIB) $(notdir $(OBJS)) $(notdir $(PDF2STRUC_OBJS))
+	# sh_inflate is a miniz wrapper, so the fuzz archive needs miniz in it
+	# too -- the same flags the normal rule at the top of this file uses.
+	$(FUZZ_CC) $(FUZZ_CFLAGS) -I$(VENDOR_DIR) -DMINIZ_NO_STDIO -DMINIZ_NO_TIME -c $(MINIZ_SRCS)
+	ar rcs $(FUZZ_LIB) $(notdir $(OBJS)) $(notdir $(PDF2STRUC_OBJS)) $(notdir $(MINIZ_OBJS))
 
 fuzz-inflate: fuzz-lib
 	$(FUZZ_CC) $(FUZZ_CFLAGS) $(INCLUDES) tests/fuzz/fuzz_inflate.c 		-L. -lshared_fuzz -lm -o fuzz_inflate
@@ -315,11 +318,20 @@ fuzz-pdf2struc: fuzz-lib
 # the fuzz targets that already existed in carta, nexus and surge are run by
 # nothing, so they only find what someone remembers to look for.
 fuzz-smoke: fuzz
-	./fuzz_inflate tests/fuzz/corpus_inflate/ -max_total_time=$(FUZZ_SMOKE_SECONDS) -print_final_stats=1
-	./fuzz_protobuf tests/fuzz/corpus_protobuf/ -max_total_time=$(FUZZ_SMOKE_SECONDS) -print_final_stats=1
-	./fuzz_pdf2struc tests/fuzz/corpus_pdf2struc/ -max_total_time=$(FUZZ_SMOKE_SECONDS) -print_final_stats=1
+	# The first directory is where libFuzzer writes what it finds; the seed
+	# directory after it is only read. Passing the seeds alone has it write
+	# its discoveries back into them -- a 15 second local run left 269 new
+	# files in the corpora, which is how a curated seed set becomes noise.
+	@mkdir -p $(FUZZ_WORK)/inflate $(FUZZ_WORK)/protobuf $(FUZZ_WORK)/pdf2struc
+	./fuzz_inflate $(FUZZ_WORK)/inflate tests/fuzz/corpus_inflate/ \
+		-max_total_time=$(FUZZ_SMOKE_SECONDS) -print_final_stats=1
+	./fuzz_protobuf $(FUZZ_WORK)/protobuf tests/fuzz/corpus_protobuf/ \
+		-max_total_time=$(FUZZ_SMOKE_SECONDS) -print_final_stats=1
+	./fuzz_pdf2struc $(FUZZ_WORK)/pdf2struc tests/fuzz/corpus_pdf2struc/ \
+		-max_total_time=$(FUZZ_SMOKE_SECONDS) -print_final_stats=1
 
 FUZZ_SMOKE_SECONDS ?= 30
+FUZZ_WORK ?= build/fuzz-corpus
 
 # Clean
 clean:
