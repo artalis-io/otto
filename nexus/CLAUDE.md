@@ -13,6 +13,8 @@ Document Bytes → Stage A (extract) → nx_raw JSON
                                        ↓
                                Stage X (validate) → validated JSON
                                        ↓
+                               Stage V (verify, if --verify) → faithfulness report
+                                       ↓
                                Stage D (emit) → GeoJSON / CSV / JSON
 ```
 
@@ -20,6 +22,7 @@ Document Bytes → Stage A (extract) → nx_raw JSON
 **Stage M**: Continuation row merging for PDF tables (`nx_merge`)
 **Stage B**: Schema-driven transform (`nx_xform` + `nx_compute`) → `nx_canonical` format
 **Stage X**: Semantic validation (`nx_validate`) — geo_bounds, format, unique, outlier
+**Stage V**: Faithfulness verification (`nx_verify`, opt-in `--verify`) — provenance, conservation, and lossless direct-mapping checks of output vs raw, without re-running the transform grammar
 **Stage D**: Output emitters (`nx_emit`) — GeoJSON (RFC 7946), CSV (RFC 4180)
 
 ## Key Files
@@ -33,6 +36,7 @@ Document Bytes → Stage A (extract) → nx_raw JSON
 | `include/nx_xform.h` | Schema-driven transform engine | 68 |
 | `include/nx_compute.h` | Compute function registry API | 40 |
 | `include/nx_validate.h` | Semantic validation engine (Stage X) | 107 |
+| `include/nx_verify.h` | Faithfulness verification engine (Stage V) | 79 |
 | `include/nx_merge.h` | Continuation row merging API | 66 |
 | `include/nx_discover.h` | Auto schema discovery API | 58 |
 | `include/nx_emit.h` | Output emitter API (GeoJSON, CSV) | 50 |
@@ -90,7 +94,8 @@ Hardening: `-fstack-protector-strong -D_FORTIFY_SOURCE=2 -fPIE -fno-common`.
 - test_issue: 13 tests (init/free, add, dynamic growth, count, JSON output)
 - test_diff: 14 tests (null input, identical/added/removed/modified, mixed, empty, parse error)
 - test_pipeline: 9 tests (end-to-end pipeline, issues threading, GeoJSON/CSV emit, diff identical/modified/removed, manifest JSON/counts)
-- Total: 199 tests
+- test_verify: 8 tests (faithful/clean, lossy numeric truncation, precision-clamp detection, string mismatch, provenance mismatch, derived-field unverified, rejected rows skipped, status strings)
+- Total: 207 tests
 
 ## Schemas
 
@@ -216,6 +221,10 @@ in-process using `sh_pdf2struc` for PDF text extraction (no Python dependency).
 
 # Diff against previous run (change detection)
 ./nx_pipeline input.xlsx --schema s.json --baseline prev.json
+
+# Verify output faithfully represents raw input (Stage V)
+./nx_pipeline input.csv --schema s.json --verify          # report only
+./nx_pipeline input.csv --schema s.json --verify-strict   # exit non-zero on any faithfulness failure
 
 # CSV options
 ./nx_pipeline input.csv --delimiter ";" --no-header

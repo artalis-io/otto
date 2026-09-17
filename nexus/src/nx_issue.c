@@ -142,6 +142,7 @@ const char *nx_stage_str(NxStage stage)
         case NX_STAGE_M: return "M";
         case NX_STAGE_B: return "B";
         case NX_STAGE_X: return "X";
+        case NX_STAGE_V: return "V";
         case NX_STAGE_D: return "D";
         default:         return "?";
     }
@@ -164,6 +165,7 @@ char nx_stage_tag(NxStage stage)
         case NX_STAGE_M: return 'M';
         case NX_STAGE_B: return 'B';
         case NX_STAGE_X: return 'X';
+        case NX_STAGE_V: return 'V';
         case NX_STAGE_D: return 'D';
         default:         return '?';
     }

@@ -23,6 +23,7 @@
 #include "nx_xform.h"
 #include "nx_validate.h"
 #include "nx_emit.h"
+#include "nx_verify.h"
 #include "nx_issue.h"
 #include "nx_diff.h"
 #include "sh_arena.h"
@@ -298,12 +299,12 @@ static void print_issue_summary(const NxIssueList *issues)
 
     /* Per-stage counts */
     static const NxStage stages[] = {
-        NX_STAGE_A, NX_STAGE_M, NX_STAGE_B, NX_STAGE_X, NX_STAGE_D
+        NX_STAGE_A, NX_STAGE_M, NX_STAGE_B, NX_STAGE_X, NX_STAGE_V, NX_STAGE_D
     };
     static const char *stage_names[] = {
-        "A (extract)", "M (merge)", "B (transform)", "X (validate)", "D (emit)"
+        "A (extract)", "M (merge)", "B (transform)", "X (validate)", "V (verify)", "D (emit)"
     };
-    for (int s = 0; s < 5; s++) {
+    for (int s = 0; s < 6; s++) {
         int errs = nx_issue_count(issues, (int)stages[s], NX_ISSUE_ERROR);
         int warns = nx_issue_count(issues, (int)stages[s], NX_ISSUE_WARNING);
         int infos = nx_issue_count(issues, (int)stages[s], NX_ISSUE_INFO);
@@ -349,6 +350,8 @@ typedef struct {
     int csv_no_header;       /* 1 = no header row in CSV */
     const char *emit_format;    /* NULL, "geojson", or "csv" */
     const char *baseline_path;  /* NULL, or path to previous canonical JSON for diff */
+    int verify;                 /* 1 = run Stage V faithfulness verification */
+    int verify_strict;          /* 1 = non-zero exit on any faithfulness failure */
 } PipelineOpts;
 
 static int process_file(const PipelineOpts *po)
@@ -527,6 +530,7 @@ static int process_file(const PipelineOpts *po)
     /* Read schema once for all stages (M, B, X) */
     char *canon_json = NULL;
     size_t canon_len = 0;
+    int verify_failed = 0;   /* set when --verify-strict finds a faithfulness failure */
 
     if (po->schema_path) {
         size_t schema_file_len = 0;
@@ -616,6 +620,27 @@ static int process_file(const PipelineOpts *po)
                 canon_len = validated_len;
             }
         }
+
+        /* Stage V: Verify canonical output faithfully represents the raw input */
+        if (po->verify && canon_json) {
+            fprintf(stderr, "  Stage V: Verifying...\n");
+            NxVerifyOptions vo; nx_verify_options_default(&vo);
+            NxVerifyReport vr;
+            NxVerifyStatus vst = nx_verify(raw_json, raw_len, canon_json, canon_len,
+                                           schema, schema_file_len, &vo, &issues, &vr);
+            if (vst != NX_VERIFY_OK) {
+                fprintf(stderr, "  Verify: could not run (%s)\n", nx_verify_status_str(vst));
+            } else {
+                fprintf(stderr, "  Verify: %d rows, %d fields ok, %d lossy, %d mismatch, "
+                        "%d unverified%s\n",
+                        vr.rows_checked, vr.fields_verified, vr.fields_lossy,
+                        vr.fields_mismatch, vr.fields_unverified,
+                        vr.provenance_ok ? "" : ", PROVENANCE FAIL");
+                if (po->verify_strict && !nx_verify_clean(&vr))
+                    verify_failed = 1;
+            }
+        }
+
         /* Stage D: Emit downstream format (if --emit specified) */
         if (po->emit_format && canon_json) {
             fprintf(stderr, "  Stage D: Emitting %s...\n", po->emit_format);
@@ -790,7 +815,7 @@ static int process_file(const PipelineOpts *po)
     free(canon_json);
     free(diff_json);
     nx_issue_list_free(&issues);
-    return 0;
+    return verify_failed ? 2 : 0;   /* --verify-strict: non-zero on faithfulness failure */
 }
 
 /* ============================================================================
@@ -1072,10 +1097,10 @@ batch_file_done:
             fprintf(mf, ",\"stages\":{");
             int first_stage = 1;
             static const NxStage batch_stages[] = {
-                NX_STAGE_A, NX_STAGE_M, NX_STAGE_B, NX_STAGE_X, NX_STAGE_D
+                NX_STAGE_A, NX_STAGE_M, NX_STAGE_B, NX_STAGE_X, NX_STAGE_V, NX_STAGE_D
             };
-            static const char *batch_stage_tags[] = {"A","M","B","X","D"};
-            for (int s = 0; s < 5; s++) {
+            static const char *batch_stage_tags[] = {"A","M","B","X","V","D"};
+            for (int s = 0; s < 6; s++) {
                 int se = nx_issue_count(&file_issues, (int)batch_stages[s], NX_ISSUE_ERROR);
                 int sw = nx_issue_count(&file_issues, (int)batch_stages[s], NX_ISSUE_WARNING);
                 int si = nx_issue_count(&file_issues, (int)batch_stages[s], NX_ISSUE_INFO);
@@ -1165,6 +1190,8 @@ static void usage(const char *prog)
     fprintf(stderr, "  --emit FMT    Emit format: geojson, csv (default: canonical JSON)\n");
     fprintf(stderr, "  --baseline F  Compare against previous canonical JSON (outputs diff)\n");
     fprintf(stderr, "  --raw         Output raw JSON even when schema given\n");
+    fprintf(stderr, "  --verify      Verify output faithfully represents raw input (Stage V)\n");
+    fprintf(stderr, "  --verify-strict  As --verify, but exit non-zero on any faithfulness failure\n");
     fprintf(stderr, "  -o FILE       Write output to file\n");
 }
 
@@ -1213,6 +1240,10 @@ int main(int argc, char **argv)
             po.emit_format = argv[++i];
         } else if (strcmp(argv[i], "--baseline") == 0 && i + 1 < argc) {
             po.baseline_path = argv[++i];
+        } else if (strcmp(argv[i], "--verify") == 0) {
+            po.verify = 1;
+        } else if (strcmp(argv[i], "--verify-strict") == 0) {
+            po.verify = 1; po.verify_strict = 1;
         } else if (strcmp(argv[i], "--raw") == 0) {
             po.output_raw = 1;
         } else if (strcmp(argv[i], "-h") == 0 || strcmp(argv[i], "--help") == 0) {
