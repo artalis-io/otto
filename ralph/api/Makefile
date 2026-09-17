@@ -47,7 +47,7 @@ KEEL_LIB = $(KEEL_DIR)/libkeel.a
 
 TARGET = ralph-solver-server
 
-.PHONY: all clean deps run debug test
+.PHONY: all clean deps run debug test build
 
 all: deps $(TARGET)
 

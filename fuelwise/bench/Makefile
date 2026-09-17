@@ -35,7 +35,7 @@ RALPH_DIR = ../../ralph
 
 .PHONY: all clean test quick validator-test regression-test
 .PHONY: benchmark-gate benchmark-gate-raw
-.PHONY: benchmark-profile benchmark-profile-raw
+.PHONY: benchmark-profile benchmark-profile-raw help
 
 all: $(TARGET)
 

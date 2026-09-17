@@ -67,7 +67,7 @@ TRE_OBJS = $(TRE_SRCS:.c=.o)
 LINK_LIBS = $(call link_lib,.,nexus) $(MINIZ_ZIP_OBJ) $(call link_lib,../shared,shared) $(LDFLAGS)
 LINK_LIBS_PDF = $(call link_lib,.,nexus) $(MINIZ_ZIP_OBJ) $(call link_lib,../shared,sh_pdf2struc) $(call link_lib,../shared,shared) $(LDFLAGS)
 
-.PHONY: all clean test lib debug tools fuzz fuzz-lib fuzz-xlsx fuzz-pdf fuzz-csv fuzz-smoke
+.PHONY: all clean test lib debug tools fuzz fuzz-lib fuzz-xlsx fuzz-pdf fuzz-csv fuzz-smoke help
 
 all: lib $(TEST_REGEX_BIN) $(TEST_INGEST_BIN) $(TEST_XFORM_BIN) $(TEST_VALIDATE_BIN) $(TEST_DISCOVER_BIN) $(TEST_MERGE_BIN) $(TEST_EMIT_BIN) $(TEST_ISSUE_BIN) $(TEST_DIFF_BIN) $(TEST_PIPELINE_BIN)
 

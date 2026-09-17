@@ -113,4 +113,4 @@ test-queue: $(TARGET)
 clean:
 	rm -rf $(TARGET) $(SRC_DIR)/*.o $(BUILD_DIR)
 
-.PHONY: all clean run run-port test
+.PHONY: all clean run run-port test test-quick test-ratelimit test-queue

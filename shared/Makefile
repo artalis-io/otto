@@ -107,7 +107,7 @@ TEST_PDF2STRUC_BIN = test_pdf2struc
 TEST_PROTOBUF_BIN = test_protobuf
 TEST_INFLATE_BIN = test_inflate
 
-.PHONY: all clean test test-asan test-pal test-font test-json test-xml test-csv test-geojson test-fs test-sha256 test-eov test-pdf2struc test-protobuf test-inflate fuzz fuzz-lib fuzz-inflate fuzz-protobuf fuzz-pdf2struc fuzz-json fuzz-smoke font-compare lib debug generate-font-data
+.PHONY: all clean test test-asan test-pal test-font test-json test-xml test-csv test-geojson test-fs test-sha256 test-eov test-pdf2struc test-protobuf test-inflate fuzz fuzz-lib fuzz-inflate fuzz-protobuf fuzz-pdf2struc fuzz-json fuzz-smoke font-compare lib debug generate-font-data help
 
 # Default target
 all: lib $(TEST_BIN)

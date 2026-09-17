@@ -78,7 +78,7 @@ BENCH_BIN = bench_carta
 # WASM output
 WASM_OUT = carta.js
 
-.PHONY: all clean test test-transport bench lib debug wasm cli compare fuzz fuzz-lib fuzz-smoke
+.PHONY: all clean test test-transport bench lib debug wasm cli compare fuzz fuzz-lib fuzz-smoke help
 
 # Default target
 all: lib $(TEST_BIN)

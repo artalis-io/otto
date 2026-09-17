@@ -45,7 +45,7 @@ HTTPSERVER_OBJ = build/sh_httpserver.o build/sh_httpasync.o
 
 TARGET = velo-route-server
 
-.PHONY: all clean deps run debug
+.PHONY: all clean deps run debug build test
 
 all: deps $(TARGET)
 

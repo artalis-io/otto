@@ -62,7 +62,7 @@ API_EXPORTS += ,_fuelwise_response_body,_fuelwise_response_body_len
 API_EXPORTS += ,_fuelwise_api_version
 API_EXPORTS += ,_wasm_malloc,_wasm_free,_malloc,_free
 
-.PHONY: all clean check-emcc api-demo test-api
+.PHONY: all clean check-emcc api-demo test-api debug release types
 
 all: check-emcc $(OUTPUT_JS)
 
