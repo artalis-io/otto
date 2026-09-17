@@ -149,5 +149,9 @@ test-asan: clean test
 # print FAIL five times and still exit 0. CI was unaffected (it calls the script
 # directly), but anyone running make locally was told the wrong thing.
 test: $(TARGET)
-	@bash test_api.sh
+	# test_api.sh resolves both the server and its data file relative to the
+	# repo root (SERVER=./carta/api/..., data/monaco...), so it has to run
+	# from there. Without the cd this target could never work -- CI has been
+	# invoking the script directly from the root and never used it.
+	@cd ../.. && bash carta/api/test_api.sh
 
