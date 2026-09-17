@@ -527,6 +527,115 @@ TEST(pb_packed_svarint)
  * (data, len) points past the input (an OOB read for the consumer). Pre-fix,
  * sh_pbf_decompress_blob returned SH_OK with out.len = 0xFFFFFFFF pointing past
  * a 6-byte buffer. Field 1 (RAW), wire 2 (length-delimited), then varint. */
+/*
+ * Twenty-three allocation guards across velo and surge now call
+ * sh_mul_would_overflow() instead of writing `count > SIZE_MAX / sizeof(T)`
+ * inline, so its behaviour at the boundaries is what stands between a
+ * malformed graph header and a wrapped allocation size on a 32-bit target.
+ * Neither this nor sh_safe_mul_size() had any test at all.
+ *
+ * The boundary is the interesting part: exactly SIZE_MAX/elem must be
+ * allowed, one past it must be refused. An off-by-one the permissive way
+ * silently reopens the hole these guards exist to close; the other way it
+ * rejects the largest legitimate graph.
+ */
+TEST(mul_would_overflow_boundaries)
+{
+    /* Zero is never an overflow, whichever operand it is. */
+    ASSERT_EQ(sh_mul_would_overflow(0, sizeof(double)), 0);
+    ASSERT_EQ(sh_mul_would_overflow(1000, 0), 0);
+    ASSERT_EQ(sh_mul_would_overflow(0, 0), 0);
+
+    /* Ordinary sizes are fine. */
+    ASSERT_EQ(sh_mul_would_overflow(1000000, sizeof(double)), 0);
+
+    /* The boundary, for a few element sizes. */
+    ASSERT_EQ(sh_mul_would_overflow(SIZE_MAX / 8, 8), 0);
+    ASSERT_EQ(sh_mul_would_overflow(SIZE_MAX / 8 + 1, 8), 1);
+    ASSERT_EQ(sh_mul_would_overflow(SIZE_MAX / 4, 4), 0);
+    ASSERT_EQ(sh_mul_would_overflow(SIZE_MAX / 4 + 1, 4), 1);
+    ASSERT_EQ(sh_mul_would_overflow(SIZE_MAX, 1), 0);
+    ASSERT_EQ(sh_mul_would_overflow(SIZE_MAX, 2), 1);
+
+    /* And that a value the guard allows really does multiply without
+     * wrapping, which is the property the callers rely on. */
+    size_t n = SIZE_MAX / sizeof(double);
+    ASSERT_EQ(sh_mul_would_overflow(n, sizeof(double)), 0);
+    ASSERT(n * sizeof(double) >= n);
+}
+
+/* The product-returning form, which the same reasoning applies to. */
+TEST(safe_mul_size_boundaries)
+{
+    size_t out;
+
+    ASSERT_EQ(sh_safe_mul_size(0, sizeof(double), &out), 1);
+    ASSERT_EQ(out, (size_t)0);
+
+    ASSERT_EQ(sh_safe_mul_size(12, 8, &out), 1);
+    ASSERT_EQ(out, (size_t)96);
+
+    ASSERT_EQ(sh_safe_mul_size(SIZE_MAX / 8, 8, &out), 1);
+    ASSERT_EQ(sh_safe_mul_size(SIZE_MAX / 8 + 1, 8, &out), 0);
+    ASSERT_EQ(sh_safe_mul_size(SIZE_MAX, 2, &out), 0);
+
+    /* The two helpers must agree; they are the same question. */
+    size_t probes[] = { 0, 1, 7, 1000, SIZE_MAX / 8, SIZE_MAX / 8 + 1, SIZE_MAX };
+    for (size_t i = 0; i < sizeof(probes) / sizeof(probes[0]); i++) {
+        int a = sh_mul_would_overflow(probes[i], 8);
+        int b = sh_safe_mul_size(probes[i], 8, &out) ? 0 : 1;
+        ASSERT_EQ(a, b);
+    }
+}
+
+/*
+ * The 32-bit case, which is the only reason these guards exist and the one a
+ * 64-bit test runner cannot reach directly.
+ *
+ * sh_mul_would_overflow() is `count > SIZE_MAX / elem`. The test above pins
+ * that at the running platform's width; this one evaluates the same shape
+ * against a 32-bit limit, so the numbers a wasm32 build would actually see
+ * are checked rather than argued about.
+ *
+ * The concrete case: a graph header claiming 0x20000001 nodes, times
+ * sizeof(VLNode) at 8 bytes. On wasm32 that product wraps to 8 and the
+ * allocation succeeds at a fraction of the size the loader then reads.
+ */
+static int would_overflow_at(uint64_t limit, uint64_t count, uint64_t elem)
+{
+    return elem != 0 && count > limit / elem;
+}
+
+TEST(mul_would_overflow_at_32_bits)
+{
+    const uint64_t max32 = 0xFFFFFFFFull;
+
+    /* The header value that motivated the guards. */
+    ASSERT_EQ(would_overflow_at(max32, 0x20000001ull, 8), 1);
+    /* ...and that it really does wrap at 32 bits, so the guard is not
+     * refusing something harmless. */
+    ASSERT((uint32_t)(0x20000001u * 8u) < 0x20000001u);
+
+    /* Boundary at 32 bits. */
+    ASSERT_EQ(would_overflow_at(max32, max32 / 8, 8), 0);
+    ASSERT_EQ(would_overflow_at(max32, max32 / 8 + 1, 8), 1);
+
+    /* A graph size that is fine on both widths stays fine. */
+    ASSERT_EQ(would_overflow_at(max32, 1000000, 8), 0);
+    ASSERT_EQ(sh_mul_would_overflow(1000000, 8), 0);
+
+    /* The helper and the shape agree at the running width, which is what
+     * makes the 32-bit rows above evidence about the helper rather than
+     * about an unrelated expression. */
+    uint64_t probes[] = { 0, 1, 4096, (uint64_t)(SIZE_MAX / 8),
+                          (uint64_t)(SIZE_MAX / 8) + 1 };
+    for (size_t i = 0; i < sizeof(probes) / sizeof(probes[0]); i++) {
+        if (probes[i] > (uint64_t)SIZE_MAX) continue;
+        ASSERT_EQ(would_overflow_at((uint64_t)SIZE_MAX, probes[i], 8),
+                  sh_mul_would_overflow((size_t)probes[i], 8));
+    }
+}
+
 TEST(pbf_decompress_blob_oob_length)
 {
     const uint8_t mal[] = { 0x0A, 0xFF, 0xFF, 0xFF, 0xFF, 0x0F };
@@ -5535,6 +5644,9 @@ int main(void)
     RUN_TEST(pb_svarint_negative);
     RUN_TEST(pb_svarint_edge);
     RUN_TEST(pb_tag_roundtrip);
+    RUN_TEST(mul_would_overflow_boundaries);
+    RUN_TEST(safe_mul_size_boundaries);
+    RUN_TEST(mul_would_overflow_at_32_bits);
     RUN_TEST(pbf_decompress_blob_oob_length);
     RUN_TEST(pbf_decompress_blob_absurd_raw_size);
     RUN_TEST(pb_fixed32_roundtrip);

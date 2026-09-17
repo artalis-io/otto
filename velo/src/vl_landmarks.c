@@ -24,6 +24,7 @@
  */
 
 #include "vl_types.h"
+#include "shared.h"   /* sh_mul_would_overflow */
 #include <stdlib.h>
 #include <string.h>
 #include <stdio.h>
@@ -74,7 +75,7 @@ static void select_landmarks_farthest(const VLGraph *graph, int num_landmarks,
     landmarks[0] = first_landmark;
 
     /* Integer overflow check */
-    if (num_nodes > SIZE_MAX / sizeof(double)) return;
+    if (sh_mul_would_overflow(num_nodes, sizeof(double))) return;
 
     /* Track minimum distance to any landmark for each node */
     double *min_to_landmark = malloc(num_nodes * sizeof(double));

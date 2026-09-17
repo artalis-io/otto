@@ -9,6 +9,7 @@
  */
 
 #include "vl_types.h"
+#include "shared.h"   /* sh_mul_would_overflow */
 #include "sh_pal.h"
 #include <stdlib.h>
 #include <string.h>
@@ -290,8 +291,8 @@ VLStatus vl_graph_build_reverse_index(VLGraph *graph)
     free(graph->rev_edge_idx);
 
     /* Integer overflow checks */
-    if (graph->num_nodes > SIZE_MAX / sizeof(uint32_t) ||
-        graph->num_edges > SIZE_MAX / sizeof(uint32_t)) {
+    if (sh_mul_would_overflow(graph->num_nodes, sizeof(uint32_t)) ||
+        sh_mul_would_overflow(graph->num_edges, sizeof(uint32_t))) {
         return VL_ERROR_OUT_OF_MEMORY;
     }
 
@@ -389,7 +390,7 @@ VLStatus vl_graph_build_grid_index(VLGraph *graph)
     size_t num_cells = (size_t)VL_GRID_SIZE * VL_GRID_SIZE;
 
     /* Integer overflow check */
-    if (graph->num_nodes > SIZE_MAX / sizeof(uint32_t)) {
+    if (sh_mul_would_overflow(graph->num_nodes, sizeof(uint32_t))) {
         free(grid);
         return VL_ERROR_OUT_OF_MEMORY;
     }
@@ -757,8 +758,8 @@ VLStatus vl_graph_contract_degree2(VLGraph *graph)
            num_contractable, 100.0 * num_contractable / num_nodes);
 
     /* Integer overflow checks */
-    if (num_nodes > SIZE_MAX / sizeof(uint32_t) ||
-        (num_nodes - num_contractable) > SIZE_MAX / sizeof(uint32_t)) {
+    if (sh_mul_would_overflow(num_nodes, sizeof(uint32_t)) ||
+        sh_mul_would_overflow(num_nodes - num_contractable, sizeof(uint32_t))) {
         free(contracted);
         return VL_ERROR_OUT_OF_MEMORY;
     }
@@ -1131,8 +1132,8 @@ VLGraph *vl_graph_load(const char *filename)
 
     /* Guard the size math against a malformed header on 32-bit (WASM) targets,
      * matching the mmap loader's check. */
-    if (graph->num_nodes > SIZE_MAX / sizeof(VLNode) ||
-        graph->num_edges > SIZE_MAX / sizeof(VLEdge)) {
+    if (sh_mul_would_overflow(graph->num_nodes, sizeof(VLNode)) ||
+        sh_mul_would_overflow(graph->num_edges, sizeof(VLEdge))) {
         vl_graph_free(graph);
         fclose(f);
         return NULL;
@@ -1171,8 +1172,8 @@ VLGraph *vl_graph_load_memory(const uint8_t *data, size_t size)
     /* Guard the size math against a malformed header before it feeds the
      * `size < expected_size` check: on 32-bit (WASM) a wrapped product would
      * pass the check and then over-read `data` in the memcpy below. */
-    if (header->num_nodes > SIZE_MAX / sizeof(VLNode) ||
-        header->num_edges > SIZE_MAX / sizeof(VLEdge)) {
+    if (sh_mul_would_overflow(header->num_nodes, sizeof(VLNode)) ||
+        sh_mul_would_overflow(header->num_edges, sizeof(VLEdge))) {
         return NULL;
     }
 
@@ -1245,8 +1246,8 @@ VLGraph *vl_graph_mmap(const char *filename)
     size_t edges_size = (size_t)header->num_edges * sizeof(VLEdge);
 
     /* Check for integer overflow in size calculations */
-    if (header->num_nodes > SIZE_MAX / sizeof(VLNode) ||
-        header->num_edges > SIZE_MAX / sizeof(VLEdge)) {
+    if (sh_mul_would_overflow(header->num_nodes, sizeof(VLNode)) ||
+        sh_mul_would_overflow(header->num_edges, sizeof(VLEdge))) {
         sh_unmap_file(&map);
         return NULL;
     }
@@ -1533,9 +1534,9 @@ VLStatus vl_graph_reorder_hilbert(VLGraph *graph)
     if (lon_range < 1e-9) lon_range = 1e-9;
 
     /* Integer overflow checks for all allocations */
-    if (num_nodes > SIZE_MAX / sizeof(HilbertNode) ||
-        num_nodes > SIZE_MAX / sizeof(uint32_t) ||
-        num_nodes > SIZE_MAX / sizeof(VLNode)) {
+    if (sh_mul_would_overflow(num_nodes, sizeof(HilbertNode)) ||
+        sh_mul_would_overflow(num_nodes, sizeof(uint32_t)) ||
+        sh_mul_would_overflow(num_nodes, sizeof(VLNode))) {
         return VL_ERROR_OUT_OF_MEMORY;
     }
 

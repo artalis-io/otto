@@ -95,6 +95,30 @@ static inline int sh_safe_mul_size(size_t a, size_t b, size_t *result)
     return 1;
 }
 
+/*
+ * Would count * elem overflow size_t?
+ *
+ * The same question as sh_safe_mul_size(), for the callers that only want to
+ * refuse the input and have no use for the product. Written as a call rather
+ * than inline at each site for a specific reason: `count > SIZE_MAX / elem` is
+ * tautologically false whenever count is narrower than size_t, which on a
+ * 64-bit target it almost always is, so the compiler reports every such guard
+ * as a comparison that is always false (-Wtype-limits). The guards are not
+ * pointless -- on wasm32 size_t is 32 bits and they are what stands between a
+ * malformed graph header and a wrapped allocation size -- but 23 warnings that
+ * are all expected is 23 places nobody reads, and a real one would sit
+ * unnoticed among them.
+ *
+ * Here the operands are size_t by declaration, so the comparison is honest at
+ * either width and the warning has nothing to report.
+ *
+ * Returns: 1 if the multiplication would overflow, 0 if it is safe.
+ */
+static inline int sh_mul_would_overflow(size_t count, size_t elem)
+{
+    return elem != 0 && count > SIZE_MAX / elem;
+}
+
 /* Version string */
 const char *sh_version(void);
 

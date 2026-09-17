@@ -1,5 +1,6 @@
 #include "sg_internal.h"
 
+#include "shared.h"   /* sh_mul_would_overflow */
 #include <stdarg.h>
 #include <stdio.h>
 
@@ -667,8 +668,8 @@ uint32_t sg_add_vehicle(SGContext *ctx) {
 
     id = ctx->num_vehicles;
     next_count = (size_t)ctx->num_vehicles + 1;
-    if (next_count > SIZE_MAX / sizeof(*ctx->vehicles) ||
-        (size_t)ctx->dimension_count > SIZE_MAX / sizeof(double)) {
+    if (sh_mul_would_overflow(next_count, sizeof(*ctx->vehicles)) ||
+        sh_mul_would_overflow(ctx->dimension_count, sizeof(double))) {
         return UINT32_MAX;
     }
 
@@ -714,8 +715,8 @@ uint32_t sg_add_task(SGContext *ctx, SGTaskType type) {
 
     id = ctx->num_tasks;
     next_count = (size_t)ctx->num_tasks + 1;
-    if (next_count > SIZE_MAX / sizeof(*ctx->tasks) ||
-        (size_t)ctx->dimension_count > SIZE_MAX / sizeof(double)) {
+    if (sh_mul_would_overflow(next_count, sizeof(*ctx->tasks)) ||
+        sh_mul_would_overflow(ctx->dimension_count, sizeof(double))) {
         return UINT32_MAX;
     }
 
