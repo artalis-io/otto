@@ -78,7 +78,7 @@ BENCH_BIN = bench_carta
 # WASM output
 WASM_OUT = carta.js
 
-.PHONY: all clean test test-transport bench lib debug wasm cli compare fuzz
+.PHONY: all clean test test-transport bench lib debug wasm cli compare fuzz fuzz-lib fuzz-smoke
 
 # Default target
 all: lib $(TEST_BIN)
@@ -152,14 +152,20 @@ FUZZ_BIN = fuzz_pbf
 FUZZ_CC = clang
 FUZZ_CFLAGS = -fsanitize=fuzzer,address,undefined -g -O1 -std=c11 -D_GNU_SOURCE
 FUZZ_SRCS = tests/fuzz/fuzz_pbf.c
+FUZZ_LIB = libcarta_fuzz.a
 
 # Build fuzz target (requires rebuilt library with sanitizers)
 fuzz: fuzz-lib $(FUZZ_BIN)
 
 # Rebuild library with sanitizers for fuzzing
 fuzz-lib:
+	# -c without -o writes each object to the current directory, so the
+	# archive has to name them there too. $(CORE_OBJS) is src/*.o, which
+	# is where the ORDINARY build puts its objects -- so this archived
+	# whatever a previous `make` had left there, un-instrumented, and the
+	# fuzzer ran with no coverage feedback over most of the library.
 	$(FUZZ_CC) $(FUZZ_CFLAGS) $(INCLUDES) -c $(CORE_SRCS)
-	ar rcs libcarta_fuzz.a $(CORE_OBJS)
+	ar rcs libcarta_fuzz.a $(notdir $(CORE_OBJS))
 	$(MAKE) -C $(SHARED_DIR) CC=$(FUZZ_CC) CFLAGS="$(FUZZ_CFLAGS)" clean lib
 
 $(FUZZ_BIN): $(FUZZ_SRCS) fuzz-lib
@@ -167,14 +173,30 @@ $(FUZZ_BIN): $(FUZZ_SRCS) fuzz-lib
 		$(call link_lib,.,carta_fuzz) $(call link_lib,$(SHARED_DIR),shared) $(LDFLAGS) $(EXE_OUT)$@
 	@echo ""
 	@echo "Fuzzer built successfully. Run with:"
-	@echo "  ./$(FUZZ_BIN) tests/fuzz/corpus/ -max_len=1000000"
+	@echo "  ./$(FUZZ_BIN) work/ tests/fuzz/corpus_pbf/ -max_len=1000000"
 	@echo ""
 	@echo "Or run a quick smoke test:"
-	@echo "  ./$(FUZZ_BIN) tests/fuzz/corpus/ -max_len=100000 -max_total_time=60"
+	@echo "  ./$(FUZZ_BIN) work/ tests/fuzz/corpus_pbf/ -max_len=100000 -max_total_time=60"
+
+FUZZ_SMOKE_SECONDS ?= 30
+FUZZ_WORK ?= build/fuzz-corpus
+# A bounded run over the committed seed corpora, for CI. The first directory
+# is where libFuzzer writes what it finds; the seeds after it are read only.
+# Passing the seeds alone would make libFuzzer write its discoveries back
+# into them, which turns a curated seed set into noise.
+#
+# Short on purpose: this keeps the harnesses building and catches shallow
+# regressions on every push. It is not a fuzzing campaign.
+fuzz-smoke: fuzz
+	@mkdir -p $(FUZZ_WORK)/pbf
+	./$(FUZZ_BIN) $(FUZZ_WORK)/pbf tests/fuzz/corpus_pbf/ \
+		-max_total_time=$(FUZZ_SMOKE_SECONDS) -max_len=1000000 -print_final_stats=1
 
 # Clean
 clean:
 	rm -f $(CORE_OBJS) $(LIB_FILE) libcarta_fuzz.a
+	# the fuzz build writes its objects here, not into src/
+	rm -f $(notdir $(CORE_OBJS))
 	rm -f $(TEST_BIN) $(TEST_METATILE_BIN) $(TEST_TRANSPORT_BIN) $(CLI_BIN) $(COMPARE_BIN) $(BENCH_BIN) $(FUZZ_BIN)
 	rm -f $(WASM_OUT) carta.wasm
 

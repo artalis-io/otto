@@ -203,3 +203,8 @@ ralph/benchmarks/.emps/
 # fuzz-smoke points that at shared/build/ so the committed seed corpora
 # stay a curated set rather than accumulating whatever a run turned up.
 shared/build/
+
+# libFuzzer scratch corpora, so the committed seeds stay curated
+carta/build/
+nexus/build/
+surge/build/

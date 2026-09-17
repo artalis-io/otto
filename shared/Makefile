@@ -107,7 +107,7 @@ TEST_PDF2STRUC_BIN = test_pdf2struc
 TEST_PROTOBUF_BIN = test_protobuf
 TEST_INFLATE_BIN = test_inflate
 
-.PHONY: all clean test test-asan test-pal test-font test-json test-xml test-csv test-geojson test-fs test-sha256 test-eov test-pdf2struc test-protobuf test-inflate fuzz fuzz-lib fuzz-inflate fuzz-protobuf fuzz-pdf2struc fuzz-smoke font-compare lib debug generate-font-data
+.PHONY: all clean test test-asan test-pal test-font test-json test-xml test-csv test-geojson test-fs test-sha256 test-eov test-pdf2struc test-protobuf test-inflate fuzz fuzz-lib fuzz-inflate fuzz-protobuf fuzz-pdf2struc fuzz-json fuzz-smoke font-compare lib debug generate-font-data
 
 # Default target
 all: lib $(TEST_BIN)
@@ -292,7 +292,7 @@ FUZZ_CC = clang
 FUZZ_CFLAGS = -fsanitize=fuzzer,address,undefined -fno-sanitize-recover=all               -g -O1 -std=c11 -D_GNU_SOURCE -D_USE_MATH_DEFINES
 FUZZ_LIB = libshared_fuzz.a
 
-fuzz: fuzz-inflate fuzz-protobuf fuzz-pdf2struc
+fuzz: fuzz-inflate fuzz-protobuf fuzz-pdf2struc fuzz-json
 
 fuzz-lib:
 	$(FUZZ_CC) $(FUZZ_CFLAGS) $(INCLUDES) -c $(SRCS)
@@ -314,6 +314,14 @@ fuzz-pdf2struc: fuzz-lib
 	$(FUZZ_CC) $(FUZZ_CFLAGS) $(INCLUDES) tests/fuzz/fuzz_pdf2struc.c 		-L. -lshared_fuzz -lm -o fuzz_pdf2struc
 	@echo "Run: ./fuzz_pdf2struc tests/fuzz/corpus_pdf2struc/ -max_total_time=60"
 
+# sh_json is the only parser here fed straight from an HTTP request body --
+# fuelwise, ralph, surge and velo all call sh_json_parse() on bytes off the
+# wire -- and it was the last one with no fuzzer.
+fuzz-json: fuzz-lib
+	$(FUZZ_CC) $(FUZZ_CFLAGS) $(INCLUDES) tests/fuzz/fuzz_json.c \
+		-L. -lshared_fuzz -lm -o fuzz_json
+	@echo "Run: ./fuzz_json work/ tests/fuzz/corpus_json/ -max_total_time=60"
+
 # A bounded run over the seed corpora. Short enough for CI, which is the point:
 # the fuzz targets that already existed in carta, nexus and surge are run by
 # nothing, so they only find what someone remembers to look for.
@@ -322,12 +330,14 @@ fuzz-smoke: fuzz
 	# directory after it is only read. Passing the seeds alone has it write
 	# its discoveries back into them -- a 15 second local run left 269 new
 	# files in the corpora, which is how a curated seed set becomes noise.
-	@mkdir -p $(FUZZ_WORK)/inflate $(FUZZ_WORK)/protobuf $(FUZZ_WORK)/pdf2struc
+	@mkdir -p $(FUZZ_WORK)/inflate $(FUZZ_WORK)/protobuf $(FUZZ_WORK)/pdf2struc $(FUZZ_WORK)/json
 	./fuzz_inflate $(FUZZ_WORK)/inflate tests/fuzz/corpus_inflate/ \
 		-max_total_time=$(FUZZ_SMOKE_SECONDS) -print_final_stats=1
 	./fuzz_protobuf $(FUZZ_WORK)/protobuf tests/fuzz/corpus_protobuf/ \
 		-max_total_time=$(FUZZ_SMOKE_SECONDS) -print_final_stats=1
 	./fuzz_pdf2struc $(FUZZ_WORK)/pdf2struc tests/fuzz/corpus_pdf2struc/ \
+		-max_total_time=$(FUZZ_SMOKE_SECONDS) -print_final_stats=1
+	./fuzz_json $(FUZZ_WORK)/json tests/fuzz/corpus_json/ \
 		-max_total_time=$(FUZZ_SMOKE_SECONDS) -print_final_stats=1
 
 FUZZ_SMOKE_SECONDS ?= 30
@@ -335,7 +345,7 @@ FUZZ_WORK ?= build/fuzz-corpus
 
 # Clean
 clean:
-	rm -f $(OBJS) $(MINIZ_OBJS) $(LIB_FILE) $(TEST_BIN) $(TEST_FONT_BIN) $(TEST_JSON_BIN) $(TEST_XML_BIN) $(TEST_CSV_BIN) $(TEST_GEOJSON_BIN) $(TEST_FS_BIN) $(TEST_SHA256_BIN) $(TEST_EOV_BIN) $(TEST_PROTOBUF_BIN) $(TEST_INFLATE_BIN) $(FONT_COMPARE_BIN) $(FUZZ_LIB) fuzz_inflate fuzz_protobuf fuzz_pdf2struc
+	rm -f $(OBJS) $(MINIZ_OBJS) $(LIB_FILE) $(TEST_BIN) $(TEST_FONT_BIN) $(TEST_JSON_BIN) $(TEST_XML_BIN) $(TEST_CSV_BIN) $(TEST_GEOJSON_BIN) $(TEST_FS_BIN) $(TEST_SHA256_BIN) $(TEST_EOV_BIN) $(TEST_PROTOBUF_BIN) $(TEST_INFLATE_BIN) $(FONT_COMPARE_BIN) $(FUZZ_LIB) fuzz_inflate fuzz_protobuf fuzz_pdf2struc fuzz_json
 	@rm -f *.obj *.pdb *.ilk *.exp 2>/dev/null || true
 	rm -f $(PDF2STRUC_OBJS) $(PDF2STRUC_LIB) $(TEST_PDF2STRUC_BIN)
 	rm -f tests/soft_*.png tests/compare.html

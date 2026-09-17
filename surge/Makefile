@@ -69,7 +69,7 @@ TSAN_LDFLAGS = -fsanitize=thread
         bench-gh-200 bench-gh-all bench-ll-200 bench-ll-all bench-full \
         bench-tune tune-quick tune-all \
         bench-download bench-validate \
-        shared-lib python-test node-test cppcheck fuzz tsan
+        shared-lib python-test node-test cppcheck fuzz tsan fuzz-smoke
 
 all: lib $(TEST_BIN)
 
@@ -240,6 +240,20 @@ $(FUZZ_BIN): fuzz/fuzz_json_api.c $(SRCS) $(ARBOR_SRCS) $(SHARED_BINDING_SRCS)
 
 fuzz: $(FUZZ_BIN)
 	@echo "Run: ./$(FUZZ_BIN) fuzz/corpus/ -max_len=65536 -jobs=4"
+
+FUZZ_SMOKE_SECONDS ?= 30
+FUZZ_WORK ?= build/fuzz-corpus
+# A bounded run over the committed seed corpora, for CI. The first directory
+# is where libFuzzer writes what it finds; the seeds after it are read only.
+# Passing the seeds alone would make libFuzzer write its discoveries back
+# into them, which turns a curated seed set into noise.
+#
+# Short on purpose: this keeps the harnesses building and catches shallow
+# regressions on every push. It is not a fuzzing campaign.
+fuzz-smoke: fuzz
+	@mkdir -p $(FUZZ_WORK)/json
+	./$(FUZZ_BIN) $(FUZZ_WORK)/json fuzz/corpus/ \
+		-max_total_time=$(FUZZ_SMOKE_SECONDS) -max_len=65536 -print_final_stats=1
 
 # --- Thread Sanitizer ---
 

@@ -26,3 +26,5 @@ Makefile        text eol=lf
 # simply stop reaching the code paths they were chosen for.
 shared/tests/fuzz/corpus_*/** binary
 */tests/fuzz/corpus_*/** binary
+# surge keeps its corpus outside the tests/ tree, so the globs above miss it
+surge/fuzz/corpus/** binary
