@@ -94,7 +94,7 @@ API_EXPORTS += ,_malloc,_free
 API_OUTPUT_JS = $(OUTPUT_DIR)/carta-api-demo.js
 API_OUTPUT_WASM = $(OUTPUT_DIR)/carta-api-demo.wasm
 
-.PHONY: all clean check-emcc debug release types test api-demo
+.PHONY: all clean check-emcc debug release types test api-demo test-api embed-monaco
 
 all: check-emcc $(OUTPUT_JS)
 

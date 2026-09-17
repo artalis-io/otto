@@ -71,7 +71,7 @@ API_EXPORTS += ,_surge_response_body,_surge_response_body_len
 API_EXPORTS += ,_surge_api_version_string
 API_EXPORTS += ,_malloc,_free
 
-.PHONY: all clean check-emcc api-demo test-api
+.PHONY: all clean check-emcc api-demo test-api debug release
 
 all: check-emcc $(OUTPUT_JS)
 

@@ -59,7 +59,7 @@ OBJS = $(BUILD_DIR)/main.o $(HTTPSERVER_OBJ)
 # Target
 TARGET = carta-tile-server
 
-.PHONY: all clean debug deps run test test-threading test-threading-quick
+.PHONY: all clean debug deps run test test-threading test-threading-quick install docker
 
 all: deps $(TARGET)
 

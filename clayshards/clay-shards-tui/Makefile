@@ -20,7 +20,7 @@ HEADERS = include/cs_tui.h src/cs_tui_internal.h
 
 BUILD_DIR = build
 
-.PHONY: all clean lib test
+.PHONY: all clean lib test help
 
 all: lib
 

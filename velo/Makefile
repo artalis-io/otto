@@ -97,7 +97,7 @@ ROUTE_BENCH = velo-route-bench
 # WASM output
 WASM_OUT = velo.js
 
-.PHONY: all clean test test-transport bench lib debug wasm route-bench omp-mode
+.PHONY: all clean test test-transport bench lib debug wasm route-bench omp-mode test-osrm help
 
 # Default target
 all: lib $(TEST_BIN)

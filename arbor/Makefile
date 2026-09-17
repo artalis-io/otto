@@ -29,7 +29,7 @@ LIB_FILE = libarbor.a
 TEST_BIN = test_arbor
 TEST_OP_BIN = test_ar_operators
 
-.PHONY: all clean test test-asan lib debug
+.PHONY: all clean test test-asan lib debug help
 
 all: lib $(TEST_BIN) $(TEST_OP_BIN)
 

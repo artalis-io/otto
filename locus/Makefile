@@ -54,7 +54,7 @@ BENCH_BIN = bench_locus
 # WASM output
 WASM_OUT = locus.js
 
-.PHONY: all clean test test-transport bench lib debug wasm
+.PHONY: all clean test test-transport bench lib debug wasm help
 
 # Default target
 all: lib $(TEST_BIN)

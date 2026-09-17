@@ -965,6 +965,39 @@ jobs:
         run: make -C ${{ matrix.suite.dir }} ${{ matrix.suite.target }}
 
   # ==========================================================================
+  # Test coverage of the test suite itself
+  #
+  # Not "how much code is covered" -- whether anything runs the tests that are
+  # in the tree. The same defect kept recurring: a test file compiling, passing
+  # and named by no target anything invokes. It hid an invalid MPS writer
+  # (`make test` without test_lp), a broken MSVC link and an unsanitised PDF
+  # parser (`shared/test` without test_pdf2struc), and 135 passing assertions
+  # in ralph. Every time, the suite reported all green, because what it did not
+  # run it also did not count.
+  #
+  # Cheap to check and cheap to keep true, which is the argument for doing it
+  # in CI rather than by audit every few months.
+  # ==========================================================================
+  test-coverage:
+    name: Every Test Is Run
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential
+
+      - name: Check that every test program is reached by a CI target
+        run: python3 scripts/check_test_coverage.py
+
+  # ==========================================================================
   # Fuzzing (bounded)
   #
   # OTTO already had fuzz targets in carta, nexus and surge before this job

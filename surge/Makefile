@@ -85,7 +85,7 @@ TSAN_LDFLAGS = -fsanitize=thread
         bench-gh-200 bench-gh-all bench-ll-200 bench-ll-all bench-full \
         bench-tune tune-quick tune-all \
         bench-download bench-validate \
-        shared-lib python-test node-test cppcheck fuzz tsan fuzz-smoke
+        shared-lib python-test node-test cppcheck fuzz tsan fuzz-smoke cppcheck-all help
 
 all: lib $(TEST_BIN)
 
