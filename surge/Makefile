@@ -42,11 +42,27 @@ BENCH_TUNE_BIN = bench_tune
 
 # Shared library for FFI bindings (Python ctypes, etc.)
 ARBOR_SRCS = ../arbor/src/ar_alns.c ../arbor/src/ar_operators.c ../arbor/src/arbor.c
+# This has to be the transitive closure of what surge and arbor call in
+# shared/, because the two targets that use it compile these sources directly
+# rather than linking libshared.a. It was not: sh_workqueue, sh_worker_pool and
+# sh_completion call the platform layer (sh_mutex_lock, sh_cond_timedwait,
+# sh_monotonic_ms, sh_wall_ns) and sg_solution/sg_repair call sh_heap_*, and
+# neither the PAL nor sh_heap was listed. Every other consumer links the whole
+# archive and so never noticed.
+#
+# Both PAL files are listed the way shared/Makefile lists them: each compiles
+# to nothing on the platform it is not for.
+#
+# If you add a shared/ call to surge or arbor, this list is what needs it. A
+# link against libshared.a would not need maintaining, and is the better shape
+# if these targets are ever reworked.
 SHARED_BINDING_SRCS = ../shared/src/sh_json.c ../shared/src/sh_arena.c \
                       ../shared/src/sh_hashmap.c ../shared/src/sh_dist.c \
                       ../shared/src/sh_stepfunc.c ../shared/src/sh_piecewise.c \
                       ../shared/src/sh_completion.c ../shared/src/sh_worker_pool.c \
-                      ../shared/src/sh_workqueue.c
+                      ../shared/src/sh_workqueue.c \
+                      ../shared/src/sh_heap.c \
+                      ../shared/src/sh_pal_posix.c ../shared/src/sh_pal_windows.c
 
 ifeq ($(UNAME_S),Darwin)
     SHARED_LIB = libsurge_api.dylib
@@ -69,7 +85,7 @@ TSAN_LDFLAGS = -fsanitize=thread
         bench-gh-200 bench-gh-all bench-ll-200 bench-ll-all bench-full \
         bench-tune tune-quick tune-all \
         bench-download bench-validate \
-        shared-lib python-test node-test cppcheck fuzz tsan
+        shared-lib python-test node-test cppcheck fuzz tsan fuzz-smoke
 
 all: lib $(TEST_BIN)
 
@@ -240,6 +256,20 @@ $(FUZZ_BIN): fuzz/fuzz_json_api.c $(SRCS) $(ARBOR_SRCS) $(SHARED_BINDING_SRCS)
 
 fuzz: $(FUZZ_BIN)
 	@echo "Run: ./$(FUZZ_BIN) fuzz/corpus/ -max_len=65536 -jobs=4"
+
+FUZZ_SMOKE_SECONDS ?= 30
+FUZZ_WORK ?= build/fuzz-corpus
+# A bounded run over the committed seed corpora, for CI. The first directory
+# is where libFuzzer writes what it finds; the seeds after it are read only.
+# Passing the seeds alone would make libFuzzer write its discoveries back
+# into them, which turns a curated seed set into noise.
+#
+# Short on purpose: this keeps the harnesses building and catches shallow
+# regressions on every push. It is not a fuzzing campaign.
+fuzz-smoke: fuzz
+	@mkdir -p $(FUZZ_WORK)/json
+	./$(FUZZ_BIN) $(FUZZ_WORK)/json fuzz/corpus/ \
+		-max_total_time=$(FUZZ_SMOKE_SECONDS) -max_len=65536 -print_final_stats=1
 
 # --- Thread Sanitizer ---
 

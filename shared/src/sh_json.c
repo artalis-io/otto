@@ -456,6 +456,22 @@ static ShJsonValue *parse_array(ShJsonParser *p)
     size_t i = 0;
     if (peek(p) != ']') {
         while (p->status == SH_JSON_OK) {
+            /* `count` came from a scanner that is deliberately looser than the
+             * grammar below -- it tracks nesting with a bracket counter and a
+             * two-state string machine, and knows nothing about which escapes
+             * or literals are legal. Being looser means it stays inside a
+             * string or a nested container for at least as long as the real
+             * parse does, so it cannot see fewer top-level commas, so `count`
+             * cannot come out short.
+             *
+             * That is an argument, not a check, and it is the only thing
+             * standing between a mismatch here and a heap write past the end
+             * of `items`. Both passes are open to edits by someone who has not
+             * reconstructed the argument. Make it a check. */
+            if (i >= count) {
+                p->status = SH_JSON_ERR_SYNTAX;
+                break;
+            }
             skip_whitespace(p);
             items[i] = parse_value(p);
             if (!items[i]) break;
@@ -560,6 +576,14 @@ static ShJsonValue *parse_object(ShJsonParser *p)
     size_t i = 0;
     if (peek(p) != '}') {
         while (p->status == SH_JSON_OK) {
+            /* See the matching note in parse_array(): the member count comes
+             * from a looser scanner that cannot under-count, and this makes
+             * that reasoning something the compiler enforces rather than
+             * something the next reader has to rediscover. */
+            if (i >= count) {
+                p->status = SH_JSON_ERR_SYNTAX;
+                break;
+            }
             skip_whitespace(p);
 
             /* Parse key (must be string) */

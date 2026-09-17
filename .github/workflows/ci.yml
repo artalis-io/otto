@@ -1023,6 +1023,73 @@ jobs:
           retention-days: 14
           if-no-files-found: ignore
 
+  # ==========================================================================
+  # Fuzzing the module parsers (bounded)
+  #
+  # carta, nexus and surge all shipped fuzz harnesses, and none of them had
+  # ever run. They were not merely unscheduled -- they did not work:
+  #
+  #   * carta and nexus archived $(OBJS), which is src/*.o, but compiled with
+  #     `-c` and no `-o`, which writes to the current directory. The archive
+  #     therefore picked up whatever objects an ordinary build had left in
+  #     src/, un-instrumented, so the fuzzer ran with no coverage feedback
+  #     over the library it was supposed to be fuzzing.
+  #   * nexus passed -Wl,-ld_classic unconditionally. That is a macOS flag;
+  #     on Linux, the only place these can run in CI, GNU ld reads it as
+  #     "link the library d_classic" and the link fails.
+  #   * carta had no seed corpus directory at all, while its own help text
+  #     told you to point it at one.
+  #
+  # All three are fixed in the same commit as this job. The job exists so the
+  # next regression is caught by CI rather than by someone deciding to try the
+  # harnesses two years later.
+  #
+  # Split by module so a slow one does not gate the others, and because the
+  # fuzz builds rebuild ../shared with sanitizer flags in place -- they are
+  # destructive to a shared workspace and want a checkout each.
+  # ==========================================================================
+  fuzz-smoke-modules:
+    name: Fuzz Smoke (${{ matrix.module }})
+    runs-on: ubuntu-latest
+
+    strategy:
+      fail-fast: false
+      matrix:
+        module: [carta, nexus, surge]
+
+    env:
+      UBSAN_OPTIONS: print_stacktrace=1:halt_on_error=1
+      ASAN_OPTIONS: abort_on_error=1
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential clang
+
+      - name: Report the toolchain
+        run: clang --version | head -2
+
+      - name: Fuzz ${{ matrix.module }}
+        run: make -C ${{ matrix.module }} fuzz-smoke FUZZ_SMOKE_SECONDS=20
+
+      - name: Upload crashes
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fuzz-crashes-${{ matrix.module }}
+          path: |
+            ${{ matrix.module }}/crash-*
+            ${{ matrix.module }}/leak-*
+            ${{ matrix.module }}/timeout-*
+          retention-days: 14
+          if-no-files-found: ignore
+
   # API docs
   #
   # site/api.html is generated from the /*@api ... */ annotations in the module

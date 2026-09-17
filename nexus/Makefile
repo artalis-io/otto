@@ -67,7 +67,7 @@ TRE_OBJS = $(TRE_SRCS:.c=.o)
 LINK_LIBS = $(call link_lib,.,nexus) $(MINIZ_ZIP_OBJ) $(call link_lib,../shared,shared) $(LDFLAGS)
 LINK_LIBS_PDF = $(call link_lib,.,nexus) $(MINIZ_ZIP_OBJ) $(call link_lib,../shared,sh_pdf2struc) $(call link_lib,../shared,shared) $(LDFLAGS)
 
-.PHONY: all clean test lib debug tools fuzz fuzz-lib fuzz-xlsx fuzz-pdf fuzz-csv
+.PHONY: all clean test lib debug tools fuzz fuzz-lib fuzz-xlsx fuzz-pdf fuzz-csv fuzz-smoke
 
 all: lib $(TEST_REGEX_BIN) $(TEST_INGEST_BIN) $(TEST_XFORM_BIN) $(TEST_VALIDATE_BIN) $(TEST_DISCOVER_BIN) $(TEST_MERGE_BIN) $(TEST_EMIT_BIN) $(TEST_ISSUE_BIN) $(TEST_DIFF_BIN) $(TEST_PIPELINE_BIN)
 
@@ -158,7 +158,16 @@ debug: clean all
 # Fuzzing build (requires clang with libFuzzer)
 FUZZ_CC = clang
 FUZZ_CFLAGS = -fsanitize=fuzzer,address,undefined -g -O1 -std=c11 -D_GNU_SOURCE
+# -ld_classic is a macOS linker flag, needed there for Homebrew LLVM. It was
+# set unconditionally, so on Linux -- the only platform where these fuzzers
+# can actually be built and run in CI -- GNU ld read it as "link the library
+# d_classic" and the link failed. Apply it only where it means anything.
+FUZZ_UNAME := $(shell uname -s 2>/dev/null)
+ifeq ($(FUZZ_UNAME),Darwin)
 FUZZ_LDFLAGS = -Wl,-ld_classic
+else
+FUZZ_LDFLAGS =
+endif
 FUZZ_LIB = libnexus_fuzz.a
 FUZZ_LINK = -L. -lnexus_fuzz $(MINIZ_ZIP_OBJ) -L../shared -lshared -lm
 
@@ -167,7 +176,11 @@ fuzz: fuzz-xlsx fuzz-pdf fuzz-csv
 fuzz-lib:
 	$(FUZZ_CC) $(FUZZ_CFLAGS) $(INCLUDES) -c $(SRCS)
 	$(FUZZ_CC) $(FUZZ_CFLAGS) -I$(TRE_DIR) -c $(TRE_SRCS)
-	ar rcs $(FUZZ_LIB) $(OBJS) $(notdir $(TRE_OBJS))
+	# $(OBJS) is src/*.o but -c without -o wrote them to the current
+	# directory, so this archived whatever the ordinary build had left in
+	# src/ -- un-instrumented. The TRE half already used $(notdir); the
+	# nexus half did not.
+	ar rcs $(FUZZ_LIB) $(notdir $(OBJS)) $(notdir $(TRE_OBJS))
 	$(MAKE) -C ../shared CC=$(FUZZ_CC) CFLAGS="$(FUZZ_CFLAGS)" clean lib
 	$(FUZZ_CC) $(FUZZ_CFLAGS) -isystem $(VENDOR_DIR) -DMINIZ_NO_STDIO -DMINIZ_NO_TIME -c $(MINIZ_ZIP_SRC) -o $(MINIZ_ZIP_OBJ)
 
@@ -186,8 +199,27 @@ fuzz-csv: fuzz-lib
 		$(FUZZ_LINK) -o fuzz_csv
 	@echo "Run: ./fuzz_csv tests/fuzz/corpus_csv/ -max_len=1000000 -max_total_time=60"
 
+FUZZ_SMOKE_SECONDS ?= 30
+FUZZ_WORK ?= build/fuzz-corpus
+# A bounded run over the committed seed corpora, for CI. The first directory
+# is where libFuzzer writes what it finds; the seeds after it are read only.
+# Passing the seeds alone would make libFuzzer write its discoveries back
+# into them, which turns a curated seed set into noise.
+#
+# Short on purpose: this keeps the harnesses building and catches shallow
+# regressions on every push. It is not a fuzzing campaign.
+fuzz-smoke: fuzz
+	@mkdir -p $(FUZZ_WORK)/xlsx $(FUZZ_WORK)/pdf $(FUZZ_WORK)/csv
+	./fuzz_xlsx $(FUZZ_WORK)/xlsx tests/fuzz/corpus_xlsx/ \
+		-max_total_time=$(FUZZ_SMOKE_SECONDS) -max_len=1000000 -print_final_stats=1
+	./fuzz_pdf $(FUZZ_WORK)/pdf tests/fuzz/corpus_pdf/ \
+		-max_total_time=$(FUZZ_SMOKE_SECONDS) -max_len=1000000 -print_final_stats=1
+	./fuzz_csv $(FUZZ_WORK)/csv tests/fuzz/corpus_csv/ \
+		-max_total_time=$(FUZZ_SMOKE_SECONDS) -max_len=1000000 -print_final_stats=1
+
 clean:
 	rm -f $(OBJS) $(TRE_OBJS) $(LIB_FILE) $(FUZZ_LIB) fuzz_xlsx fuzz_pdf fuzz_csv $(MINIZ_ZIP_OBJ)
+	rm -f $(notdir $(OBJS)) $(notdir $(TRE_OBJS))
 	rm -f $(TEST_INGEST_BIN) $(TEST_XFORM_BIN) $(TEST_VALIDATE_BIN) $(TEST_DISCOVER_BIN) $(TEST_MERGE_BIN) $(TEST_EMIT_BIN) $(TEST_ISSUE_BIN) $(TEST_DIFF_BIN) $(TEST_PIPELINE_BIN) $(TEST_REGEX_BIN) $(NX_RUN_BIN) $(NX_PDF_RUN_BIN) $(NX_XFORM_RUN_BIN) $(NX_PIPELINE_BIN)
 
 help:
