@@ -400,6 +400,64 @@ typedef struct {
 #define VL_SPEED_SERVICE     20
 #define VL_SPEED_DEFAULT     50
 
+/*
+ * Heavy-goods-vehicle (HGV) speed caps by road class (km/h).
+ *
+ * The graph bakes a single duration per edge from the road's car speed (OSM
+ * maxspeed, or the VL_SPEED_* default for its class). Trucks are governed to
+ * ~90 km/h across the EU and are held below the car limit on fast roads, while
+ * tracking cars on slower classes. So a truck's effective speed on an edge is
+ * min(baked road speed, cap): see vl_edge_duration_s. Caps at or above the
+ * matching VL_SPEED_* are therefore no-ops (primary/secondary/residential),
+ * which is intended -- trucks only lose time where the class actually limits
+ * them. Cars and all other profiles use the baked duration unchanged.
+ */
+#define VL_TRUCK_SPEED_MOTORWAY    85
+#define VL_TRUCK_SPEED_TRUNK       80
+#define VL_TRUCK_SPEED_PRIMARY     70
+#define VL_TRUCK_SPEED_SECONDARY   60
+#define VL_TRUCK_SPEED_TERTIARY    45
+#define VL_TRUCK_SPEED_RESIDENTIAL 30
+#define VL_TRUCK_SPEED_SERVICE     15
+#define VL_TRUCK_SPEED_DEFAULT     45
+
+/* Truck speed cap (km/h) for an edge's road class, read from its flags. */
+static inline int vl_truck_speed_cap(uint16_t flags)
+{
+    switch (flags & VL_EDGE_TYPE_MASK) {
+    case VL_EDGE_MOTORWAY:    return VL_TRUCK_SPEED_MOTORWAY;
+    case VL_EDGE_TRUNK:       return VL_TRUCK_SPEED_TRUNK;
+    case VL_EDGE_PRIMARY:     return VL_TRUCK_SPEED_PRIMARY;
+    case VL_EDGE_SECONDARY:   return VL_TRUCK_SPEED_SECONDARY;
+    case VL_EDGE_TERTIARY:    return VL_TRUCK_SPEED_TERTIARY;
+    case VL_EDGE_RESIDENTIAL: return VL_TRUCK_SPEED_RESIDENTIAL;
+    case VL_EDGE_SERVICE:     return VL_TRUCK_SPEED_SERVICE;
+    default:                  return VL_TRUCK_SPEED_DEFAULT;
+    }
+}
+
+/*
+ * Effective traversal time of an edge in seconds for a given profile.
+ *
+ * The baked duration reflects the road's (car) speed. Trucks additionally cap
+ * their speed per road class, so their time is the slower of the baked time and
+ * the class cap -- this preserves any slower OSM maxspeed while enforcing the
+ * HGV limit on fast roads. Every other profile returns the baked duration
+ * unchanged, so behaviour for cars is bit-for-bit identical. Because the cap
+ * only ever makes an edge slower, duration-based heuristics that assume the
+ * network's top speed stay admissible for trucks.
+ */
+static inline double vl_edge_duration_s(const VLEdge *edge, VLProfile profile)
+{
+    double baked_s = edge->duration / 10.0;
+    if (profile == VL_PROFILE_TRUCK) {
+        /* dist(m) / (cap_kmh / 3.6) = dist(m) * 3.6 / cap_kmh, in seconds. */
+        double capped_s = (edge->distance / 1000.0) * 3.6 / (double)vl_truck_speed_cap(edge->flags);
+        if (capped_s > baked_s) return capped_s;
+    }
+    return baked_s;
+}
+
 /* ============================================================================
  * Binary File Format
  * ============================================================================ */

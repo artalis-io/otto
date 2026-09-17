@@ -880,6 +880,85 @@ TEST(profile_with_astar)
     vl_graph_free(graph);
 }
 
+/*
+ * Build a 2-node, single-edge graph whose one edge has the given road class,
+ * length, and baked (car) speed. Lets a duration-weighted route read back the
+ * effective traversal time for a profile without any pathfinding ambiguity.
+ */
+static VLGraph *create_single_edge_graph(uint16_t flags, double dist_m, int baked_kmh)
+{
+    VLGraph *graph = calloc(1, sizeof(VLGraph));
+    if (!graph) return NULL;
+    graph->num_nodes = 2;
+    graph->nodes = calloc(2, sizeof(VLNode));
+    graph->edges = calloc(1, sizeof(VLEdge));
+    if (!graph->nodes || !graph->edges) { free(graph->nodes); free(graph->edges); free(graph); return NULL; }
+
+    graph->nodes[0].coord.lat = (int32_t)(47.5 * 1e7); graph->nodes[0].coord.lon = (int32_t)(19.0 * 1e7);
+    graph->nodes[1].coord.lat = (int32_t)(47.5 * 1e7); graph->nodes[1].coord.lon = (int32_t)(19.1 * 1e7);
+    graph->nodes[0].osm_id = 1; graph->nodes[1].osm_id = 2;
+    graph->nodes[0].edge_start = 0; graph->nodes[0].edge_count = 1;
+    graph->nodes[1].edge_start = 1; graph->nodes[1].edge_count = 0;
+
+    graph->num_edges = 1;
+    graph->edges[0].target = 1;
+    graph->edges[0].distance = (uint32_t)(dist_m * 1000.0);           /* mm */
+    double baked_s = dist_m * 3.6 / (double)baked_kmh;
+    graph->edges[0].duration = (uint16_t)(baked_s * 10.0);            /* deciseconds */
+    graph->edges[0].flags = flags;
+
+    graph->owns_memory = 1;
+    return graph;
+}
+
+static double single_edge_duration(uint16_t flags, double dist_m, int baked_kmh, VLProfile profile)
+{
+    VLGraph *graph = create_single_edge_graph(flags, dist_m, baked_kmh);
+    VLRouteOptions opts;
+    vl_default_options(&opts);
+    opts.algorithm = VL_ALGORITHM_DIJKSTRA;   /* no heuristic: coords irrelevant */
+    opts.weight = VL_WEIGHT_DURATION;
+    opts.profile = profile;
+    VLRoute route;
+    VLStatus status = vl_route(graph, 0, 1, &opts, &route);
+    double dur = (status == VL_OK) ? route.duration_s : -1.0;
+    vl_free_route(&route);
+    vl_graph_free(graph);
+    return dur;
+}
+
+/*
+ * Truck speed model: a truck's effective speed is min(baked road speed, HGV cap
+ * for the road class). So trucks are slower than cars only where the class cap
+ * bites (fast roads), and identical to cars elsewhere -- and a road already
+ * slower than the cap (low OSM maxspeed) keeps its slower speed.
+ */
+TEST(truck_speed_cap)
+{
+    const double d = 8500.0;  /* meters; keeps all baked durations within uint16 deciseconds */
+
+    /* Fast motorway (110 km/h baked): truck is capped to VL_TRUCK_SPEED_MOTORWAY. */
+    double car_mw   = single_edge_duration(VL_EDGE_MOTORWAY, d, 110, VL_PROFILE_CAR);
+    double truck_mw = single_edge_duration(VL_EDGE_MOTORWAY, d, 110, VL_PROFILE_TRUCK);
+    ASSERT_GT(truck_mw, car_mw);
+    ASSERT_NEAR(truck_mw, d * 3.6 / (double)VL_TRUCK_SPEED_MOTORWAY, 1.0);
+    ASSERT_NEAR(car_mw,   d * 3.6 / 110.0, 1.0);
+
+    /* Residential (30 km/h baked): cap equals the car speed, so truck == car. */
+    double car_res   = single_edge_duration(VL_EDGE_RESIDENTIAL, d, 30, VL_PROFILE_CAR);
+    double truck_res = single_edge_duration(VL_EDGE_RESIDENTIAL, d, 30, VL_PROFILE_TRUCK);
+    ASSERT_NEAR(truck_res, car_res, 1.0);
+
+    /* Motorway signed at 50 km/h (low OSM maxspeed): road is slower than the
+     * truck cap, so the truck keeps the road speed -- min(), not the cap. */
+    double car_slow   = single_edge_duration(VL_EDGE_MOTORWAY, d, 50, VL_PROFILE_CAR);
+    double truck_slow = single_edge_duration(VL_EDGE_MOTORWAY, d, 50, VL_PROFILE_TRUCK);
+    ASSERT_NEAR(truck_slow, car_slow, 1.0);
+
+    /* Cars are unaffected by the truck model on every class. */
+    ASSERT_NEAR(car_mw, single_edge_duration(VL_EDGE_MOTORWAY, d, 110, VL_PROFILE_ANY), 1.0);
+}
+
 /* ============================================================================
  * Shortest vs Fastest Routing Tests
  *
@@ -1652,6 +1731,7 @@ int main(void)
     RUN_TEST(profile_foot_avoids_motorway_trunk);
     RUN_TEST(profile_any_no_filtering);
     RUN_TEST(profile_with_astar);
+    RUN_TEST(truck_speed_cap);
     printf("\n");
 
     printf("Shortest vs Fastest Routing Tests:\n");

@@ -202,12 +202,12 @@ void vl_free_route(VLRoute *route)
  * Edge Weight Calculation
  * ============================================================================ */
 
-static inline double edge_weight(const VLEdge *edge, VLWeightType weight)
+static inline double edge_weight(const VLEdge *edge, VLWeightType weight, VLProfile profile)
 {
     if (weight == VL_WEIGHT_DISTANCE) {
         return edge->distance / 1000.0;
     } else {
-        return edge->duration / 10.0;
+        return vl_edge_duration_s(edge, profile);
     }
 }
 
@@ -358,7 +358,7 @@ static VLStatus reconstruct_bidir_path(const VLGraph *graph,
     return VL_OK;
 }
 
-static void calculate_metrics(const VLGraph *graph, VLRoute *route)
+static void calculate_metrics(const VLGraph *graph, VLRoute *route, VLProfile profile)
 {
     route->distance_m = 0;
     route->duration_s = 0;
@@ -372,7 +372,10 @@ static void calculate_metrics(const VLGraph *graph, VLRoute *route)
             const VLEdge *edge = &graph->edges[node->edge_start + e];
             if (edge->target == to) {
                 route->distance_m += edge->distance / 1000.0;
-                route->duration_s += edge->duration / 10.0;
+                /* Match the routing cost so the reported ETA reflects the
+                 * profile (e.g. truck speed caps), not just the baked car
+                 * duration. */
+                route->duration_s += vl_edge_duration_s(edge, profile);
                 break;
             }
         }
@@ -454,7 +457,7 @@ static VLStatus dijkstra_ctx(const VLGraph *graph, VLQueryContext *ctx,
             if (!edge_accessible(edge->flags, profile, access_mask)) continue;
 
             uint32_t v = edge->target;
-            double w = edge_weight(edge, opts->weight);
+            double w = edge_weight(edge, opts->weight, opts->profile);
             double new_dist = ctx->dist_fwd[u] + w;
 
             LAZY_INIT_FWD(ctx, v);
@@ -473,7 +476,7 @@ static VLStatus dijkstra_ctx(const VLGraph *graph, VLQueryContext *ctx,
         status = reconstruct_path(graph, ctx->parent_fwd, source, target, route,
                                   opts->include_geometry);
         if (status == VL_OK) {
-            calculate_metrics(graph, route);
+            calculate_metrics(graph, route, opts->profile);
         }
     }
 
@@ -570,7 +573,7 @@ static VLStatus dijkstra_bidir_ctx(const VLGraph *graph, VLQueryContext *ctx,
                     uint32_t v = edge->target;
                     if (IS_SETTLED_FWD(ctx, v)) continue;
 
-                    double w = edge_weight(edge, opts->weight);
+                    double w = edge_weight(edge, opts->weight, opts->profile);
                     LAZY_INIT_FWD(ctx, v);
                     double new_dist = ctx->dist_fwd[u] + w;
 
@@ -625,7 +628,7 @@ static VLStatus dijkstra_bidir_ctx(const VLGraph *graph, VLQueryContext *ctx,
                     uint32_t v = graph->rev_edges[rev_start + r];
                     if (IS_SETTLED_BWD(ctx, v)) continue;
 
-                    double w = edge_weight(edge, opts->weight);
+                    double w = edge_weight(edge, opts->weight, opts->profile);
                     LAZY_INIT_BWD(ctx, v);
                     double new_dist = ctx->dist_bwd[u] + w;
 
@@ -658,7 +661,7 @@ static VLStatus dijkstra_bidir_ctx(const VLGraph *graph, VLQueryContext *ctx,
                                         source, target, meeting_node,
                                         route, opts->include_geometry);
         if (status == VL_OK) {
-            calculate_metrics(graph, route);
+            calculate_metrics(graph, route, opts->profile);
         }
     }
 
@@ -721,7 +724,7 @@ static VLStatus astar_ctx(const VLGraph *graph, VLQueryContext *ctx,
             if (!edge_accessible(edge->flags, profile, access_mask)) continue;
 
             uint32_t v = edge->target;
-            double w = edge_weight(edge, opts->weight);
+            double w = edge_weight(edge, opts->weight, opts->profile);
             double tentative_g = ctx->dist_fwd[u] + w;
 
             LAZY_INIT_FWD(ctx, v);
@@ -741,7 +744,7 @@ static VLStatus astar_ctx(const VLGraph *graph, VLQueryContext *ctx,
         status = reconstruct_path(graph, ctx->parent_fwd, source, target, route,
                                   opts->include_geometry);
         if (status == VL_OK) {
-            calculate_metrics(graph, route);
+            calculate_metrics(graph, route, opts->profile);
         }
     }
 
@@ -850,7 +853,7 @@ static VLStatus astar_bidir_ctx(const VLGraph *graph, VLQueryContext *ctx,
                     uint32_t v = edge->target;
                     if (IS_SETTLED_FWD(ctx, v)) continue;
 
-                    double w = edge_weight(edge, opts->weight);
+                    double w = edge_weight(edge, opts->weight, opts->profile);
                     LAZY_INIT_FWD(ctx, v);
                     double tentative_g = ctx->dist_fwd[u] + w;
 
@@ -903,7 +906,7 @@ static VLStatus astar_bidir_ctx(const VLGraph *graph, VLQueryContext *ctx,
                     uint32_t v = graph->rev_edges[rev_start + r];
                     if (IS_SETTLED_BWD(ctx, v)) continue;
 
-                    double w = edge_weight(edge, opts->weight);
+                    double w = edge_weight(edge, opts->weight, opts->profile);
                     LAZY_INIT_BWD(ctx, v);
                     double tentative_g = ctx->dist_bwd[u] + w;
 
@@ -936,7 +939,7 @@ static VLStatus astar_bidir_ctx(const VLGraph *graph, VLQueryContext *ctx,
                                         source, target, meeting_node,
                                         route, opts->include_geometry);
         if (status == VL_OK) {
-            calculate_metrics(graph, route);
+            calculate_metrics(graph, route, opts->profile);
         }
     }
 
@@ -1199,7 +1202,7 @@ VLStatus vl_route_astar_landmarks(const VLGraph *graph, const VLLandmarks *lm,
         status = reconstruct_path(graph, parent, source, target, route,
                                   opts->include_geometry);
         if (status == VL_OK) {
-            calculate_metrics(graph, route);
+            calculate_metrics(graph, route, opts->profile);
         }
     }
 
@@ -1363,7 +1366,7 @@ VLStatus vl_route_dijkstra_bucket(const VLGraph *graph, uint32_t source, uint32_
         status = reconstruct_path(graph, parent, source, target, route,
                                   opts->include_geometry);
         if (status == VL_OK) {
-            calculate_metrics(graph, route);
+            calculate_metrics(graph, route, opts->profile);
         }
     }
 
