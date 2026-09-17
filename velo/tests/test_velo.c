@@ -1528,6 +1528,63 @@ TEST(pbf_blob_length_is_honoured)
 
 
 /* ============================================================================
+ * Component-aware snapping
+ * ============================================================================ */
+
+/* 6-node strongly-connected core (nodes 0-5, bidirectional grid) + 1 isolated
+ * stub (node 6) placed far away. A coordinate near the stub must snap to the
+ * core, not the disconnected stub. */
+static VLGraph *create_core_stub_graph(void)
+{
+    VLGraph *g = create_test_graph();   /* 6 strongly-connected nodes, 14 edges */
+    if (!g) return NULL;
+    /* grow to 7 nodes: add an isolated stub far from the core */
+    VLNode *nodes = calloc(7, sizeof(VLNode));
+    if (!nodes) { vl_graph_free(g); return NULL; }
+    memcpy(nodes, g->nodes, 6 * sizeof(VLNode));
+    free(g->nodes);
+    g->nodes = nodes;
+    g->num_nodes = 7;
+    g->nodes[6].coord.lat = (int32_t)(47.30 * 1e7);
+    g->nodes[6].coord.lon = (int32_t)(19.40 * 1e7);
+    g->nodes[6].osm_id = 7;
+    g->nodes[6].edge_start = g->num_edges;   /* no outgoing edges */
+    g->nodes[6].edge_count = 0;
+    vl_graph_build_reverse_index(g);          /* needed for SCC computation */
+    return g;
+}
+
+TEST(component_aware_snap)
+{
+    VLGraph *g = create_core_stub_graph();
+    ASSERT_NE(g, NULL);
+
+    VLCoord near_stub = {47.3001, 19.4001};   /* essentially on the isolated stub */
+
+    /* plain nearest snaps to the disconnected stub (node 6) */
+    ASSERT_EQ(vl_graph_nearest_node(g, near_stub), 6u);
+
+    /* routable nearest avoids it and returns a core node (0..5) */
+    uint32_t r = vl_graph_nearest_node_routable(g, near_stub, VL_PROFILE_CAR);
+    ASSERT_LT(r, 6u);
+
+    /* the core mask marks the giant SCC, not the stub */
+    ASSERT_NE(g->node_core, NULL);
+    ASSERT_EQ(g->node_core[6], 0);
+    ASSERT_EQ(g->node_core[0], 1);
+
+    /* end to end: a route to the near-stub coordinate now succeeds (dest snaps to
+     * the core) where naive snapping to the isolated stub would return no route */
+    VLRouteOptions opts; vl_default_options(&opts);
+    VLCoord origin = {47.5, 19.0};
+    VLRoute route;
+    ASSERT_EQ(vl_route_coords(g, origin, near_stub, &opts, &route), VL_OK);
+    vl_free_route(&route);
+
+    vl_graph_free(g);
+}
+
+/* ============================================================================
  * Main
  * ============================================================================ */
 
@@ -1566,6 +1623,7 @@ int main(void)
     printf("Graph Tests:\n");
     RUN_TEST(graph_create);
     RUN_TEST(graph_nearest_node);
+    RUN_TEST(component_aware_snap);
     printf("\n");
 
     printf("Routing Tests:\n");
