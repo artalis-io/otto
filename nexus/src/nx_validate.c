@@ -719,7 +719,19 @@ NxValidateStatus nx_validate(const char *canonical_json, size_t canon_len,
                                 if (floor(num) == num && fabs(num) < 1e10) {
                                     sh_json_write_kv_int(&w, key, (int64_t)num);
                                 } else {
-                                    sh_json_write_kv_double_fmt(&w, key, num, 6);
+                                    /*
+                                     * Stage X rewrites every record, so it must
+                                     * not degrade the precision Stage B already
+                                     * chose per column (up to 17 sig figs). The
+                                     * original number token is not retained by
+                                     * sh_json (only the parsed double), so we
+                                     * reformat: 15 sig figs round-trips any
+                                     * real-world decimal without the float noise
+                                     * %.17g would add (0.1 -> 0.1, not
+                                     * 0.10000000000000001). A hardcoded 6 here
+                                     * silently clamped e.g. 8769.627 -> 8769.63.
+                                     */
+                                    sh_json_write_kv_double_fmt(&w, key, num, 15);
                                 }
                             }
                             break;

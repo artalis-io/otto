@@ -150,6 +150,14 @@ test: $(TEST_REGEX_BIN) $(TEST_INGEST_BIN) $(TEST_XFORM_BIN) $(TEST_VALIDATE_BIN
 	./$(TEST_ISSUE_BIN)
 	./$(TEST_DIFF_BIN)
 	./$(TEST_PIPELINE_BIN)
+	$(MAKE) test-reconcile
+
+# Reconciliation gate self-test: proves the schema-driven reconciler both
+# passes a correct schema and CATCHES one that silently truncates data, on
+# committed synthetic fixtures (client data is never committed). Needs the CLI
+# tool and python3.
+test-reconcile: $(NX_PIPELINE_BIN)
+	sh scripts/ci_reconcile_selftest.sh
 
 debug: CFLAGS = $(DEBUG_CFLAGS)
 debug: LDFLAGS = -lm $(DEBUG_LDFLAGS)
