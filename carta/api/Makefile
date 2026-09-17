@@ -59,7 +59,7 @@ OBJS = $(BUILD_DIR)/main.o $(HTTPSERVER_OBJ)
 # Target
 TARGET = carta-tile-server
 
-.PHONY: all clean debug deps run test test-threading test-threading-quick install docker
+.PHONY: all clean debug deps run test test-threading test-threading-quick install docker test-asan
 
 all: deps $(TARGET)
 
@@ -124,6 +124,23 @@ test-threading: $(TARGET)
 test-threading-quick: $(TARGET)
 	@./test_threading.sh --threads 2 --clients 8 --requests 50
 
+# The server under ASan and UBSan, driven by the same integration suite.
+#
+# The six API servers are the only OTTO code that reads bytes off a socket,
+# and until this target they were the only modules never built with a
+# sanitizer -- covered solely by test_api.sh, which judges the server by what
+# curl gets back and cannot see a diagnostic on its stderr.
+#
+# What this instruments is the server itself: main.c and the shared HTTP
+# helpers it compiles in, which is where a request is parsed and routed.
+# libralph and libshared are linked as already built, so their interiors are
+# not instrumented -- but ASan intercepts the allocator process-wide, so
+# their heap allocations still get redzones. Instrumenting the whole
+# dependency tree is a larger change and a separate one.
+test-asan: CFLAGS = $(DEBUG_CFLAGS)
+test-asan: LDFLAGS += $(DEBUG_LDFLAGS)
+test-asan: clean test
+
 # Test the API endpoints
 # The heavy lifting lives in test_api.sh, which starts its own server, asserts
 # on every endpoint and exits non-zero when any of them fails. This target used
@@ -132,5 +149,9 @@ test-threading-quick: $(TARGET)
 # print FAIL five times and still exit 0. CI was unaffected (it calls the script
 # directly), but anyone running make locally was told the wrong thing.
 test: $(TARGET)
-	@bash test_api.sh
+	# test_api.sh resolves both the server and its data file relative to the
+	# repo root (SERVER=./carta/api/..., data/monaco...), so it has to run
+	# from there. Without the cd this target could never work -- CI has been
+	# invoking the script directly from the root and never used it.
+	@cd ../.. && bash carta/api/test_api.sh
 

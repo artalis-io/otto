@@ -172,6 +172,20 @@ jobs:
         timeout-minutes: 5
         run: cd surge/api && bash test_api.sh
 
+      # The same suite again, against a server built with ASan and UBSan.
+      #
+      # These six are the only OTTO code that reads bytes off a socket and
+      # were the only modules never built with a sanitizer. Appended to this
+      # job rather than given its own so the fixtures fetched above are
+      # reused rather than fetched twice.
+      #
+      # test_api.sh judges the server by what curl gets back, which cannot
+      # see a diagnostic on the server's stderr -- so the script now also
+      # greps the server log and fails on anything a sanitizer produced.
+      # Without that this step would be a job that cannot go red.
+      - name: Test Surge API under ASan/UBSan
+        run: make -C surge/api test-asan
+
 
 
   # ==========================================================================
@@ -204,6 +218,20 @@ jobs:
         timeout-minutes: 5
         run: bash ralph/api/test_api.sh
 
+      # The same suite again, against a server built with ASan and UBSan.
+      #
+      # These six are the only OTTO code that reads bytes off a socket and
+      # were the only modules never built with a sanitizer. Appended to this
+      # job rather than given its own so the fixtures fetched above are
+      # reused rather than fetched twice.
+      #
+      # test_api.sh judges the server by what curl gets back, which cannot
+      # see a diagnostic on the server's stderr -- so the script now also
+      # greps the server log and fails on anything a sanitizer produced.
+      # Without that this step would be a job that cannot go red.
+      - name: Test Ralph API under ASan/UBSan
+        run: make -C ralph/api test-asan
+
   # ==========================================================================
   # FuelWise API (Keel-backed)
   #
@@ -234,6 +262,20 @@ jobs:
 
       - name: Test FuelWise API
         run: make -C fuelwise/api test
+
+      # The same suite again, against a server built with ASan and UBSan.
+      #
+      # These six are the only OTTO code that reads bytes off a socket and
+      # were the only modules never built with a sanitizer. Appended to this
+      # job rather than given its own so the fixtures fetched above are
+      # reused rather than fetched twice.
+      #
+      # test_api.sh judges the server by what curl gets back, which cannot
+      # see a diagnostic on the server's stderr -- so the script now also
+      # greps the server log and fails on anything a sanitizer produced.
+      # Without that this step would be a job that cannot go red.
+      - name: Test FuelWise API under ASan/UBSan
+        run: make -C fuelwise/api test-asan
 
 
 
@@ -275,6 +317,20 @@ jobs:
         timeout-minutes: 5
         run: bash velo/api/test_api.sh
 
+      # The same suite again, against a server built with ASan and UBSan.
+      #
+      # These six are the only OTTO code that reads bytes off a socket and
+      # were the only modules never built with a sanitizer. Appended to this
+      # job rather than given its own so the fixtures fetched above are
+      # reused rather than fetched twice.
+      #
+      # test_api.sh judges the server by what curl gets back, which cannot
+      # see a diagnostic on the server's stderr -- so the script now also
+      # greps the server log and fails on anything a sanitizer produced.
+      # Without that this step would be a job that cannot go red.
+      - name: Test Velo API under ASan/UBSan
+        run: make -C velo/api test-asan
+
   # ==========================================================================
   # Carta API (Keel-backed)
   #
@@ -308,6 +364,20 @@ jobs:
         timeout-minutes: 5
         run: bash carta/api/test_api.sh
 
+      # The same suite again, against a server built with ASan and UBSan.
+      #
+      # These six are the only OTTO code that reads bytes off a socket and
+      # were the only modules never built with a sanitizer. Appended to this
+      # job rather than given its own so the fixtures fetched above are
+      # reused rather than fetched twice.
+      #
+      # test_api.sh judges the server by what curl gets back, which cannot
+      # see a diagnostic on the server's stderr -- so the script now also
+      # greps the server log and fails on anything a sanitizer produced.
+      # Without that this step would be a job that cannot go red.
+      - name: Test Carta API under ASan/UBSan
+        run: make -C carta/api test-asan
+
   # ==========================================================================
   # Locus API (Keel-backed)
   #
@@ -340,6 +410,20 @@ jobs:
       - name: Test Locus API
         timeout-minutes: 5
         run: bash locus/api/test_api.sh
+
+      # The same suite again, against a server built with ASan and UBSan.
+      #
+      # These six are the only OTTO code that reads bytes off a socket and
+      # were the only modules never built with a sanitizer. Appended to this
+      # job rather than given its own so the fixtures fetched above are
+      # reused rather than fetched twice.
+      #
+      # test_api.sh judges the server by what curl gets back, which cannot
+      # see a diagnostic on the server's stderr -- so the script now also
+      # greps the server log and fails on anything a sanitizer produced.
+      # Without that this step would be a job that cannot go red.
+      - name: Test Locus API under ASan/UBSan
+        run: make -C locus/api test-asan
 
   # ==========================================================================
   # Windows
