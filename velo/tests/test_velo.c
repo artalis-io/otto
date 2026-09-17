@@ -959,6 +959,31 @@ TEST(truck_speed_cap)
     ASSERT_NEAR(car_mw, single_edge_duration(VL_EDGE_MOTORWAY, d, 110, VL_PROFILE_ANY), 1.0);
 }
 
+/*
+ * Bike/foot speed model: cyclists and pedestrians move at a flat own-pace speed
+ * that ignores the road's (car) speed, so their ETA depends only on distance --
+ * a bike takes the same time on a residential street as on a fast primary of
+ * equal length, and both are far slower than the baked car duration.
+ */
+TEST(bike_foot_speed)
+{
+    const double d = 6000.0;  /* meters */
+
+    /* Time is distance / flat profile speed, regardless of road class. */
+    double bike_primary = single_edge_duration(VL_EDGE_PRIMARY, d, 70, VL_PROFILE_BIKE);
+    double bike_resid   = single_edge_duration(VL_EDGE_RESIDENTIAL, d, 30, VL_PROFILE_BIKE);
+    ASSERT_NEAR(bike_primary, d * 3.6 / (double)VL_BIKE_SPEED, 1.0);
+    ASSERT_NEAR(bike_primary, bike_resid, 1.0);  /* road class does not matter */
+
+    double foot_primary = single_edge_duration(VL_EDGE_PRIMARY, d, 70, VL_PROFILE_FOOT);
+    ASSERT_NEAR(foot_primary, d * 3.6 / (double)VL_FOOT_SPEED, 1.0);
+
+    /* Ordering sanity: foot slower than bike slower than car on the same edge. */
+    double car_primary = single_edge_duration(VL_EDGE_PRIMARY, d, 70, VL_PROFILE_CAR);
+    ASSERT_GT(bike_primary, car_primary);
+    ASSERT_GT(foot_primary, bike_primary);
+}
+
 /* ============================================================================
  * Shortest vs Fastest Routing Tests
  *
@@ -1732,6 +1757,7 @@ int main(void)
     RUN_TEST(profile_any_no_filtering);
     RUN_TEST(profile_with_astar);
     RUN_TEST(truck_speed_cap);
+    RUN_TEST(bike_foot_speed);
     printf("\n");
 
     printf("Shortest vs Fastest Routing Tests:\n");
