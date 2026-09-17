@@ -156,13 +156,21 @@ quiet on an ordinary file. It is not bounded by anything structural: a payload
 compressing at better than 10:1 puts `actual` against `decomp_cap` and the
 overshoot leaves the allocation. Fixed rather than argued down.
 
-**The sanitizer job was not looking at this file.** `shared/test-asan` is
-`clean test`, and the `test` target's list of binaries did not include
-`test_pdf2struc` -- so the parser with the largest untrusted attack surface in
+**Neither the sanitizer job nor MSVC was looking at this file.**
+`shared/test-asan` is `clean test`, and the `test` target's list of binaries did
+not include `test_pdf2struc` -- so the parser with the largest untrusted attack surface in
 shared/ was the one the sanitizer never ran. It is in the list now, which is
 also what makes the predictor regression test worth keeping: without a
 sanitizer that test cannot fail, since the overflow does not change the result
 this compiler produces.
+
+Adding it immediately turned the Windows MSVC job red, which is the other half
+of the same gap. `$(TEST_PDF2STRUC_BIN)`'s link rule still spelled its inputs
+`-L. -lsh_pdf2struc -lshared`, from before `mk/toolchain.mk` existed. `cl`
+ignores those with a D9002 warning per flag and then fails with six unresolved
+externals, so that suite had never built under MSVC -- it was only ever reached
+by the Linux `test-pdf2struc` job. It uses `$(call link_lib,...)` like every
+other test binary in the file now, and passes 30/30 under both toolchains.
 
 ## What this sweep did not cover
 

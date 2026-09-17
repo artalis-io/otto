@@ -200,7 +200,7 @@ $(PDF2STRUC_LIB): $(PDF2STRUC_OBJS)
 	$(AR_CMD)$@ $^
 
 $(TEST_PDF2STRUC_BIN): tests/test_pdf2struc.c $(PDF2STRUC_LIB) $(LIB_FILE)
-	$(CC) $(CFLAGS) $(INCLUDES) $< -L. -lsh_pdf2struc -lshared $(LDFLAGS) $(EXE_OUT)$@
+	$(CC) $(CFLAGS) $(INCLUDES) $< $(call link_lib,.,sh_pdf2struc) $(call link_lib,.,shared) $(LDFLAGS) $(EXE_OUT)$@
 
 # Run PDF2struc tests only
 test-pdf2struc: $(TEST_PDF2STRUC_BIN)
