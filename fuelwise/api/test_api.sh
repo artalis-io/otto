@@ -8,6 +8,11 @@
 
 set -e
 
+# A sanitizer finding in the server does not show up in any curl response,
+# so without this the whole suite passes while the server reports undefined
+# behaviour. See scripts/api_sanitizer_check.sh.
+. "$(cd "$(dirname "$0")" && pwd)/../../scripts/api_sanitizer_check.sh"
+
 PORT=8099
 PASS=0
 FAIL=0
@@ -46,7 +51,7 @@ fail() {
 # Start server
 start_server() {
     local extra_args="$1"
-    ./fuelwise-api -p $PORT $extra_args > /dev/null 2>&1 &
+    ./fuelwise-api -p $PORT $extra_args >> "$API_SAN_LOG" 2>&1 &
     SERVER_PID=$!
     sleep 1
 
@@ -460,6 +465,13 @@ if [ $FAIL -gt 0 ]; then
     echo -e "  ${RED}Failed${NC}: $FAIL"
     exit 1
 else
+    # The curl checks above can all pass while the server reported a sanitizer
+    # finding on stderr; UBSan prints and keeps going by default. Look before
+    # claiming success.
+    if ! api_sanitizer_assert; then
+        echo "FAIL: the server produced sanitizer output (see above)"
+        exit 1
+    fi
     echo -e "  ${GREEN}All tests passed!${NC}"
     exit 0
 fi

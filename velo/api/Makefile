@@ -45,7 +45,7 @@ HTTPSERVER_OBJ = build/sh_httpserver.o build/sh_httpasync.o
 
 TARGET = velo-route-server
 
-.PHONY: all clean deps run debug build test
+.PHONY: all clean deps run debug build test test-asan
 
 all: deps $(TARGET)
 
@@ -85,6 +85,23 @@ debug: clean all
 # Run with sample data
 run: all
 	./$(TARGET) ../../data/hungary-latest.osm.pbf
+
+# The server under ASan and UBSan, driven by the same integration suite.
+#
+# The six API servers are the only OTTO code that reads bytes off a socket,
+# and until this target they were the only modules never built with a
+# sanitizer -- covered solely by test_api.sh, which judges the server by what
+# curl gets back and cannot see a diagnostic on its stderr.
+#
+# What this instruments is the server itself: main.c and the shared HTTP
+# helpers it compiles in, which is where a request is parsed and routed.
+# libralph and libshared are linked as already built, so their interiors are
+# not instrumented -- but ASan intercepts the allocator process-wide, so
+# their heap allocations still get redzones. Instrumenting the whole
+# dependency tree is a larger change and a separate one.
+test-asan: CFLAGS = $(DEBUG_CFLAGS)
+test-asan: LDFLAGS += $(DEBUG_LDFLAGS)
+test-asan: clean test
 
 # Test the API endpoints (uses --no-landmarks for faster startup)
 # The heavy lifting lives in test_api.sh, which starts its own server, asserts
