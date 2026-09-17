@@ -226,6 +226,39 @@ writes a NUL at the decoded length, which equals `len` when the input has no
 entities -- so it needs `len + 1` bytes, and the header only said "must be
 writable". The internal caller allocates `len + 1`; the header now says so.
 
+### Fuzzing
+
+`shared/` had no fuzz target, which is part of why sh_inflate and sh_protobuf
+had no coverage of any kind. There are now three -- `fuzz-inflate`,
+`fuzz-protobuf`, `fuzz-pdf2struc` -- built the way carta and nexus build
+theirs, with committed seed corpora.
+
+The corpora are seeded with inputs that matter rather than random bytes: the
+protobuf seeds include the length-near-2^64 shape that wrapped the check, and
+the PDF seeds include both crafted files from this audit -- the `Columns`
+near INT_MAX and the negative `/W`. A regression in either is then caught on
+the first execution rather than by chance.
+
+**The harnesses assert, they do not merely run.** `fuzz_protobuf` drives a
+scanning loop and aborts if a tag or skip ever claims more bytes than remain,
+so a bad length is a crash rather than a silently wrong parse; `fuzz_inflate`
+aborts if a successful decompression reports more output than the buffer holds;
+`fuzz_pdf2struc` walks the text of every emitted block, so a block pointing at
+memory the extractor does not own is an ASan report rather than nothing.
+
+**A `fuzz-smoke` CI job runs them on every push**, 20 seconds each. That
+matters more than the harnesses: OTTO already had fuzz targets in carta, nexus
+and surge, and **no CI job ran any of them**. A fuzzer nobody runs finds what
+someone remembers to look for. This is a smoke run, not a campaign -- it keeps
+the harnesses building and catches shallow regressions; a longer scheduled run
+is the obvious follow-up.
+
+Not verifiable on Windows: libFuzzer needs clang, and neither Windows clang
+works -- the MinGW target rejects `-fsanitize=fuzzer`, and the MSVC target
+lacks the POSIX spellings `shared/` uses. CI is the check. The pre-existing
+fuzzers in carta, nexus and surge are still unwired, and one of them passes
+`-Wl,-ld_classic`, a macOS linker flag, so wiring those needs a fix first.
+
 ## What this sweep did not cover
 
 Everything semantic. Use-after-free, double-free, leak tracing, null-deref
