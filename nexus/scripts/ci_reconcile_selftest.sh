@@ -18,7 +18,10 @@ NEXUS_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 FIX="$NEXUS_DIR/tests/reconcile"
 REC="$NEXUS_DIR/scripts/reconcile.py"
 
-if [ ! -x "$NEXUS_DIR/nx_pipeline" ]; then
+# The Makefile writes `nx_pipeline`; on Windows the compiler appends `.exe`.
+# Checking only the bare name meant this rebuilt on every run there, and the
+# reconciler then could not find the binary it had just built.
+if [ ! -x "$NEXUS_DIR/nx_pipeline" ] && [ ! -x "$NEXUS_DIR/nx_pipeline.exe" ]; then
     echo "building nx_pipeline..." >&2
     make -C "$NEXUS_DIR" tools >/dev/null
 fi
