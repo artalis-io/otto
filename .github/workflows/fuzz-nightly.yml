@@ -1,0 +1,146 @@
+name: Fuzz Nightly
+
+# ============================================================================
+# A long fuzzing run over every harness in the tree, with the corpus carried
+# from one night to the next.
+#
+# ci.yml already runs each harness for 20 seconds on every push. That is a
+# build check and a guard against shallow regressions; it is not fuzzing. The
+# defects found in sh_pdf2struc surfaced between two and four minutes in, well
+# past where the smoke run stops, and they were only reachable at all because
+# the seed corpus had been widened first.
+#
+# The difference that matters here is the cache. libFuzzer's corpus is the
+# state of the search: each night restores what the last one found, explores
+# from there, and saves the result. A run that starts from the committed seeds
+# every time re-derives the same shallow coverage nightly and never gets
+# deeper. With the cache, the corpus compounds.
+#
+# Separate from netlib-nightly.yml on purpose. That job needs a quiet machine
+# -- it derives Ralph's time limit from GLPK's measured time on the same
+# problem, so contention makes it report failures that are not there -- and its
+# pull_request path filter is scoped to the gate's own files. Fuzzing has
+# neither constraint and should not be able to trigger, or be triggered by,
+# a NETLIB baseline edit.
+# ============================================================================
+
+on:
+  schedule:
+    # 02:00 UTC. Two hours clear of the NETLIB gate at 04:00, so the two
+    # nightlies do not overlap even if this one runs long.
+    - cron: '0 2 * * *'
+  workflow_dispatch:
+    inputs:
+      seconds:
+        description: 'Seconds per harness'
+        required: false
+        default: '600'
+  # On pull requests that touch the fuzzing machinery itself. A harness or
+  # Makefile change is exactly when you want to know the long run still works,
+  # rather than finding out at 02:00.
+  pull_request:
+    paths:
+      - '.github/workflows/fuzz-nightly.yml'
+      - '**/tests/fuzz/**'
+      - 'surge/fuzz/**'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: fuzz-nightly
+  cancel-in-progress: false
+
+jobs:
+  fuzz:
+    name: Fuzz ${{ matrix.module }}
+    runs-on: ubuntu-latest
+    # nexus runs three harnesses back to back, so its wall time is 3x the
+    # per-harness budget plus the build. Bounded so a hang cannot burn a
+    # six-hour runner.
+    timeout-minutes: 90
+
+    strategy:
+      fail-fast: false
+      matrix:
+        module: [shared, carta, nexus, surge]
+
+    env:
+      UBSAN_OPTIONS: print_stacktrace=1:halt_on_error=1
+      ASAN_OPTIONS: abort_on_error=1
+      # A pull request is asking "does the long run still work", not "find me
+      # a bug", so it gets a short budget. The nightly gets the real one.
+      SECONDS_PER_HARNESS: ${{ github.event.inputs.seconds || (github.event_name == 'pull_request' && '60' || '600') }}
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential clang
+
+      - name: Report the toolchain
+        run: clang --version | head -2
+
+      # The key is unique per run so every night writes a new entry; the
+      # restore-keys prefix then picks up the most recent previous one. A cache
+      # entry is never updated in place, which is why the key cannot be static.
+      - name: Restore the accumulated corpus
+        uses: actions/cache@v4
+        with:
+          path: ${{ matrix.module }}/build/fuzz-corpus
+          key: fuzz-corpus-${{ matrix.module }}-${{ github.run_id }}
+          restore-keys: |
+            fuzz-corpus-${{ matrix.module }}-
+
+      - name: Report the corpus carried over
+        run: |
+          d="${{ matrix.module }}/build/fuzz-corpus"
+          if [ -d "$d" ]; then
+            echo "restored $(find "$d" -type f | wc -l) inputs from previous runs"
+            du -sh "$d"
+          else
+            echo "no previous corpus; starting from the committed seeds"
+          fi
+
+      - name: Fuzz ${{ matrix.module }}
+        run: |
+          make -C ${{ matrix.module }} fuzz-smoke \
+            FUZZ_SMOKE_SECONDS=$SECONDS_PER_HARNESS
+
+      - name: Report the corpus after the run
+        if: always()
+        run: |
+          d="${{ matrix.module }}/build/fuzz-corpus"
+          [ -d "$d" ] && echo "corpus now $(find "$d" -type f | wc -l) inputs" || true
+
+      # Crashes are the product. Keep them for a long time: a crash found at
+      # 02:00 is worth nothing if the input has expired by the time anyone
+      # reads the notification.
+      - name: Upload crashes
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fuzz-nightly-crashes-${{ matrix.module }}
+          path: |
+            ${{ matrix.module }}/crash-*
+            ${{ matrix.module }}/leak-*
+            ${{ matrix.module }}/timeout-*
+            ${{ matrix.module }}/oom-*
+          retention-days: 90
+          if-no-files-found: ignore
+
+      # Also keep the corpus when the run fails, so the inputs that led up to a
+      # crash are not lost with the job.
+      - name: Upload the corpus on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fuzz-nightly-corpus-${{ matrix.module }}
+          path: ${{ matrix.module }}/build/fuzz-corpus
+          retention-days: 30
+          if-no-files-found: ignore

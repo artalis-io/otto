@@ -54,28 +54,66 @@ static const char *const SLOW_PROBLEMS[] = {
 #define NUM_PROBLEMS ((int)(sizeof(SLOW_PROBLEMS) / sizeof(SLOW_PROBLEMS[0])))
 
 /*
- * Limits small enough that these problems cannot be solved within them. Two
- * tiers rather than one, so a limit that only works at some magnitudes is still
- * caught, and only two because most of this test's wall time is spent reading
- * MPS files rather than solving -- pilot87 and maros-r7 are large.
+ * Limits small enough that these problems cannot be solved within them, in
+ * increasing order. The first is a measurement as much as a test case; see
+ * below. Note that a limit of zero or less means "no limit" in this solver
+ * (simplex.c:3836), so the floor probe uses a microsecond rather than 0.
  */
-static const double LIMITS_SEC[] = { 0.005, 0.050 };
+static const double LIMITS_SEC[] = { 0.000001, 0.005, 0.050 };
 #define NUM_LIMITS ((int)(sizeof(LIMITS_SEC) / sizeof(LIMITS_SEC[0])))
+#define FLOOR_LIMIT_INDEX 0
 
 /*
- * What a solve may take: ten times its limit, plus 250ms.
+ * What a solve may take.
  *
- * The fixed part is presolve and setup, which is per-problem work that does not
- * shrink when the limit does -- with a 5ms limit the measured worst here is
- * maros-r7 at 81ms, and every other problem is under 40ms. 250ms leaves roughly
- * 3x headroom over that for a busy runner.
+ * A limited solve costs roughly (fixed setup) + (the limit) + (however long it
+ * takes to notice). The fixed part is presolve and factorisation: per-problem
+ * work that does not shrink when the limit does. This used to be a constant --
+ * 250ms, chosen because the worst problem measured 81ms on the machine where
+ * the test was written.
  *
- * Deliberately not tighter. A bound that fired on a 2x overrun would be flaky
- * and would end up muted, and the bugs this exists for do not overrun by a
- * little -- bnl1 overran by 45x and would have run for ever. Against these
- * limits, a solve that stopped checking the clock would take seconds.
+ * That constant was wrong twice in one day on the macOS runner: bnl2 took 482ms
+ * against a 300ms budget, and maros-r7 769ms against 750ms. Neither was a
+ * solver defect. Both returned TIME_LIMIT, correctly; the fixed part simply
+ * costs six to nine times more on a loaded shared runner than on the machine
+ * the constant came from. A budget calibrated against hardware the test does
+ * not run on will keep doing that, and a test that cries wolf gets muted.
+ *
+ * So measure it instead. The first tier above gives each problem a microsecond,
+ * which none of them can meet, so what it times is precisely the fixed part --
+ * on this machine, under this load, in this run. Measured here with -O2:
+ *
+ *     pilot4      2.1ms      bnl2       26.1ms      pilot87   57.1ms
+ *     perold      2.3ms      d2q06c     28.2ms      maros-r7  76.1ms
+ *     maros       2.7ms      greenbea   34.7ms
+ *
+ * a 36x spread across problems, which is the other reason one constant for all
+ * twenty could not fit.
+ *
+ * The cap is what stops this from excusing the bug it exists to catch. A solve
+ * that has stopped looking at the clock takes just as long with a microsecond
+ * budget as with any other, so without a cap it would raise its own budget to
+ * cover itself. 2000ms is far above any honest fixed cost measured anywhere --
+ * eight times the old constant, and 26x this machine's worst -- and far below
+ * the failures this test is for: bnl1 blew a one-second limit by 45x, which
+ * against these limits is tens of seconds.
  */
-#define BUDGET_MS(limit_sec) ((limit_sec) * 1000.0 * 10.0 + 250.0)
+#define FLOOR_SLACK      3.0      /* run-to-run variance in the fixed part */
+#define FLOOR_CAP_MS  2000.0      /* a stuck solve may not inflate its own budget */
+#define LIMIT_MULT      10.0      /* headroom over the limit itself */
+
+/*
+ * The floor probe has no measurement to lean on, so it gets a flat generous
+ * budget. Five seconds to do setup and notice a microsecond has passed is not
+ * a slow machine, it is a solve that is not checking.
+ */
+#define FLOOR_BUDGET_MS 5000.0
+
+static double budget_ms(double limit_sec, double floor_ms)
+{
+    double f = (floor_ms < FLOOR_CAP_MS) ? floor_ms : FLOOR_CAP_MS;
+    return f * FLOOR_SLACK + limit_sec * 1000.0 * LIMIT_MULT;
+}
 
 static int tests_run = 0;
 static int tests_passed = 0;
@@ -93,12 +131,16 @@ int main(void)
 
     for (p = 0; p < NUM_PROBLEMS; p++) {
         char path[512];
+        /* Set by the floor probe below, then used to size the other tiers.
+         * Per problem, because the fixed cost varies 36x across this set. */
+        double floor_ms = 0.0;
         snprintf(path, sizeof(path), "benchmarks/netlib/%s.mps", SLOW_PROBLEMS[p]);
 
         for (l = 0; l < NUM_LIMITS; l++) {
             RalphLPModel *m = ralph_lp_create();
             double limit = LIMITS_SEC[l];
-            double budget = BUDGET_MS(limit);
+            double budget = (l == FLOOR_LIMIT_INDEX)
+                            ? FLOOR_BUDGET_MS : budget_ms(limit, floor_ms);
             uint64_t t0, t1;
             double ms, ratio;
             RalphLPStatus st;
@@ -123,20 +165,34 @@ int main(void)
             st = ralph_lp_get_status(m);
             ralph_lp_free(m);
 
-            if (st == RALPH_LP_STATUS_TIME_LIMIT) hit_limit++;
+            if (l == FLOOR_LIMIT_INDEX) floor_ms = ms;
 
-            ratio = ms / (limit * 1000.0);
-            if (ratio > worst_ratio) {
-                worst_ratio = ratio;
-                worst_name = SLOW_PROBLEMS[p];
+            /*
+             * Only the real tiers count toward this. A microsecond budget is
+             * met by any problem at all, so counting the floor probe would
+             * make the "these problems are still slow enough" check below
+             * pass no matter what, which is the opposite of its purpose.
+             */
+            if (l != FLOOR_LIMIT_INDEX && st == RALPH_LP_STATUS_TIME_LIMIT)
+                hit_limit++;
+
+            /* Skipped for the floor probe: ms/0.001 is enormous by
+             * construction there and would swamp the reported worst case. */
+            if (l != FLOOR_LIMIT_INDEX) {
+                ratio = ms / (limit * 1000.0);
+                if (ratio > worst_ratio) {
+                    worst_ratio = ratio;
+                    worst_name = SLOW_PROBLEMS[p];
+                }
             }
 
             tests_run++;
             if (ms <= budget) {
                 tests_passed++;
             } else {
-                printf("  FAIL: %s with a %.0fms limit took %.0fms (%.0fx), status=%s\n",
-                       SLOW_PROBLEMS[p], limit * 1000.0, ms, ratio,
+                printf("  FAIL: %s with a %.0fms limit took %.0fms, "
+                       "budget %.0fms (fixed cost measured at %.0fms), status=%s\n",
+                       SLOW_PROBLEMS[p], limit * 1000.0, ms, budget, floor_ms,
                        ralph_lp_status_string(st));
             }
         }
