@@ -18,3 +18,11 @@ Makefile        text eol=lf
 # CRLF .c file compiles fine, but it rewrites the whole file in every diff.
 *.c             text eol=lf
 *.h             text eol=lf
+
+# Fuzz corpora are byte-exact inputs, not text. Without this git applies eol
+# conversion on checkout and the seeds arrive mangled -- a PDF whose xref
+# offsets no longer point where they say, a deflate stream that no longer
+# inflates. The seeds would still "work" in that the fuzzer runs; they would
+# simply stop reaching the code paths they were chosen for.
+shared/tests/fuzz/corpus_*/** binary
+*/tests/fuzz/corpus_*/** binary

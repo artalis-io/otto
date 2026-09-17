@@ -964,6 +964,65 @@ jobs:
       - name: Sanitize ${{ matrix.suite.name }}
         run: make -C ${{ matrix.suite.dir }} ${{ matrix.suite.target }}
 
+  # ==========================================================================
+  # Fuzzing (bounded)
+  #
+  # OTTO already had fuzz targets in carta, nexus and surge before this job
+  # existed, and nothing ran any of them. A fuzzer nobody runs finds what
+  # someone remembers to look for, which is the same as no fuzzer -- and the
+  # two defects the PDF extractor gave up under manual reading were both
+  # reachable from files under 500 bytes, well inside what a fuzzer reaches in
+  # seconds.
+  #
+  # Deliberately short. This is a smoke run over committed seed corpora, to
+  # keep the harnesses building and catch the shallow regressions on every
+  # push; it is not a fuzzing campaign and will not find deep bugs. A longer
+  # scheduled run is the obvious follow-up.
+  #
+  # libFuzzer needs clang, and the harnesses do not build under either Windows
+  # clang -- the MinGW target has no -fsanitize=fuzzer, and the MSVC target
+  # lacks the POSIX spellings shared/ uses. Linux is where this runs.
+  # ==========================================================================
+  fuzz-smoke:
+    name: Fuzz Smoke (shared)
+    runs-on: ubuntu-latest
+
+    env:
+      UBSAN_OPTIONS: print_stacktrace=1:halt_on_error=1
+      ASAN_OPTIONS: abort_on_error=1
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential clang
+
+      - name: Report the toolchain
+        run: clang --version | head -2
+
+      # 20s each over the seeds. The corpora carry the two crafted PDFs that
+      # exercised the predictor and the negative /W, so a regression in either
+      # is caught on the first execution rather than by chance.
+      - name: Fuzz sh_inflate, sh_protobuf and sh_pdf2struc
+        run: make -C shared fuzz-smoke FUZZ_SMOKE_SECONDS=20
+
+      - name: Upload crashes
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fuzz-crashes
+          path: |
+            shared/crash-*
+            shared/leak-*
+            shared/timeout-*
+          retention-days: 14
+          if-no-files-found: ignore
+
   # API docs
   #
   # site/api.html is generated from the /*@api ... */ annotations in the module

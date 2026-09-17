@@ -104,8 +104,10 @@ PDF2STRUC_SRCS = src/sh_pdf2struc.c src/sh_pdf2struc_text.c
 PDF2STRUC_OBJS = $(PDF2STRUC_SRCS:.c=.o)
 PDF2STRUC_LIB = libsh_pdf2struc.a
 TEST_PDF2STRUC_BIN = test_pdf2struc
+TEST_PROTOBUF_BIN = test_protobuf
+TEST_INFLATE_BIN = test_inflate
 
-.PHONY: all clean test test-asan test-pal test-font test-json test-xml test-csv test-geojson test-fs test-sha256 test-eov test-pdf2struc font-compare lib debug generate-font-data
+.PHONY: all clean test test-asan test-pal test-font test-json test-xml test-csv test-geojson test-fs test-sha256 test-eov test-pdf2struc test-protobuf test-inflate fuzz fuzz-lib fuzz-inflate fuzz-protobuf fuzz-pdf2struc fuzz-smoke font-compare lib debug generate-font-data
 
 # Default target
 all: lib $(TEST_BIN)
@@ -155,7 +157,7 @@ $(TEST_EOV_BIN): tests/test_eov.c $(LIB_FILE)
 # test-asan is `clean test`, so anything missing from this list is never seen
 # by a sanitizer. pdf2struc was missing: the parser with the largest untrusted
 # attack surface in shared/ was the one the sanitizer job did not exercise.
-test: $(TEST_BIN) $(TEST_FONT_BIN) $(TEST_JSON_BIN) $(TEST_XML_BIN) $(TEST_CSV_BIN) $(TEST_GEOJSON_BIN) $(TEST_FS_BIN) $(TEST_SHA256_BIN) $(TEST_EOV_BIN) $(TEST_PDF2STRUC_BIN)
+test: $(TEST_BIN) $(TEST_FONT_BIN) $(TEST_JSON_BIN) $(TEST_XML_BIN) $(TEST_CSV_BIN) $(TEST_GEOJSON_BIN) $(TEST_FS_BIN) $(TEST_SHA256_BIN) $(TEST_EOV_BIN) $(TEST_PDF2STRUC_BIN) $(TEST_PROTOBUF_BIN) $(TEST_INFLATE_BIN)
 	./$(TEST_BIN)
 	./$(TEST_FONT_BIN)
 	./$(TEST_JSON_BIN)
@@ -166,6 +168,8 @@ test: $(TEST_BIN) $(TEST_FONT_BIN) $(TEST_JSON_BIN) $(TEST_XML_BIN) $(TEST_CSV_B
 	./$(TEST_SHA256_BIN)
 	./$(TEST_EOV_BIN)
 	./$(TEST_PDF2STRUC_BIN)
+	./$(TEST_PROTOBUF_BIN)
+	./$(TEST_INFLATE_BIN)
 
 # Run JSON tests only
 test-json: $(TEST_JSON_BIN)
@@ -199,10 +203,22 @@ test-eov: $(TEST_EOV_BIN)
 $(PDF2STRUC_LIB): $(PDF2STRUC_OBJS)
 	$(AR_CMD)$@ $^
 
+$(TEST_PROTOBUF_BIN): tests/test_protobuf.c $(LIB_FILE)
+	$(CC) $(CFLAGS) $(INCLUDES) $< $(call link_lib,.,shared) $(LDFLAGS) $(EXE_OUT)$@
+
+$(TEST_INFLATE_BIN): tests/test_inflate.c $(LIB_FILE)
+	$(CC) $(CFLAGS) $(INCLUDES) $< $(call link_lib,.,shared) $(LDFLAGS) $(EXE_OUT)$@
+
 $(TEST_PDF2STRUC_BIN): tests/test_pdf2struc.c $(PDF2STRUC_LIB) $(LIB_FILE)
 	$(CC) $(CFLAGS) $(INCLUDES) $< $(call link_lib,.,sh_pdf2struc) $(call link_lib,.,shared) $(LDFLAGS) $(EXE_OUT)$@
 
 # Run PDF2struc tests only
+test-protobuf: $(TEST_PROTOBUF_BIN)
+	./$(TEST_PROTOBUF_BIN)
+
+test-inflate: $(TEST_INFLATE_BIN)
+	./$(TEST_INFLATE_BIN)
+
 test-pdf2struc: $(TEST_PDF2STRUC_BIN)
 	./$(TEST_PDF2STRUC_BIN)
 
@@ -257,9 +273,69 @@ debug: CFLAGS = $(DEBUG_CFLAGS)
 debug: LDFLAGS += $(DEBUG_LDFLAGS)
 debug: clean all
 
+# ============================================================================
+# Fuzzing
+#
+# shared had no fuzz target, which is how sh_inflate and sh_protobuf ended up
+# with no coverage of any kind. These three decode untrusted bytes: compressed
+# streams and protobuf wire data arrive from PDF and OSM extracts, and the PDF
+# extractor is the largest parser here.
+#
+# Both defects found by reading sh_pdf2struc -- the predictor's row_bytes + 1
+# and the xref stream's negative /W -- are reachable from files under 500
+# bytes, which is the size a fuzzer reaches in seconds. The corpora seed both.
+#
+# Requires clang. Run with a time budget, e.g.
+#   ./fuzz_protobuf tests/fuzz/corpus_protobuf/ -max_total_time=60
+# ============================================================================
+FUZZ_CC = clang
+FUZZ_CFLAGS = -fsanitize=fuzzer,address,undefined -fno-sanitize-recover=all               -g -O1 -std=c11 -D_GNU_SOURCE -D_USE_MATH_DEFINES
+FUZZ_LIB = libshared_fuzz.a
+
+fuzz: fuzz-inflate fuzz-protobuf fuzz-pdf2struc
+
+fuzz-lib:
+	$(FUZZ_CC) $(FUZZ_CFLAGS) $(INCLUDES) -c $(SRCS)
+	$(FUZZ_CC) $(FUZZ_CFLAGS) $(INCLUDES) -c $(PDF2STRUC_SRCS)
+	# sh_inflate is a miniz wrapper, so the fuzz archive needs miniz in it
+	# too -- the same flags the normal rule at the top of this file uses.
+	$(FUZZ_CC) $(FUZZ_CFLAGS) -I$(VENDOR_DIR) -DMINIZ_NO_STDIO -DMINIZ_NO_TIME -c $(MINIZ_SRCS)
+	ar rcs $(FUZZ_LIB) $(notdir $(OBJS)) $(notdir $(PDF2STRUC_OBJS)) $(notdir $(MINIZ_OBJS))
+
+fuzz-inflate: fuzz-lib
+	$(FUZZ_CC) $(FUZZ_CFLAGS) $(INCLUDES) tests/fuzz/fuzz_inflate.c 		-L. -lshared_fuzz -lm -o fuzz_inflate
+	@echo "Run: ./fuzz_inflate tests/fuzz/corpus_inflate/ -max_total_time=60"
+
+fuzz-protobuf: fuzz-lib
+	$(FUZZ_CC) $(FUZZ_CFLAGS) $(INCLUDES) tests/fuzz/fuzz_protobuf.c 		-L. -lshared_fuzz -lm -o fuzz_protobuf
+	@echo "Run: ./fuzz_protobuf tests/fuzz/corpus_protobuf/ -max_total_time=60"
+
+fuzz-pdf2struc: fuzz-lib
+	$(FUZZ_CC) $(FUZZ_CFLAGS) $(INCLUDES) tests/fuzz/fuzz_pdf2struc.c 		-L. -lshared_fuzz -lm -o fuzz_pdf2struc
+	@echo "Run: ./fuzz_pdf2struc tests/fuzz/corpus_pdf2struc/ -max_total_time=60"
+
+# A bounded run over the seed corpora. Short enough for CI, which is the point:
+# the fuzz targets that already existed in carta, nexus and surge are run by
+# nothing, so they only find what someone remembers to look for.
+fuzz-smoke: fuzz
+	# The first directory is where libFuzzer writes what it finds; the seed
+	# directory after it is only read. Passing the seeds alone has it write
+	# its discoveries back into them -- a 15 second local run left 269 new
+	# files in the corpora, which is how a curated seed set becomes noise.
+	@mkdir -p $(FUZZ_WORK)/inflate $(FUZZ_WORK)/protobuf $(FUZZ_WORK)/pdf2struc
+	./fuzz_inflate $(FUZZ_WORK)/inflate tests/fuzz/corpus_inflate/ \
+		-max_total_time=$(FUZZ_SMOKE_SECONDS) -print_final_stats=1
+	./fuzz_protobuf $(FUZZ_WORK)/protobuf tests/fuzz/corpus_protobuf/ \
+		-max_total_time=$(FUZZ_SMOKE_SECONDS) -print_final_stats=1
+	./fuzz_pdf2struc $(FUZZ_WORK)/pdf2struc tests/fuzz/corpus_pdf2struc/ \
+		-max_total_time=$(FUZZ_SMOKE_SECONDS) -print_final_stats=1
+
+FUZZ_SMOKE_SECONDS ?= 30
+FUZZ_WORK ?= build/fuzz-corpus
+
 # Clean
 clean:
-	rm -f $(OBJS) $(MINIZ_OBJS) $(LIB_FILE) $(TEST_BIN) $(TEST_FONT_BIN) $(TEST_JSON_BIN) $(TEST_XML_BIN) $(TEST_CSV_BIN) $(TEST_GEOJSON_BIN) $(TEST_FS_BIN) $(TEST_SHA256_BIN) $(TEST_EOV_BIN) $(FONT_COMPARE_BIN)
+	rm -f $(OBJS) $(MINIZ_OBJS) $(LIB_FILE) $(TEST_BIN) $(TEST_FONT_BIN) $(TEST_JSON_BIN) $(TEST_XML_BIN) $(TEST_CSV_BIN) $(TEST_GEOJSON_BIN) $(TEST_FS_BIN) $(TEST_SHA256_BIN) $(TEST_EOV_BIN) $(TEST_PROTOBUF_BIN) $(TEST_INFLATE_BIN) $(FONT_COMPARE_BIN) $(FUZZ_LIB) fuzz_inflate fuzz_protobuf fuzz_pdf2struc
 	@rm -f *.obj *.pdb *.ilk *.exp 2>/dev/null || true
 	rm -f $(PDF2STRUC_OBJS) $(PDF2STRUC_LIB) $(TEST_PDF2STRUC_BIN)
 	rm -f tests/soft_*.png tests/compare.html

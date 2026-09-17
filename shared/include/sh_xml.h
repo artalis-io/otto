@@ -135,7 +135,10 @@ int sh_xml_skip(ShXmlReader *r, const char *tag_name);
  * Converts &amp; &lt; &gt; &quot; &apos; to their characters.
  * Returns the new length (always <= input length).
  *
- * @param buf  Buffer to decode in-place (must be writable)
+ * @param buf  Buffer to decode in-place. Must be writable and hold at least
+ *             len + 1 bytes: decoding only ever shrinks the data, but a NUL
+ *             terminator is written at the new length, which equals len when
+ *             the input contains no entities.
  * @param len  Length of data in buffer
  * @return New length after decoding
  */
