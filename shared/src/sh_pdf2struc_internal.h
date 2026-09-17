@@ -20,6 +20,20 @@
 #define PDF_MAX_PAGES          10000
 #define PDF_MAX_FONTS          256
 #define PDF_MAX_GSTATE_DEPTH   64
+/* Deepest array/dict nesting pdf_parse_obj() will follow.
+ *
+ * 64, not 256. Real PDFs nest a handful of levels, so either is far past what
+ * a producer emits -- but 256 frames still overflowed a 1MB stack in an -O0
+ * sanitizer build, where each frame carries ASan's redzones. A bound that only
+ * holds in optimised builds is not a bound, and 1MB is what Windows gives a
+ * thread by default. */
+#define PDF_MAX_PARSE_DEPTH    64
+/* Deepest /Pages nesting the page tree walk will follow. The walk had no
+ * bound and no cycle check, so a Pages node whose /Kids listed itself --
+ * a 238 byte file -- recursed until the stack ran out. A depth cap stops
+ * both the self-reference and the mutual A->B->A case without needing a
+ * visited set. Real page trees are a few levels deep. */
+#define PDF_MAX_PAGE_TREE_DEPTH 64
 #define PDF_MAX_OPERAND_STACK  256
 #define PDF_MAX_TOUNICODE      65536
 #define PDF_MAX_WIDTHS         65536
@@ -209,6 +223,13 @@ typedef struct {
 
 struct ShPdf2strucCtx {
     SHArena *arena;
+
+    /* Nesting depth of the object parser. pdf_parse_obj() recurses through
+     * arrays and dictionaries, and nothing bounded it: a content stream of
+     * 20000 open brackets -- a 40KB file -- exhausted the stack and killed
+     * the process. Carried on the context rather than passed down, so the
+     * signature stays what sh_pdf2struc_text.c already calls. */
+    int parse_depth;
 
     /* Error */
     char error[PDF_MAX_ERROR_LEN];

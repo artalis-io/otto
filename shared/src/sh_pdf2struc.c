@@ -139,16 +139,31 @@ static PdfObj *pdf_parse_string(ShPdf2strucCtx *ctx, PdfScanner *s)
 
     /* First pass: find end to compute length */
     size_t scan_pos = s->pos;
+    int closed = 0;
     while (scan_pos < s->size && depth > 0) {
         uint8_t c = s->data[scan_pos++];
         if (c == '\\' && scan_pos < s->size) scan_pos++;
         else if (c == '(') depth++;
-        else if (c == ')') depth--;
+        else if (c == ')') {
+            depth--;
+            if (depth == 0) closed = 1;
+        }
     }
 
-    size_t raw_len = scan_pos - start - 1; /* exclude closing ) */
+    /* The -1 drops the closing ')', which scan_pos has already stepped over.
+     * When the string is never closed there is no ')' to drop and scan_pos is
+     * simply the end of the buffer -- subtracting anyway undercounted by one,
+     * and the decode pass below then wrote its NUL terminator one byte past
+     * the allocation. Reachable from a 339 byte file whose trailer holds an
+     * unterminated string; found by fuzzing once the arena was poisoned. */
+    size_t raw_len = scan_pos - start - (closed ? 1u : 0u);
     uint8_t *buf = (uint8_t *)sh_arena_alloc(ctx->arena, raw_len + 1);
     if (!buf) return NULL;
+
+    /* The decode pass writes at most one byte per byte consumed, so raw_len is
+     * an upper bound on `out`. Checked anyway: the two passes agreeing is an
+     * invariant that has already been broken once. */
+#define PDF_STR_PUT(b) do { if (out < raw_len) buf[out++] = (uint8_t)(b); } while (0)
 
     /* Second pass: decode escapes */
     size_t out = 0;
@@ -158,14 +173,14 @@ static PdfObj *pdf_parse_string(ShPdf2strucCtx *ctx, PdfScanner *s)
         if (c == '\\' && s->pos < s->size) {
             uint8_t esc = s->data[s->pos++];
             switch (esc) {
-                case 'n': buf[out++] = '\n'; break;
-                case 'r': buf[out++] = '\r'; break;
-                case 't': buf[out++] = '\t'; break;
-                case 'b': buf[out++] = '\b'; break;
-                case 'f': buf[out++] = '\f'; break;
-                case '(': buf[out++] = '('; break;
-                case ')': buf[out++] = ')'; break;
-                case '\\': buf[out++] = '\\'; break;
+                case 'n': PDF_STR_PUT('\n'); break;
+                case 'r': PDF_STR_PUT('\r'); break;
+                case 't': PDF_STR_PUT('\t'); break;
+                case 'b': PDF_STR_PUT('\b'); break;
+                case 'f': PDF_STR_PUT('\f'); break;
+                case '(': PDF_STR_PUT('('); break;
+                case ')': PDF_STR_PUT(')'); break;
+                case '\\': PDF_STR_PUT('\\'); break;
                 case '\r':
                     if (s->pos < s->size && s->data[s->pos] == '\n') s->pos++;
                     break;
@@ -181,23 +196,24 @@ static PdfObj *pdf_parse_string(ShPdf2strucCtx *ctx, PdfScanner *s)
                                 s->data[s->pos] <= '7')
                                 val = val * 8 + (s->data[s->pos++] - '0');
                         }
-                        buf[out++] = (uint8_t)(val & 0xFF);
+                        PDF_STR_PUT(val & 0xFF);
                     } else {
-                        buf[out++] = esc;
+                        PDF_STR_PUT(esc);
                     }
                     break;
             }
         } else if (c == '(') {
             depth++;
-            buf[out++] = c;
+            PDF_STR_PUT(c);
         } else if (c == ')') {
             depth--;
-            if (depth > 0) buf[out++] = c;
+            if (depth > 0) PDF_STR_PUT(c);
         } else {
-            buf[out++] = c;
+            PDF_STR_PUT(c);
         }
     }
     buf[out] = '\0';
+#undef PDF_STR_PUT
 
     PdfObj *obj = pdf_alloc_obj(ctx);
     if (!obj) return NULL;
@@ -474,11 +490,34 @@ static PdfObj *pdf_parse_dict(ShPdf2strucCtx *ctx, PdfScanner *s)
 }
 
 /* Main object parser - dispatches by first character */
+static PdfObj *pdf_parse_obj_inner(ShPdf2strucCtx *ctx, PdfScanner *s);
+
 PdfObj *pdf_parse_obj(ShPdf2strucCtx *ctx, PdfScanner *s)
 {
+    PdfObj *result;
+
     scan_skip_whitespace(s);
     if (scan_eof(s)) return NULL;
 
+    /* Arrays and dictionaries recurse back into here. Refusing past a fixed
+     * depth turns a stack overflow into a parse failure. The counter is
+     * decremented on every return path below, so a refusal here must not
+     * fall through to one. */
+    if (ctx->parse_depth >= PDF_MAX_PARSE_DEPTH) {
+        pdf_set_error(ctx, "object nesting deeper than %d levels",
+                      PDF_MAX_PARSE_DEPTH);
+        return NULL;
+    }
+    ctx->parse_depth++;
+
+    result = pdf_parse_obj_inner(ctx, s);
+
+    ctx->parse_depth--;
+    return result;
+}
+
+static PdfObj *pdf_parse_obj_inner(ShPdf2strucCtx *ctx, PdfScanner *s)
+{
     uint8_t c = scan_peek(s);
 
     /* Dict or hex string */
@@ -1190,8 +1229,18 @@ static PdfObj *pdf_parse_from_objstm(ShPdf2strucCtx *ctx, int stm_obj, int stm_i
 static void pdf_collect_pages(ShPdf2strucCtx *ctx, PdfObj *node,
                                PdfObj *inherited_resources,
                                PdfObj *inherited_mediabox,
-                               int inherited_rotate)
+                               int inherited_rotate,
+                               int depth)
 {
+    /* /Kids is a reference like any other, and nothing stopped it pointing
+     * back up the tree. A Pages node listing itself in /Kids recursed until
+     * the stack ran out -- reachable in a 238 byte file. */
+    if (depth >= PDF_MAX_PAGE_TREE_DEPTH) {
+        pdf_set_error(ctx, "page tree deeper than %d levels",
+                      PDF_MAX_PAGE_TREE_DEPTH);
+        return;
+    }
+
     node = pdf_resolve(ctx, node);
     if (!node) return;
 
@@ -1219,7 +1268,7 @@ static void pdf_collect_pages(ShPdf2strucCtx *ctx, PdfObj *node,
             for (int i = 0; i < n; i++) {
                 pdf_collect_pages(ctx, pdf_array_get(kids, i),
                                    inherited_resources, inherited_mediabox,
-                                   inherited_rotate);
+                                   inherited_rotate, depth + 1);
             }
         }
     } else if (type && strcmp(type, "Page") == 0) {
@@ -1402,7 +1451,7 @@ static ShPdf2strucStatus pdf_do_extract(ShPdf2strucCtx *ctx,
     ctx->page_count = 0;
 
     /* Walk page tree */
-    pdf_collect_pages(ctx, pages, NULL, NULL, 0);
+    pdf_collect_pages(ctx, pages, NULL, NULL, 0, 0);
     if (ctx->page_count == 0) {
         pdf_set_error(ctx, "no pages found");
         return SH_PDF2STRUC_ERR_INVALID_PDF;
