@@ -17,6 +17,7 @@
 #include "miniz.h"
 #include "miniz_tinfl.h"
 
+#include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -29,6 +30,13 @@ SHStatus sh_inflate(const uint8_t *src, size_t src_len,
                     size_t *actual_len)
 {
     if (!src || !dst || !actual_len) {
+        return SH_ERROR_INVALID_PARAM;
+    }
+
+    /* avail_in/avail_out are 32-bit. Narrowing silently would describe a
+     * different buffer than the caller passed -- smaller, so not a memory
+     * error, but a truncated result reported as success. Rejected instead. */
+    if (src_len > (size_t)UINT32_MAX || dst_len > (size_t)UINT32_MAX) {
         return SH_ERROR_INVALID_PARAM;
     }
 
@@ -65,18 +73,23 @@ SHStatus sh_inflate_raw(const uint8_t *src, size_t src_len,
         return SH_ERROR_INVALID_PARAM;
     }
 
-    tinfl_status status = tinfl_decompress_mem_to_mem(
+    /* tinfl_decompress_mem_to_mem returns the number of bytes written, or
+     * TINFL_DECOMPRESS_MEM_TO_MEM_FAILED ((size_t)-1). Storing that in a
+     * tinfl_status enum and testing it as a status worked only because a
+     * count happens to be non-negative and the failure value happens to be
+     * -1; the type said one thing and the value was another. */
+    size_t written = tinfl_decompress_mem_to_mem(
         dst, dst_len,
         src, src_len,
         TINFL_FLAG_PARSE_ZLIB_HEADER
     );
 
-    if (status == TINFL_STATUS_DONE || (int)status >= 0) {
-        *actual_len = (size_t)status;
-        return SH_OK;
+    if (written == TINFL_DECOMPRESS_MEM_TO_MEM_FAILED) {
+        return SH_ERROR_DECOMPRESS;
     }
 
-    return SH_ERROR_DECOMPRESS;
+    *actual_len = written;
+    return SH_OK;
 }
 
 uint8_t *sh_inflate_alloc(const uint8_t *src, size_t src_len,

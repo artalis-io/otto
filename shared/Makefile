@@ -104,8 +104,10 @@ PDF2STRUC_SRCS = src/sh_pdf2struc.c src/sh_pdf2struc_text.c
 PDF2STRUC_OBJS = $(PDF2STRUC_SRCS:.c=.o)
 PDF2STRUC_LIB = libsh_pdf2struc.a
 TEST_PDF2STRUC_BIN = test_pdf2struc
+TEST_PROTOBUF_BIN = test_protobuf
+TEST_INFLATE_BIN = test_inflate
 
-.PHONY: all clean test test-asan test-pal test-font test-json test-xml test-csv test-geojson test-fs test-sha256 test-eov test-pdf2struc font-compare lib debug generate-font-data
+.PHONY: all clean test test-asan test-pal test-font test-json test-xml test-csv test-geojson test-fs test-sha256 test-eov test-pdf2struc test-protobuf test-inflate font-compare lib debug generate-font-data
 
 # Default target
 all: lib $(TEST_BIN)
@@ -155,7 +157,7 @@ $(TEST_EOV_BIN): tests/test_eov.c $(LIB_FILE)
 # test-asan is `clean test`, so anything missing from this list is never seen
 # by a sanitizer. pdf2struc was missing: the parser with the largest untrusted
 # attack surface in shared/ was the one the sanitizer job did not exercise.
-test: $(TEST_BIN) $(TEST_FONT_BIN) $(TEST_JSON_BIN) $(TEST_XML_BIN) $(TEST_CSV_BIN) $(TEST_GEOJSON_BIN) $(TEST_FS_BIN) $(TEST_SHA256_BIN) $(TEST_EOV_BIN) $(TEST_PDF2STRUC_BIN)
+test: $(TEST_BIN) $(TEST_FONT_BIN) $(TEST_JSON_BIN) $(TEST_XML_BIN) $(TEST_CSV_BIN) $(TEST_GEOJSON_BIN) $(TEST_FS_BIN) $(TEST_SHA256_BIN) $(TEST_EOV_BIN) $(TEST_PDF2STRUC_BIN) $(TEST_PROTOBUF_BIN) $(TEST_INFLATE_BIN)
 	./$(TEST_BIN)
 	./$(TEST_FONT_BIN)
 	./$(TEST_JSON_BIN)
@@ -166,6 +168,8 @@ test: $(TEST_BIN) $(TEST_FONT_BIN) $(TEST_JSON_BIN) $(TEST_XML_BIN) $(TEST_CSV_B
 	./$(TEST_SHA256_BIN)
 	./$(TEST_EOV_BIN)
 	./$(TEST_PDF2STRUC_BIN)
+	./$(TEST_PROTOBUF_BIN)
+	./$(TEST_INFLATE_BIN)
 
 # Run JSON tests only
 test-json: $(TEST_JSON_BIN)
@@ -199,10 +203,22 @@ test-eov: $(TEST_EOV_BIN)
 $(PDF2STRUC_LIB): $(PDF2STRUC_OBJS)
 	$(AR_CMD)$@ $^
 
+$(TEST_PROTOBUF_BIN): tests/test_protobuf.c $(LIB_FILE)
+	$(CC) $(CFLAGS) $(INCLUDES) $< $(call link_lib,.,shared) $(LDFLAGS) $(EXE_OUT)$@
+
+$(TEST_INFLATE_BIN): tests/test_inflate.c $(LIB_FILE)
+	$(CC) $(CFLAGS) $(INCLUDES) $< $(call link_lib,.,shared) $(LDFLAGS) $(EXE_OUT)$@
+
 $(TEST_PDF2STRUC_BIN): tests/test_pdf2struc.c $(PDF2STRUC_LIB) $(LIB_FILE)
 	$(CC) $(CFLAGS) $(INCLUDES) $< $(call link_lib,.,sh_pdf2struc) $(call link_lib,.,shared) $(LDFLAGS) $(EXE_OUT)$@
 
 # Run PDF2struc tests only
+test-protobuf: $(TEST_PROTOBUF_BIN)
+	./$(TEST_PROTOBUF_BIN)
+
+test-inflate: $(TEST_INFLATE_BIN)
+	./$(TEST_INFLATE_BIN)
+
 test-pdf2struc: $(TEST_PDF2STRUC_BIN)
 	./$(TEST_PDF2STRUC_BIN)
 
@@ -259,7 +275,7 @@ debug: clean all
 
 # Clean
 clean:
-	rm -f $(OBJS) $(MINIZ_OBJS) $(LIB_FILE) $(TEST_BIN) $(TEST_FONT_BIN) $(TEST_JSON_BIN) $(TEST_XML_BIN) $(TEST_CSV_BIN) $(TEST_GEOJSON_BIN) $(TEST_FS_BIN) $(TEST_SHA256_BIN) $(TEST_EOV_BIN) $(FONT_COMPARE_BIN)
+	rm -f $(OBJS) $(MINIZ_OBJS) $(LIB_FILE) $(TEST_BIN) $(TEST_FONT_BIN) $(TEST_JSON_BIN) $(TEST_XML_BIN) $(TEST_CSV_BIN) $(TEST_GEOJSON_BIN) $(TEST_FS_BIN) $(TEST_SHA256_BIN) $(TEST_EOV_BIN) $(TEST_PROTOBUF_BIN) $(TEST_INFLATE_BIN) $(FONT_COMPARE_BIN)
 	@rm -f *.obj *.pdb *.ilk *.exp 2>/dev/null || true
 	rm -f $(PDF2STRUC_OBJS) $(PDF2STRUC_LIB) $(TEST_PDF2STRUC_BIN)
 	rm -f tests/soft_*.png tests/compare.html

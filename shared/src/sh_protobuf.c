@@ -7,6 +7,7 @@
  */
 
 #include "sh_protobuf.h"
+#include <limits.h>
 #include <string.h>
 
 /* ============================================================================
@@ -78,7 +79,17 @@ int sh_pb_skip_field(const uint8_t *buf, size_t len, uint32_t wire_type)
     case SH_PB_WIRE_LENGTH_DELIM: {
         uint64_t field_len;
         int n = sh_pb_read_varint(buf, len, &field_len);
-        if (n == 0 || (size_t)(n + field_len) > len) return 0;
+        if (n == 0) return 0;
+
+        /* `n + field_len` is 64-bit unsigned addition: a length near 2^64
+         * wraps to something small and sails past the comparison. It failed
+         * closed only because (int)field_len then came out negative, which is
+         * luck rather than a check. Comparing against the space that actually
+         * remains cannot wrap -- n is at most len, so len - n does not
+         * underflow -- and INT_MAX bounds the return value, which is an int. */
+        size_t remaining = len - (size_t)n;
+        if (field_len > (uint64_t)remaining) return 0;
+        if (field_len > (uint64_t)(INT_MAX - n)) return 0;
         return n + (int)field_len;
     }
 

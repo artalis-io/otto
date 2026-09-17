@@ -172,6 +172,60 @@ externals, so that suite had never built under MSVC -- it was only ever reached
 by the Linux `test-pdf2struc` job. It uses `$(call link_lib,...)` like every
 other test binary in the file now, and passes 30/30 under both toolchains.
 
+### The remaining shared parsers, and what watches them
+
+Before reading any of them, the question of what already watches these files:
+
+| parser | lines | unit test | ASan/UBSan | fuzzed |
+|---|---|---|---|---|
+| sh_json | 1199 | yes | yes | no |
+| sh_pdf2struc | 1487 | yes | yes | no |
+| sh_csv | 568 | yes | yes | no |
+| sh_xml | 428 | yes | yes | no |
+| **sh_inflate** | 124 | **none** | **none** | no |
+| **sh_protobuf** | 264 | **none** | **none** | no |
+
+OTTO does have fuzzers -- `carta/tests/fuzz/fuzz_pbf.c`,
+`nexus/tests/fuzz/{fuzz_csv,fuzz_pdf,fuzz_xlsx}.c`, `surge/fuzz/fuzz_json_api.c`
+-- with `fuzz` targets in those three Makefiles. **No CI job runs any of them**,
+and none targets a shared primitive directly: they drive the module wrappers
+(`nx_csv_parse`, `ct_pbf_*`) rather than `sh_csv` or `sh_protobuf`. `shared/`
+has no fuzz target at all.
+
+**sh_protobuf: the length check could wrap.** `sh_pb_skip_field` validated a
+length-delimited field with `(size_t)(n + field_len) > len`, which is unsigned
+64-bit addition: a length near 2^64 wraps to something small and passes. The
+first reading of this was that it failed closed, because `(int)field_len` would
+then come out negative -- a test written to that assumption failed against the
+unfixed source, which is the more useful answer. The check now compares against
+the space that actually remains and bounds the return to `INT_MAX`.
+
+**sh_inflate: a byte count stored in a status enum.**
+`tinfl_decompress_mem_to_mem` returns the number of bytes written, or
+`(size_t)-1`. That was assigned to a `tinfl_status` and tested as
+`status == TINFL_STATUS_DONE || (int)status >= 0`, which works only because a
+count is non-negative and the failure value is -1. It now compares against
+`TINFL_DECOMPRESS_MEM_TO_MEM_FAILED`. The `size_t` to `mz_uint32` narrowing of
+the buffer lengths is also rejected rather than silently truncated -- a
+truncation there describes a smaller buffer than the caller passed, so it
+reports a short result as success rather than corrupting memory.
+
+Both files now have tests -- 19 and 13 -- and are in the `test` target, so
+`test-asan` covers them.
+
+**sh_csv and sh_xml were read and are sound.** The CSV quoted-field decoder
+uses the same two-pass count-then-write shape as sh_json, where divergence
+would be a heap overflow; the two loops are structurally identical, so the
+write cannot outrun the count. An over-long field returns NULL without
+advancing the read position, but the caller sets `eof` rather than retrying, so
+it cannot spin. XML entity decoding is in-place and every entity shrinks
+(`&quot;` to one byte), so the write index can never pass the read index.
+
+One contract gap rather than a defect: `sh_xml_decode_entities` is public and
+writes a NUL at the decoded length, which equals `len` when the input has no
+entities -- so it needs `len + 1` bytes, and the header only said "must be
+writable". The internal caller allocates `len + 1`; the header now says so.
+
 ## What this sweep did not cover
 
 Everything semantic. Use-after-free, double-free, leak tracing, null-deref
@@ -181,5 +235,9 @@ the six servers' request paths were traced for numeric validation. `sh_pdf2struc
 described above, though it was targeted at the highest-risk routines -- the
 predictor, the xref stream decoders, the decompression sizing -- rather than
 read end to end; its text-extraction half (1.7k lines) was not examined at all.
-What remains untouched is `sh_csv.c`, `sh_xml.c`, `sh_inflate.c` and
-`sh_protobuf.c`, all of which decode untrusted bytes.
+`sh_csv`, `sh_xml`, `sh_inflate` and `sh_protobuf`
+have had the pass described above. What remains unread is
+`sh_pdf2struc_text.c` -- 1.7k lines of text extraction and table assembly,
+reached only after a document has already parsed -- and the question of whether
+any of these parsers deserves a fuzz target, given that the ones OTTO has are
+run by nothing.
