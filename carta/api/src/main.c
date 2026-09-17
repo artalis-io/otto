@@ -925,7 +925,15 @@ static int parse_tile_uri(const char *uri, size_t uri_len, int *z, int *x, int *
     if (*next == '.') {
         next++;
         int i = 0;
-        while (next < end && i < 7 && isalnum(*next)) {
+        /* (unsigned char), because isalnum() is undefined for a negative
+         * argument other than EOF and plain char is signed here. Keel rejects
+         * a raw byte above 127 in the request line today -- the connection is
+         * closed before this runs -- and does not percent-decode, so nothing
+         * currently reaches this with the high bit set. That is Keel's
+         * behaviour rather than this function's contract, and the cast costs
+         * nothing. MSVC's isalnum asserts on a negative argument in a debug
+         * build, which is the configuration this now runs in under CI. */
+        while (next < end && i < 7 && isalnum((unsigned char)*next)) {
             ext[i++] = *next++;
         }
         ext[i] = '\0';
