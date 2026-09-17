@@ -229,6 +229,25 @@ uint32_t vl_graph_nearest_node(const VLGraph *graph, VLCoord coord);
  */
 uint32_t vl_graph_nearest_node_within(const VLGraph *graph, VLCoord coord, double max_dist);
 
+/*
+ * Compute the routable core: the largest strongly-connected component, marked in
+ * graph->node_core (allocated here; freed by vl_graph_free). O(V+E), one-time.
+ * Safe to call repeatedly (no-op if already computed). Returns VL_OK, or
+ * VL_ERROR_OUT_OF_MEMORY.
+ */
+VLStatus vl_graph_compute_core(VLGraph *graph, VLProfile profile);
+
+/*
+ * Find the nearest node that is in the routable core (largest SCC), so the
+ * result is guaranteed mutually reachable with the rest of the network. Computes
+ * the core lazily on first use. This avoids snapping a valid coordinate onto a
+ * disconnected stub (parking aisle, service loop) a few meters away. Falls back
+ * to vl_graph_nearest_node if the core cannot be computed.
+ *
+ * Returns node index, or VL_INVALID_NODE if graph is empty.
+ */
+uint32_t vl_graph_nearest_node_routable(VLGraph *graph, VLCoord coord, VLProfile profile);
+
 /* ============================================================================
  * Graph Statistics
  * ============================================================================ */

@@ -121,6 +121,15 @@ typedef struct {
     /* Grid spatial index for fast nearest-node queries */
     struct VLGridIndex *grid_index;
 
+    /* Routable-core mask: node_core[i] != 0 iff node i is in the largest
+     * strongly-connected component *under a routing profile's edge rules*.
+     * Lazily computed by vl_graph_compute_core and used by
+     * vl_graph_nearest_node_routable to avoid snapping onto stubs the router
+     * cannot leave. core_profile records which profile it was built for. */
+    uint8_t *node_core;
+    int      core_profile;     /* VLProfile the node_core mask was built for */
+    int      core_computed;    /* 1 once node_core is valid */
+
     /* Degree-2 contraction data (for path unpacking) */
     struct VLContraction *contraction;
 
@@ -234,6 +243,32 @@ typedef enum {
     VL_PROFILE_FOOT,       /* Pedestrian - avoid motorways, trunks, primaries */
     VL_PROFILE_ANY         /* No filtering (all roads accessible) */
 } VLProfile;
+
+/*
+ * Edge admissibility per profile. Defined here (shared, static inline) so that
+ * routing and the routable-core computation apply the EXACT same rule -- a core
+ * built with different edge rules than the router would be inconsistent.
+ */
+static inline uint16_t vl_profile_access_mask(VLProfile profile)
+{
+    switch (profile) {
+    case VL_PROFILE_CAR:   return VL_ACCESS_NO_CAR;
+    case VL_PROFILE_TRUCK: return VL_ACCESS_NO_TRUCK;
+    case VL_PROFILE_BIKE:  return VL_ACCESS_NO_BIKE;
+    case VL_PROFILE_FOOT:  return VL_ACCESS_NO_FOOT;
+    default:               return 0;  /* VL_PROFILE_ANY - no filtering */
+    }
+}
+
+static inline int vl_edge_accessible(uint16_t flags, VLProfile profile, uint16_t access_mask)
+{
+    if (flags & access_mask) return 0;
+    if (profile == VL_PROFILE_BIKE || profile == VL_PROFILE_FOOT) {
+        uint16_t rt = flags & VL_EDGE_TYPE_MASK;
+        if (rt == VL_EDGE_MOTORWAY || rt == VL_EDGE_TRUNK) return 0;
+    }
+    return 1;
+}
 
 typedef enum {
     VL_WEIGHT_DISTANCE,    /* Optimize for shortest distance */

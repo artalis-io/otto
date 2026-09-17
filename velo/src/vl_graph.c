@@ -1029,6 +1029,148 @@ VLStatus vl_graph_unpack_path(const VLGraph *graph,
  * Graph Memory Management
  * ============================================================================ */
 
+/* ============================================================================
+ * Routable core (largest strongly-connected component)
+ * ============================================================================ */
+
+/* Iterative BFS from seed over forward (reverse=0) or reverse (reverse=1) edges,
+ * traversing only edges admissible for `profile` -- the SAME rule the router
+ * applies -- so the core matches what routing can actually reach. `queue` is
+ * caller-provided scratch of num_nodes. */
+static void vl_bfs_mark(const VLGraph *g, uint32_t seed, uint8_t *mark,
+                        int reverse, uint32_t *queue,
+                        VLProfile profile, uint16_t mask)
+{
+    uint32_t head = 0, tail = 0;
+    queue[tail++] = seed; mark[seed] = 1;
+    while (head < tail) {
+        uint32_t u = queue[head++];
+        if (reverse) {
+            uint32_t s = g->rev_edge_start[u], c = g->rev_edge_count[u];
+            for (uint32_t k = 0; k < c; k++) {
+                uint16_t flags = g->edges[g->rev_edge_idx[s + k]].flags;
+                if (!vl_edge_accessible(flags, profile, mask)) continue;
+                uint32_t v = g->rev_edges[s + k];
+                if (v < g->num_nodes && !mark[v]) { mark[v] = 1; queue[tail++] = v; }
+            }
+        } else {
+            const VLNode *nd = &g->nodes[u];
+            for (uint32_t e = nd->edge_start; e < nd->edge_start + nd->edge_count; e++) {
+                if (!vl_edge_accessible(g->edges[e].flags, profile, mask)) continue;
+                uint32_t v = g->edges[e].target;
+                if (v < g->num_nodes && !mark[v]) { mark[v] = 1; queue[tail++] = v; }
+            }
+        }
+    }
+}
+
+VLStatus vl_graph_compute_core(VLGraph *graph, VLProfile profile)
+{
+    if (!graph || graph->num_nodes == 0) return VL_OK;
+    if (graph->core_computed && graph->core_profile == (int)profile)
+        return VL_OK;                                   /* cached for this profile */
+    uint32_t N = graph->num_nodes;
+
+    /* No reverse index -> cannot compute an SCC; treat everything as routable
+     * (identical to the previous, non-component-aware behaviour). */
+    if (!graph->rev_edge_start || !graph->rev_edge_count ||
+        !graph->rev_edges || !graph->rev_edge_idx) {
+        free(graph->node_core);
+        graph->node_core = malloc(N);
+        if (!graph->node_core) return VL_ERROR_OUT_OF_MEMORY;
+        memset(graph->node_core, 1, N);
+        graph->core_profile = (int)profile; graph->core_computed = 1;
+        return VL_OK;
+    }
+
+    uint16_t mask = vl_profile_access_mask(profile);
+
+    /* Seed = highest-degree node: on a road network it is (near-certainly) in the
+     * giant SCC, so its SCC (forward-reach ∩ backward-reach over admissible edges)
+     * is the routable core for this profile. */
+    uint32_t seed = 0, best_deg = 0;
+    for (uint32_t i = 0; i < N; i++) {
+        uint32_t deg = graph->nodes[i].edge_count + graph->rev_edge_count[i];
+        if (deg > best_deg) { best_deg = deg; seed = i; }
+    }
+
+    uint8_t *fwd = calloc(N, 1), *bwd = calloc(N, 1), *core = calloc(N, 1);
+    uint32_t *queue = malloc((size_t)N * sizeof(uint32_t));
+    if (!fwd || !bwd || !core || !queue) {
+        free(fwd); free(bwd); free(core); free(queue);
+        return VL_ERROR_OUT_OF_MEMORY;
+    }
+    vl_bfs_mark(graph, seed, fwd, 0, queue, profile, mask);
+    vl_bfs_mark(graph, seed, bwd, 1, queue, profile, mask);
+    uint32_t core_count = 0;
+    for (uint32_t i = 0; i < N; i++) {
+        core[i] = (fwd[i] && bwd[i]) ? 1 : 0;
+        core_count += core[i];
+    }
+
+    /* Only filter when the core is genuinely dominant. If no component dominates
+     * -- small/synthetic graphs, or a heavily fragmented map -- disable filtering
+     * so routable snapping degrades to plain nearest-node. */
+    if (core_count * 2 < N) memset(core, 1, N);
+
+    free(fwd); free(bwd); free(queue);
+    free(graph->node_core);
+    graph->node_core = core;
+    graph->core_profile = (int)profile; graph->core_computed = 1;
+    return VL_OK;
+}
+
+uint32_t vl_graph_nearest_node_routable(VLGraph *graph, VLCoord coord, VLProfile profile)
+{
+    if (!graph || graph->num_nodes == 0) return VL_INVALID_NODE;
+    if (vl_graph_compute_core(graph, profile) != VL_OK || !graph->node_core)
+        return vl_graph_nearest_node(graph, coord);
+
+    const VLGridIndex *grid = graph->grid_index;
+    if (!grid) {                                        /* no spatial index: linear over core */
+        uint32_t best = VL_INVALID_NODE; double bd = VL_INF;
+        for (uint32_t i = 0; i < graph->num_nodes; i++) {
+            if (!graph->node_core[i]) continue;
+            double d = vl_haversine(coord, VL_FIXED_TO_COORD(graph->nodes[i].coord));
+            if (d < bd) { bd = d; best = i; }
+        }
+        return best == VL_INVALID_NODE ? vl_graph_nearest_node(graph, coord) : best;
+    }
+
+    int center_row = (int)((coord.lat - grid->lat_min) / grid->cell_lat);
+    int center_col = (int)((coord.lon - grid->lon_min) / grid->cell_lon);
+    if (center_row < 0) center_row = 0;
+    if (center_row >= VL_GRID_SIZE) center_row = VL_GRID_SIZE - 1;
+    if (center_col < 0) center_col = 0;
+    if (center_col >= VL_GRID_SIZE) center_col = VL_GRID_SIZE - 1;
+
+    /* Ring-expanding search over the grid, accepting only core nodes. Since the
+     * core is ~all nodes, the first hit is usually the center/adjacent cell; scan
+     * one extra ring past the first hit so a nearer node in a neighbouring cell
+     * is not missed. O(1) average. */
+    uint32_t best = VL_INVALID_NODE; double bd = VL_INF; int found_r = -1;
+    for (int radius = 0; radius < VL_GRID_SIZE; radius++) {
+        if (found_r >= 0 && radius > found_r + 1) break;
+        for (int dr = -radius; dr <= radius; dr++) {
+            for (int dc = -radius; dc <= radius; dc++) {
+                if (radius > 0 && abs(dr) != radius && abs(dc) != radius) continue;
+                int row = center_row + dr, col = center_col + dc;
+                if (row < 0 || row >= VL_GRID_SIZE || col < 0 || col >= VL_GRID_SIZE) continue;
+                size_t cell = (size_t)row * VL_GRID_SIZE + col;
+                uint32_t s = grid->cell_offsets[cell], e = grid->cell_offsets[cell + 1];
+                for (uint32_t i = s; i < e; i++) {
+                    uint32_t nidx = grid->cell_nodes[i];
+                    if (!graph->node_core[nidx]) continue;
+                    double d = vl_haversine(coord, VL_FIXED_TO_COORD(graph->nodes[nidx].coord));
+                    if (d < bd) { bd = d; best = nidx; }
+                }
+            }
+        }
+        if (best != VL_INVALID_NODE && found_r < 0) found_r = radius;
+    }
+    return best == VL_INVALID_NODE ? vl_graph_nearest_node(graph, coord) : best;
+}
+
 void vl_graph_free(VLGraph *graph)
 {
     if (!graph) return;
@@ -1058,6 +1200,9 @@ void vl_graph_free(VLGraph *graph)
         free(graph->grid_index->cell_offsets);
         free(graph->grid_index);
     }
+
+    /* Free routable-core mask */
+    free(graph->node_core);
 
     free(graph);
 }

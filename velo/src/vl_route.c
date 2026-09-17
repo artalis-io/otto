@@ -68,6 +68,7 @@ VLStatus vl_bucket_heap_push(VLBucketHeap *heap, uint32_t node, double priority)
 VLStatus vl_bucket_heap_pop(VLBucketHeap *heap, VLHeapEntry *entry);
 
 uint32_t vl_graph_nearest_node(const VLGraph *graph, VLCoord coord);
+uint32_t vl_graph_nearest_node_routable(VLGraph *graph, VLCoord coord, VLProfile profile);
 void vl_query_context_free(VLQueryContext *ctx);
 
 /* ============================================================================
@@ -90,38 +91,11 @@ void vl_default_options(VLRouteOptions *opts)
  * Vehicle Profile Edge Filtering
  * ============================================================================ */
 
-/*
- * Get the access denial bitmask for a profile.
- * Returns 0 for VL_PROFILE_ANY (no filtering).
- */
-static inline uint16_t profile_access_mask(VLProfile profile)
-{
-    switch (profile) {
-    case VL_PROFILE_CAR:   return VL_ACCESS_NO_CAR;
-    case VL_PROFILE_TRUCK: return VL_ACCESS_NO_TRUCK;
-    case VL_PROFILE_BIKE:  return VL_ACCESS_NO_BIKE;
-    case VL_PROFILE_FOOT:  return VL_ACCESS_NO_FOOT;
-    default:               return 0;  /* VL_PROFILE_ANY - no filtering */
-    }
-}
-
-/*
- * Check if edge is accessible for given vehicle profile.
- * For profiles with road type restrictions (BIKE, FOOT), also checks road type.
- */
-static inline int edge_accessible(uint16_t flags, VLProfile profile, uint16_t access_mask)
-{
-    /* Fast path: check access flags with precomputed mask */
-    if (flags & access_mask) return 0;
-
-    /* Bike/Foot: additional road type safety restrictions */
-    if (profile == VL_PROFILE_BIKE || profile == VL_PROFILE_FOOT) {
-        uint16_t rt = flags & VL_EDGE_TYPE_MASK;
-        if (rt == VL_EDGE_MOTORWAY || rt == VL_EDGE_TRUNK) return 0;
-    }
-
-    return 1;
-}
+/* profile_access_mask / edge_accessible now live in vl_types.h as
+ * vl_profile_access_mask / vl_edge_accessible, so routing and the routable-core
+ * computation share one definition. Thin aliases keep the call sites below. */
+#define profile_access_mask vl_profile_access_mask
+#define edge_accessible     vl_edge_accessible
 
 /* ============================================================================
  * Query Context (for memory reuse and lazy initialization)
@@ -1060,8 +1034,12 @@ VLStatus vl_route_coords(const VLGraph *graph, VLCoord origin, VLCoord destinati
         return VL_ERROR_INVALID_ARGUMENT;
     }
 
-    uint32_t source = vl_graph_nearest_node(graph, origin);
-    uint32_t target = vl_graph_nearest_node(graph, destination);
+    /* Snap to the routable core so a coordinate near a disconnected stub does not
+     * become unroutable. The cast drops const only to populate a lazily-computed
+     * cache (graph->node_core); the graph's routing data is not modified. */
+    VLProfile snap_profile = opts ? opts->profile : VL_PROFILE_CAR;
+    uint32_t source = vl_graph_nearest_node_routable((VLGraph *)graph, origin, snap_profile);
+    uint32_t target = vl_graph_nearest_node_routable((VLGraph *)graph, destination, snap_profile);
 
     if (source == VL_INVALID_NODE || target == VL_INVALID_NODE) {
         return VL_ERROR_NODE_NOT_FOUND;
