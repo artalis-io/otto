@@ -42,18 +42,26 @@ BENCH_TUNE_BIN = bench_tune
 
 # Shared library for FFI bindings (Python ctypes, etc.)
 ARBOR_SRCS = ../arbor/src/ar_alns.c ../arbor/src/ar_operators.c ../arbor/src/arbor.c
-# sh_workqueue, sh_worker_pool and sh_completion all call the platform layer
-# -- sh_mutex_lock, sh_cond_timedwait, sh_monotonic_ms, sh_wall_ns -- and the
-# PAL was missing from this list. Every other consumer links the whole
-# libshared.a and so never noticed; the two targets below compile this subset
-# directly and failed at link with a page of undefined references. Both PAL
-# files are listed the way shared/Makefile lists them: each is a no-op on the
-# platform it is not for.
+# This has to be the transitive closure of what surge and arbor call in
+# shared/, because the two targets that use it compile these sources directly
+# rather than linking libshared.a. It was not: sh_workqueue, sh_worker_pool and
+# sh_completion call the platform layer (sh_mutex_lock, sh_cond_timedwait,
+# sh_monotonic_ms, sh_wall_ns) and sg_solution/sg_repair call sh_heap_*, and
+# neither the PAL nor sh_heap was listed. Every other consumer links the whole
+# archive and so never noticed.
+#
+# Both PAL files are listed the way shared/Makefile lists them: each compiles
+# to nothing on the platform it is not for.
+#
+# If you add a shared/ call to surge or arbor, this list is what needs it. A
+# link against libshared.a would not need maintaining, and is the better shape
+# if these targets are ever reworked.
 SHARED_BINDING_SRCS = ../shared/src/sh_json.c ../shared/src/sh_arena.c \
                       ../shared/src/sh_hashmap.c ../shared/src/sh_dist.c \
                       ../shared/src/sh_stepfunc.c ../shared/src/sh_piecewise.c \
                       ../shared/src/sh_completion.c ../shared/src/sh_worker_pool.c \
                       ../shared/src/sh_workqueue.c \
+                      ../shared/src/sh_heap.c \
                       ../shared/src/sh_pal_posix.c ../shared/src/sh_pal_windows.c
 
 ifeq ($(UNAME_S),Darwin)
