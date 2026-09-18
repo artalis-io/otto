@@ -6368,10 +6368,20 @@ static void test_setup_classes_alloc_overflow(void) {
     assert(sg_set_num_setup_classes(ctx, 2147483647u) == SG_STATUS_INVALID_ARG);
     assert(sg_set_num_setup_classes(ctx, 2000000000u) == SG_STATUS_INVALID_ARG);
 
-    /* Just under the threshold -- count*count*8 still fits -- so the bounds
-     * check passes it and the allocator is the one that says no. Asserted so
-     * the cap cannot quietly widen to reject legitimate sizes. */
-    assert(sg_set_num_setup_classes(ctx, 1073741824u) == SG_STATUS_OUT_OF_MEMORY);
+    /*
+     * Overflow was only half of it. 444 million classes does not overflow --
+     * count*count*8 is 1.58e18, well inside size_t -- it just asks calloc()
+     * for 1.58 exabytes, which a release build survives and a sanitizer build
+     * aborts on. The cap is what refuses these, so the boundary is asserted
+     * from both sides.
+     */
+    assert(sg_set_num_setup_classes(ctx, 444000000u) == SG_STATUS_INVALID_ARG);
+    assert(sg_set_num_setup_classes(ctx, 1073741824u) == SG_STATUS_INVALID_ARG);
+    assert(sg_set_num_setup_classes(ctx, SG_MAX_SETUP_CLASSES + 1) == SG_STATUS_INVALID_ARG);
+
+    /* At the cap it still works, so the bound has not quietly narrowed. */
+    assert(sg_set_num_setup_classes(ctx, SG_MAX_SETUP_CLASSES) == SG_STATUS_OK);
+    assert(sg_set_setup_time(ctx, 1, SG_MAX_SETUP_CLASSES, 5.0) == SG_STATUS_OK);
 
     /* And count*count itself overflowing is still caught. */
     assert(sg_set_num_setup_classes(ctx, 4294967295u) == SG_STATUS_INVALID_ARG);

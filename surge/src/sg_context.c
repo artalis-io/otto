@@ -2187,6 +2187,10 @@ SGStatus sg_set_num_setup_classes(SGContext *ctx, uint32_t count) {
         return SG_STATUS_OK;
     }
 
+    if (count > SG_MAX_SETUP_CLASSES) {
+        return SG_STATUS_INVALID_ARG;
+    }
+
     total = (size_t)count * (size_t)count;
     if (total / count != count) {
         return SG_STATUS_INVALID_ARG;

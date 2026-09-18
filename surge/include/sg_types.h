@@ -28,6 +28,26 @@
  */
 #define SG_MAX_EXCLUSION_GROUPS 4096
 
+/*
+ * Most setup classes a model may declare.
+ *
+ * sg_set_num_setup_classes() allocates count * count doubles, and
+ * build_setup_times() calls it before it has looked at the matrix -- so
+ * nothing bounded the allocation by what the request could actually
+ * describe. num_classes of 444 million asked calloc() for 1.58 exabytes.
+ *
+ * A release build survives that: calloc() refuses and the caller reports
+ * OUT_OF_MEMORY. A sanitizer build aborts on it, and "the allocator will
+ * say no" is a poor place to bound attacker-controlled input -- the sizes
+ * just below the refusal threshold are the damaging ones.
+ *
+ * 4096 is the largest square matrix a request could populate anyway: the
+ * body limit is 32MB, a JSON number costs about two bytes, so 16.7M
+ * elements is the ceiling and its square root is 4096. Bounding it here
+ * rejects nothing that could have been sent.
+ */
+#define SG_MAX_SETUP_CLASSES 4096
+
 #ifdef __cplusplus
 extern "C" {
 #endif
