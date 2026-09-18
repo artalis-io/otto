@@ -181,8 +181,8 @@ Phase 1→2 transition fragility for problems with many stuck artificials (see P
 
 `make_dual_feasible()` (dual_simplex.c:721-766):
 - Iterates all non-basic variables
-- At LB with rc < -OPT_TOL: flip to UB (if finite)
-- At UB with rc > OPT_TOL: flip to LB (if finite)
+- At LB with rc < -RALPH_OPT_TOL: flip to UB (if finite)
+- At UB with rc > RALPH_OPT_TOL: flip to LB (if finite)
 - Free variables with rc ≠ 0: cannot fix by flipping, deferred to `dual_phase1`
 - Returns count of changes made
 

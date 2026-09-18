@@ -264,8 +264,8 @@ Measured against GLPK 5.0 with `bench_mip`, every objective matching:
   checked against the previous writer, where it fails.
 
 ### Return Value Confusion
-- `ralph_optimize()` returns 0 for success, -1 for error (not the solve status)
-- Use `ralph_get_status()` to get the actual solve status
+- `ralph_core_optimize()` returns 0 for success, -1 for error (not the solve status)
+- Use `ralph_core_get_status()` to get the actual solve status
 - This was a source of bugs in benchmark code (fixed in commit `eb50d7e`)
 
 ## Missing Features
@@ -438,7 +438,7 @@ File issues at: https://github.com/ottofleet/otto/issues
 Include:
 - Problem description (ideally MPS or C code to reproduce)
 - Expected vs actual behavior
-- Ralph version (`ralph_version()`)
+- Ralph version (`ralph_core_version()`)
 - Platform and compiler
 
 ## Compiler-Dependent Behaviour

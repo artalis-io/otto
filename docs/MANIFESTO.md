@@ -233,7 +233,7 @@ ClayShards is **not**:
 Every OTTO API endpoint is fundamentally:
 
 ```c
-int carta_render_tile(int z, int x, int y, uint8_t **out, size_t *out_len);
+uint8_t *ct_api_generate_png(CTAPIContext *ctx, int z, int x, int y, size_t *out_len);
 int vl_route(VLGraph *g, int from, int to, VLRoute *route);
 int lc_search(LCIndex *idx, const char *query, LCResult *results);
 int fw_optimize(FWProblem *p, FWSolution *s);
@@ -246,27 +246,36 @@ No HTTP. No request objects. No response writers. Just input → output.
 Keel HTTP is one transport:
 
 ```c
-static void handle_tile(struct mg_connection *c, struct mg_http_message *hm) {
-    int z = parse_int(hm, "z");
-    int x = parse_int(hm, "x");
-    int y = parse_int(hm, "y");
+static int handle_tile(CTAPIContext *ctx, const ShApiRequest *req,
+                       ShApiResponse *resp) {
+    int z, x, y;
+    char ext[8];
+    if (parse_tile_path(req->path, &z, &x, &y, ext) != 0) {
+        return sh_api_response_error(resp, 400, "Invalid tile path format");
+    }
 
-    uint8_t *png; size_t len;
-    int status = carta_render_tile(z, x, y, &png, &len);
-
-    mg_http_reply(c, status == 0 ? 200 : 500,
-                  "Content-Type: image/png\r\n", "%.*s", len, png);
+    resp->body = ct_api_generate_png(ctx, z, x, y, &resp->body_len);
+    if (!resp->body) {
+        return sh_api_response_error(resp, 500, "Tile generation failed");
+    }
+    resp->status_code = 200;
+    resp->content_type = "image/png";
+    return 0;
 }
 ```
 
 WASM is another transport:
 
 ```c
+static CTAPIContext *g_ctx;   /* built once when the module loads */
+
 EMSCRIPTEN_KEEPALIVE
 int carta_api_handle(const char *path, uint8_t **out, size_t *out_len) {
     int z, x, y;
-    parse_tile_path(path, &z, &x, &y);
-    return carta_render_tile(z, x, y, out, out_len);
+    char ext[8];
+    parse_tile_path(path, &z, &x, &y, ext);
+    *out = ct_api_generate_png(g_ctx, z, x, y, out_len);
+    return *out ? 0 : -1;
 }
 ```
 
@@ -303,7 +312,7 @@ They open it, click "Try it", and the real API runs locally.
 │  Keel HTTP │ WASM+JS │ Unix socket │ Direct C call              │
 ├─────────────────────────────────────────────────────────────────┤
 │                    Core API (pure C)                             │
-│  carta_render_tile() │ vl_route() │ lc_search() │ fw_optimize() │
+│  ct_api_generate_png() │ vl_route() │ lc_search() │ fw_optimize() │
 └─────────────────────────────────────────────────────────────────┘
 ```
 
@@ -379,10 +388,11 @@ if (!r.ok) {
 ### Arena Allocation (Preferred)
 
 ```c
-Arena arena = arena_create(buffer, size);
-Node *nodes = arena_alloc(&arena, n * sizeof(Node));
+SHArena *arena = sh_arena_create(capacity);
+Node *nodes = sh_arena_alloc(arena, n * sizeof(Node));
 /* ... use nodes ... */
-arena_reset(&arena);  /* Free everything at once */
+sh_arena_reset(arena);   /* Reuse the block; keeps the allocation */
+sh_arena_free(arena);    /* Give it back */
 ```
 
 **Benefits:** No double-free, no dangling pointers, no fragmentation.
