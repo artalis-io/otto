@@ -168,9 +168,14 @@ test-reconcile: $(NX_PIPELINE_BIN)
 # Travel-matrix builder self-test: proves the geocoded-orders -> Surge matrix
 # step keeps a strict 1:1 order<->index bijection (unique keys, split orders
 # distinct, zero diagonal) on canned route data -- no graph needed (graphs are
-# not committed). Needs python3.
+# not committed). Where python3 is not on PATH (e.g. the Windows CI runners),
+# skip rather than fail, matching the reconcile self-test.
 test-matrix:
-	python3 scripts/matrix_selftest.py
+	@if command -v python3 >/dev/null 2>&1; then \
+		python3 scripts/matrix_selftest.py; \
+	else \
+		echo "skipping matrix self-test: python3 not found" >&2; \
+	fi
 
 debug: CFLAGS = $(DEBUG_CFLAGS)
 debug: LDFLAGS = -lm $(DEBUG_LDFLAGS)
