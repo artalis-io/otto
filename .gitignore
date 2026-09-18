@@ -212,3 +212,22 @@ surge/build/
 # libFuzzer scratch corpora for the *_api_handle() harnesses
 ralph/build/
 fuelwise/build/
+velo/build/
+locus/build/
+
+# The *_api_handle() fuzzer binaries. They are linked into the module root
+# rather than build/, the way nexus's are above, so they need naming too --
+# both spellings, since MinGW appends .exe and a clang targeting MSVC does
+# not.
+surge/fuzz_surge_api
+ralph/fuzz_ralph_api
+fuelwise/fuzz_fuelwise_api
+velo/fuzz_velo_api
+locus/fuzz_locus_api
+carta/fuzz_carta_api
+surge/fuzz_surge_api.exe
+ralph/fuzz_ralph_api.exe
+fuelwise/fuzz_fuelwise_api.exe
+velo/fuzz_velo_api.exe
+locus/fuzz_locus_api.exe
+carta/fuzz_carta_api.exe

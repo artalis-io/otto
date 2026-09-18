@@ -1173,8 +1173,10 @@ jobs:
       fail-fast: false
       matrix:
         # ralph and fuelwise joined when their *_api_handle() harnesses were
-        # added; they had no fuzz target before that.
-        module: [carta, nexus, surge, ralph, fuelwise]
+        # added; they had no fuzz target before that. velo and locus joined
+        # the same way, and carta gained a second harness alongside its PBF
+        # one -- its fuzz-smoke now runs both.
+        module: [carta, nexus, surge, ralph, fuelwise, velo, locus]
 
     env:
       UBSAN_OPTIONS: print_stacktrace=1:halt_on_error=1

@@ -146,6 +146,40 @@ size_t lc_grid_query_point(const LCSpatialGrid *grid, SHCoord coord,
     return count;
 }
 
+/*
+ * Smallest cosine of latitude the longitude span is computed with. At the
+ * poles the true value is zero and the span is unbounded; 1e-4 corresponds
+ * to about 0.006 degrees of latitude away from the pole, which is closer
+ * than any grid cell, so it changes nothing for coordinates that are not
+ * essentially polar.
+ */
+#define LC_MIN_COS_LAT 1e-4
+
+/*
+ * Narrow a span of fractional cell positions to the cells that exist.
+ *
+ * Returns 0 and leaves *lo and *hi untouched when the span misses the grid
+ * entirely; otherwise clips it to [0, limit) and returns 1.
+ *
+ * The clipping is done in double and only then converted, because the
+ * positions can legitimately be far outside int -- a query at a pole, or one
+ * well outside the indexed area -- and converting an out-of-range double to
+ * int is undefined rather than merely inaccurate. NaN fails every comparison
+ * here and so reports no intersection, which is both a defined answer and the
+ * right one.
+ */
+static int lc_clip_cell_span(double lo_pos, double hi_pos, int limit,
+                             int *lo, int *hi)
+{
+    if (limit <= 0) return 0;
+    if (!(lo_pos <= hi_pos)) return 0;                  /* empty, or NaN */
+    if (!(hi_pos >= 0.0) || !(lo_pos < (double)limit)) return 0;
+
+    *lo = (lo_pos > 0.0) ? (int)lo_pos : 0;
+    *hi = (hi_pos < (double)(limit - 1)) ? (int)hi_pos : limit - 1;
+    return 1;
+}
+
 size_t lc_grid_query_radius(const LCSpatialGrid *grid, SHCoord coord,
                             double radius_m, size_t max_results, uint32_t *results)
 {
@@ -153,19 +187,48 @@ size_t lc_grid_query_radius(const LCSpatialGrid *grid, SHCoord coord,
 
     /* Convert radius to degrees (rough approximation) */
     double radius_lat = radius_m / 111000.0;  /* ~111km per degree latitude */
-    double radius_lon = radius_m / (111000.0 * cos(coord.lat * M_PI / 180.0));
 
-    /* Determine cells to search */
-    int min_row = (int)((coord.lat - radius_lat - grid->bounds.min_lat) / grid->cell_size_lat);
-    int max_row = (int)((coord.lat + radius_lat - grid->bounds.min_lat) / grid->cell_size_lat);
-    int min_col = (int)((coord.lon - radius_lon - grid->bounds.min_lon) / grid->cell_size_lon);
-    int max_col = (int)((coord.lon + radius_lon - grid->bounds.min_lon) / grid->cell_size_lon);
+    /*
+     * cos() reaches zero at the poles, so a degree of longitude shrinks to
+     * nothing and radius_lon explodes: at lat = -90 it came out as 1.5e14
+     * degrees for a 100m radius, and the cell quotients below then fell
+     * outside int, which is undefined. -90 is a latitude the API accepts, so
+     * an ordinary /api/v1/reverse?lat=-90&lon=180 reached it.
+     *
+     * Clamping the cosine bounds the span. At the poles every longitude is
+     * effectively the same place, so widening to the whole row is also the
+     * honest answer rather than a fudge.
+     */
+    double cos_lat = cos(coord.lat * M_PI / 180.0);
+    if (cos_lat < LC_MIN_COS_LAT) cos_lat = LC_MIN_COS_LAT;
+    double radius_lon = radius_m / (111000.0 * cos_lat);
 
-    /* Clamp to grid bounds */
-    if (min_row < 0) min_row = 0;
-    if (max_row >= grid->grid_height) max_row = grid->grid_height - 1;
-    if (min_col < 0) min_col = 0;
-    if (max_col >= grid->grid_width) max_col = grid->grid_width - 1;
+    /*
+     * Clipped as doubles and then converted, not converted and then clipped.
+     * The old order cast first, so the value had already left the range of
+     * int before anything looked at it.
+     *
+     * A span that misses the grid returns nothing, which is what the old
+     * clamping arrived at too -- there, by the accident of min_* only being
+     * clamped upwards and max_* only downwards, so the two crossed and the
+     * loop below ran zero times. Saying it directly keeps that outcome
+     * without depending on the accident.
+     */
+    int min_row, max_row, min_col, max_col;
+
+    if (!lc_clip_cell_span((coord.lat - radius_lat - grid->bounds.min_lat)
+                               / grid->cell_size_lat,
+                           (coord.lat + radius_lat - grid->bounds.min_lat)
+                               / grid->cell_size_lat,
+                           grid->grid_height, &min_row, &max_row))
+        return 0;
+
+    if (!lc_clip_cell_span((coord.lon - radius_lon - grid->bounds.min_lon)
+                               / grid->cell_size_lon,
+                           (coord.lon + radius_lon - grid->bounds.min_lon)
+                               / grid->cell_size_lon,
+                           grid->grid_width, &min_col, &max_col))
+        return 0;
 
     size_t count = 0;
     for (int row = min_row; row <= max_row && count < max_results; row++) {
