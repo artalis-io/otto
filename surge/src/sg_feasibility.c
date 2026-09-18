@@ -1702,7 +1702,7 @@ int sg_route_eval_insertion_cached(const SGContext *ctx, const SGRouteSolution *
                         dd = (double)sd->tw_early;
                     }
                     if ((cursor - dd) > (double)vehicle->max_duration_seconds + 1e-9) {
-                        if (!pen_enabled) return 0;
+                        if (!pen_enabled || ctx->config.hard_max_duration) return 0;
                         ins_violations[SG_PENALTY_DURATION] += (cursor - dd) - (double)vehicle->max_duration_seconds;
                     }
                 }
@@ -1736,7 +1736,7 @@ int sg_route_eval_insertion_cached(const SGContext *ctx, const SGRouteSolution *
                         dd = (double)sd->tw_early;
                     }
                     if ((arrival_at_end - dd) > (double)vehicle->max_duration_seconds + 1e-9) {
-                        if (!pen_enabled) return 0;
+                        if (!pen_enabled || ctx->config.hard_max_duration) return 0;
                         ins_violations[SG_PENALTY_DURATION] += (arrival_at_end - dd) - (double)vehicle->max_duration_seconds;
                     }
                 }
@@ -2587,7 +2587,7 @@ int sg_route_eval_pd_best_insertion_cached(
                         }
                         if (vehicle->max_duration_seconds > 0 &&
                             (d_depart - depot_depart) > (double)vehicle->max_duration_seconds + 1e-9) {
-                            if (!pen_enabled) goto next_j;
+                            if (!pen_enabled || ctx->config.hard_max_duration) goto next_j;
                             pd_viol[SG_PENALTY_DURATION] += (d_depart - depot_depart) - (double)vehicle->max_duration_seconds;
                         }
                     } else {
@@ -2617,7 +2617,7 @@ int sg_route_eval_pd_best_insertion_cached(
                         }
                         if (vehicle->max_duration_seconds > 0 &&
                             (arrival_at_end - depot_depart) > (double)vehicle->max_duration_seconds + 1e-9) {
-                            if (!pen_enabled) goto next_j;
+                            if (!pen_enabled || ctx->config.hard_max_duration) goto next_j;
                             pd_viol[SG_PENALTY_DURATION] += (arrival_at_end - depot_depart) - (double)vehicle->max_duration_seconds;
                         }
                     }

@@ -903,6 +903,9 @@ static SGStatus sg_solve_route_model(SGContext *ctx) {
     } else {
         init_status = sg_route_construct_initial_solution(ctx, &initial);
     }
+    /* Greedy construction uses an approximate time budget; if a hard on-duty
+     * cap was requested, repair any over-max_duration routes before search. */
+    (void)sg_route_postprocess_eject_over_duration(ctx, &initial);
     sg_phase_end(ctx, 0, sg_route_solution_cost(&initial, ctx),
                  initial.vehicles_used, initial.base.num_unassigned);
     /* Record construction result as first convergence entry */
@@ -1199,7 +1202,6 @@ skip_phase1:
         ctx->penalty.enabled = 0;
     }
 skip_phase15:
-
     /* ---- Phase 2: Distance polishing ---- */
     if (sg_time_budget_expired(&ctx->time_budget, sg_monotonic_seconds())) goto skip_phase2;
     if (phase2_iters > 0) {
@@ -1352,6 +1354,7 @@ skip_phase2:
                 (void)sg_route_postprocess_intensify(ctx, best);
             if (!sg_time_budget_expired(&ctx->time_budget, sg_monotonic_seconds()))
                 (void)sg_route_postprocess_polish_distance(ctx, best);
+            (void)sg_route_postprocess_eject_over_duration(ctx, best);
         } else {
             if (!sg_time_budget_expired(&ctx->time_budget, sg_monotonic_seconds()))
                 (void)sg_route_postprocess_reduce_vehicles(ctx, &initial);

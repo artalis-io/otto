@@ -247,6 +247,7 @@ void sg_config_default(SGConfig *config) {
     config->seed = 0xDEADBEEF;
     config->deterministic = true;
     config->require_bound_requests_at_solve = true;
+    config->hard_max_duration = false;  /* default: soft (penalized) as before */
     config->priority_removal_policy = SG_PRIORITY_REMOVE_LOWER_FIRST;
     config->lexicographic_objective = false;
     config->accept_type = SG_ACCEPT_SA;
@@ -513,6 +514,21 @@ bool sg_get_require_bound_requests_at_solve(const SGContext *ctx) {
         return true;
     }
     return ctx->config.require_bound_requests_at_solve;
+}
+
+SGStatus sg_set_hard_max_duration(SGContext *ctx, bool hard) {
+    if (!ctx) {
+        return SG_STATUS_INVALID_ARG;
+    }
+    ctx->config.hard_max_duration = hard;
+    return SG_STATUS_OK;
+}
+
+bool sg_get_hard_max_duration(const SGContext *ctx) {
+    if (!ctx) {
+        return false;
+    }
+    return ctx->config.hard_max_duration;
 }
 
 SGStatus sg_set_demand_sign_convention(SGContext *ctx, SGDemandSignConvention convention) {

@@ -1996,6 +1996,53 @@ int sg_try_place_with_ejection(const SGContext *ctx, SGRouteSolution *sol,
     return 0;
 }
 
+ARStatus sg_route_postprocess_eject_over_duration(const SGContext *ctx, SGRouteSolution *sol) {
+    uint32_t v;
+
+    if (!ctx || !sol) {
+        return AR_STATUS_INVALID_ARG;
+    }
+    /* Only enforce when the caller asked for hard max_duration. The greedy
+     * construction uses an approximate per-request time budget, so it can admit
+     * routes whose exact duration exceeds max_duration; eject stops until each
+     * offending route is within its cap. Ejected requests land in the unassigned
+     * pool and are re-placed by the (hard) repair operators, or left dropped. */
+    if (!ctx->config.hard_max_duration) {
+        return AR_STATUS_OK;
+    }
+
+    for (v = 0; v < ctx->num_vehicles; v++) {
+        double md = (double)ctx->vehicles[v].max_duration_seconds;
+        if (md <= 0.0) {
+            continue;
+        }
+        sg_route_update_timing((SGContext *)ctx, sol, v);
+        while (sol->route_duration && sol->route_duration[v] > md + 1e-6 &&
+               sol->route_lengths[v] > 0) {
+            const uint32_t *reqs = sg_route_vehicle_ptr_const(sol, v);
+            uint32_t n = sol->route_lengths[v];
+            uint32_t k, worst = reqs[n - 1];
+            double worst_tu = -1.0;
+            /* Eject the request with the largest isolated time_use (the farthest
+             * / heaviest stop) -- the biggest single duration contributor.
+             * Placement of the ejected requests is re-optimized downstream. */
+            for (k = 0; k < n; k++) {
+                double tu = 0.0;
+                if (sg_request_time_use_for_vehicle(ctx, v, reqs[k], &tu) && tu > worst_tu) {
+                    worst_tu = tu;
+                    worst = reqs[k];
+                }
+            }
+            if (sg_route_unassign_request(ctx, sol, worst, NULL) != AR_STATUS_OK) {
+                break;
+            }
+            sg_route_update_timing((SGContext *)ctx, sol, v);
+            sg_route_update_load((SGContext *)ctx, sol, v);
+        }
+    }
+    return AR_STATUS_OK;
+}
+
 ARStatus sg_route_postprocess_ejection_reduce(const SGContext *ctx, SGRouteSolution *sol) {
     int restarted;
     uint8_t *chain_visited = NULL;

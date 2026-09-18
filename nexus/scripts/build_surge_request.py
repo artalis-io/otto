@@ -92,6 +92,8 @@ def main():
     ap.add_argument("--sub-fixed-cost", type=float, default=100000.0)
     ap.add_argument("--objective", default="vehicles-then-distance",
                     choices=["vehicles-then-distance", "distance", "duration"])
+    ap.add_argument("--hard-max-duration", action=argparse.BooleanOptionalAction, default=True,
+                    help="treat vehicle max_duration as a hard (legal HoS) limit, not a penalty")
     ap.add_argument("--max-iterations", type=int, default=20000)
     ap.add_argument("--demand-sign", type=int, default=1,
                     help="0=pickup+/delivery- (Surge default), 1=pickup-/delivery+ (matches positive delivery demand)")
@@ -184,7 +186,8 @@ def assemble_request(orows, oidx, dflat, uflat, N, vrows, a):
 
     req = {
         "config": {"max_iterations": a.max_iterations, "max_time_seconds": a.max_time_seconds,
-                   "seed": a.seed, "lexicographic_objective": a.objective == "vehicles-then-distance"},
+                   "seed": a.seed, "lexicographic_objective": a.objective == "vehicles-then-distance",
+                   "hard_max_duration": a.hard_max_duration},
         "dimension_count": dim,
         "demand_sign_convention": a.demand_sign,   # 1 = delivery demand positive
         "locations": locations,
