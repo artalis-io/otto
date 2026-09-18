@@ -213,43 +213,43 @@ Status codes:
 
 ### Adding a new endpoint
 
-1. Create processing function:
+Endpoints are added in `fuelwise/src/fw_api.c`, not in the server. The server
+is transport only: it hands `fw_api_handle()` a whole `ShApiRequest` and writes
+back whatever `ShApiResponse` it gets. Nothing about a route reaches
+`api/src/main.c`, which is why the same endpoint works from WASM and from an
+embedded caller without being written twice.
+
+1. Write the handler beside the others in `fw_api.c`. It takes the parsed
+   request and fills the response; it does not know what a socket is:
+
 ```c
-static char *process_new_endpoint(const char *body, int *status_code) {
-    *status_code = 200;
-    // Parse JSON body
-    // Call FuelWise functions
-    // Return malloc'd JSON response string
+static int handle_new_endpoint(FWAPIContext *ctx,
+                               const ShApiRequest *req,
+                               ShApiResponse *resp)
+{
+    /* Parse req->body / req->body_len, call the FuelWise core, then either
+     * sh_api_response_error(resp, 400, "...") or fill resp->body,
+     * resp->body_len, resp->status_code and resp->content_type. */
 }
 ```
 
-2. Add work type enum if using queue:
-```c
-typedef enum {
-    WORK_TYPE_SOLVE,
-    WORK_TYPE_FILTER,
-    WORK_TYPE_OPTIMIZE,
-    WORK_TYPE_NEW_ENDPOINT  // Add here
-} WorkType;
-```
+2. Route to it in `fw_api_handle()`, in the same chain as the existing paths:
 
-3. Add handler in `ev_handler()`:
 ```c
-} else if (mg_match(hm->uri, mg_str("/api/v1/new_endpoint"), NULL)) {
-    if (mg_match(hm->method, mg_str("POST"), NULL)) {
-        handle_queued_request(c, hm, WORK_TYPE_NEW_ENDPOINT);
-    } else {
-        send_error(c, 405, "Method not allowed");
-    }
+else if (strcmp(req->path, "/api/v1/new_endpoint") == 0) {
+    return handle_new_endpoint(ctx, req, resp);
 }
 ```
 
-4. Add case in `process_work_item()`:
-```c
-case WORK_TYPE_NEW_ENDPOINT:
-    item->response_data = process_new_endpoint(item->request_body, &item->status_code);
-    break;
-```
+3. Add a case to `fuelwise/api/test_api.sh` and, if the endpoint parses
+   untrusted input, a seed to `fuelwise/tests/fuzz/corpus_api/`. The fuzzer
+   drives `fw_api_handle()` directly, so a new route is covered as soon as it
+   is routed -- two control bytes at the front of a seed pick the path and the
+   method.
+
+The queue and the rate limiter sit in front of all of this in
+`sh_http_async_dispatch()` and need no per-endpoint change: a new route is
+queued, rate-limited and deadlined exactly like the existing ones.
 
 ### Modifying rate limits
 

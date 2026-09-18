@@ -233,8 +233,8 @@ clayshards/clay-shards-tui-webgl/crt-effects.js      # CRT post-processing
 
 | Scope | Pattern | Example |
 |-------|---------|---------|
-| Ralph functions | `ralph_*` | `ralph_optimize()` |
-| Velo functions | `vl_*` | `vl_route_astar()` |
+| Ralph functions | `ralph_*` | `ralph_core_optimize()` |
+| Velo functions | `vl_*` | `vl_route_astar_landmarks()` |
 | Carta functions | `ct_*` | `ct_generate_png()` |
 | Locus functions | `lc_*` | `lc_search()` |
 | FuelWise functions | `fw_*` | `fw_solve_refuel_lp()` |
@@ -247,15 +247,16 @@ clayshards/clay-shards-tui-webgl/crt-effects.js      # CRT post-processing
 
 ### Arena Allocation (Preferred)
 ```c
-Arena arena = arena_create(buffer, size);
-Node *nodes = arena_alloc(&arena, n * sizeof(Node));
+SHArena *arena = sh_arena_create(capacity);
+Node *nodes = sh_arena_alloc(arena, n * sizeof(Node));
 /* ... use nodes ... */
-arena_reset(&arena);  /* Free everything at once */
+sh_arena_reset(arena);   /* Reuse the block; keeps the allocation */
+sh_arena_free(arena);    /* Give it back */
 ```
 
 ### Ownership Rules
 ```c
-/* _create() implies _destroy() */
+/* _create() implies a matching free; the names below are illustrative */
 Graph *g = graph_create();
 graph_destroy(g);
 g = NULL;  /* Prevent use-after-free */
@@ -405,14 +406,14 @@ OTTO APIs follow a transport-agnostic pattern. Core logic is pure C functions; H
 │  Keel HTTP     │ WASM+JS │ Unix socket │ Embedded   │
 ├─────────────────────────────────────────────────────┤
 │  Core API (pure C functions)                        │
-│  carta_render_tile() │ vl_route() │ lc_search()     │
+│  ct_api_generate_png() │ vl_route() │ lc_search()   │
 └─────────────────────────────────────────────────────┘
 ```
 
 **Pattern:**
 ```c
 // Core: transport-agnostic, runs anywhere
-int carta_render_tile(int z, int x, int y, uint8_t **out, size_t *len);
+uint8_t *ct_api_generate_png(CTAPIContext *ctx, int z, int x, int y, size_t *len);
 
 // HTTP wrapper: parse request → call core → format response
 // WASM wrapper: parse JSON → call core → return JSON

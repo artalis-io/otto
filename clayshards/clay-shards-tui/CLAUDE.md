@@ -20,9 +20,9 @@ Renders Clay's render commands to ANSI escape sequences for modern terminal emul
 │   renderer.render_commands()        │
 ├─────────────────────────────────────┤
 │        CsTuiRenderer                │
-│  • cs_tui_render_rect()             │
-│  • cs_tui_render_text()             │
-│  • cs_tui_render_border()           │
+│  • cs_tui_rect()             │
+│  • cs_tui_text()             │
+│  • cs_tui_border()           │
 ├─────────────────────────────────────┤
 │          Terminal                   │
 │  • ANSI escape sequences            │
@@ -82,9 +82,8 @@ int main(void) {
 
         /* Render to terminal */
         cs_tui_begin(r);
-        cs_tui_render_commands(r, commands);
+        cs_tui_render_clay_commands(r, commands);
         cs_tui_end(r);
-        cs_tui_flush(r);
     }
 
     cs_tui_free(r);
@@ -108,9 +107,8 @@ cs_tui_get_size(r, &width, &height);
 
 cs_tui_begin(r);
 cs_tui_clear(r, (Clay_Color){30, 30, 30, 255});
-cs_tui_render_commands(r, commands);
+cs_tui_render_clay_commands(r, commands);
 cs_tui_end(r);
-cs_tui_flush(r);
 
 cs_tui_free(r);
 ```
@@ -121,7 +119,7 @@ cs_tui_free(r);
 typedef struct {
     int width;                 /* Terminal width (0 = auto) */
     int height;                /* Terminal height (0 = auto) */
-    CsTuiColorMode color_mode; /* AUTO, COLOR_16, COLOR_256, COLOR_TRUE */
+    CsTuiColorMode color_mode; /* CS_TUI_COLOR_AUTO, _16, _256, _TRUE */
     CsTuiBoxStyle box_style;   /* ASCII, LIGHT, HEAVY, DOUBLE, ROUNDED */
     bool alternate_screen;     /* Use alternate screen buffer */
     bool hide_cursor;          /* Hide cursor during rendering */
@@ -146,8 +144,8 @@ Detection checks:
 | `TEXT` | Write characters with fg color |
 | `BORDER` | Box-drawing characters |
 | `IMAGE` | Placeholder "[IMAGE]" or ASCII art |
-| `SCISSOR_START` | Push clip region |
-| `SCISSOR_END` | Pop clip region |
+| `CLAY_RENDER_COMMAND_TYPE_SCISSOR_START` | Push clip region |
+| `CLAY_RENDER_COMMAND_TYPE_SCISSOR_END` | Pop clip region |
 | `CUSTOM` | Dispatch to custom handler |
 
 ## Box-Drawing Styles
