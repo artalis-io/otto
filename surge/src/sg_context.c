@@ -2137,6 +2137,9 @@ SGStatus sg_add_exclusion_group(SGContext *ctx, uint32_t *group_id_out) {
     if (!ctx || !group_id_out) {
         return SG_STATUS_INVALID_ARG;
     }
+    if (ctx->num_exclusion_groups >= SG_MAX_EXCLUSION_GROUPS) {
+        return SG_STATUS_INVALID_ARG;
+    }
     *group_id_out = ctx->num_exclusion_groups;
     ctx->num_exclusion_groups++;
     return SG_STATUS_OK;

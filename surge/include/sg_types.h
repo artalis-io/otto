@@ -6,6 +6,28 @@
 
 #define SG_MAX_COMPARTMENTS_PER_VEHICLE 8
 
+/*
+ * Most exclusion groups a model may declare.
+ *
+ * sg_add_exclusion_group() had no limit: it incremented a counter and
+ * returned OK, so the loop in build_exclusion_groups() ran however many
+ * times the request asked for, with nothing able to stop it early.
+ * {"exclusion_groups":{"count":2147483647}} -- a 66 byte body -- spun for
+ * 2.8 seconds on a solve-pool worker and answered 200 OK. Cost is linear in
+ * the count, so the amplification is whatever the caller types.
+ *
+ * The number also multiplies with the vehicle count for the
+ * construct_exclusion_counts and route_exclusion_counts allocations, so an
+ * inflated one reaches a calloc as well as a loop.
+ *
+ * 4096 is far past what a fleet needs -- exclusion groups are categories
+ * that cannot share a vehicle, and real models have a handful -- and far
+ * below anything that costs noticeable time. sg_add_commodity() bounds
+ * itself the same way at 64, which is where this should have been modelled
+ * from.
+ */
+#define SG_MAX_EXCLUSION_GROUPS 4096
+
 #ifdef __cplusplus
 extern "C" {
 #endif

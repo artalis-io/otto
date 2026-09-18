@@ -6326,6 +6326,44 @@ static void test_commodity_pd_request(void) {
     sg_free(ctx);
 }
 
+/*
+ * The count in {"exclusion_groups":{"count":N}} went straight into a loop
+ * that nothing could stop: sg_add_exclusion_group() incremented a counter and
+ * always returned OK. At N = INT_MAX a 66 byte request body spun a solve-pool
+ * worker for 2.8 seconds and then answered 200, against 57ms for the same
+ * body with N = 1. Linear in N, so the amplification was whatever the caller
+ * typed.
+ *
+ * Two things are asserted, because fixing only the first would leave a cap
+ * that silently truncates a model instead of rejecting it:
+ *   - the call fails once the cap is reached, so the loop terminates
+ *   - the count stops at the cap rather than continuing to climb
+ */
+static void test_exclusion_group_limit(void) {
+    SGContext *ctx = sg_create();
+    uint32_t gid;
+    int i;
+
+    assert(ctx != NULL);
+
+    /* Everything up to the cap is accepted, and ids stay dense. */
+    for (i = 0; i < SG_MAX_EXCLUSION_GROUPS; i++) {
+        assert(sg_add_exclusion_group(ctx, &gid) == SG_STATUS_OK);
+        assert(gid == (uint32_t)i);
+    }
+
+    /* The next one is refused rather than accepted-and-ignored. */
+    assert(sg_add_exclusion_group(ctx, &gid) == SG_STATUS_INVALID_ARG);
+
+    /* And refusal is stable: a caller that keeps asking keeps being told no,
+     * which is what makes the loop in build_exclusion_groups() terminate. */
+    for (i = 0; i < 1000; i++) {
+        assert(sg_add_exclusion_group(ctx, &gid) == SG_STATUS_INVALID_ARG);
+    }
+
+    sg_free(ctx);
+}
+
 static void test_exclusion_group_api(void) {
     SGContext *ctx = sg_create();
     uint32_t g0, g1;
@@ -17832,6 +17870,7 @@ int main(void) {
     RUN_TEST(test_commodity_no_conflict);
     RUN_TEST(test_commodity_pd_request);
     RUN_TEST(test_exclusion_group_api);
+    RUN_TEST(test_exclusion_group_limit);
     RUN_TEST(test_exclusion_group_filters);
     RUN_TEST(test_exclusion_group_multi);
     RUN_TEST(test_commodity_exclusion_combined);
@@ -18253,9 +18292,9 @@ int main(void) {
     printf("================\n");
     printf("%d/%d tests passed\n", tests_passed, tests_run);
 #ifdef SG_HAS_THREADS
-    assert(tests_run == 468);
+    assert(tests_run == 469);
 #else
-    assert(tests_run == 444);
+    assert(tests_run == 445);
 #endif
     return tests_passed == tests_run ? 0 : 1;
 }
