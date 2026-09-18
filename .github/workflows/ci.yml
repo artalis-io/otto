@@ -1172,7 +1172,9 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        module: [carta, nexus, surge]
+        # ralph and fuelwise joined when their *_api_handle() harnesses were
+        # added; they had no fuzz target before that.
+        module: [carta, nexus, surge, ralph, fuelwise]
 
     env:
       UBSAN_OPTIONS: print_stacktrace=1:halt_on_error=1

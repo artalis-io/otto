@@ -208,3 +208,7 @@ shared/build/
 carta/build/
 nexus/build/
 surge/build/
+
+# libFuzzer scratch corpora for the *_api_handle() harnesses
+ralph/build/
+fuelwise/build/

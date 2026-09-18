@@ -63,7 +63,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        module: [shared, carta, nexus, surge]
+        module: [shared, carta, nexus, surge, ralph, fuelwise]
 
     env:
       UBSAN_OPTIONS: print_stacktrace=1:halt_on_error=1

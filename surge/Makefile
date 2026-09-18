@@ -85,7 +85,7 @@ TSAN_LDFLAGS = -fsanitize=thread
         bench-gh-200 bench-gh-all bench-ll-200 bench-ll-all bench-full \
         bench-tune tune-quick tune-all \
         bench-download bench-validate \
-        shared-lib python-test node-test cppcheck fuzz tsan fuzz-smoke cppcheck-all help
+        shared-lib python-test node-test cppcheck fuzz tsan fuzz-smoke cppcheck-all help fuzz-api fuzz-api-smoke
 
 all: lib $(TEST_BIN)
 
@@ -266,10 +266,54 @@ FUZZ_WORK ?= build/fuzz-corpus
 #
 # Short on purpose: this keeps the harnesses building and catches shallow
 # regressions on every push. It is not a fuzzing campaign.
-fuzz-smoke: fuzz
+# Both harnesses. fuzz_json_api calls sg_api_solve() directly, so a mutation
+# maps one-to-one onto body bytes; fuzz_surge_api goes through sg_api_handle()
+# and covers routing, methods and the response contract as well.
+fuzz-smoke: fuzz fuzz-api-smoke
 	@mkdir -p $(FUZZ_WORK)/json
 	./$(FUZZ_BIN) $(FUZZ_WORK)/json fuzz/corpus/ \
 		-max_total_time=$(FUZZ_SMOKE_SECONDS) -max_len=65536 -print_final_stats=1
+
+# --- Fuzzing the API handler (requires clang with libFuzzer) ---
+#
+# *_api_handle() is an ordinary C function taking (ctx, request,
+# response), so this needs no socket, no event loop and no server
+# lifecycle. The api/src/main.c wrappers are thin marshalling -- see
+# docs/analysis/api-server-read.md -- and this is the code behind them,
+# where a request body becomes a model.
+#
+# The shared sources are compiled in rather than linked from libshared.a
+# because sh_json is the parser under test and an uninstrumented copy of
+# it would defeat the point. Listed by wildcard so the set cannot drift
+# from what is actually in the directory.
+FUZZ_SHARED_SRCS = $(filter-out %/sh_httpserver.c %/sh_httpasync.c,\
+                   $(wildcard ../shared/src/*.c))
+FUZZ_MINIZ_SRCS = $(wildcard ../vendor/miniz/miniz*.c)
+
+# Overridable so the target can be built with a clang that has libFuzzer
+# when the default one does not -- the MinGW clang on Windows, say.
+FUZZ_API_CC ?= clang
+FUZZ_API_BIN = fuzz_surge_api
+FUZZ_API_SRC = tests/fuzz/fuzz_surge_api.c
+
+fuzz-api: $(FUZZ_API_BIN)
+
+$(FUZZ_API_BIN): $(FUZZ_API_SRC) $(SRCS) $(ARBOR_SRCS)
+	$(FUZZ_API_CC) -w -g -O1 -std=c11 -D_GNU_SOURCE $(CC_PORT_DEFS) -DMINIZ_NO_STDIO -DMINIZ_NO_TIME -DSG_HAS_THREADS \
+	  -fsanitize=fuzzer,address,undefined -fno-omit-frame-pointer \
+	  $(INCLUDES) -I../shared/tests/fuzz -I../vendor/miniz  \
+	  $< $(SRCS) $(ARBOR_SRCS) $(FUZZ_SHARED_SRCS) $(FUZZ_MINIZ_SRCS) \
+	  -lm -lpthread $(EXE_OUT)$@
+
+FUZZ_SMOKE_SECONDS ?= 30
+FUZZ_WORK ?= build/fuzz-corpus
+
+# A bounded run over the committed seeds, for CI. The first directory is
+# where libFuzzer writes what it finds; the seeds after it are read only.
+fuzz-api-smoke: fuzz-api
+	@mkdir -p $(FUZZ_WORK)/api
+	./$(FUZZ_API_BIN) $(FUZZ_WORK)/api tests/fuzz/corpus_api/ \
+		-max_total_time=$(FUZZ_SMOKE_SECONDS) -print_final_stats=1
 
 # --- Thread Sanitizer ---
 
@@ -284,6 +328,7 @@ tsan: $(TSAN_TEST_BIN)
 clean:
 	rm -f $(OBJS) $(LIB_FILE) $(TEST_BIN) $(TEST_TB_BIN) $(TEST_NB_BIN) $(TEST_PM_BIN) $(TRANSPORT_TEST_BIN) $(BENCH_SOL_BIN) $(BENCH_PD_BIN) $(BENCH_CORD_BIN) $(BENCH_TUNE_BIN) $(SHARED_LIB) \
 	  $(FUZZ_BIN) $(TSAN_TEST_BIN)
+	rm -f $(FUZZ_API_BIN) $(FUZZ_API_BIN).exe
 
 help:
 	@echo "Surge Build System"
