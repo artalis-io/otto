@@ -8749,6 +8749,31 @@ static void test_multi_trip_no_change_default(void) {
     sg_free(ctx);
 }
 
+static void test_multi_trip_max_duration_new_trip(void) {
+    /* Regression for #182: the new-trip fast path in sg_repair.c must honor
+       max_duration. Before the fix, max_trips=0 (unlimited) or >=3 combined with
+       a max_duration too tight for all trips accepted infeasible new trips in
+       ranking, which later failed validation and dropped EVERY request. Here a
+       cap-5 vehicle serves 1 stop/trip; max_duration only fits some trips. The
+       solve must succeed, respect max_duration, and NOT drop everything. */
+    SGContext *ctx = make_config(2000, 42);
+    uint32_t depot;
+    add_depot_with_location(ctx, &depot, 0, 0);
+    sg_depot_set_time_window(ctx, depot, 0, 86400);
+    add_vehicle_with_depot(ctx, depot, 0, 86400, 5.0);   /* cap 5 -> 1 stop/trip */
+    sg_vehicle_set_max_trips(ctx, 0, 0);                 /* unlimited: the bug case */
+    sg_vehicle_set_trip_reload_seconds(ctx, 0, 0);
+    sg_vehicle_set_max_duration(ctx, 0, 45);            /* too tight for all 3 trips */
+    add_delivery_request(ctx, 10, 0, 0, 86400, 0, -5.0);
+    add_delivery_request(ctx, 15, 0, 0, 86400, 0, -5.0);
+    add_delivery_request(ctx, 20, 0, 0, 86400, 0, -5.0);
+    assert(sg_solve(ctx) == SG_STATUS_OK);              /* not INFEASIBLE / error */
+    assert(sg_get_unassigned(ctx) < 3);                /* the bug dropped all 3 */
+    assert(sg_get_used_vehicle_count(ctx) == 1);
+    assert(sg_solution_get_route_duration(ctx, 0) <= 45.0 + 1e-6);  /* max_duration honored */
+    sg_free(ctx);
+}
+
 static void test_multi_trip_capacity_reset(void) {
     /* Vehicle capacity=5, two requests each with demand=5.
        With 1 trip: need 2 vehicles or 1 unassigned.
@@ -18026,6 +18051,7 @@ int main(void) {
     RUN_TEST(test_multi_trip_api);
     RUN_TEST(test_multi_trip_no_change_default);
     RUN_TEST(test_multi_trip_capacity_reset);
+    RUN_TEST(test_multi_trip_max_duration_new_trip);
     RUN_TEST(test_multi_trip_timing);
     RUN_TEST(test_multi_trip_pd_same_trip);
     RUN_TEST(test_multi_trip_max_trips_enforced);
@@ -18343,9 +18369,9 @@ int main(void) {
     printf("================\n");
     printf("%d/%d tests passed\n", tests_passed, tests_run);
 #ifdef SG_HAS_THREADS
-    assert(tests_run == 470);
+    assert(tests_run == 471);
 #else
-    assert(tests_run == 446);
+    assert(tests_run == 447);
 #endif
     return tests_passed == tests_run ? 0 : 1;
 }
