@@ -906,6 +906,7 @@ static SGStatus sg_solve_route_model(SGContext *ctx) {
     /* Greedy construction uses an approximate time budget; if a hard on-duty
      * cap was requested, repair any over-max_duration routes before search. */
     (void)sg_route_postprocess_eject_over_duration(ctx, &initial);
+    (void)sg_route_postprocess_eject_over_capacity(ctx, &initial);
     sg_phase_end(ctx, 0, sg_route_solution_cost(&initial, ctx),
                  initial.vehicles_used, initial.base.num_unassigned);
     /* Record construction result as first convergence entry */
@@ -1355,6 +1356,7 @@ skip_phase2:
             if (!sg_time_budget_expired(&ctx->time_budget, sg_monotonic_seconds()))
                 (void)sg_route_postprocess_polish_distance(ctx, best);
             (void)sg_route_postprocess_eject_over_duration(ctx, best);
+            (void)sg_route_postprocess_eject_over_capacity(ctx, best);
         } else {
             if (!sg_time_budget_expired(&ctx->time_budget, sg_monotonic_seconds()))
                 (void)sg_route_postprocess_reduce_vehicles(ctx, &initial);

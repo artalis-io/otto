@@ -2043,6 +2043,85 @@ ARStatus sg_route_postprocess_eject_over_duration(const SGContext *ctx, SGRouteS
     return AR_STATUS_OK;
 }
 
+ARStatus sg_route_postprocess_eject_over_capacity(const SGContext *ctx, SGRouteSolution *sol) {
+    uint32_t v, d, dim;
+    double *tload;
+
+    if (!ctx || !sol) {
+        return AR_STATUS_INVALID_ARG;
+    }
+    if (!ctx->config.hard_capacity || ctx->dimension_count == 0) {
+        return AR_STATUS_OK;
+    }
+    dim = ctx->dimension_count;
+    tload = (double *)malloc((size_t)dim * sizeof(double));
+    if (!tload) {
+        return AR_STATUS_OUT_OF_MEMORY;
+    }
+
+    /* For each vehicle, walk its trips (delimited by trip_start); if a trip's
+     * per-dimension load exceeds capacity, eject the request in that trip with
+     * the largest demand in the worst-overflowing dimension, then recompute.
+     * Ejected requests go to the unassigned pool for the (hard) repair operators.
+     * Guards any path (construction / concat / multi-trip) that admitted an
+     * over-capacity route despite the hard accept-path check. */
+    for (v = 0; v < ctx->num_vehicles; v++) {
+        const SGVehicleRecord *veh = &ctx->vehicles[v];
+        int progress = 1;
+        if (!veh->has_capacity || !veh->capacity) {
+            continue;
+        }
+        while (progress) {
+            const SGRouteStop *stops = sg_route_vehicle_stop_ptr_const(sol, v);
+            uint32_t n = sol->route_stop_lengths[v];
+            uint32_t s, ts = 0, eject_req = UINT32_MAX;
+            progress = 0;
+            if (n == 0) break;
+            for (s = 1; s <= n; s++) {
+                if (s == n || stops[s].trip_start) {   /* trip = [ts, s) */
+                    uint32_t k;
+                    int over_d = -1;
+                    double over_amt = 0.0;
+                    for (d = 0; d < dim; d++) tload[d] = 0.0;
+                    for (k = ts; k < s; k++) {
+                        const SGTaskRecord *t = &ctx->tasks[stops[k].task_id];
+                        if (t->has_demand && t->demand)
+                            for (d = 0; d < dim; d++) tload[d] += t->demand[d];
+                    }
+                    for (d = 0; d < dim; d++) {
+                        double cap = veh->capacity[d];
+                        if (tload[d] > cap + SG_DEMAND_TOLERANCE && (tload[d] - cap) > over_amt) {
+                            over_amt = tload[d] - cap; over_d = (int)d;
+                        }
+                    }
+                    if (over_d >= 0) {
+                        double best = -1.0;
+                        eject_req = stops[ts].request_id;
+                        for (k = ts; k < s; k++) {
+                            const SGTaskRecord *t = &ctx->tasks[stops[k].task_id];
+                            double dm = (t->has_demand && t->demand) ? t->demand[over_d] : 0.0;
+                            if (dm > best) { best = dm; eject_req = stops[k].request_id; }
+                        }
+                        progress = 1;
+                        break;
+                    }
+                    ts = s;
+                }
+            }
+            if (progress && eject_req != UINT32_MAX) {
+                if (sg_route_unassign_request(ctx, sol, eject_req, NULL) != AR_STATUS_OK) {
+                    progress = 0;
+                } else {
+                    sg_route_update_timing((SGContext *)ctx, sol, v);
+                    sg_route_update_load((SGContext *)ctx, sol, v);
+                }
+            }
+        }
+    }
+    free(tload);
+    return AR_STATUS_OK;
+}
+
 ARStatus sg_route_postprocess_ejection_reduce(const SGContext *ctx, SGRouteSolution *sol) {
     int restarted;
     uint8_t *chain_visited = NULL;

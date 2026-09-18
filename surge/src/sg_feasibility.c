@@ -1854,7 +1854,7 @@ int sg_route_eval_insertion_cached(const SGContext *ctx, const SGRouteSolution *
 #endif /* SG_CONCAT_VERIFY */
 
             if (!concat_ok) {
-                if (!pen_enabled) return 0;
+                if (!pen_enabled || ctx->config.hard_capacity) return 0;
                 ins_violations[SG_PENALTY_CAPACITY] += concat_violation;
             }
         } else {
@@ -1934,11 +1934,11 @@ int sg_route_eval_insertion_cached(const SGContext *ctx, const SGRouteSolution *
                         excess += (il + hyp_max) - cap;
                     }
                     if (excess > 0.0) {
-                        if (!pen_enabled) return 0;
+                        if (!pen_enabled || ctx->config.hard_capacity) return 0;
                         ins_violations[SG_PENALTY_CAPACITY] += excess;
                     }
                 } else if ((hyp_max - hyp_min) > cap + SG_DEMAND_TOLERANCE) {
-                    if (!pen_enabled) return 0;
+                    if (!pen_enabled || ctx->config.hard_capacity) return 0;
                     ins_violations[SG_PENALTY_CAPACITY] += (hyp_max - hyp_min) - cap;
                 }
             }

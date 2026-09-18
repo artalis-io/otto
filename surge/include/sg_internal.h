@@ -1216,6 +1216,10 @@ ARStatus sg_route_postprocess_polish_distance(const SGContext *ctx, SGRouteSolut
  * greedy construction's time budget is approximate, so it can build over-cap
  * routes; this repairs them. No-op when hard_max_duration is off. */
 ARStatus sg_route_postprocess_eject_over_duration(const SGContext *ctx, SGRouteSolution *sol);
+/* When config.hard_capacity is set, eject requests from any trip whose demand
+ * exceeds the vehicle capacity until it fits (ejected go to the unassigned
+ * pool). No-op when hard_capacity is off. */
+ARStatus sg_route_postprocess_eject_over_capacity(const SGContext *ctx, SGRouteSolution *sol);
 int sg_route_try_pd_reorder_once(const SGContext *ctx, SGRouteSolution *sol);
 int sg_route_try_2opt_intra_once(const SGContext *ctx, SGRouteSolution *sol);
 int sg_route_try_pd_relocate_intra_once(const SGContext *ctx, SGRouteSolution *sol);

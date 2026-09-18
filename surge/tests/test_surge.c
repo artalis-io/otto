@@ -8826,6 +8826,37 @@ static void test_hard_max_duration_eject_pass(void) {
     sg_free(ctx);
 }
 
+static void test_hard_capacity_eject_pass(void) {
+    /* With hard_capacity, no route may exceed vehicle capacity; the eject pass
+       repairs any over-capacity route the (soft) search or construction admits.
+       cap=10, four deliveries of 4 each -> at most 2 fit; the rest stay
+       unassigned rather than overloading the vehicle. */
+    SGContext *ctx = make_config(500, 7);
+    assert(sg_set_hard_capacity(ctx, true) == SG_STATUS_OK);
+    assert(sg_get_hard_capacity(ctx) == true);
+    uint32_t depot;
+    add_depot_with_location(ctx, &depot, 0, 0);
+    sg_depot_set_time_window(ctx, depot, 0, 86400);
+    add_vehicle_with_depot(ctx, depot, 0, 86400, 10.0);   /* capacity 10 */
+    sg_vehicle_set_max_trips(ctx, 0, 1);
+    { int i; for (i = 1; i <= 4; i++) add_delivery_request(ctx, 10.0*i, 0, 0, 86400, 0, -4.0); }
+    assert(sg_solve(ctx) == SG_STATUS_OK);
+    /* invariant: no stop's cumulative load exceeds capacity */
+    {
+        uint32_t r, nr = sg_solution_get_route_count(ctx);
+        for (r = 0; r < nr; r++) {
+            uint32_t k, sc = sg_solution_get_route_stop_count(ctx, r);
+            for (k = 0; k < sc; k++) {
+                double load = 0.0;
+                if (sg_solution_get_route_stop_load(ctx, r, k, 0, &load) == SG_STATUS_OK)
+                    assert(load <= 10.0 + 1e-6);
+            }
+        }
+    }
+    assert(sg_get_unassigned(ctx) >= 1);   /* couldn't fit all 4 within capacity 10 */
+    sg_free(ctx);
+}
+
 static void test_multi_trip_capacity_reset(void) {
     /* Vehicle capacity=5, two requests each with demand=5.
        With 1 trip: need 2 vehicles or 1 unassigned.
@@ -18106,6 +18137,7 @@ int main(void) {
     RUN_TEST(test_multi_trip_max_duration_new_trip);
     RUN_TEST(test_hard_max_duration_existing_trip);
     RUN_TEST(test_hard_max_duration_eject_pass);
+    RUN_TEST(test_hard_capacity_eject_pass);
     RUN_TEST(test_multi_trip_timing);
     RUN_TEST(test_multi_trip_pd_same_trip);
     RUN_TEST(test_multi_trip_max_trips_enforced);
@@ -18423,9 +18455,9 @@ int main(void) {
     printf("================\n");
     printf("%d/%d tests passed\n", tests_passed, tests_run);
 #ifdef SG_HAS_THREADS
-    assert(tests_run == 473);
+    assert(tests_run == 474);
 #else
-    assert(tests_run == 449);
+    assert(tests_run == 450);
 #endif
     return tests_passed == tests_run ? 0 : 1;
 }

@@ -46,7 +46,7 @@ def main():
         max_trips=2, trip_reload_seconds=1800,
         objective="vehicles-then-distance",
         max_iterations=20000, max_time_seconds=30, seed=42,
-        demand_sign=1, unassigned_penalty=1e6, hard_max_duration=True,
+        demand_sign=1, unassigned_penalty=1e6, hard_max_duration=True, hard_capacity=True,
     )
     req, n_own, n_sub = bsr.assemble_request(orows, oidx, dflat, uflat, N, vrows, a)
 
