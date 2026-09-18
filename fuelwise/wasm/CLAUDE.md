@@ -90,15 +90,18 @@ Already implemented in `wasm_solve_segments()`:
 ```c
 EMSCRIPTEN_KEEPALIVE
 int wasm_solve_segments(
+    double *stations_flat,      /* [id, distance, price] x num_stations */
+    int num_stations,
+    double *segments_flat,      /* [start_dist, weight, mpg] x num_segments */
+    int num_segments,
     double total_distance,
     double tank_capacity,
     double current_fuel,
     double minimum_fuel,
-    double* stations_data,    // [id, dist, price, ...]
-    int num_stations,
-    double* segments_data,    // [start, weight, mpg, ...]
-    int num_segments,
-    double* solution_out
+    double min_purchase,        /* 0 = no minimum */
+    double stop_cost,           /* 0 = no stop cost */
+    double *result_purchases,
+    double *result_meta
 );
 ```
 

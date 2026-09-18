@@ -23,9 +23,24 @@ Three that were live when this check was written:
   - ralph/CLAUDE.md said models are freed with ralph_free(). The function is
     ralph_core_free().
 
-Two shapes are checked, because they are the two that can be decided
-mechanically: a function-like `name(` whose prefix looks like a module symbol,
-and an ALL_CAPS constant. Prose is left alone.
+Two shapes are checked for existence, because they are the two that can be
+decided mechanically: a function-like `name(` whose prefix looks like a module
+symbol, and an ALL_CAPS constant. Prose is left alone.
+
+A name that exists is then checked for arity: a document that calls or declares
+a function with the wrong number of arguments is wrong in a way a reader only
+discovers at the compiler. Names alone were not enough -- twice in a row a
+correction to a name left a call that could not compile. The MANIFESTO's
+`sh_arena_create(&arena, buffer, size)` passed the name check while the
+function takes a capacity and returns the arena, and
+`cs_tui_render_clay_commands(r, commands)` was introduced by a rename in the
+very commit that added this check's first half, against a function taking
+three arguments.
+
+Only calls that pass at least one argument are compared. `foo()` in a document
+names a function rather than calling it with nothing, and that idiom is most of
+what a document does: requiring it to match dropped the reading from 195
+complaints to 7, of which 6 were real.
 
 One rule exists because writing this check produced a false positive worth
 remembering. A first pass reported 39 documented environment variables as
@@ -101,6 +116,20 @@ CODE = re.compile(r'`([a-z][a-z0-9]{1,5}_[a-z0-9_]{2,})`')
 # underscore so exists() can tell it apart from a plain constant.
 GLOB = re.compile(r'\b([A-Z][A-Z0-9]{1,}_[A-Z0-9_]*_)\*')
 
+# A declaration or definition at the start of a line: a return type, then the
+# name, then the parameter list. Used to learn how many arguments each function
+# takes.
+DECL = re.compile(r'(?m)^[A-Za-z_][A-Za-z0-9_\s\*]*?\b([a-z][a-z0-9_]{2,})\s*\(')
+
+# Words that are followed by a parenthesis without being a function.
+NOT_CALLS = frozenset((
+    'if', 'for', 'while', 'switch', 'return', 'sizeof', 'defined', 'do',
+    'else', 'case', 'typedef', 'struct', 'union', 'enum', 'static', 'inline',
+    'const', 'void', 'int', 'char', 'float', 'double', 'long', 'short',
+    'unsigned', 'signed', 'extern', 'register', 'volatile', 'goto', 'break',
+    'continue', 'default',
+))
+
 # Symbols that are deliberately not real: placeholders in "here is the shape of
 # a thing you would write" examples, and words that merely look like constants.
 # Keep the reason with the entry.
@@ -139,6 +168,14 @@ ALLOWLIST = {
         'proposed in the review\'s recommendations; the doc says "Add"',
     # Not ours.
     'AF_INET6': 'POSIX, from <sys/socket.h>',
+}
+
+# Calls whose argument count is deliberately not the real one. Same rule as
+# above: the reason lives with the entry, and an entry that matches nothing
+# fails the run.
+ARITY_ALLOWLIST = {
+    'make_dual_feasible()':
+        'a call-graph sketch in the simplex review, written with the tableau alone',
 }
 
 
@@ -207,6 +244,94 @@ def source_identifiers():
     return seen
 
 
+def balanced(text, open_idx):
+    """The text between text[open_idx] == '(' and its matching ')'.
+
+    Counting parentheses rather than matching a regex, because both sides need
+    it: an argument can be a call, and a parameter can be a function pointer
+    (`void (*cb)(SHLogLevel, const char *, void *)`).
+    """
+    depth = 0
+    i = open_idx
+    n = len(text)
+    while i < n:
+        c = text[i]
+        if c in '"\'':
+            quote = c
+            i += 1
+            while i < n and text[i] != quote:
+                i += 2 if text[i] == '\\' else 1
+        elif c == '(':
+            depth += 1
+        elif c == ')':
+            depth -= 1
+            if depth == 0:
+                return text[open_idx + 1:i]
+        i += 1
+    return None
+
+
+def split_args(text):
+    """Split an argument or parameter list on its top-level commas."""
+    out, depth, cur = [], 0, ''
+    for c in text:
+        if c in '([{':
+            depth += 1
+        elif c in ')]}':
+            depth -= 1
+        if c == ',' and depth == 0:
+            out.append(cur)
+            cur = ''
+        else:
+            cur += c
+    out.append(cur)
+    return [x.strip() for x in out if x.strip()]
+
+
+def arity_of(params):
+    """(count, variadic) for a parameter list. `void` alone means none."""
+    parts = split_args(params)
+    if parts == ['void']:
+        return 0, False
+    return len([x for x in parts if x != '...']), any(x == '...' for x in parts)
+
+
+def declared_arities():
+    """name -> {(count, variadic)}. More than one entry means ambiguous.
+
+    Ambiguity is real -- a static helper can share a name across files -- and
+    those names are skipped rather than guessed at.
+    """
+    subs = submodule_paths()
+    out = {}
+    for root, dirs, files in os.walk('.'):
+        dirs[:] = [d for d in dirs
+                   if d not in ('.git', 'node_modules', 'build', 'site', 'docs')]
+        rel = os.path.relpath(root, '.').replace(os.sep, '/').lstrip('./')
+        dirs[:] = [d for d in dirs
+                   if ('%s/%s' % (rel, d)).lstrip('/') not in subs]
+        for f in files:
+            if not f.endswith(('.c', '.h')):
+                continue
+            try:
+                body = open(os.path.join(root, f), encoding='utf-8',
+                            errors='ignore').read()
+            except OSError:
+                continue
+            for m in DECL.finditer(body):
+                name = m.group(1)
+                if name in NOT_CALLS:
+                    continue
+                inner = balanced(body, m.end() - 1)
+                if inner is None:
+                    continue
+                after = body[m.end() + len(inner) + 1:m.end() + len(inner) + 40]
+                if not re.match(r'\s*[;{]', after):
+                    continue          # a call or an expression, not a signature
+                out.setdefault(name, set()).add(arity_of(inner))
+    return out
+
+
 def docs():
     out = subprocess.run(['git', 'ls-files', '*CLAUDE.md', 'docs/*.md'],
                          capture_output=True, text=True).stdout.split()
@@ -237,9 +362,12 @@ def main():
         head, _, tail = sym.partition('_')
         return bool(tail) and head in prefixes and tail in known
 
+    arities = declared_arities()
     files = docs()
     used_allow = set()
+    used_arity_allow = set()
     failures = []
+    wrong_arity = []
 
     log('')
     log('%-46s %s' % ('document', 'symbols named but absent'))
@@ -255,6 +383,34 @@ def main():
             if not exists(name):
                 missing.add(name)
 
+        # Arity, for the names that do exist.
+        for m in FUNC.finditer(body):
+            name = m.group(1)
+            sigs = arities.get(name)
+            if not sigs or len(sigs) != 1:
+                continue              # unknown, or ambiguous across files
+            want, variadic = next(iter(sigs))
+            inner = balanced(body, m.end() - 1)
+            if inner is None:
+                continue
+            args = split_args(inner)
+            if args == ['void']:
+                args = []
+            # `foo()` names the function rather than calling it with nothing,
+            # and `foo(...)` is an explicit placeholder.
+            if not args or any(a == '...' for a in args):
+                continue
+            if name + '()' in ARITY_ALLOWLIST:
+                used_arity_allow.add(name + '()')
+                continue
+            got = len(args)
+            if (got < want) if variadic else (got != want):
+                wrong_arity.append(
+                    '%s:%d: %s takes %d argument%s%s, given %d'
+                    % (d, body[:m.start()].count(chr(10)) + 1, name, want,
+                       '' if want == 1 else 's',
+                       ' or more' if variadic else '', got))
+
         allowed = {s for s in missing if s in ALLOWLIST}
         used_allow |= allowed
         bad = sorted(missing - allowed)
@@ -266,18 +422,29 @@ def main():
 
     # An allowlist entry nothing matches any more is stale: it would silence a
     # future mistake with the same name and nobody would know.
-    stale = sorted(set(ALLOWLIST) - used_allow)
+    stale = sorted((set(ALLOWLIST) - used_allow)
+                   | (set(ARITY_ALLOWLIST) - used_arity_allow))
     if stale:
         print()
         print('Stale ALLOWLIST entries (nothing in any document names these):')
         for s in stale:
-            print('    %-28s %s' % (s, ALLOWLIST[s]))
+            print('    %-28s %s'
+                  % (s, ALLOWLIST.get(s) or ARITY_ALLOWLIST.get(s)))
         print('Remove them, so the allowlist keeps meaning what it says.')
 
-    if failures or stale:
+    if wrong_arity:
+        print()
+        print('Called with the wrong number of arguments:')
+        for w in wrong_arity:
+            print('    %s' % w)
+        print('A document that will not compile is worse than one that is')
+        print('merely out of date: it looks like something you can paste.')
+
+    if failures or stale or wrong_arity:
         print()
         print('FAIL: %d symbols named by a document but absent from the tree, '
-              '%d stale allowlist entries.' % (len(failures), len(stale)))
+              '%d called with the wrong arity, %d stale allowlist entries.'
+              % (len(failures), len(wrong_arity), len(stale)))
         if failures:
             print()
             for f in failures:
@@ -289,8 +456,8 @@ def main():
             print('they are followed.')
         return 1
 
-    print('OK: every symbol named by a checked document exists, or is '
-          'allowlisted with a reason.')
+    print('OK: every symbol named by a checked document exists and is called '
+          'with the right number of arguments, or is allowlisted with a reason.')
     return 0
 
 

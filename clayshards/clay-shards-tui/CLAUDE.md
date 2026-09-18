@@ -82,7 +82,7 @@ int main(void) {
 
         /* Render to terminal */
         cs_tui_begin(r);
-        cs_tui_render_clay_commands(r, commands);
+        cs_tui_render_clay_commands(r, commands, count);
         cs_tui_end(r);
     }
 
@@ -107,7 +107,7 @@ cs_tui_get_size(r, &width, &height);
 
 cs_tui_begin(r);
 cs_tui_clear(r, (Clay_Color){30, 30, 30, 255});
-cs_tui_render_clay_commands(r, commands);
+cs_tui_render_clay_commands(r, commands, count);
 cs_tui_end(r);
 
 cs_tui_free(r);

@@ -234,8 +234,10 @@ Every OTTO API endpoint is fundamentally:
 
 ```c
 uint8_t *ct_api_generate_png(CTAPIContext *ctx, int z, int x, int y, size_t *out_len);
-int vl_route(VLGraph *g, int from, int to, VLRoute *route);
-int lc_search(LCIndex *idx, const char *query, LCResult *results);
+VLStatus vl_route(const VLGraph *graph, uint32_t source, uint32_t target,
+                  const VLRouteOptions *opts, VLRoute *route);
+LCStatus lc_search(const LCIndex *index, const char *query,
+                   const LCSearchOptions *opts, LCSearchResult *result);
 int fw_optimize(FWProblem *p, FWSolution *s);
 ```
 
@@ -268,14 +270,18 @@ WASM is another transport:
 
 ```c
 static CTAPIContext *g_ctx;   /* built once when the module loads */
+static ShApiResponse g_resp;  /* reused; JS copies before the next call */
 
 EMSCRIPTEN_KEEPALIVE
-int carta_api_handle(const char *path, uint8_t **out, size_t *out_len) {
+ShApiResponse *carta_api_handle(const char *path, const char *query) {
     int z, x, y;
     char ext[8];
-    parse_tile_path(path, &z, &x, &y, ext);
-    *out = ct_api_generate_png(g_ctx, z, x, y, out_len);
-    return *out ? 0 : -1;
+    if (!g_ctx || parse_tile_path(path, &z, &x, &y, ext) != 0) return NULL;
+
+    (void)query;
+    g_resp.body = ct_api_generate_png(g_ctx, z, x, y, &g_resp.body_len);
+    g_resp.status_code = g_resp.body ? 200 : 500;
+    return &g_resp;
 }
 ```
 
