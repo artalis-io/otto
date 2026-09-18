@@ -7,20 +7,23 @@
  *   S <i> <snapped_node> <snap_offset_m>     (per location i)
  *   M <i> <j> <dur_s> <dist_m>               (per ordered pair i != j)
  *
- * For each source it runs one one-to-all Dijkstra, optimizing DURATION (the
- * fastest path), using the same edge-accessibility (vl_edge_accessible) and
- * per-profile cost (vl_edge_duration_s) the router applies, and carries the
- * distance travelled along that time-optimal path. Locations snap to the
- * routable core (largest SCC) via vl_graph_nearest_node_routable, so every
- * reachable pair resolves. Unreachable entries are emitted as -1.
+ * For each source it runs one one-to-all Dijkstra, optimizing --weight (duration
+ * = fastest path, the default; or distance = shortest path), using the same
+ * edge-accessibility (vl_edge_accessible) and per-profile cost
+ * (vl_edge_duration_s) the router applies. It carries the OTHER metric along the
+ * chosen-optimal path -- so a duration matrix reports the distance driven on the
+ * fastest route, and a distance matrix reports the time taken on the shortest
+ * route. Both duration and distance are always emitted per pair. Locations snap
+ * to the routable core (largest SCC) via vl_graph_nearest_node_routable, so
+ * every reachable pair resolves; unreachable entries are emitted as -1.
  *
  * This is a thin CLI over the core engine: no vehicle, dataset, or client
- * assumptions are baked in -- profile and weighting are caller-chosen and the
+ * assumptions are baked in -- profile and weight are caller-chosen and the
  * location list comes entirely from stdin.
  *
  * Usage:
  *   matrix_build <graph.vlg|map.osm.pbf> [--profile car|truck|bike|foot|any]
- *                < id\tlat\tlon
+ *                [--weight duration|distance] < id\tlat\tlon
  */
 #include "velo.h"
 #include "vl_types.h"
@@ -43,11 +46,13 @@ int main(int argc, char **argv)
 {
     if (argc < 2) {
         fprintf(stderr, "usage: %s <graph.vlg|map.osm.pbf> "
-                        "[--profile car|truck|bike|foot|any] < id\\tlat\\tlon\n", argv[0]);
+                        "[--profile car|truck|bike|foot|any] "
+                        "[--weight duration|distance] < id\\tlat\\tlon\n", argv[0]);
         return 2;
     }
 
     VLProfile prof = VL_PROFILE_CAR;
+    int use_dist = 0;   /* 0 = optimize duration (fastest), 1 = optimize distance (shortest) */
     for (int i = 2; i < argc; i++) {
         if (strcmp(argv[i], "--profile") == 0 && i + 1 < argc) {
             const char *p = argv[++i];
@@ -55,6 +60,8 @@ int main(int argc, char **argv)
                    strcmp(p, "bike")  == 0 ? VL_PROFILE_BIKE  :
                    strcmp(p, "foot")  == 0 ? VL_PROFILE_FOOT  :
                    strcmp(p, "any")   == 0 ? VL_PROFILE_ANY   : VL_PROFILE_CAR;
+        } else if (strcmp(argv[i], "--weight") == 0 && i + 1 < argc) {
+            use_dist = strcmp(argv[++i], "distance") == 0;
         }
     }
     uint16_t amask = vl_profile_access_mask(prof);
@@ -85,8 +92,8 @@ int main(int argc, char **argv)
         }
         lat[ns] = la; lon[ns] = lo; ns++;
     }
-    fprintf(stderr, "matrix_build: %d locations, graph nodes=%u, profile=%d\n",
-            ns, g->num_nodes, (int)prof);
+    fprintf(stderr, "matrix_build: %d locations, graph nodes=%u, profile=%d, weight=%s\n",
+            ns, g->num_nodes, (int)prof, use_dist ? "distance" : "duration");
 
     /* snap each location to the routable core, report node + offset */
     for (int i = 0; i < ns; i++) {
@@ -120,16 +127,21 @@ int main(int argc, char **argv)
         VLHeapEntry e;
         while (!vl_heap_empty(h) && vl_heap_pop(h, &e) == VL_OK) {
             uint32_t u = e.node;
-            if (e.priority > dt[u]) continue;   /* stale heap entry */
+            double key_u = use_dist ? dm[u] : dt[u];   /* the metric being minimized */
+            if (e.priority > key_u) continue;          /* stale heap entry */
             const VLNode *nd = &g->nodes[u];
             for (uint32_t x = 0; x < nd->edge_count; x++) {
                 const VLEdge *ed = &g->edges[nd->edge_start + x];
                 if (!vl_edge_accessible(ed->flags, prof, amask)) continue;
-                double nt = dt[u] + vl_edge_duration_s(ed, prof);
-                if (nt < dt[ed->target]) {
-                    dt[ed->target] = nt;
-                    dm[ed->target] = dm[u] + ed->distance / 1000.0;
-                    vl_heap_push_or_decrease(h, ed->target, nt);
+                double ndur  = dt[u] + vl_edge_duration_s(ed, prof);
+                double ndist = dm[u] + ed->distance / 1000.0;
+                double nkey  = use_dist ? ndist : ndur;
+                double vkey  = use_dist ? dm[ed->target] : dt[ed->target];
+                if (nkey < vkey) {
+                    /* carry BOTH metrics along the key-optimal path */
+                    dt[ed->target] = ndur;
+                    dm[ed->target] = ndist;
+                    vl_heap_push_or_decrease(h, ed->target, nkey);
                 }
             }
         }
