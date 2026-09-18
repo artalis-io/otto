@@ -163,13 +163,34 @@ def api_prefixes():
     return set(re.findall(r'"([A-Z][A-Z0-9_]*)"', m.group(1)))
 
 
+def submodule_paths():
+    """Paths listed in .gitmodules, which may or may not be checked out."""
+    out = set()
+    if os.path.exists('.gitmodules'):
+        body = open('.gitmodules', encoding='utf-8', errors='replace').read()
+        out = set(re.findall(r'^\s*path\s*=\s*(\S+)', body, re.M))
+    return out
+
+
 def source_identifiers():
     """Every identifier that appears anywhere in the tree's sources."""
+    submodules = submodule_paths()
     seen = set()
     me = os.path.abspath(__file__)
     for root, dirs, files in os.walk('.'):
         dirs[:] = [d for d in dirs
                    if d not in ('.git', 'node_modules', 'build', 'site', 'docs')]
+        # Submodules are skipped so the answer cannot depend on whether they
+        # are checked out. That cost a red CI run: locally, with vendor/keel
+        # absent, AF_INET6 was correctly missing and its allowlist entry was
+        # in use; on CI, which checks out submodules recursively, Keel's
+        # sockets brought AF_INET6 into the corpus, the entry matched nothing,
+        # and a stale entry fails the run. Vendored trees that are checked in
+        # -- miniz, TRE, Clay -- stay, because they are always there and the
+        # docs cite them (TINFL_STATUS_DONE, RE_DUP_MAX).
+        root_rel = os.path.relpath(root, '.').replace(os.sep, '/')
+        dirs[:] = [d for d in dirs
+                   if ('%s/%s' % (root_rel, d)).lstrip('./') not in submodules]
         for f in files:
             path = os.path.join(root, f)
             # This file names every allowlisted symbol, so counting it as
