@@ -1087,6 +1087,12 @@ jobs:
   # they named a feature-class table of four values that were never in the
   # enum, an "add an endpoint" guide written against a webserver replaced two
   # migrations ago, and half a dozen functions under names they do not have.
+  #
+  # Widened afterwards to docs/ -- the MANIFESTO's central example was also
+  # labelled Keel and written in Mongoose, and the ralph internals named a
+  # dozen entry points without the _core_ they have carried since. Archive,
+  # roadmaps and business are excluded on principle: they are supposed to name
+  # things that do not exist yet, or no longer do.
   # ==========================================================================
   doc-symbols:
     name: Docs Name Real Things
@@ -1099,7 +1105,7 @@ jobs:
         with:
           submodules: recursive
 
-      - name: Check that every symbol a CLAUDE.md names exists
+      - name: Check that every symbol a descriptive document names exists
         run: python3 scripts/check_doc_symbols.py
 
   # ==========================================================================

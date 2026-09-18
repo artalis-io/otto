@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 """
-Every symbol a CLAUDE.md names must exist, or be listed here with a reason.
+Every symbol a descriptive document names must exist, or be listed here with
+a reason.
 
-These files are instructions. They are the first thing a new contributor or an
+The CLAUDE.md files are instructions. They are the first thing a new contributor or an
 agent session reads, and unlike the code they describe, nothing compiles them --
 so they rot silently and keep giving confident directions to a tree that has
 moved on.
@@ -36,6 +37,23 @@ with one of those prefixes is also accepted when the remainder exists. The
 prefixes are read out of sh_args.c rather than repeated here, so the two cannot
 drift apart.
 
+What is covered is every CLAUDE.md plus the documents under docs/ that
+describe the system as it is. Three directories are left out on principle,
+because holding them to it would be wrong rather than merely noisy:
+
+  - docs/archive/ is a frozen record of superseded plans. It is supposed to
+    name things that no longer exist.
+  - docs/roadmaps/ proposes work not yet done. hose.md describes a module
+    that does not exist; that is the point of it.
+  - docs/business/ is strategy, and carries redaction markers.
+
+Measured before choosing that line: over everything, 1576 symbols across 111
+files, of which docs/archive/carta/TODO_FEATURES.md alone accounts for 104.
+Over the descriptive set, 49 across 10 files -- a set small enough to read,
+which is what makes the difference between a gate and a wall of noise.
+
+Individual files can be excluded too, with the reason next to them.
+
 Exclusions are not forbidden; they have to be written down. Usage:
 
     python3 scripts/check_doc_symbols.py [--quiet]
@@ -51,7 +69,19 @@ os.chdir(ROOT)
 QUIET = '--quiet' in sys.argv
 
 # Third-party docs describe third-party trees; they are not ours to police.
-SKIP_DIRS = ('vendor/',)
+# The docs/ entries are explained in the module docstring above.
+SKIP_DIRS = (
+    'vendor/',
+    'docs/archive/',
+    'docs/roadmaps/',
+    'docs/business/',
+)
+
+# Documents that are plans rather than descriptions. Keep the reason.
+SKIP_FILES = {
+    'docs/TOOLING.md':
+        'a phased plan -- "Add to root Makefile", "Create shared/include/sh_log.h"',
+}
 
 SOURCE_EXT = ('.c', '.h', '.py', '.js', '.mjs', '.sh', '.mk', '.rs', '.yml')
 SOURCE_NAMES = ('Makefile',)
@@ -61,6 +91,12 @@ SOURCE_NAMES = ('Makefile',)
 # prose like "the parser(".
 FUNC = re.compile(r'\b([a-z][a-z0-9]{1,5}_[a-z0-9_]{2,})\s*\(')
 CONST = re.compile(r'\b([A-Z][A-Z0-9]{1,}_[A-Z0-9_]{2,})\b')
+# A backtick-quoted identifier, which is how prose names a function it is not
+# calling: "`ralph_optimize_lp` remains as a compatibility dispatcher". Needed
+# because FUNC wants a '(' -- without this, two dead names in
+# docs/internals/ralph-architecture.md passed the gate.
+CODE = re.compile(r'`([a-z][a-z0-9]{1,5}_[a-z0-9_]{2,})`')
+
 # A documented family: `VL_TRUCK_SPEED_*`. The name keeps its trailing
 # underscore so exists() can tell it apart from a plain constant.
 GLOB = re.compile(r'\b([A-Z][A-Z0-9]{1,}_[A-Z0-9_]*_)\*')
@@ -88,6 +124,21 @@ ALLOWLIST = {
     'VITE_TILE_SERVER': 'Vite variable for the React frontend, which lives outside this repo',
     'ct_font_load()': 'under a heading marked "(planned)" -- the MSDF C API is unwritten',
     'ct_font_text_width()': 'under a heading marked "(planned)"',
+    # Named precisely because they are gone -- the sentence is about the removal.
+    'node_queue_free()': 'KNOWN_ISSUES records that it was deleted',
+    'RALPH_BIG_M': 'the simplex review records it as removed from the codebase',
+    # Pseudocode and notation in explanatory sketches.
+    'swap_rows()': 'pseudocode in the LU pivoting sketch',
+    'cut_value()': 'mathematical notation in a Benders assertion, not a function',
+    'render_track_and_thumb()': 'pseudocode in the widget input-ordering example',
+    'output_char()': 'pseudocode in the terminal differential-update example',
+    'do_something()': 'placeholder in the error-handling example',
+    'log_error()': 'placeholder in the error-handling example',
+    # Proposed, deliberately unwritten.
+    'dual_simplex_solve_v2_lightweight()':
+        'proposed in the review\'s recommendations; the doc says "Add"',
+    # Not ours.
+    'AF_INET6': 'POSIX, from <sys/socket.h>',
 }
 
 
@@ -136,10 +187,11 @@ def source_identifiers():
 
 
 def docs():
-    out = subprocess.run(['git', 'ls-files', '*CLAUDE.md'],
+    out = subprocess.run(['git', 'ls-files', '*CLAUDE.md', 'docs/*.md'],
                          capture_output=True, text=True).stdout.split()
-    return [d for d in sorted(out)
-            if not any(d.startswith(p) for p in SKIP_DIRS)]
+    return [d for d in sorted(set(out))
+            if not any(d.startswith(p) for p in SKIP_DIRS)
+            and d not in SKIP_FILES]
 
 
 def main():
@@ -175,7 +227,7 @@ def main():
     for d in files:
         body = open(d, encoding='utf-8', errors='replace').read()
         missing = set()
-        for name in FUNC.findall(body):
+        for name in FUNC.findall(body) + CODE.findall(body):
             if not exists(name):
                 missing.add(name + '()')
         for name in CONST.findall(body) + GLOB.findall(body):
@@ -216,8 +268,8 @@ def main():
             print('they are followed.')
         return 1
 
-    print('OK: every symbol named by a CLAUDE.md exists, or is allowlisted '
-          'with a reason.')
+    print('OK: every symbol named by a checked document exists, or is '
+          'allowlisted with a reason.')
     return 0
 
 

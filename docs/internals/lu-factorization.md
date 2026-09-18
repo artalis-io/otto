@@ -156,12 +156,12 @@ where η'[leaving_pos] = 1/η[leaving_pos]
 
 ### Applying Eta Updates
 
-**File:** `lu.c`, function `apply_eta_forward()`
+**File:** `lu.c`, function `lu_update_backend_apply_forward()`
 
 **CRITICAL:** This function must update ALL components, not just the pivot column.
 
 ```c
-void apply_eta_forward(lu, x) {
+void lu_update_backend_apply_forward(lu, x) {
     for (k = 0; k < num_eta; k++) {
         col = eta_col[k];
         eta = eta_vectors[k];
@@ -181,7 +181,7 @@ void apply_eta_forward(lu, x) {
 
 **For transpose solve:**
 ```c
-void apply_eta_backward(lu, x) {
+void lu_update_backend_apply_backward(lu, x) {
     for (k = num_eta - 1; k >= 0; k--) {
         col = eta_col[k];
         eta = eta_vectors[k];
@@ -219,7 +219,7 @@ void lu_solve(lu, rhs, solution) {
 
     // Step 3: Apply eta updates
     // solution = Eₖ⁻¹ × ... × E₁⁻¹ × z
-    apply_eta_forward(lu, solution);
+    lu_update_backend_apply_forward(lu, solution);
 }
 ```
 
@@ -229,7 +229,7 @@ void lu_solve(lu, rhs, solution) {
 void lu_solve_transpose(lu, rhs, solution) {
     // Step 1: Apply eta updates in reverse
     copy(work, rhs);
-    apply_eta_backward(lu, work);
+    lu_update_backend_apply_backward(lu, work);
 
     // Step 2: Solve U' × y = work
     solve_Ut(lu, work, solution);

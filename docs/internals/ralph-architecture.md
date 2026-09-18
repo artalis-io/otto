@@ -7,8 +7,8 @@ This document describes the high-level architecture and current API/dispatch bou
 
 ## API Design Philosophy (Feb 2026 Baseline)
 
-- LP and MIP entry points are explicit (`ralph_optimize_lp`, `ralph_optimize_mip`).
-- `ralph_optimize` remains as a compatibility dispatcher for legacy callers.
+- LP and MIP entry points are explicit (`ralph_core_optimize_lp`, `ralph_core_optimize_mip`).
+- `ralph_core_optimize` remains as a compatibility dispatcher for legacy callers.
 - Parameter contracts are typed and scope-aware first (LP-only, MIP-only, shared),
   with string-name APIs preserved as wrappers.
 - LP algorithm routing (requested vs effective algorithm/crossover and fallback reason)
@@ -25,7 +25,7 @@ This document describes the high-level architecture and current API/dispatch bou
 ┌─────────────────────────────────────────────────────────────────────┐
 │             Public API (ralph_lp.h + ralph_mip.h)                    │
 │  Model build/edit/query + solve APIs + params + diagnostics         │
-│  ralph_optimize_lp / ralph_optimize_mip / ralph_optimize (compat)   │
+│  ralph_core_optimize_lp / _mip / _optimize (compat)   │
 └─────────────────────────────────────────────────────────────────────┘
                                   │
                                   ▼
@@ -70,11 +70,11 @@ This document describes the high-level architecture and current API/dispatch bou
 ### External LP Backend Dispatch Contract (Feb 2026)
 
 - `lp_algorithm` supports explicit external modes:
-  `PRIMAL_SIMPLEX_EXTERNAL`, `DUAL_SIMPLEX_EXTERNAL`, `BARRIER_EXTERNAL`.
+  `RALPH_LP_ALGORITHM_PRIMAL_SIMPLEX_EXTERNAL`, `RALPH_LP_ALGORITHM_DUAL_SIMPLEX_EXTERNAL`, `RALPH_LP_ALGORITHM_BARRIER_EXTERNAL`.
 - `lp_external_provider` selects the required provider ID
   (`NONE`, `GLPK`, `HiGHS`, `CLP`, `CPLEX`, `Gurobi`, `GLOP`).
 - Dispatch rules:
-  - `PRIMAL_SIMPLEX`, `DUAL_SIMPLEX`, `AUTO` always select internal simplex backends.
+  - `RALPH_LP_ALGORITHM_PRIMAL_SIMPLEX`, `RALPH_LP_ALGORITHM_DUAL_SIMPLEX`, `AUTO` always select internal simplex backends.
   - External backends are selected only for explicit external algorithms and only when
     provider ID matches the registered external adapter.
   - On mismatch/unavailability, dispatch falls back to internal simplex and reports
@@ -186,13 +186,13 @@ The solver supports domain-specific customization via callbacks and priorities:
 
 ```c
 /* Branching control */
-void ralph_set_branch_priorities(RalphModel *m, const int *priorities);
-void ralph_set_branch_directions(RalphModel *m, const int *directions);
+void ralph_core_set_branch_priorities(RalphModel *m, const int *priorities);
+void ralph_core_set_branch_directions(RalphModel *m, const int *directions);
 
 /* Warm start for re-optimization */
-RalphBasis* ralph_save_basis(const RalphModel *m);
-int ralph_load_basis(RalphModel *m, const RalphBasis *basis);
-void ralph_free_basis(RalphBasis *basis);
+RalphBasis* ralph_core_save_basis(const RalphModel *m);
+int ralph_core_load_basis(RalphModel *m, const RalphBasis *basis);
+void ralph_core_free_basis(RalphBasis *basis);
 
 /* Cut callback - invoked at each B&B node */
 typedef struct {
@@ -200,7 +200,7 @@ typedef struct {
                          int num_vars, RalphCut *cuts, int max_cuts);
     void *user_data;
 } RalphCutCallback;
-void ralph_set_cut_callback(RalphModel *m, const RalphCutCallback *cb);
+void ralph_core_set_cut_callback(RalphModel *m, const RalphCutCallback *cb);
 
 /* Branch callback - custom variable selection */
 typedef struct {
@@ -209,11 +209,11 @@ typedef struct {
                               const double *lb, const double *ub);
     void *user_data;
 } RalphBranchCallback;
-void ralph_set_branch_callback(RalphModel *m, const RalphBranchCallback *cb);
+void ralph_core_set_branch_callback(RalphModel *m, const RalphBranchCallback *cb);
 
 /* Lazy constraints - add cuts and re-solve */
-int ralph_add_lazy_constraint(RalphModel *m, const RalphCut *cut);
-int ralph_add_lazy_constraints(RalphModel *m, const RalphCut *cuts, int count);
+int ralph_core_add_lazy_constraint(RalphModel *m, const RalphCut *cut);
+int ralph_core_add_lazy_constraints(RalphModel *m, const RalphCut *cuts, int count);
 ```
 
 **Use cases:**

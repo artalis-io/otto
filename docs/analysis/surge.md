@@ -355,7 +355,7 @@ This is where PTV, HERE, Ortec, and OptimoRoute play. Neither OR-Tools nor VROOM
 | Feature | Notes |
 |---------|-------|
 | **Multi-period/strategic planning** | Solve each day independently, pass vehicle end-states as next-day initial loads/positions via `sg_vehicle_set_initial_load()`. Orchestration decides which requests go to which day. |
-| **Territory/zone assignment** | Pre-filter which vehicles serve which requests by geography, feed filtered problem to solver. Already expressible via `sg_request_set_allowed_vehicles()`. |
+| **Territory/zone assignment** | Pre-filter which vehicles serve which requests by geography, feed filtered problem to solver. Already expressible via `sg_request_set_required_qualifications()` against `sg_vehicle_set_qualifications()`. |
 | **Driver skill calendars** | Availability = which vehicles exist today. Map calendar to vehicle set per solve, feed to solver. Qualifications already handle skill matching. |
 | **Regulatory compliance** | Country-specific HoS rules map to break policy parameters. ADR routing restrictions map to per-vehicle travel profiles (restricted road network). |
 

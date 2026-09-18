@@ -11,7 +11,7 @@ fw_solve_refuel_benders() [fuelwise/src/fw_refuel.c:541]
     │     z[2k..3k-1]   - stop decisions (binary, MASTER)
     │     θ = 3k        - recourse cost (continuous, MASTER)
     │
-    └── ralph_solve_benders() [ralph/src/ralph.c → benders.c:1206]
+    └── ralph_core_solve_benders() [ralph/src/ralph.c → benders.c:1206]
             │
             ├── benders_create() [benders.c:39]
             │     └── Allocate context, cuts, mappings
