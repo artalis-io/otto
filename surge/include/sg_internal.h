@@ -1210,6 +1210,12 @@ ARStatus sg_route_postprocess_reduce_vehicles_relaxed(const SGContext *ctx,
                                                        double distance_factor);
 ARStatus sg_route_postprocess_ejection_reduce(const SGContext *ctx, SGRouteSolution *sol);
 ARStatus sg_route_postprocess_polish_distance(const SGContext *ctx, SGRouteSolution *sol);
+/* When config.hard_max_duration is set, eject requests from any route whose
+ * exact duration exceeds the vehicle's max_duration until it is within the cap
+ * (ejected requests go to the unassigned pool for the repair operators). The
+ * greedy construction's time budget is approximate, so it can build over-cap
+ * routes; this repairs them. No-op when hard_max_duration is off. */
+ARStatus sg_route_postprocess_eject_over_duration(const SGContext *ctx, SGRouteSolution *sol);
 int sg_route_try_pd_reorder_once(const SGContext *ctx, SGRouteSolution *sol);
 int sg_route_try_2opt_intra_once(const SGContext *ctx, SGRouteSolution *sol);
 int sg_route_try_pd_relocate_intra_once(const SGContext *ctx, SGRouteSolution *sol);

@@ -8774,6 +8774,58 @@ static void test_multi_trip_max_duration_new_trip(void) {
     sg_free(ctx);
 }
 
+static void test_hard_max_duration_existing_trip(void) {
+    /* With sg_set_hard_max_duration, a route must never exceed max_duration even
+       when packing stops into a single trip -- excess stays unassigned rather
+       than overloading one vehicle past the (legal HoS) cap. This exercises the
+       existing-trip insertion accept path (capacity is ample; single trip). */
+    SGContext *ctx = make_config(3000, 42);
+    assert(sg_set_hard_max_duration(ctx, true) == SG_STATUS_OK);
+    assert(sg_get_hard_max_duration(ctx) == true);
+    uint32_t depot;
+    add_depot_with_location(ctx, &depot, 0, 0);
+    sg_depot_set_time_window(ctx, depot, 0, 86400);
+    add_vehicle_with_depot(ctx, depot, 0, 86400, 1000.0);  /* big cap: won't force trips */
+    sg_vehicle_set_max_trips(ctx, 0, 1);                    /* single trip */
+    sg_vehicle_set_max_duration(ctx, 0, 50);              /* tight: fits ~2 stops on a line */
+    add_delivery_request(ctx, 10, 0, 0, 86400, 0, -1.0);
+    add_delivery_request(ctx, 20, 0, 0, 86400, 0, -1.0);
+    add_delivery_request(ctx, 30, 0, 0, 86400, 0, -1.0);
+    add_delivery_request(ctx, 40, 0, 0, 86400, 0, -1.0);
+    assert(sg_solve(ctx) == SG_STATUS_OK);
+    assert(sg_get_used_vehicle_count(ctx) == 1);
+    assert(sg_solution_get_route_duration(ctx, 0) <= 50.0 + 1e-6);  /* hard cap honored */
+    assert(sg_get_unassigned(ctx) >= 1);                            /* couldn't fit all */
+    sg_free(ctx);
+}
+
+static void test_hard_max_duration_eject_pass(void) {
+    /* The greedy construction can pack a route past max_duration via its
+       approximate time budget; with hard_max_duration the post-construction
+       eject pass must repair it so NO route exceeds the cap (#182 dig). Many
+       stops, ample capacity, single trip -> only max_duration limits it. */
+    SGContext *ctx = make_config(500, 7);
+    assert(sg_set_hard_max_duration(ctx, true) == SG_STATUS_OK);
+    uint32_t depot;
+    add_depot_with_location(ctx, &depot, 0, 0);
+    sg_depot_set_time_window(ctx, depot, 0, 86400);
+    add_vehicle_with_depot(ctx, depot, 0, 86400, 1000.0);
+    sg_vehicle_set_max_trips(ctx, 0, 1);
+    sg_vehicle_set_max_duration(ctx, 0, 60);   /* only the nearest few stops fit */
+    { int s; for (s = 1; s <= 8; s++) add_delivery_request(ctx, 10.0 * s, 0, 0, 86400, 0, -1.0); }
+    assert(sg_solve(ctx) == SG_STATUS_OK);
+    /* invariant: every used route honors the hard cap */
+    {
+        uint32_t r, nr = sg_solution_get_route_count(ctx);
+        for (r = 0; r < nr; r++) {
+            if (sg_solution_get_route_stop_count(ctx, r) > 0)
+                assert(sg_solution_get_route_duration(ctx, r) <= 60.0 + 1e-6);
+        }
+    }
+    assert(sg_get_unassigned(ctx) >= 1);  /* not all 8 fit within 60s */
+    sg_free(ctx);
+}
+
 static void test_multi_trip_capacity_reset(void) {
     /* Vehicle capacity=5, two requests each with demand=5.
        With 1 trip: need 2 vehicles or 1 unassigned.
@@ -18052,6 +18104,8 @@ int main(void) {
     RUN_TEST(test_multi_trip_no_change_default);
     RUN_TEST(test_multi_trip_capacity_reset);
     RUN_TEST(test_multi_trip_max_duration_new_trip);
+    RUN_TEST(test_hard_max_duration_existing_trip);
+    RUN_TEST(test_hard_max_duration_eject_pass);
     RUN_TEST(test_multi_trip_timing);
     RUN_TEST(test_multi_trip_pd_same_trip);
     RUN_TEST(test_multi_trip_max_trips_enforced);
@@ -18369,9 +18423,9 @@ int main(void) {
     printf("================\n");
     printf("%d/%d tests passed\n", tests_passed, tests_run);
 #ifdef SG_HAS_THREADS
-    assert(tests_run == 471);
+    assert(tests_run == 473);
 #else
-    assert(tests_run == 447);
+    assert(tests_run == 449);
 #endif
     return tests_passed == tests_run ? 0 : 1;
 }

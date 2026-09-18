@@ -38,6 +38,10 @@ void sg_config_default(SGConfig *config);
 SGStatus sg_set_config(SGContext *ctx, const SGConfig *config);
 SGStatus sg_set_require_bound_requests_at_solve(SGContext *ctx, bool require_bound);
 bool sg_get_require_bound_requests_at_solve(const SGContext *ctx);
+/* When true, vehicle max_duration is a hard constraint in the insertion accept
+ * path (over-cap routes are rejected, not just penalized). Default false. */
+SGStatus sg_set_hard_max_duration(SGContext *ctx, bool hard);
+bool sg_get_hard_max_duration(const SGContext *ctx);
 SGStatus sg_set_demand_sign_convention(SGContext *ctx, SGDemandSignConvention convention);
 SGDemandSignConvention sg_get_demand_sign_convention(const SGContext *ctx);
 SGStatus sg_set_dimension_count(SGContext *ctx, uint32_t dimension_count);

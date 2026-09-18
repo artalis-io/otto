@@ -101,6 +101,9 @@ static SGStatus build_config(SGContext *ctx, const ShJsonValue *cfg_val) {
         v = sh_json_get(cfg_val, "lexicographic_objective");
         if (v) cfg.lexicographic_objective = sh_json_as_bool(v, cfg.lexicographic_objective);
 
+        v = sh_json_get(cfg_val, "hard_max_duration");
+        if (v) cfg.hard_max_duration = sh_json_as_bool(v, cfg.hard_max_duration);
+
         v = sh_json_get(cfg_val, "adaptive_q");
         if (v) cfg.adaptive_q = sh_json_as_bool(v, cfg.adaptive_q);
 

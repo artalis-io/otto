@@ -197,6 +197,10 @@ typedef struct {
     uint64_t seed;
     bool deterministic;
     bool require_bound_requests_at_solve;
+    /* Treat vehicle max_duration as a HARD constraint in the insertion accept
+     * path (reject over-cap routes even during infeasible-space exploration),
+     * not just a penalty. Off by default; use for legal HoS on-duty limits. */
+    bool hard_max_duration;
     SGPriorityRemovalPolicy priority_removal_policy;
     bool lexicographic_objective;
     SGAcceptType accept_type;
