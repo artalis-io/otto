@@ -173,8 +173,9 @@ test-reconcile: $(NX_PIPELINE_BIN)
 test-matrix:
 	@if command -v python3 >/dev/null 2>&1; then \
 		python3 scripts/matrix_selftest.py; \
+		python3 scripts/vrp_bundle_selftest.py; \
 	else \
-		echo "skipping matrix self-test: python3 not found" >&2; \
+		echo "skipping matrix/bundle self-tests: python3 not found" >&2; \
 	fi
 
 debug: CFLAGS = $(DEBUG_CFLAGS)
