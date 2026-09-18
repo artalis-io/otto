@@ -1,0 +1,19 @@
+{
+  "nx_schema": 2,
+  "version": "TEMPLATE-vehicles-v1",
+  "output_type": "record",
+  "skip_rows": 0,
+
+  "_comment": "SKELETON. Set every `source` to the 0-based raw column index for THIS vendor's fleet export. Keep row_id producing a stable `id`; emit_vrp_bundle flattens the rest verbatim into vehicles.csv, so name columns however the solve-request builder expects.",
+
+  "columns": [
+    {"source": 0, "target": "plate",             "type": "string", "transforms": ["trim"], "default": ""},
+    {"source": 1, "target": "vehicle_class",     "type": "string", "transforms": ["trim"], "default": ""},
+    {"source": 2, "target": "depot",             "type": "string", "transforms": ["trim"], "default": ""},
+    {"source": 3, "target": "capacity_pallets",  "type": "double", "precision": 10, "validate": {"min": 0}},
+    {"source": 4, "target": "capacity_kg",       "type": "double", "precision": 10, "validate": {"min": 0}},
+    {"source": 5, "target": "operator",          "type": "string", "transforms": ["trim"], "default": ""}
+  ],
+
+  "row_id": {"template": "TEMPLATE-veh-{plate}", "slugify": true}
+}
