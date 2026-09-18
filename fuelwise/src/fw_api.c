@@ -250,6 +250,18 @@ static char *process_solve(const char *body, size_t body_len, int *status_code) 
     if (parse_solve_request(root, &problem) != 0) {
         sh_arena_free(arena);
         *status_code = 400;
+        /*
+         * parse_solve_request() can fail after it has already allocated. It
+         * parses "segments" before "stations", and parse_snapped_stations()
+         * rejects an empty array -- so a body carrying valid segments and an
+         * empty stations list leaked the segments, 24 bytes per segment, on
+         * every such request. The other two exits from this function free the
+         * problem; this one did not. parse_solve_request() memsets on entry,
+         * so a partially filled problem is safe to free.
+         *
+         * Found by LeakSanitizer through the api handler fuzzer.
+         */
+        free_problem(&problem);
         return strdup("{\"error\": \"Invalid request format\"}\n");
     }
 

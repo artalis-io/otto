@@ -6339,6 +6339,56 @@ static void test_commodity_pd_request(void) {
  *   - the call fails once the cap is reached, so the loop terminates
  *   - the count stops at the cap rather than continuing to climb
  */
+/*
+ * sg_set_num_setup_classes() guarded count * count but not the allocation it
+ * then made, which is total * sizeof(double). num_classes just under 2^31
+ * gives a total of 4.6e18 -- fits in size_t -- and 4.6e18 * 8 does not.
+ *
+ * calloc() is required to detect that and return NULL, so a release build
+ * reported OUT_OF_MEMORY and carried on; a sanitizer build aborts with
+ * calloc-overflow. Found by fuzzing sg_api_handle() with a num_classes of
+ * 2444444444444444444444444444444444444444444444, which is also how this was
+ * missed by reading: the function looked guarded because it has a guard.
+ */
+static void test_setup_classes_alloc_overflow(void) {
+    SGContext *ctx = sg_create();
+    assert(ctx != NULL);
+
+    /* Sane values still work. */
+    assert(sg_set_num_setup_classes(ctx, 4) == SG_STATUS_OK);
+    assert(sg_set_setup_time(ctx, 1, 2, 30.0) == SG_STATUS_OK);
+
+    /* Zero frees the matrix and is not an error. */
+    assert(sg_set_num_setup_classes(ctx, 0) == SG_STATUS_OK);
+
+    /*
+     * Large enough that count*count fits but count*count*sizeof(double) does
+     * not. Refused by the bounds check rather than by the allocator.
+     */
+    assert(sg_set_num_setup_classes(ctx, 2147483647u) == SG_STATUS_INVALID_ARG);
+    assert(sg_set_num_setup_classes(ctx, 2000000000u) == SG_STATUS_INVALID_ARG);
+
+    /*
+     * Overflow was only half of it. 444 million classes does not overflow --
+     * count*count*8 is 1.58e18, well inside size_t -- it just asks calloc()
+     * for 1.58 exabytes, which a release build survives and a sanitizer build
+     * aborts on. The cap is what refuses these, so the boundary is asserted
+     * from both sides.
+     */
+    assert(sg_set_num_setup_classes(ctx, 444000000u) == SG_STATUS_INVALID_ARG);
+    assert(sg_set_num_setup_classes(ctx, 1073741824u) == SG_STATUS_INVALID_ARG);
+    assert(sg_set_num_setup_classes(ctx, SG_MAX_SETUP_CLASSES + 1) == SG_STATUS_INVALID_ARG);
+
+    /* At the cap it still works, so the bound has not quietly narrowed. */
+    assert(sg_set_num_setup_classes(ctx, SG_MAX_SETUP_CLASSES) == SG_STATUS_OK);
+    assert(sg_set_setup_time(ctx, 1, SG_MAX_SETUP_CLASSES, 5.0) == SG_STATUS_OK);
+
+    /* And count*count itself overflowing is still caught. */
+    assert(sg_set_num_setup_classes(ctx, 4294967295u) == SG_STATUS_INVALID_ARG);
+
+    sg_free(ctx);
+}
+
 static void test_exclusion_group_limit(void) {
     SGContext *ctx = sg_create();
     uint32_t gid;
@@ -17871,6 +17921,7 @@ int main(void) {
     RUN_TEST(test_commodity_pd_request);
     RUN_TEST(test_exclusion_group_api);
     RUN_TEST(test_exclusion_group_limit);
+    RUN_TEST(test_setup_classes_alloc_overflow);
     RUN_TEST(test_exclusion_group_filters);
     RUN_TEST(test_exclusion_group_multi);
     RUN_TEST(test_commodity_exclusion_combined);
@@ -18292,9 +18343,9 @@ int main(void) {
     printf("================\n");
     printf("%d/%d tests passed\n", tests_passed, tests_run);
 #ifdef SG_HAS_THREADS
-    assert(tests_run == 469);
+    assert(tests_run == 470);
 #else
-    assert(tests_run == 445);
+    assert(tests_run == 446);
 #endif
     return tests_passed == tests_run ? 0 : 1;
 }

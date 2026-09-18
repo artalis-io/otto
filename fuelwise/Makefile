@@ -130,9 +130,54 @@ test-bench: shared ralph $(LIB_NAME)
 	$(MAKE) -C bench regression-test
 
 # Clean
+# --- Fuzzing the API handler (requires clang with libFuzzer) ---
+#
+# *_api_handle() is an ordinary C function taking (ctx, request,
+# response), so this needs no socket, no event loop and no server
+# lifecycle. The api/src/main.c wrappers are thin marshalling -- see
+# docs/analysis/api-server-read.md -- and this is the code behind them,
+# where a request body becomes a model.
+#
+# The shared sources are compiled in rather than linked from libshared.a
+# because sh_json is the parser under test and an uninstrumented copy of
+# it would defeat the point. Listed by wildcard so the set cannot drift
+# from what is actually in the directory.
+FUZZ_SHARED_SRCS = $(filter-out %/sh_httpserver.c %/sh_httpasync.c,\
+                   $(wildcard ../shared/src/*.c))
+FUZZ_MINIZ_SRCS = $(wildcard ../vendor/miniz/miniz*.c)
+
+# Overridable so the target can be built with a clang that has libFuzzer
+# when the default one does not -- the MinGW clang on Windows, say.
+FUZZ_API_CC ?= clang
+FUZZ_API_BIN = fuzz_fuelwise_api
+FUZZ_API_SRC = tests/fuzz/fuzz_fuelwise_api.c
+
+fuzz-api: $(FUZZ_API_BIN)
+
+$(FUZZ_API_BIN): $(FUZZ_API_SRC) $(SOURCES) $(wildcard ../ralph/src/*.c ../ralph/src/optim/*.c)
+	$(FUZZ_API_CC) -w -g -O1 -std=c11 -D_GNU_SOURCE $(CC_PORT_DEFS) -DMINIZ_NO_STDIO -DMINIZ_NO_TIME  \
+	  -fsanitize=fuzzer,address,undefined -fno-omit-frame-pointer \
+	  $(INCLUDES) -I../shared/tests/fuzz -I../vendor/miniz -I../ralph/src \
+	  $< $(SOURCES) $(wildcard ../ralph/src/*.c ../ralph/src/optim/*.c) $(FUZZ_SHARED_SRCS) $(FUZZ_MINIZ_SRCS) \
+	  -lm  $(EXE_OUT)$@
+
+FUZZ_SMOKE_SECONDS ?= 30
+FUZZ_WORK ?= build/fuzz-corpus
+
+# A bounded run over the committed seeds, for CI. The first directory is
+# where libFuzzer writes what it finds; the seeds after it are read only.
+# The name CI uses for every module. This one has a single harness.
+fuzz-smoke: fuzz-api-smoke
+
+fuzz-api-smoke: fuzz-api
+	@mkdir -p $(FUZZ_WORK)/api
+	./$(FUZZ_API_BIN) $(FUZZ_WORK)/api tests/fuzz/corpus_api/ \
+		-max_total_time=$(FUZZ_SMOKE_SECONDS) -print_final_stats=1
+
 clean:
 	rm -f $(OBJECTS) $(LIB_NAME) $(TEST_EXEC) $(TRANSPORT_TEST_EXEC)
 	$(MAKE) -C bench clean
+	rm -f $(FUZZ_API_BIN) $(FUZZ_API_BIN).exe
 
 # Clean all including Ralph
 clean-all: clean
@@ -150,7 +195,7 @@ uninstall:
 	rm -rf /usr/local/include/fuelwise
 	rm -f /usr/local/lib/$(LIB_NAME)
 
-.PHONY: all lib clean clean-all debug test test-regression test-unit test-bench test-transport wasm install uninstall ralph shared help
+.PHONY: all lib clean clean-all debug test test-regression test-unit test-bench test-transport wasm install uninstall ralph shared help fuzz-api fuzz-api-smoke fuzz-smoke
 
 # Build WASM (delegates to wasm/ subdirectory)
 wasm:

@@ -2187,8 +2187,27 @@ SGStatus sg_set_num_setup_classes(SGContext *ctx, uint32_t count) {
         return SG_STATUS_OK;
     }
 
+    if (count > SG_MAX_SETUP_CLASSES) {
+        return SG_STATUS_INVALID_ARG;
+    }
+
     total = (size_t)count * (size_t)count;
     if (total / count != count) {
+        return SG_STATUS_INVALID_ARG;
+    }
+    /*
+     * The check above covers count * count. The allocation is
+     * total * sizeof(double), which can still overflow once total is large:
+     * num_classes just under 2^31 gives a total of 4.6e18, which fits, and
+     * 4.6e18 * 8 does not. calloc() is required to detect that and return
+     * NULL, so a release build reported OUT_OF_MEMORY and carried on -- but a
+     * sanitizer build aborts on it, and "the allocator will catch it" is a
+     * poor place to put a bounds check on attacker-controlled input.
+     *
+     * Found by fuzzing sg_api_handle() with
+     * {"setup_times":{"num_classes":2444...444}}.
+     */
+    if (sh_mul_would_overflow(total, sizeof(double))) {
         return SG_STATUS_INVALID_ARG;
     }
     matrix = (double *)calloc(total, sizeof(double));

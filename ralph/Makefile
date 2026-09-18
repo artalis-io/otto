@@ -1321,8 +1321,53 @@ download-netlib:
 	cd $(BENCH_DIR) && bash download_netlib.sh
 
 # Clean
+# --- Fuzzing the API handler (requires clang with libFuzzer) ---
+#
+# *_api_handle() is an ordinary C function taking (ctx, request,
+# response), so this needs no socket, no event loop and no server
+# lifecycle. The api/src/main.c wrappers are thin marshalling -- see
+# docs/analysis/api-server-read.md -- and this is the code behind them,
+# where a request body becomes a model.
+#
+# The shared sources are compiled in rather than linked from libshared.a
+# because sh_json is the parser under test and an uninstrumented copy of
+# it would defeat the point. Listed by wildcard so the set cannot drift
+# from what is actually in the directory.
+FUZZ_SHARED_SRCS = $(filter-out %/sh_httpserver.c %/sh_httpasync.c,\
+                   $(wildcard ../shared/src/*.c))
+FUZZ_MINIZ_SRCS = $(wildcard ../vendor/miniz/miniz*.c)
+
+# Overridable so the target can be built with a clang that has libFuzzer
+# when the default one does not -- the MinGW clang on Windows, say.
+FUZZ_API_CC ?= clang
+FUZZ_API_BIN = fuzz_ralph_api
+FUZZ_API_SRC = tests/fuzz/fuzz_ralph_api.c
+
+fuzz-api: $(FUZZ_API_BIN)
+
+$(FUZZ_API_BIN): $(FUZZ_API_SRC) $(SOURCES)
+	$(FUZZ_API_CC) -w -g -O1 -std=c11 -D_GNU_SOURCE $(CC_PORT_DEFS) -DMINIZ_NO_STDIO -DMINIZ_NO_TIME  \
+	  -fsanitize=fuzzer,address,undefined -fno-omit-frame-pointer \
+	  $(INCLUDES) -I../shared/tests/fuzz -I../vendor/miniz -I$(SRC_DIR) \
+	  $< $(SOURCES) $(FUZZ_SHARED_SRCS) $(FUZZ_MINIZ_SRCS) \
+	  -lm  $(EXE_OUT)$@
+
+FUZZ_SMOKE_SECONDS ?= 30
+FUZZ_WORK ?= build/fuzz-corpus
+
+# A bounded run over the committed seeds, for CI. The first directory is
+# where libFuzzer writes what it finds; the seeds after it are read only.
+# The name CI uses for every module. This one has a single harness.
+fuzz-smoke: fuzz-api-smoke
+
+fuzz-api-smoke: fuzz-api
+	@mkdir -p $(FUZZ_WORK)/api
+	./$(FUZZ_API_BIN) $(FUZZ_WORK)/api tests/fuzz/corpus_api/ \
+		-max_total_time=$(FUZZ_SMOKE_SECONDS) -print_final_stats=1
+
 clean:
 	rm -f $(OBJECTS) $(DEPS) $(SRC_DIR)/lp_telemetry.o $(LIB_NAME) $(TEST_EXEC) $(PRESOLVE_TEST_EXEC) $(EDGE_TEST_EXEC) $(LAP_TEST_EXEC) $(NETFLOW_TEST_EXEC) $(DETECT_TEST_EXEC) $(OPTIM_TEST_EXEC) $(LP_TEST_EXEC) $(MPS_PARSER_TEST_EXEC) $(API_TEST_EXEC) $(BENDERS_TEST_EXEC) $(BENDERS_DEBUG_TEST_EXEC) $(BENDERS_WARMSTART_TEST_EXEC) $(MIP_WARMSTART_TEST_EXEC) $(MIP_LP_RECOVERY_TEST_EXEC) $(MIP_START_SPARSE_TEST_EXEC) $(MIP_START_REPAIR_TEST_EXEC) $(MIP_BUG_TEST_EXEC) $(SPP_CONTEXT_TEST_EXEC) $(SPP_CUTS_TEST_EXEC) $(LIFTED_COVER_TEST_EXEC) $(PRESOLVE_DIFF_TEST_EXEC) $(NODE_CUTS_DIFF_TEST_EXEC) $(TIME_LIMIT_TEST_EXEC) $(UNBOUNDED_INF_TEST_EXEC) $(INFEAS_EQ_TEST_EXEC) $(PHASE1_ORACLE_TEST_EXEC) $(SPP_HEURISTIC_TEST_EXEC) $(SPP_BRANCH_TEST_EXEC) $(BENDERS_MASTER_START_TEST_EXEC) $(WARMSTART_SERDE_TEST_EXEC) $(BEACONFD_TEST_EXEC) $(BEACONFD_TRACE_TEST_EXEC) $(SIMPLEX_POLICY_TEST_EXEC) $(PHASE1_RECOVERY_TEST_EXEC) $(PHASE1_ENGINE_TEST_EXEC) $(PHASE1_ZONES_TEST_EXEC) $(DUAL_RATIO_FLIP_TEST_EXEC) $(LP_REFACTOR_POLICY_TEST_EXEC) $(LP_REINVERT_CONTROLLER_TEST_EXEC) $(LP_BASIS_GOVERNOR_TEST_EXEC) $(LP_BASIS_GOVERNOR_RUNTIME_TEST_EXEC) $(LP_DETERMINISM_TEST_EXEC) $(LP_SENSITIVITY_TEST_EXEC) $(LP_CONFLICT_TEST_EXEC) $(LP_ALGORITHM_API_TEST_EXEC) $(LP_POLICY_GLPK_COMPAT_TEST_EXEC) $(LP_GLPK_STRICT_TEST_EXEC) $(LP_GLPK_STRICT_BFCP_TEST_EXEC) $(LP_BFCP_POLICY_TEST_EXEC) $(LP_DISPATCH_TEST_EXEC) $(LP_EXTERNAL_ADAPTER_TEST_EXEC) $(LP_EXTERNAL_ADAPTER_API_TEST_EXEC) $(LP_EXTERNAL_INTROSPECTION_API_TEST_EXEC) $(LP_EXTERNAL_FAILURE_API_TEST_EXEC) $(LP_EXTERNAL_OOP_RUNNER_TEST_EXEC) $(LP_REPAIR_DEADLINE_TEST_EXEC) $(LP_EXTERNAL_GLPK_OOP_TEST_EXEC) $(LP_EXTERNAL_GLPK_OOP_INTEGRATION_TEST_EXEC) $(LP_TELEMETRY_TEST_EXECS) $(LP_PUBLIC_API_SPLIT_TEST_EXEC) $(MIP_PUBLIC_API_SPLIT_TEST_EXEC) $(LP_ERROR_API_TEST_EXEC) $(LU_MARKOWITZ_TEST_EXEC) $(LU_SUPERNODE_TEST_EXEC) $(BENCH_SIZES_EXEC) $(COMPARE_GLPK_EXEC) $(BENCH_VS_GLPK_EXEC) $(BENCH_MIP_EXEC) $(PROFILE_BENCH_EXEC) $(BENCH_LAP_EXEC) $(BENCH_LAP_PERF_EXEC) $(BENCH_NETFLOW_EXEC) $(RALPH_BENCHMARK_EXEC) $(TRANSPORT_TEST_EXEC) $(REFUELING_TEST_EXEC)
+	rm -f $(FUZZ_API_BIN) $(FUZZ_API_BIN).exe
 
 # Install headers and library
 install: $(LIB_NAME)
@@ -1337,7 +1382,7 @@ uninstall:
 	rm -rf /usr/local/include/ralph
 	rm -f /usr/local/lib/$(LIB_NAME)
 
-.PHONY: all lib clean debug test test-transport test-transport-asan test-core test-lp-suite test-mip-suite test-regression-suites test-edge test-lap test-netflow test-detect test-optim test-api test-benders test-benders-debug test-benders-known-regression test-benders-warmstart test-mip-bug test-bb-node-pool test-gmi-cut-validity test-cover-cuts-generated test-mip-warmstart test-mip-lp-recovery test-mip-start-sparse test-mip-start-repair test-spp-context test-spp-cuts test-lifted-cover test-presolve-differential test-spp-heuristic test-spp-branch test-benders-master-start test-warmstart-serde test-beaconfd test-beaconfd-trace test-phase1-recovery test-phase1-engine test-phase1-zones test-simplex-policy test-dual-ratio-flip test-lp-refactor-policy test-lp-reinvert-controller test-lp-basis-governor test-lp-basis-governor-runtime test-lp-determinism test-lp-sensitivity test-lp-conflict test-lp-algorithm-api test-lp-policy-glpk-compat test-lp-glpk-strict test-lp-glpk-strict-bfcp test-lp-bfcp-policy test-lp-dispatch test-lp-external-adapter test-lp-external-adapter-api test-lp-external-introspection-api test-lp-external-failure-api test-lp-external-oop-runner test-lp-external-glpk-oop test-lp-external-glpk-oop-integration test-lp-telemetry test-lp-telemetry-solver test-lp-telemetry-lu test-lp-telemetry-gate test-lp-telemetry-lu-sparse test-lp-public-api-split test-mip-public-api-split test-lp-error-api test-lu-markowitz test-lu-supernode test-netlib test-netlib-full test-netlib-gate test-netlib-gate-small test-netlib-gate-stress-fit1p-nesm test-netlib-gate-stress-fit1p-nesm-gating test-netlib-gate-stress-fit1p-nesm-non-gating test-netlib-gate-pilot-focus test-netlib-gate-timeout22 test-netlib-gate-crash6-norelax-noflip test-netlib-gate-control-all-canary phase1-canaries glpk-strict-plan-init glpk-strict-plan-status glpk-strict-plan-next glpk-strict-plan-phase1 glpk-strict-plan-phase2 glpk-strict-plan-phase3 bench bench-lap bench-lap-perf bench-lap-perf-quick bench-netflow compare-glpk bench-glpk bench-glpk-quick bench-mip bench-mip-quick bench-mip-cover-effect bench-mip-specialized bench-mip-compare profile-bench build-ralph-benchmark download-netlib install uninstall help test-mps-parser test-node-cuts-diff test-time-limit test-unbounded-infinite-bound test-infeasible-equality-bounds test-phase1-oracle-glpk test-bandm test-blend test-lotfi test-lp-repair-deadline repro-cfl-crash bench-mip-specialized-quick bench-mip-compare-quick test-lp test-presolve
+.PHONY: all lib clean debug test test-transport test-transport-asan test-core test-lp-suite test-mip-suite test-regression-suites test-edge test-lap test-netflow test-detect test-optim test-api test-benders test-benders-debug test-benders-known-regression test-benders-warmstart test-mip-bug test-bb-node-pool test-gmi-cut-validity test-cover-cuts-generated test-mip-warmstart test-mip-lp-recovery test-mip-start-sparse test-mip-start-repair test-spp-context test-spp-cuts test-lifted-cover test-presolve-differential test-spp-heuristic test-spp-branch test-benders-master-start test-warmstart-serde test-beaconfd test-beaconfd-trace test-phase1-recovery test-phase1-engine test-phase1-zones test-simplex-policy test-dual-ratio-flip test-lp-refactor-policy test-lp-reinvert-controller test-lp-basis-governor test-lp-basis-governor-runtime test-lp-determinism test-lp-sensitivity test-lp-conflict test-lp-algorithm-api test-lp-policy-glpk-compat test-lp-glpk-strict test-lp-glpk-strict-bfcp test-lp-bfcp-policy test-lp-dispatch test-lp-external-adapter test-lp-external-adapter-api test-lp-external-introspection-api test-lp-external-failure-api test-lp-external-oop-runner test-lp-external-glpk-oop test-lp-external-glpk-oop-integration test-lp-telemetry test-lp-telemetry-solver test-lp-telemetry-lu test-lp-telemetry-gate test-lp-telemetry-lu-sparse test-lp-public-api-split test-mip-public-api-split test-lp-error-api test-lu-markowitz test-lu-supernode test-netlib test-netlib-full test-netlib-gate test-netlib-gate-small test-netlib-gate-stress-fit1p-nesm test-netlib-gate-stress-fit1p-nesm-gating test-netlib-gate-stress-fit1p-nesm-non-gating test-netlib-gate-pilot-focus test-netlib-gate-timeout22 test-netlib-gate-crash6-norelax-noflip test-netlib-gate-control-all-canary phase1-canaries glpk-strict-plan-init glpk-strict-plan-status glpk-strict-plan-next glpk-strict-plan-phase1 glpk-strict-plan-phase2 glpk-strict-plan-phase3 bench bench-lap bench-lap-perf bench-lap-perf-quick bench-netflow compare-glpk bench-glpk bench-glpk-quick bench-mip bench-mip-quick bench-mip-cover-effect bench-mip-specialized bench-mip-compare profile-bench build-ralph-benchmark download-netlib install uninstall help test-mps-parser test-node-cuts-diff test-time-limit test-unbounded-infinite-bound test-infeasible-equality-bounds test-phase1-oracle-glpk test-bandm test-blend test-lotfi test-lp-repair-deadline repro-cfl-crash bench-mip-specialized-quick bench-mip-compare-quick test-lp test-presolve fuzz-api fuzz-api-smoke fuzz-smoke
 
 # MIP benchmark with specialized solvers (LAP, Network, SCP)
 bench-mip-specialized: $(BENCH_MIP_EXEC)
