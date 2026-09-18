@@ -1,0 +1,201 @@
+#!/usr/bin/env python3
+"""
+build_surge_request.py - Nexus pipeline step: VRP bundle -> Surge solve request.
+
+Turns a bundle (orders.csv, distance.csv, duration.csv, vehicles.csv -- see
+emit_vrp_bundle.py) into a Surge POST /api/v1/solve JSON body. The bundle's
+location order IS the travel-matrix index order (row 0 = depot, rows 1..N =
+stops), so:
+
+  * locations[]  -> one entry per bundle row, indexed 0..N (the travel index)
+  * depots[]     -> the depot row(s) (role=depot), location_id = their index (0)
+  * tasks[]      -> one delivery task per stop, location_id = its travel index
+  * requests[]   -> one delivery-only request per task
+  * travel{}     -> location_count + the square distance/duration matrices
+
+Multiple routes per vehicle use Surge's native multi-trip (max_trips /
+trip_reload_seconds): each trip departs and returns to the depot, capacity
+resets per trip. Fleet: own vehicles plus optional subcontractor clones (high
+fixed cost, used only when the own fleet can't cover -- "unlimited subs").
+
+Everything policy-ish is a flag; the bundle alone (no other input) drives the
+structure, so this is vendor-neutral.
+
+Usage:
+  build_surge_request.py --bundle bundle/truck.distance \\
+    --demand-cols pallets,weight_kg --capacity-cols capacity_pallets,capacity_kg \\
+    --max-trips 0 --trip-reload-seconds 1800 \\
+    --shift 06:00-18:00 --max-duration-min 540 \\
+    --sub-col is_subcontractor --sub-clones 5 --own-fixed-cost 100 --sub-fixed-cost 100000 \\
+    --objective vehicles-then-distance --max-time-seconds 30 --out request.json
+"""
+import argparse, csv, json, os, sys
+
+
+def read_csv(path):
+    with open(path) as fh:
+        return list(csv.reader(fh))
+
+
+def to_num(s, default=0.0):
+    s = (s or "").strip()
+    if s == "":
+        return default
+    try:
+        f = float(s)
+        return int(f) if f.is_integer() else f
+    except ValueError:
+        return default
+
+
+def hhmm_to_sec(s):
+    """'H:MM' / 'HH:MM' -> seconds from midnight; '' -> None."""
+    s = (s or "").strip()
+    if not s or ":" not in s:
+        return None
+    h, m = s.split(":")[:2]
+    return int(h) * 3600 + int(m) * 60
+
+
+def flatten_square(rows):
+    """rows = labelled square CSV (header + N rows, first col = key). -> (N, flat)."""
+    keys = [r[0] for r in rows[1:]]
+    N = len(keys)
+    flat = []
+    for i in range(N):
+        cells = rows[i + 1][1:]
+        assert len(cells) == N, f"row {i} has {len(cells)} cols, expected {N}"
+        flat.extend(to_num(c) for c in cells)
+    return N, flat, keys
+
+
+def parse_shift(s):
+    """'HH:MM-HH:MM' -> (early_sec, late_sec)."""
+    a, b = s.split("-")
+    return hhmm_to_sec(a), hhmm_to_sec(b)
+
+
+def main():
+    ap = argparse.ArgumentParser(description="Build a Surge solve request from a VRP bundle")
+    ap.add_argument("--bundle", required=True, help="bundle dir with orders/distance/duration/vehicles.csv")
+    ap.add_argument("--demand-cols", default="pallets,weight_kg", help="order columns -> demand dimensions")
+    ap.add_argument("--capacity-cols", default="capacity_pallets,capacity_kg", help="vehicle columns -> capacity dims")
+    ap.add_argument("--max-trips", type=int, default=2,
+                    help="trips per vehicle. NOTE: Surge's solver currently drops all "
+                         "requests for max_trips 0 (unlimited) or >=3; use 1 or 2 until fixed.")
+    ap.add_argument("--trip-reload-seconds", type=int, default=1800)
+    ap.add_argument("--shift", default="06:00-18:00", help="HH:MM-HH:MM depot/vehicle shift window")
+    ap.add_argument("--max-duration-min", type=int, default=540, help="max on-duty minutes per vehicle")
+    ap.add_argument("--sub-col", default="is_subcontractor", help="vehicle column flagging subcontractors")
+    ap.add_argument("--sub-clones", type=int, default=5, help="times to replicate each subcontractor (unlimited-ish)")
+    ap.add_argument("--own-fixed-cost", type=float, default=100.0)
+    ap.add_argument("--sub-fixed-cost", type=float, default=100000.0)
+    ap.add_argument("--objective", default="vehicles-then-distance",
+                    choices=["vehicles-then-distance", "distance", "duration"])
+    ap.add_argument("--max-iterations", type=int, default=20000)
+    ap.add_argument("--demand-sign", type=int, default=1,
+                    help="0=pickup+/delivery- (Surge default), 1=pickup-/delivery+ (matches positive delivery demand)")
+    ap.add_argument("--max-time-seconds", type=int, default=30)
+    ap.add_argument("--seed", type=int, default=42)
+    ap.add_argument("--unassigned-penalty", type=float, default=1e6)
+    ap.add_argument("--out", required=True)
+    a = ap.parse_args()
+
+    orders = read_csv(os.path.join(a.bundle, "orders.csv"))
+    ohdr = orders[0]; oidx = {c: ohdr.index(c) for c in ohdr}
+    orows = orders[1:]
+    dN, dflat, dkeys = flatten_square(read_csv(os.path.join(a.bundle, "distance.csv")))
+    uN, uflat, ukeys = flatten_square(read_csv(os.path.join(a.bundle, "duration.csv")))
+    N = len(orows)
+    assert dN == uN == N, f"matrix/orders size mismatch: dist {dN}, dur {uN}, orders {N}"
+    assert [r[oidx["key"]] for r in orows] == dkeys == ukeys, "keys not aligned across bundle files"
+
+    vrows = read_csv(os.path.join(a.bundle, "vehicles.csv"))
+    req, n_own, n_sub = assemble_request(orows, oidx, dflat, uflat, N, vrows, a)
+    json.dump(req, open(a.out, "w"))
+    print(f"build_surge_request: N={N} locations ({len(req['depots'])} depot, {len(req['tasks'])} deliveries), "
+          f"{len(req['vehicles'])} vehicles ({n_own} own + {n_sub} sub-clones), dim={req['dimension_count']}, "
+          f"max_trips={a.max_trips}, objective={a.objective} -> {a.out}", file=sys.stderr)
+
+
+def assemble_request(orows, oidx, dflat, uflat, N, vrows, a):
+    """Pure core: parsed bundle rows + options -> Surge request dict. Testable."""
+    shift_early, shift_late = parse_shift(a.shift)
+    max_dur = a.max_duration_min * 60
+    demand_cols = [c for c in a.demand_cols.split(",") if c]
+    cap_cols = [c for c in a.capacity_cols.split(",") if c]
+    assert len(demand_cols) == len(cap_cols), "demand and capacity must have same dimension count"
+    dim = len(demand_cols)
+
+    # locations: index == travel-matrix index == bundle row order
+    locations = [{"x": to_num(r[oidx["lon"]]), "y": to_num(r[oidx["lat"]])} for r in orows]
+
+    # depots (role == depot); location_id == their travel index
+    depots = []
+    for i, r in enumerate(orows):
+        if r[oidx["role"]] == "depot":
+            depots.append({"id": len(depots), "location_id": i,
+                           "tw_early": shift_early, "tw_late": shift_late})
+    if not depots:
+        raise ValueError("no depot row (role=depot) in orders.csv")
+
+    # tasks + requests: one delivery per stop, location_id == its travel index
+    tasks, requests = [], []
+    for i, r in enumerate(orows):
+        if r[oidx["role"]] == "depot":
+            continue
+        tid = len(tasks)
+        tw_e = hhmm_to_sec(r[oidx["tw_start"]]) if "tw_start" in oidx else None
+        tw_l = hhmm_to_sec(r[oidx["tw_end"]]) if "tw_end" in oidx else None
+        tasks.append({
+            "id": tid, "type": "delivery", "location_id": i,
+            "tw_early": shift_early if tw_e is None else tw_e,
+            "tw_late": shift_late if tw_l is None else tw_l,
+            "service_seconds": int(to_num(r[oidx["service_min"]]) * 60) if "service_min" in oidx else 0,
+            "demand": [to_num(r[oidx[c]]) if c in oidx else 0.0 for c in demand_cols],
+        })
+        requests.append({"id": tid, "delivery_task_id": tid,
+                         "unassigned_penalty": a.unassigned_penalty})
+
+    # vehicles: own as-is + subcontractor clones (high fixed cost -> used only if needed)
+    vi = {c: vrows[0].index(c) for c in vrows[0]}
+    def is_sub(row):
+        return a.sub_col in vi and str(row[vi[a.sub_col]]).strip().lower() in ("true", "1", "yes")
+    def cap_of(row):
+        return [to_num(row[vi[c]]) if c in vi else 0.0 for c in cap_cols]
+    vehicles, n_own, n_sub = [], 0, 0
+    def add_vehicle(cap, fixed):
+        vehicles.append({
+            "id": len(vehicles), "start_depot_id": 0, "end_depot_id": 0,
+            "capacity": cap, "shift_early": shift_early, "shift_late": shift_late,
+            "max_duration": max_dur,
+            "max_trips": a.max_trips, "trip_reload_seconds": a.trip_reload_seconds,
+            "fixed_cost": fixed,
+            "cost_per_distance": 1.0 if a.objective != "duration" else 0.0,
+            "cost_per_duration": 1.0 if a.objective == "duration" else 0.0,
+        })
+    for row in vrows[1:]:
+        cap = cap_of(row)
+        if is_sub(row):
+            for _ in range(max(1, a.sub_clones)):
+                add_vehicle(cap, a.sub_fixed_cost); n_sub += 1
+        else:
+            add_vehicle(cap, a.own_fixed_cost); n_own += 1
+
+    req = {
+        "config": {"max_iterations": a.max_iterations, "max_time_seconds": a.max_time_seconds,
+                   "seed": a.seed, "lexicographic_objective": a.objective == "vehicles-then-distance"},
+        "dimension_count": dim,
+        "demand_sign_convention": a.demand_sign,   # 1 = delivery demand positive
+        "locations": locations,
+        "depots": depots,
+        "vehicles": vehicles,
+        "tasks": tasks,
+        "requests": requests,
+        "travel": {"location_count": N, "distances": dflat, "durations": uflat},
+    }
+    return req, n_own, n_sub
+
+
+if __name__ == "__main__":
+    main()

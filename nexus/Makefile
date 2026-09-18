@@ -174,6 +174,7 @@ test-matrix:
 	@if command -v python3 >/dev/null 2>&1; then \
 		python3 scripts/matrix_selftest.py; \
 		python3 scripts/vrp_bundle_selftest.py; \
+		python3 scripts/surge_request_selftest.py; \
 	else \
 		echo "skipping matrix/bundle self-tests: python3 not found" >&2; \
 	fi
