@@ -97,7 +97,7 @@ ROUTE_BENCH = velo-route-bench
 # WASM output
 WASM_OUT = velo.js
 
-.PHONY: all clean test test-transport bench lib debug wasm route-bench omp-mode test-osrm help
+.PHONY: all clean test test-transport bench lib debug wasm route-bench omp-mode test-osrm help fuzz-api fuzz-api-smoke fuzz-smoke
 
 # Default target
 all: lib $(TEST_BIN)
@@ -185,6 +185,62 @@ debug: clean all
 # WASM build (delegates to wasm/ subdirectory)
 wasm:
 	$(MAKE) -C wasm
+
+
+# --- API handler fuzzing ---------------------------------------------------
+#
+# Drives vl_api_handle() the way the transport does -- a whole ShApiRequest, with the
+# route and method chosen by two control bytes -- so the routing and the
+# parameter parsing are fuzzed together rather than one handler in isolation.
+#
+# The shared sources are compiled in rather than linked from libshared.a, so
+# that they are instrumented too. Listed by wildcard so the set cannot drift
+# from what is actually in the directory; the two HTTP sources are excluded
+# because they include Keel headers this build has no include path for, and
+# the transport is not what the harness drives anyway.
+FUZZ_SHARED_SRCS = $(filter-out %/sh_httpserver.c %/sh_httpasync.c,\
+                   $(wildcard ../shared/src/*.c))
+FUZZ_MINIZ_SRCS = $(wildcard ../vendor/miniz/miniz*.c)
+
+# Overridable so the target can be built with a clang that has libFuzzer
+# when the default one does not -- the MinGW clang on Windows, say.
+FUZZ_API_CC ?= clang
+# Overridable alongside FUZZ_API_CC, and for the same reason: a clang that
+# targets MSVC has no separate libm -- the maths functions are in the CRT --
+# so `-lm` is a link error there rather than a no-op. Building with
+# FUZZ_API_CC=<llvm clang> FUZZ_API_LIBS= is then enough to run the harness
+# on Windows.
+FUZZ_API_LIBS ?= -lm
+FUZZ_API_BIN = fuzz_velo_api
+FUZZ_API_SRC = tests/fuzz/fuzz_velo_api.c
+
+fuzz-api: $(FUZZ_API_BIN)
+
+$(FUZZ_API_BIN): $(FUZZ_API_SRC) $(CORE_SRCS)
+	$(FUZZ_API_CC) -w -g -O1 -std=c11 -D_GNU_SOURCE $(CC_PORT_DEFS) -DMINIZ_NO_STDIO -DMINIZ_NO_TIME  \
+	  -fsanitize=fuzzer,address,undefined -fno-omit-frame-pointer \
+	  $(INCLUDES) -I../shared/tests/fuzz -I../vendor/miniz \
+	  $< $(CORE_SRCS) $(FUZZ_SHARED_SRCS) $(FUZZ_MINIZ_SRCS) \
+	  $(FUZZ_API_LIBS) $(EXE_OUT)$@
+
+FUZZ_SMOKE_SECONDS ?= 30
+FUZZ_WORK ?= build/fuzz-corpus
+
+# A bounded run over the committed seeds, for CI. The first directory is
+# where libFuzzer writes what it finds; the seeds after it are read only --
+# passing the seeds alone would make libFuzzer write its discoveries back
+# into them, which turns a curated seed set into noise.
+#
+# Short on purpose: this keeps the harness building and catches shallow
+# regressions on every push. It is not a fuzzing campaign.
+fuzz-api-smoke: fuzz-api
+	@mkdir -p $(FUZZ_WORK)/api
+	./$(FUZZ_API_BIN) $(FUZZ_WORK)/api tests/fuzz/corpus_api/ \
+		-max_total_time=$(FUZZ_SMOKE_SECONDS) -print_final_stats=1
+
+# The module-wide entry point CI calls. Only the API harness exists here;
+# it gains the others as they are written.
+fuzz-smoke: fuzz-api-smoke
 
 # Clean
 clean:

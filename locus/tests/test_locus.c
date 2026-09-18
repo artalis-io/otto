@@ -1389,6 +1389,89 @@ TEST(api_reverse_rejects_nan)
     lc_index_free(index);
 }
 
+/* An index holding one entity, placed wherever the caller asks. */
+static LCIndex *build_single_entity_index(const char *name, double lat, double lon)
+{
+    LCEntityStore *store = lc_entity_store_create(4);
+    LCEntity e;
+    LCIndex *index;
+
+    if (!store) return NULL;
+
+    memset(&e, 0, sizeof(e));
+    e.name = lc_entity_store_intern(store, name, 0);
+    e.osm_id = 4242;
+    e.type = LC_ENTITY_NODE;
+    e.fclass = LC_CLASS_CITY;
+    e.centroid.lat = lat;
+    e.centroid.lon = lon;
+    if (lc_entity_store_add(store, &e) != LC_OK) {
+        lc_entity_store_free(store);
+        return NULL;
+    }
+
+    index = lc_index_create();
+    if (!index) { lc_entity_store_free(store); return NULL; }
+    if (lc_index_build(index, store) != LC_OK) {
+        lc_index_free(index);
+        return NULL;
+    }
+    return index;   /* index owns the store from here */
+}
+
+/*
+ * A reverse lookup at a pole. Unlike NaN above, lat = +/-90 is a value the
+ * API accepts, so this is an ordinary request and must answer normally.
+ *
+ * It used to be undefined behaviour: cos(90 deg) is ~6e-17, so the
+ * "degrees of longitude per metre" divisor collapsed and the search span
+ * came out as 1.5e14 degrees. The grid column index was computed by
+ * casting that to int and clamping afterwards, and the cast of an
+ * out-of-range double is undefined -- UBSan reported "-2.94e+15 is outside
+ * the range of representable values of type int". A fuzzer found it
+ * through /api/v1/reverse?lat=-90.0&lon=180.0.
+ *
+ * The assertion is on the result rather than on the absence of UB, so that
+ * it means something in the ordinary build too: the conversion produced
+ * INT_MIN for the upper column, which is below the lower one, so the scan
+ * covered no cells at all and the entity standing on the pole was not
+ * found. Asserting only status == 200 would have passed against the bug --
+ * it answered, it just answered "nothing there".
+ */
+TEST(api_reverse_at_the_poles)
+{
+    static const double LAT[] = { -90.0,  90.0, -90.0, 90.0 };
+    static const double LON[] = { 180.0, 180.0, -180.0, 0.0 };
+    size_t i;
+
+    for (i = 0; i < sizeof(LAT) / sizeof(LAT[0]); i++) {
+        LCIndex *index = build_single_entity_index("Polaris Station",
+                                                  LAT[i], LON[i]);
+        LCAPIContext *api;
+        int status = 0;
+        size_t len = 0;
+        char *json;
+
+        ASSERT(index != NULL);
+        api = lc_api_create(index, NULL);
+        ASSERT(api != NULL);
+
+        json = lc_api_reverse(api, LAT[i], LON[i], &status, &len);
+
+        /* Answered, not rejected: these are legal coordinates. */
+        ASSERT(json != NULL);
+        ASSERT_EQ(status, 200);
+        ASSERT(len == strlen(json));
+
+        /* And the scan actually covered the cell the entity is in. */
+        ASSERT(strstr(json, "Polaris Station") != NULL);
+
+        free(json);
+        lc_api_free(api);
+        lc_index_free(index);
+    }
+}
+
 int main(void)
 {
     printf("\n=== Locus Test Suite ===\n\n");
@@ -1500,6 +1583,7 @@ int main(void)
     RUN_TEST(api_search_large_result_set);
     RUN_TEST(api_search_escapes_names);
     RUN_TEST(api_reverse_rejects_nan);
+    RUN_TEST(api_reverse_at_the_poles);
 
     printf("\n=== Results: %d/%d tests passed ===\n\n", tests_passed, tests_run);
 

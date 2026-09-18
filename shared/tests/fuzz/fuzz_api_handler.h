@@ -19,6 +19,12 @@
  *   FUZZ_API_HANDLE(c,q,s) call it                  (e.g. sg_api_handle(...))
  *   FUZZ_API_ROUTES       a brace list of path strings
  *
+ * A module whose context needs building -- a graph, an index, a PBF --
+ * defines FUZZ_API_CREATE() to return a prepared one. Building it per
+ * execution would dominate the run, so the three that need it build once
+ * in a file-scope helper and hand back the same pointer, which is why
+ * FUZZ_API_FREE is a no-op there.
+ *
  * What it looks for, beyond a crash: a handler that claims success must leave
  * a response the transport can actually send. The transports read status_code,
  * body and body_len without re-validating them, so a body pointer with no
@@ -38,6 +44,29 @@ static const char *const fuzz_api_routes[] = FUZZ_API_ROUTES;
 #define FUZZ_API_NROUTES \
     ((int)(sizeof(fuzz_api_routes) / sizeof(fuzz_api_routes[0])))
 
+/*
+ * Optional: path prefixes whose tail comes from the input.
+ *
+ * Most handlers dispatch on a fixed path and take their parameters from the
+ * query string or the body, so the harness picks a path from FUZZ_API_ROUTES
+ * and fuzzes the other two. Carta does not: /tiles/{z}/{x}/{y}.{ext} carries
+ * its parameters in the path itself, parsed by hand, and fuzzing only the
+ * query there would leave the one parser that matters untouched.
+ *
+ * A module lists such prefixes -- comma-terminated, since the list is empty
+ * for everyone else -- and the harness appends the input to one of them and
+ * sends no query and no body.
+ */
+#ifndef FUZZ_API_PATH_PREFIXES
+#define FUZZ_API_PATH_PREFIXES /* none; the array holds just its terminator */
+#endif
+static const char *const fuzz_api_path_prefixes[] = {
+    FUZZ_API_PATH_PREFIXES NULL
+};
+#define FUZZ_API_NPREFIXES                          \
+    ((int)(sizeof(fuzz_api_path_prefixes)           \
+           / sizeof(fuzz_api_path_prefixes[0])) - 1)
+
 /* Methods worth trying: the handlers route on these, and a POST body arriving
  * at a GET-only path is exactly the kind of mismatch worth exercising. */
 static const char *const fuzz_api_methods[] = { "POST", "GET", "PUT", "DELETE" };
@@ -50,40 +79,112 @@ int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size)
     ShApiRequest req;
     ShApiResponse resp;
     char *body;
+    char *query;
+    char *path_buf;
     const char *path;
+    int sel;
     const char *method;
+    int is_query;
     int rc;
 
-    /* Two control bytes pick the route and method; the rest is the body. A
+    /* Two control bytes pick the route and method; the rest is the input. A
      * fuzzer discovers the split on its own, and keeping it at the front means
-     * a mutation of the body does not also change the endpoint. */
+     * a mutation of the input does not also change the endpoint. */
     if (size < 2) return 0;
     if (size > 4 * 1024 * 1024) return 0;
 
-    path   = fuzz_api_routes[data[0] % FUZZ_API_NROUTES];
     method = fuzz_api_methods[data[1] % FUZZ_API_NMETHODS];
+    sel    = data[0] % (FUZZ_API_NROUTES + FUZZ_API_NPREFIXES);
 
     data += 2;
     size -= 2;
 
-    /* A separate allocation of exactly the body length, so a read one byte
-     * past the end is a heap overflow ASan can see rather than a read into
-     * whatever the fuzzer's own buffer happens to hold. The handlers take
-     * (pointer, length) and must not assume a terminator. */
-    body = (char *)malloc(size ? size : 1);
-    if (!body) return 0;
-    if (size) memcpy(body, data, size);
+    body     = NULL;
+    query    = NULL;
+    path_buf = NULL;
+
+    if (sel >= FUZZ_API_NROUTES) {
+        /*
+         * A prefix route: the input is the rest of the request target. It is
+         * cut at the first NUL, because a path is a C string by the time a
+         * handler sees it -- the same truncation a real server would do.
+         *
+         * Then it is split at the first '?', exactly as a server splits a
+         * request target into path and query. That is not a detail worth
+         * skipping: carta's .txt tile route reads req->query as well as the
+         * coordinates in its path, so a harness that only filled one of them
+         * would leave the other unreached. The fuzzer finds the '?' itself.
+         */
+        const char *prefix = fuzz_api_path_prefixes[sel - FUZZ_API_NROUTES];
+        size_t plen = strlen(prefix);
+        char *qmark;
+
+        path_buf = (char *)malloc(plen + size + 1);
+        if (!path_buf) return 0;
+        memcpy(path_buf, prefix, plen);
+        if (size) memcpy(path_buf + plen, data, size);
+        path_buf[plen + size] = '\0';
+        path = path_buf;
+
+        qmark = strchr(path_buf, '?');
+        if (qmark) {
+            *qmark = '\0';                  /* path ends here ... */
+            query  = qmark + 1;             /* ... and the query follows */
+        }
+
+        size = 0;   /* nothing left over for the body */
+    } else {
+        path = fuzz_api_routes[sel];
+    }
+
+    /*
+     * Where the input goes follows the method, because that is where it comes
+     * from in reality: a GET carries its parameters in the query string and a
+     * POST carries them in the body. Putting the bytes in the wrong one would
+     * leave half of each handler unreached -- velo, locus and carta take query
+     * strings, surge, ralph and fuelwise take JSON bodies, and several accept
+     * both.
+     *
+     * The body is a separate allocation of exactly the input length, so a read
+     * one byte past the end is a heap overflow ASan can see rather than a read
+     * into whatever the fuzzer's own buffer holds. Handlers take
+     * (pointer, length) there and must not assume a terminator.
+     *
+     * A query string is a C string by contract, so that one is terminated --
+     * but it is allocated to fit exactly, so an overrun past the NUL is still
+     * a heap error rather than a walk into the fuzzer's buffer.
+     */
+    is_query = (strcmp(method, "GET") == 0 || strcmp(method, "DELETE") == 0);
+
+    if (path_buf) {
+        is_query = 0;           /* the input went into the path */
+    } else if (is_query) {
+        query = (char *)malloc(size + 1);
+        if (!query) return 0;
+        if (size) memcpy(query, data, size);
+        query[size] = '\0';
+        body = NULL;
+    } else {
+        body = (char *)malloc(size ? size : 1);
+        if (!body) return 0;
+        if (size) memcpy(body, data, size);
+    }
 
     ctx = FUZZ_API_CREATE();
-    if (!ctx) { free(body); return 0; }
+    if (!ctx) {
+        free(body);
+        if (!path_buf) free(query);
+        free(path_buf);
+        return 0;
+    }
 
     memset(&req, 0, sizeof(req));
     req.method   = method;
     req.path     = path;
-    req.query    = NULL;
+    req.query    = query;
     req.host     = "fuzz.invalid";
-    req.body     = size ? body : NULL;
-    req.body_len = size;
+    req.body     = (!is_query && size) ? body : NULL;
+    req.body_len = is_query ? 0 : size;
 
     memset(&resp, 0, sizeof(resp));
     rc = FUZZ_API_HANDLE(ctx, &req, &resp);
@@ -118,6 +219,10 @@ int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size)
     sh_api_response_free(&resp);
     FUZZ_API_FREE(ctx);
     free(body);
+    /* In prefix mode the query points into path_buf rather than owning
+     * anything, so only the allocation itself is released. */
+    if (!path_buf) free(query);
+    free(path_buf);
     return 0;
 }
 

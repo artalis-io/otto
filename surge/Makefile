@@ -293,6 +293,12 @@ FUZZ_MINIZ_SRCS = $(wildcard ../vendor/miniz/miniz*.c)
 # Overridable so the target can be built with a clang that has libFuzzer
 # when the default one does not -- the MinGW clang on Windows, say.
 FUZZ_API_CC ?= clang
+# Overridable alongside FUZZ_API_CC, and for the same reason: a clang that
+# targets MSVC has no separate libm -- the maths functions are in the CRT --
+# so `-lm` is a link error there rather than a no-op. Building with
+# FUZZ_API_CC=<llvm clang> FUZZ_API_LIBS= is then enough to run the harness
+# on Windows.
+FUZZ_API_LIBS ?= -lm -lpthread
 FUZZ_API_BIN = fuzz_surge_api
 FUZZ_API_SRC = tests/fuzz/fuzz_surge_api.c
 
@@ -303,7 +309,7 @@ $(FUZZ_API_BIN): $(FUZZ_API_SRC) $(SRCS) $(ARBOR_SRCS)
 	  -fsanitize=fuzzer,address,undefined -fno-omit-frame-pointer \
 	  $(INCLUDES) -I../shared/tests/fuzz -I../vendor/miniz  \
 	  $< $(SRCS) $(ARBOR_SRCS) $(FUZZ_SHARED_SRCS) $(FUZZ_MINIZ_SRCS) \
-	  -lm -lpthread $(EXE_OUT)$@
+	  $(FUZZ_API_LIBS) $(EXE_OUT)$@
 
 FUZZ_SMOKE_SECONDS ?= 30
 FUZZ_WORK ?= build/fuzz-corpus
