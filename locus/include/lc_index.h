@@ -76,8 +76,24 @@ typedef struct {
 
 typedef struct {
     int include_poi;            /* Include nearest POI (default: 0) */
-    double radius_m;            /* Search radius (default: 100.0) */
-    int max_results;            /* Max results (default: 5) */
+
+    /*
+     * Features farther than this are not reported: a coordinate out at sea
+     * gets an empty result rather than the name of a road a kilometre away.
+     * result->distance_m is then 0 and every entity pointer is NULL.
+     *
+     * Zero or negative means no bound -- answer with the nearest feature at
+     * any distance. That is what /api/v1/reverse asks for, since it exposes
+     * no radius of its own.
+     */
+    double radius_m;            /* Search radius in metres (default: 100.0) */
+
+    /*
+     * Cap on how many of the result's entity slots are filled (place, street,
+     * address, poi). Zero or negative means no cap. The default exceeds the
+     * number of slots, so it bounds nothing unless lowered.
+     */
+    int max_results;            /* Max entities reported (default: 5) */
 } LCReverseOptions;
 
 /* ============================================================================

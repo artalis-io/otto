@@ -1472,6 +1472,193 @@ TEST(api_reverse_at_the_poles)
     }
 }
 
+/*
+ * A two-entity index: a street beside the probe point and a city far from
+ * it, so a radius between the two distances has something to include and
+ * something to exclude.
+ *
+ * 0.01 degrees of latitude is about 1.1 km, which is well outside any
+ * radius these tests use and well inside the 100 km the grid search widens
+ * to, so the far entity is found but should be rejected on distance.
+ */
+static LCIndex *build_near_and_far_index(void)
+{
+    LCEntityStore *store = lc_entity_store_create(4);
+    LCEntity e;
+    LCIndex *index;
+
+    if (!store) return NULL;
+
+    memset(&e, 0, sizeof(e));
+    e.name = lc_entity_store_intern(store, "Near Street", 0);
+    e.osm_id = 1;
+    e.type = LC_ENTITY_NODE;
+    e.fclass = LC_CLASS_STREET;
+    e.centroid.lat = 47.5000;
+    e.centroid.lon = 19.0500;
+    if (lc_entity_store_add(store, &e) != LC_OK) goto fail;
+
+    memset(&e, 0, sizeof(e));
+    e.name = lc_entity_store_intern(store, "Far City", 0);
+    e.osm_id = 2;
+    e.type = LC_ENTITY_NODE;
+    e.fclass = LC_CLASS_CITY;
+    e.centroid.lat = 47.5100;   /* ~1.1 km north */
+    e.centroid.lon = 19.0500;
+    if (lc_entity_store_add(store, &e) != LC_OK) goto fail;
+
+    index = lc_index_create();
+    if (!index) goto fail;
+    if (lc_index_build(index, store) != LC_OK) {
+        lc_index_free(index);
+        return NULL;
+    }
+    return index;   /* index owns the store from here */
+
+fail:
+    lc_entity_store_free(store);
+    return NULL;
+}
+
+/*
+ * radius_m bounds what reverse geocoding reports.
+ *
+ * It was a dead field: lc_reverse() never read it, so the WASM binding's
+ * radius argument and geocode_batch's 2000 m both did nothing, and a
+ * coordinate out at sea came back named after a road a kilometre away.
+ */
+TEST(reverse_honours_radius)
+{
+    LCIndex *index = build_near_and_far_index();
+    LCAPIContext *unused = NULL;
+    LCReverseOptions opts;
+    LCReverseResult r;
+    SHCoord probe;
+
+    (void)unused;
+    ASSERT(index != NULL);
+
+    probe.lat = 47.5000;
+    probe.lon = 19.0500;   /* standing on Near Street */
+
+    /* Wide enough for both. */
+    lc_reverse_options_default(&opts);
+    opts.radius_m = 5000.0;
+    ASSERT_EQ(lc_reverse(index, probe, &opts, &r), LC_OK);
+    ASSERT(r.street != NULL);
+    ASSERT(r.place != NULL);
+    lc_reverse_result_free(&r);
+
+    /* Tight enough to exclude the city 1.1 km away, but not the street. */
+    lc_reverse_options_default(&opts);
+    opts.radius_m = 200.0;
+    ASSERT_EQ(lc_reverse(index, probe, &opts, &r), LC_OK);
+    ASSERT(r.street != NULL);
+    ASSERT(r.place == NULL);
+    lc_reverse_result_free(&r);
+
+    /* Tighter than everything: an empty result, not a distant guess. */
+    lc_reverse_options_default(&opts);
+    opts.radius_m = 1.0;
+    probe.lat = 47.4000;   /* ~11 km south of both */
+    ASSERT_EQ(lc_reverse(index, probe, &opts, &r), LC_OK);
+    ASSERT(r.street == NULL);
+    ASSERT(r.place == NULL);
+    ASSERT(r.distance_m == 0.0);
+    lc_reverse_result_free(&r);
+
+    lc_index_free(index);
+}
+
+/* Zero or negative means no bound, which is what /api/v1/reverse asks for. */
+TEST(reverse_radius_zero_is_unbounded)
+{
+    LCIndex *index = build_near_and_far_index();
+    LCReverseOptions opts;
+    LCReverseResult r;
+    SHCoord probe;
+
+    ASSERT(index != NULL);
+    probe.lat = 47.4000;   /* ~11 km from both entities */
+    probe.lon = 19.0500;
+
+    lc_reverse_options_default(&opts);
+    opts.radius_m = 0.0;
+    ASSERT_EQ(lc_reverse(index, probe, &opts, &r), LC_OK);
+    ASSERT(r.street != NULL);
+    ASSERT(r.distance_m > 0.0);
+    lc_reverse_result_free(&r);
+
+    lc_index_free(index);
+}
+
+/*
+ * max_results caps how many entity slots get filled. Its default of 5
+ * exceeds the number of slots, so it bounds nothing until lowered -- which
+ * is why wiring it up changes no existing caller.
+ */
+TEST(reverse_honours_max_results)
+{
+    LCIndex *index = build_near_and_far_index();
+    LCReverseOptions opts;
+    LCReverseResult r;
+    SHCoord probe;
+    int filled;
+
+    ASSERT(index != NULL);
+    probe.lat = 47.5000;
+    probe.lon = 19.0500;
+
+    /* The default reports both. */
+    lc_reverse_options_default(&opts);
+    opts.radius_m = 5000.0;
+    ASSERT_EQ(lc_reverse(index, probe, &opts, &r), LC_OK);
+    filled = (r.street != NULL) + (r.place != NULL);
+    ASSERT_EQ(filled, 2);
+    lc_reverse_result_free(&r);
+
+    /* One slot: the nearest, which is the street. */
+    lc_reverse_options_default(&opts);
+    opts.radius_m = 5000.0;
+    opts.max_results = 1;
+    ASSERT_EQ(lc_reverse(index, probe, &opts, &r), LC_OK);
+    filled = (r.street != NULL) + (r.place != NULL);
+    ASSERT_EQ(filled, 1);
+    ASSERT(r.street != NULL);
+    lc_reverse_result_free(&r);
+
+    lc_index_free(index);
+}
+
+/*
+ * The REST endpoint stays unbounded. It exposes no radius parameter, so if
+ * it inherited the 100 m default a caller would have no way to widen it;
+ * lc_api.c asks for no bound explicitly. A probe far from any entity must
+ * still name the nearest one.
+ */
+TEST(api_reverse_is_unbounded)
+{
+    LCIndex *index = build_near_and_far_index();
+    LCAPIContext *api;
+    int status = 0;
+    size_t len = 0;
+    char *json;
+
+    ASSERT(index != NULL);
+    api = lc_api_create(index, NULL);
+    ASSERT(api != NULL);
+
+    /* ~11 km away: far outside the 100 m library default. */
+    json = lc_api_reverse(api, 47.4000, 19.0500, &status, &len);
+    ASSERT(json != NULL);
+    ASSERT_EQ(status, 200);
+    ASSERT(strstr(json, "Near Street") != NULL);
+    free(json);
+
+    lc_api_free(api);
+    lc_index_free(index);
+}
+
 int main(void)
 {
     printf("\n=== Locus Test Suite ===\n\n");
@@ -1584,6 +1771,10 @@ int main(void)
     RUN_TEST(api_search_escapes_names);
     RUN_TEST(api_reverse_rejects_nan);
     RUN_TEST(api_reverse_at_the_poles);
+    RUN_TEST(reverse_honours_radius);
+    RUN_TEST(reverse_radius_zero_is_unbounded);
+    RUN_TEST(reverse_honours_max_results);
+    RUN_TEST(api_reverse_is_unbounded);
 
     printf("\n=== Results: %d/%d tests passed ===\n\n", tests_passed, tests_run);
 

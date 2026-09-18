@@ -721,6 +721,26 @@ void lc_reverse_options_default(LCReverseOptions *opts)
     opts->max_results = 5;
 }
 
+/*
+ * Whether a candidate at this distance is within the requested radius.
+ *
+ * radius_m <= 0 means unbounded. NaN fails the comparison and so is
+ * rejected, which is the safe direction: a distance that is not a number
+ * is not a distance we can vouch for.
+ */
+static int within_radius(double distance_m, double radius_m)
+{
+    if (!(radius_m > 0.0)) return 1;            /* unbounded, or NaN */
+    return distance_m <= radius_m;
+}
+
+/* Whether another entity may still be reported. max_results <= 0 is no cap. */
+static int slots_left(int filled, int max_results)
+{
+    if (max_results <= 0) return 1;
+    return filled < max_results;
+}
+
 LCStatus lc_reverse(const LCIndex *index, SHCoord coord,
                     const LCReverseOptions *opts, LCReverseResult *result)
 {
@@ -743,12 +763,30 @@ LCStatus lc_reverse(const LCIndex *index, SHCoord coord,
 
         if (nearest_count == 0) return LC_OK;
 
-        result->distance_m = nearest[0].distance_m;
+        /*
+         * Candidates arrive sorted by distance, so the first one inside the
+         * radius is the nearest feature and the rest can stop being considered
+         * as soon as one falls outside it.
+         */
+        int filled = 0;
+        int distance_set = 0;
 
         /* Allocate and populate entities from mmap data */
         for (size_t i = 0; i < nearest_count; i++) {
             uint32_t eid = nearest[i].entity_id;
             if (eid >= idx->header->entity_count) continue;
+
+            if (!within_radius(nearest[i].distance_m, opts->radius_m)) break;
+            if (!slots_left(filled, opts->max_results)) break;
+
+            /* The nearest candidate inside the radius, whether or not its
+             * class fills one of the result's slots -- otherwise a stretch of
+             * water nearer than any road would push the reported distance out
+             * to the road's. */
+            if (!distance_set) {
+                result->distance_m = nearest[i].distance_m;
+                distance_set = 1;
+            }
 
             LCFeatureClass fclass = lc_mmap_entity_fclass(idx, eid);
 
@@ -798,6 +836,7 @@ LCStatus lc_reverse(const LCIndex *index, SHCoord coord,
                 if (city) e->address.city = strdup(city);
 
                 *target = e;
+                filled++;
             }
         }
 
@@ -828,26 +867,37 @@ LCStatus lc_reverse(const LCIndex *index, SHCoord coord,
 
     if (nearest_count == 0) return LC_OK;
 
-    result->distance_m = nearest[0].distance_m;
+    /* Same two bounds as the mmap path above, applied the same way. */
+    int filled = 0;
+    int distance_set = 0;
 
     /* Categorize results */
     for (size_t i = 0; i < nearest_count; i++) {
         uint32_t eid = nearest[i].entity_id;
         if (eid >= index->num_entities) continue;
 
+        if (!within_radius(nearest[i].distance_m, opts->radius_m)) break;
+        if (!slots_left(filled, opts->max_results)) break;
+
+        if (!distance_set) {          /* see the mmap path above */
+            result->distance_m = nearest[i].distance_m;
+            distance_set = 1;
+        }
+
         LCEntity *e = &index->entities->entities[eid];
+        LCEntity **target = NULL;
 
         switch (e->fclass) {
             case LC_CLASS_STREET:
-                if (!result->street) result->street = e;
+                if (!result->street) target = &result->street;
                 break;
 
             case LC_CLASS_ADDRESS:
-                if (!result->address) result->address = e;
+                if (!result->address) target = &result->address;
                 break;
 
             case LC_CLASS_POI:
-                if (opts->include_poi && !result->poi) result->poi = e;
+                if (opts->include_poi && !result->poi) target = &result->poi;
                 break;
 
             case LC_CLASS_CITY:
@@ -855,11 +905,16 @@ LCStatus lc_reverse(const LCIndex *index, SHCoord coord,
             case LC_CLASS_VILLAGE:
             case LC_CLASS_SUBURB:
             case LC_CLASS_NEIGHBOURHOOD:
-                if (!result->place) result->place = e;
+                if (!result->place) target = &result->place;
                 break;
 
             default:
                 break;
+        }
+
+        if (target) {
+            *target = e;
+            filled++;
         }
     }
 
