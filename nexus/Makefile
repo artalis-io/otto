@@ -156,6 +156,7 @@ test: $(TEST_REGEX_BIN) $(TEST_INGEST_BIN) $(TEST_XFORM_BIN) $(TEST_VALIDATE_BIN
 	./$(TEST_PIPELINE_BIN)
 	./$(TEST_VERIFY_BIN)
 	$(MAKE) test-reconcile
+	$(MAKE) test-matrix
 
 # Reconciliation gate self-test: proves the schema-driven reconciler both
 # passes a correct schema and CATCHES one that silently truncates data, on
@@ -163,6 +164,13 @@ test: $(TEST_REGEX_BIN) $(TEST_INGEST_BIN) $(TEST_XFORM_BIN) $(TEST_VALIDATE_BIN
 # tool and python3.
 test-reconcile: $(NX_PIPELINE_BIN)
 	sh scripts/ci_reconcile_selftest.sh
+
+# Travel-matrix builder self-test: proves the geocoded-orders -> Surge matrix
+# step keeps a strict 1:1 order<->index bijection (unique keys, split orders
+# distinct, zero diagonal) on canned route data -- no graph needed (graphs are
+# not committed). Needs python3.
+test-matrix:
+	python3 scripts/matrix_selftest.py
 
 debug: CFLAGS = $(DEBUG_CFLAGS)
 debug: LDFLAGS = -lm $(DEBUG_LDFLAGS)

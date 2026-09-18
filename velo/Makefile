@@ -167,11 +167,15 @@ route-bench: $(ROUTE_BENCH)
 
 # CLI tools
 ROUTE_BATCH_BIN = route_batch
+MATRIX_BUILD_BIN = matrix_build
 
 $(ROUTE_BATCH_BIN): tools/route_batch.c $(LIB_FILE) $(SHARED_DIR)/libshared.a
 	$(CC) $(CFLAGS) $(INCLUDES) $< $(call link_lib,.,velo) $(call link_lib,$(SHARED_DIR),shared) $(LDFLAGS) $(EXE_OUT)$@
 
-tools: $(ROUTE_BATCH_BIN)
+$(MATRIX_BUILD_BIN): tools/matrix_build.c $(LIB_FILE) $(SHARED_DIR)/libshared.a
+	$(CC) $(CFLAGS) $(INCLUDES) $< $(call link_lib,.,velo) $(call link_lib,$(SHARED_DIR),shared) $(LDFLAGS) $(EXE_OUT)$@
+
+tools: $(ROUTE_BATCH_BIN) $(MATRIX_BUILD_BIN)
 
 # Debug build (with sanitizers)
 debug: CFLAGS = $(DEBUG_CFLAGS)
@@ -185,7 +189,7 @@ wasm:
 # Clean
 clean:
 	rm -f $(CORE_OBJS) $(LIB_FILE) $(OMP_STAMP)
-	rm -f $(TEST_BIN) $(TEST_TRANSPORT_BIN) $(TEST_OSRM) $(BENCH_ROUTING) $(BENCH_PBF) $(ROUTE_BENCH) $(ROUTE_BATCH_BIN)
+	rm -f $(TEST_BIN) $(TEST_TRANSPORT_BIN) $(TEST_OSRM) $(BENCH_ROUTING) $(BENCH_PBF) $(ROUTE_BENCH) $(ROUTE_BATCH_BIN) $(MATRIX_BUILD_BIN)
 	rm -f $(WASM_OUT) velo.wasm
 
 # Dependencies
