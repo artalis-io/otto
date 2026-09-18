@@ -1093,6 +1093,11 @@ jobs:
   # dozen entry points without the _core_ they have carried since. Archive,
   # roadmaps and business are excluded on principle: they are supposed to name
   # things that do not exist yet, or no longer do.
+  #
+  # Names were not enough. Twice a correction to a name left behind a call that
+  # could not compile -- sh_arena_create(&arena, buffer, size) against a
+  # function taking a capacity, and cs_tui_render_clay_commands(r, commands)
+  # against one taking three arguments. Argument counts are checked too.
   # ==========================================================================
   doc-symbols:
     name: Docs Name Real Things
@@ -1105,7 +1110,7 @@ jobs:
         with:
           submodules: recursive
 
-      - name: Check that every symbol a descriptive document names exists
+      - name: Check that documents name real things and call them correctly
         run: python3 scripts/check_doc_symbols.py
 
   # ==========================================================================
