@@ -61,16 +61,16 @@ def unique_keys(stops, id_field):
     return keys
 
 
-def run_matrix_tool(tool, graph, profile, stops, depot):
+def run_matrix_tool(tool, graph, profile, weight, stops, depot):
     """Feed 'idx\\tlat\\tlon' to matrix_build; parse S/M lines.
     Returns (snap_node[], snap_off[], dur[][], dist[][]) over N = depot? + stops."""
     locs = ([depot] if depot else []) + [(s["lat"], s["lon"]) for s in stops]
     N = len(locs)
     tsv = "".join(f"{i}\t{la}\t{lo}\n" for i, (la, lo) in enumerate(locs))
-    p = subprocess.run([tool, graph, "--profile", profile], input=tsv,
+    p = subprocess.run([tool, graph, "--profile", profile, "--weight", weight], input=tsv,
                        capture_output=True, text=True, timeout=7200)
     if p.returncode != 0:
-        raise RuntimeError(f"matrix_build failed (profile={profile}): {p.stderr.strip()}")
+        raise RuntimeError(f"matrix_build failed (profile={profile}, weight={weight}): {p.stderr.strip()}")
     snap_node = [None] * N
     snap_off = [None] * N
     dur = [[0.0] * N for _ in range(N)]
@@ -106,20 +106,23 @@ def build_locations(stops, keys, snap_node, snap_off, depot, depot_key, attrs, i
     return locs
 
 
-def assemble(profile, graph, locations, dur, dist, depot_index, generated_at):
+def assemble(profile, graph, weight, locations, dur, dist, depot_index, generated_at):
     """Assemble the Surge-native doc from enriched locations + matrices. Pure."""
     N = len(locations)
     unreachable = sum(1 for i in range(N) for j in range(N)
                       if i != j and (dur[i][j] < 0 or dist[i][j] < 0))
     durations = [dur[i][j] for i in range(N) for j in range(N)]
     distances = [dist[i][j] for i in range(N) for j in range(N)]
+    weight_desc = ("duration (fastest path); distance is length along that path"
+                   if weight == "duration" else
+                   "distance (shortest path); duration is time along that path")
     doc = {
         "meta": {
             "generated_by": "nexus build_matrix.py + velo matrix_build (one-to-all Dijkstra, profile-faithful)",
             "generated_at_utc": generated_at,
             "graph": graph,
             "profile": profile,
-            "weight_optimized": "duration (fastest path); distance is length along that path",
+            "weight_optimized": weight_desc,
             "units": {"duration": "seconds", "distance": "meters"},
             "location_count": N,
             "depot_index": depot_index,
@@ -172,6 +175,7 @@ def main():
     ap.add_argument("--graph", required=True)
     ap.add_argument("--matrix-tool", required=True, help="path to velo matrix_build binary")
     ap.add_argument("--profile", default="truck", help="comma list: truck,car,bike,foot,any")
+    ap.add_argument("--weight", default="duration", help="comma list: duration (fastest), distance (shortest)")
     ap.add_argument("--country", default=None, help="restrict to this geo_cc (e.g. HU)")
     ap.add_argument("--tiers", default="GREEN,YELLOW", help="accepted geo_tier values")
     ap.add_argument("--depot-key", default=None)
@@ -186,6 +190,10 @@ def main():
     tiers = set(t for t in a.tiers.split(",") if t)
     attrs = [x for x in a.attrs.split(",") if x]
     profiles = [p for p in a.profile.split(",") if p]
+    weights = [w for w in a.weight.split(",") if w]
+    for w in weights:
+        if w not in ("duration", "distance"):
+            sys.exit(f"fatal: --weight must be duration or distance, got '{w}'")
     depot = None
     if a.depot_lat is not None and a.depot_lon is not None:
         depot = (a.depot_lat, a.depot_lon)
@@ -205,16 +213,17 @@ def main():
           file=sys.stderr)
 
     for prof in profiles:
-        snap_node, snap_off, dur, dist = run_matrix_tool(a.matrix_tool, a.graph, prof, stops, depot)
-        locs = build_locations(stops, keys, snap_node, snap_off, depot, a.depot_key, attrs, a.id_field)
-        doc = assemble(prof, a.graph, locs, dur, dist, 0 if depot else None, generated_at)
-        validate_bijection(doc)
-        jpath = os.path.join(a.out_dir, f"velo_matrix.{prof}.json")
-        cpath = os.path.join(a.out_dir, f"velo_matrix.{prof}.csv")
-        json.dump(doc, open(jpath, "w"))
-        write_csv(cpath, locs, dur, dist)
-        N = doc["travel"]["location_count"]
-        print(f"  [{prof}] N={N} {doc['meta']['reachability']} -> {jpath}, {cpath}", file=sys.stderr)
+        for weight in weights:
+            snap_node, snap_off, dur, dist = run_matrix_tool(a.matrix_tool, a.graph, prof, weight, stops, depot)
+            locs = build_locations(stops, keys, snap_node, snap_off, depot, a.depot_key, attrs, a.id_field)
+            doc = assemble(prof, a.graph, weight, locs, dur, dist, 0 if depot else None, generated_at)
+            validate_bijection(doc)
+            jpath = os.path.join(a.out_dir, f"velo_matrix.{prof}.{weight}.json")
+            cpath = os.path.join(a.out_dir, f"velo_matrix.{prof}.{weight}.csv")
+            json.dump(doc, open(jpath, "w"))
+            write_csv(cpath, locs, dur, dist)
+            N = doc["travel"]["location_count"]
+            print(f"  [{prof}/{weight}] N={N} {doc['meta']['reachability']} -> {jpath}, {cpath}", file=sys.stderr)
 
 
 if __name__ == "__main__":

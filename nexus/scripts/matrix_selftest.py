@@ -58,13 +58,18 @@ def main():
     snap_node, snap_off, dur, dist = canned_route(N)
     attrs = ["id", "order_no", "ship_addr_id", "lat", "lon", "pallets"]
     locs = bm.build_locations(stops_dup, kd, snap_node, snap_off, depot, depot_key, attrs, "id")
-    doc = bm.assemble("truck", "test.vlg", locs, dur, dist, 0, "2020-01-01T00:00:00Z")
+    doc = bm.assemble("truck", "test.vlg", "duration", locs, dur, dist, 0, "2020-01-01T00:00:00Z")
 
     # contract checks
     bm.validate_bijection(doc)
     assert doc["locations"][0]["role"] == "depot" and doc["locations"][0]["key"] == depot_key
     assert doc["meta"]["depot_index"] == 0
     assert doc["meta"]["reachability"] == "ALL PAIRS ROUTABLE"
+    assert "fastest" in doc["meta"]["weight_optimized"], doc["meta"]["weight_optimized"]
+    # distance weight -> meta reflects shortest-path semantics
+    doc_d = bm.assemble("truck", "test.vlg", "distance", locs, dur, dist, 0, "2020-01-01T00:00:00Z")
+    bm.validate_bijection(doc_d)
+    assert "shortest" in doc_d["meta"]["weight_optimized"], doc_d["meta"]["weight_optimized"]
     # split order: two distinct indices, distinct keys, same coord
     idx = {l["key"]: l["index"] for l in doc["locations"]}
     assert idx["o-3#1"] != idx["o-3#2"]
