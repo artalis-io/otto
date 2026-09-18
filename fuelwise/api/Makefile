@@ -55,12 +55,27 @@ $(TARGET): $(OBJS) $(HTTPSERVER_OBJ) $(FUELWISE_LIB) $(RALPH_LIB) $(SHARED_LIB) 
 
 # Build vendored Keel. Core only (no mbedTLS/nghttp2 integrations), so
 # this needs no external libraries.
-$(KEEL_LIB):
+# Always recurse, rather than treating the archive's existence as proof it is
+# current. A target with no prerequisites is "up to date" the moment the file
+# is there, so a libkeel.a built before the v3.1.1 submodule bump went on being
+# linked against v3.1.1 headers indefinitely. That mismatch is not a link
+# error: the server starts, prints "listening", and segfaults inside
+# kl_http_router_match() on the first request -- including /api/v1/health.
+#
+# Keel's own Makefile knows what is out of date and answers "Nothing to be
+# done" when nothing is, leaving the archive's timestamp alone, so this costs
+# a sub-make and causes no needless relinking.
+$(KEEL_LIB): FORCE
 	@if [ ! -f $(KEEL_DIR)/Makefile ]; then \
 		echo "vendor/keel is empty - run: git submodule update --init vendor/keel"; \
 		exit 1; \
 	fi
 	$(MAKE) -C $(KEEL_DIR) CC=$(CC)
+
+# An always-out-of-date prerequisite. Keeping it here rather than marking
+# $(KEEL_LIB) .PHONY, because a phony target is never considered a file and
+# the link line needs the archive to still be one.
+FORCE:
 
 # Compile source files
 $(SRC_DIR)/%.o: $(SRC_DIR)/%.c
@@ -130,4 +145,4 @@ test-queue: $(TARGET)
 clean:
 	rm -rf $(TARGET) $(SRC_DIR)/*.o $(BUILD_DIR)
 
-.PHONY: all clean run run-port test test-quick test-ratelimit test-queue test-asan
+.PHONY: all clean run run-port test test-quick test-ratelimit test-queue test-asan FORCE
