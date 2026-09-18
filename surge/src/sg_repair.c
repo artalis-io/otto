@@ -559,6 +559,7 @@ sg_rank_new_trip:
                     }
 
                     /* Check depot return and shift TW */
+                    trip_time = cursor;   /* open_end: route ends at the last stop */
                     if (time_ok && !vehicle->open_end) {
                         double ret_dur = sg_travel_dur(ctx,
                             ctx->tasks[new_stops[new_stop_count - 1].task_id].location_id,
@@ -570,6 +571,26 @@ sg_rank_new_trip:
                         if (vehicle->has_shift_time_window &&
                             trip_time > (double)vehicle->shift_late + 1e-9 &&
                             !(vehicle->cost_per_overtime > 0.0)) {
+                            time_ok = 0;
+                        }
+                    }
+
+                    /* Max-duration check across the whole shift (all trips). The
+                     * existing-trip insertion path enforces this via the full
+                     * feasibility check; the new-trip fast-path must too, or a
+                     * new trip that pushes the vehicle past max_duration is
+                     * accepted here and only rejected later -- which for
+                     * max_trips 0/>=3 corrupts the solution and drops every
+                     * request. Basis matches sg_route_check_feasibility. */
+                    if (time_ok && vehicle->max_duration_seconds > 0) {
+                        double depot_depart_t = vehicle->has_shift_time_window
+                            ? (double)vehicle->shift_early : 0.0;
+                        if (!vehicle->open_start && sd->has_time_window &&
+                            depot_depart_t < (double)sd->tw_early) {
+                            depot_depart_t = (double)sd->tw_early;
+                        }
+                        if ((trip_time - depot_depart_t) >
+                            (double)vehicle->max_duration_seconds + 1e-9) {
                             time_ok = 0;
                         }
                     }
