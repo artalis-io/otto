@@ -80,9 +80,9 @@ def main():
     ap.add_argument("--bundle", required=True, help="bundle dir with orders/distance/duration/vehicles.csv")
     ap.add_argument("--demand-cols", default="pallets,weight_kg", help="order columns -> demand dimensions")
     ap.add_argument("--capacity-cols", default="capacity_pallets,capacity_kg", help="vehicle columns -> capacity dims")
-    ap.add_argument("--max-trips", type=int, default=2,
-                    help="trips per vehicle. NOTE: Surge's solver currently drops all "
-                         "requests for max_trips 0 (unlimited) or >=3; use 1 or 2 until fixed.")
+    ap.add_argument("--max-trips", type=int, default=0,
+                    help="trips per vehicle (0 = unlimited). Surge enforces max_duration "
+                         "per shift, so unlimited is bounded by the working day.")
     ap.add_argument("--trip-reload-seconds", type=int, default=1800)
     ap.add_argument("--shift", default="06:00-18:00", help="HH:MM-HH:MM depot/vehicle shift window")
     ap.add_argument("--max-duration-min", type=int, default=540, help="max on-duty minutes per vehicle")
