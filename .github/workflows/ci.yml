@@ -1082,6 +1082,27 @@ jobs:
         run: python3 scripts/check_test_coverage.py
 
   # ==========================================================================
+  # The CLAUDE.md files are instructions, and nothing compiles them, so they
+  # rot silently while still giving confident directions. When this was added
+  # they named a feature-class table of four values that were never in the
+  # enum, an "add an endpoint" guide written against a webserver replaced two
+  # migrations ago, and half a dozen functions under names they do not have.
+  # ==========================================================================
+  doc-symbols:
+    name: Docs Name Real Things
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Check that every symbol a CLAUDE.md names exists
+        run: python3 scripts/check_doc_symbols.py
+
+  # ==========================================================================
   # Fuzzing (bounded)
   #
   # OTTO already had fuzz targets in carta, nexus and surge before this job

@@ -30,7 +30,7 @@ Input Stations + Polyline
         ↓
   fw_solve_refuel_lp() → Builds LP model using Ralph API
         ↓
-  ralph_optimize() → Solves LP
+  ralph_core_optimize() → Solves LP
         ↓
   Extract solution → Purchases array + total cost
 ```
@@ -66,7 +66,7 @@ Filters stations to those near route:
 
 ### Modifying the LP formulation
 1. Edit `fw_solve_refuel_lp()` in `src/fw_refuel.c`
-2. Add/modify constraints using `ralph_add_constraint()`
+2. Add/modify constraints using `ralph_core_add_constraint()`
 3. Update `fw_validate_problem()` if new validation needed
 4. Run `make test`
 

@@ -188,7 +188,7 @@ Ralph auto-detects LAP and network flow structure in LP/MIP models:
 
 ```c
 // Enable detection for a specific model
-ralph_set_int_param(model, "detect_special", 1);
+ralph_core_set_int_param(model, "detect_special", 1);
 
 // Global toggles (both enabled by default)
 ralph_set_detect_lap(1);       // LAP detection
@@ -295,7 +295,7 @@ Network flow structure is auto-detected in LP models (enabled by default):
 
 ```c
 // Per-model detection (required)
-ralph_set_int_param(model, "detect_special", 1);
+ralph_core_set_int_param(model, "detect_special", 1);
 
 // Global toggle (enabled by default)
 ralph_set_detect_network(1);
@@ -395,7 +395,7 @@ make bench-netflow    # Network Flow benchmarks (size, warm start, bottleneck)
 
 ## Memory Management
 
-- Models freed with `ralph_free()`
+- Models freed with `ralph_core_free()`
 - Internal allocations use standard malloc/free
 - Use `SAFE_FREE(p)` macro to NULL pointer after freeing
 - Pre-allocate workspaces in hot paths (avoid malloc in loops)

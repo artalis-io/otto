@@ -190,7 +190,7 @@ To create a renderer for another platform (SDL, raylib, etc.):
    - `TEXT` - String at position with font size and color
    - `BORDER` - Border-only rectangle
    - `IMAGE` - Textured quad
-   - `SCISSOR_START/END` - Clipping regions
+   - `CLAY_RENDER_COMMAND_TYPE_SCISSOR_START`/`_END` - Clipping regions
 
 ## Other Renderers
 
