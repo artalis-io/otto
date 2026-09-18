@@ -29,7 +29,11 @@ locus/
 │   ├── lc_trie.h     # Prefix trie for autocomplete
 │   ├── lc_ngram.h    # Trigram index for fuzzy search
 │   ├── lc_spatial.h  # Grid-based spatial index
-│   └── lc_index.h    # Unified geocoding index
+│   ├── lc_index.h    # Unified geocoding index
+│   ├── lc_query.h    # Query parsing (housenumber splitting)
+│   ├── lc_serialize.h# Index serialization
+│   ├── lc_mmap.h     # Zero-copy mmap'd index (v3/v4)
+│   └── lc_api.h      # REST handler, transport-agnostic
 ├── src/              # Implementation
 │   ├── lc_pbf.c      # PBF file parsing (uses shared library)
 │   ├── lc_normalize.c# UTF-8 normalization, diacritics
@@ -37,12 +41,17 @@ locus/
 │   ├── lc_ngram.c    # Trigram fuzzy matching
 │   ├── lc_spatial.c  # Grid spatial index
 │   ├── lc_index.c    # Main index operations
+│   ├── lc_types.c    # Feature-class helpers
+│   ├── lc_query.c    # Query parsing
+│   ├── lc_serialize.c# Index read/write
+│   ├── lc_api.c      # Request handling and JSON responses
 │   └── locus.c       # Convenience API
-├── api/              # REST API server
+├── api/              # REST API server (locus-geocoder, port 8083)
 ├── wasm/             # WebAssembly build
+├── tools/            # geocode_batch, search
 ├── ../shared/        # Shared library (protobuf, inflate, PBF, geo)
 ├── ../vendor/        # Third-party (miniz)
-├── tests/            # Test suite (52 tests)
+├── tests/            # Test suite (73 tests) + fuzz harnesses
 └── benchmarks/       # Performance tests
 ```
 
@@ -59,17 +68,22 @@ locus/
 | `lc_trie.c` | Prefix trie for fast autocomplete |
 | `lc_ngram.c` | Trigram index for fuzzy matching |
 | `lc_spatial.c` | Grid-based reverse geocoding |
+| `lc_api.c` | REST request handling, JSON responses |
 
 ## Build Commands
 
 ```bash
 make all      # Build library + tests
 make lib      # Build liblocus.a only
-make test     # Run test suite (52 tests)
+make test     # Run test suite (73 tests)
 make bench    # Build and run benchmarks
 make debug    # Debug build with symbols
 make wasm     # WebAssembly (needs Emscripten)
 make clean    # Remove build artifacts
+
+make fuzz-api        # Build the lc_api_handle() libFuzzer harness (needs clang)
+make fuzz-api-smoke  # Bounded run over the committed seeds, as CI does
+make fuzz-smoke      # Every harness in the module
 ```
 
 ## Architecture
@@ -110,16 +124,30 @@ Query → Normalize → Trie Lookup (exact/prefix)
 
 ### Feature Classes
 
-| Class | Description | Example |
-|-------|-------------|---------|
-| `LC_CLASS_PLACE` | Named places | Cities, towns, villages |
-| `LC_CLASS_STREET` | Roads | Streets, highways |
-| `LC_CLASS_ADDRESS` | House numbers | addr:housenumber |
-| `LC_CLASS_POI` | Points of interest | Restaurants, shops |
-| `LC_CLASS_ADMIN` | Administrative | Countries, states |
-| `LC_CLASS_NATURAL` | Natural features | Parks, lakes |
-| `LC_CLASS_TRANSPORT` | Transport | Stations, airports |
-| `LC_CLASS_OTHER` | Other | Misc features |
+Listed in priority order, matching `LCFeatureClass` in `lc_types.h`.
+
+| Class | Tagging | Example |
+|-------|---------|---------|
+| `LC_CLASS_UNKNOWN` | unclassified | — |
+| `LC_CLASS_COUNTRY` | `admin_level=2` | France |
+| `LC_CLASS_STATE` | `admin_level=4` | Provence-Alpes-Cote d'Azur |
+| `LC_CLASS_COUNTY` | `admin_level=6` | Alpes-Maritimes |
+| `LC_CLASS_CITY` | `place=city` or `admin_level=8` | Monaco |
+| `LC_CLASS_TOWN` | `place=town` | Beausoleil |
+| `LC_CLASS_VILLAGE` | `place=village` | Peille |
+| `LC_CLASS_SUBURB` | `place=suburb` | Monte Carlo |
+| `LC_CLASS_NEIGHBOURHOOD` | `place=neighbourhood` | Larvotto |
+| `LC_CLASS_HAMLET` | `place=hamlet` | — |
+| `LC_CLASS_LOCALITY` | `place=locality` | — |
+| `LC_CLASS_STREET` | `highway=*` with a name | Boulevard Albert 1er |
+| `LC_CLASS_ADDRESS` | `addr:housenumber` + `addr:street` | 1 Avenue des Citronniers |
+| `LC_CLASS_POI` | `amenity`, `shop`, `tourism`, ... | Cafe de Paris |
+| `LC_CLASS_WATER` | `natural=water`, `waterway=*` | Port Hercule |
+| `LC_CLASS_OTHER` | other named features | — |
+
+The reverse-geocoding result groups these: `CITY` through `NEIGHBOURHOOD` fill
+`result->place`, `STREET` fills `result->street`, `ADDRESS` fills
+`result->address`, and `POI` fills `result->poi` when `include_poi` is set.
 
 ## Testing
 
@@ -127,7 +155,7 @@ Query → Normalize → Trie Lookup (exact/prefix)
 # Run all tests
 make test
 
-# Expected: 52 tests pass
+# Expected: 73 tests pass
 ```
 
 ### Test Categories
@@ -174,7 +202,7 @@ lc_search(index, "Budapest", &opts, &result);
 for (size_t i = 0; i < result.num_results; i++) {
     const LCEntity *entity = lc_search_get_entity(index, &result.matches[i]);
     printf("%s: %.4f, %.4f (score: %.2f)\n",
-           entity->name, entity->coord.lat, entity->coord.lon,
+           entity->name, entity->centroid.lat, entity->centroid.lon,
            result.matches[i].score);
 }
 lc_search_result_free(&result);

@@ -340,7 +340,27 @@ char *lc_api_reverse(LCAPIContext *ctx,
 
     SHCoord coord = {.lat = lat, .lon = lon};
     LCReverseResult result;
-    LCStatus status = lc_reverse(ctx->index, coord, NULL, &result);
+
+    /*
+     * An explicit unbounded radius rather than NULL.
+     *
+     * NULL would take lc_reverse_options_default(), whose radius is 100 m, and
+     * this endpoint has never been bounded: it answers with the nearest
+     * feature at any distance and reports how far away it is in distance_m,
+     * which is what every existing consumer has been reading. It also exposes
+     * no radius parameter, so a caller has no way to widen a bound it did not
+     * ask for. Measured against Monaco, a 100 m bound would empty the result
+     * for 60% of coordinates on a grid over the country.
+     *
+     * Saying "no bound" here keeps that contract visible at the call site,
+     * rather than resting on the default happening to be ignored -- which is
+     * what it rested on until the option was wired up.
+     */
+    LCReverseOptions opts;
+    lc_reverse_options_default(&opts);
+    opts.radius_m = 0.0;                /* nearest feature, any distance */
+
+    LCStatus status = lc_reverse(ctx->index, coord, &opts, &result);
 
     if (status != LC_OK) {
         if (status_code) *status_code = 500;
