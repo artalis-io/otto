@@ -16,13 +16,34 @@ invokes reach this file" -- not the easier "is it in `make test`". Plenty of
 tests here are run by their own target and their own CI job, and a check that
 demanded membership of `make test` would flag sixteen of them wrongly.
 
+It then asks the same question once per platform, because "something runs it"
+and "Windows runs it" are different claims and only the first was ever
+checked. The gap that prompted this: ralph's Benders, edge-case, optim,
+regression and transport suites, and shared's pdf2struc suite, run on Linux
+and nowhere else -- and the original check was satisfied, because it has no
+concept of a runner at all.
+
+Comparing test programs rather than target names is the whole trick. At the
+level of names, 22 of 40 test targets look Linux-only; 8 of those are
+top-level aliases (`make test-carta`) that Windows invokes as
+`make -C carta test`, and several more are reached through a shell script
+rather than a target. A name-level check would be mostly false positives and
+would deserve to be switched off. Dry-running to the binaries resolves all of
+those, because two spellings of the same work reach the same programs.
+
 Method:
-  1. read every `make` invocation out of .github/workflows/*.yml
+  1. read every `make` invocation out of .github/workflows/*.yml, along with
+     the platform of the job that makes it
   2. build the module libraries -- `make -n` aborts at the first
      "No rule to make target" on an unbuilt tree and reports far less than the
      truth, which is a trap this check fell into while being written
   3. dry-run each CI target and collect the test binaries it would build or run
   4. compare that against the test programs on disk
+
+Required platforms are Linux and Windows. macOS is reported but does not
+fail the run: macOS Core is deliberately a thinner job -- seven module `test`
+targets and the API servers built but not exercised -- and holding it to
+parity would mean a long allowlist that mostly says "on purpose".
 
 Exclusions are not forbidden; they have to be written down. Usage:
 
@@ -60,6 +81,16 @@ ALLOWLIST = {
         'needs a real .osm.pbf, which the repo does not carry',
 }
 
+# Platforms a test program is expected to run on. macOS is collected and
+# shown, but a gap there is not a failure -- see the note above.
+REQUIRED = ('linux', 'windows')
+ADVISORY = ('macos',)
+
+# Programs that run on some platforms and deliberately not on others. Same
+# rule as ALLOWLIST: the reason lives with the entry, and an entry that no
+# longer applies fails the run.
+PLATFORM_ALLOWLIST = {}
+
 MAKE = 'mingw32-make' if shutil.which('mingw32-make') else 'make'
 QUIET = '--quiet' in sys.argv
 
@@ -69,19 +100,68 @@ def log(*a):
         print(*a)
 
 
-def ci_make_calls():
-    """(directory, target) pairs that CI invokes."""
-    calls = set()
-    for wf in glob.glob('.github/workflows/*.yml'):
-        txt = open(wf, encoding='utf-8').read()
-        for m in re.finditer(r'\bmake\s+-C\s+([A-Za-z0-9_./-]+)((?:\s+[A-Za-z0-9_.\-]+)*)', txt):
-            for t in m.group(2).split():
-                if '=' not in t and not t.startswith('-'):
-                    calls.add((m.group(1), t))
-        for m in re.finditer(r'(?<![-\w])make((?:\s+[A-Za-z0-9_.\-]+)+)', txt):
-            for t in m.group(1).split():
-                if '=' not in t and not t.startswith('-') and t != '-C':
-                    calls.add(('.', t))
+def platform_of(runs_on, matrix_os):
+    """Normalise a runs-on value to linux / windows / macos."""
+    r = runs_on.lower()
+    if 'matrix.os' in r:
+        return sorted({platform_of(o, []) for o in matrix_os} - {None})
+    for key, name in (('ubuntu', 'linux'), ('windows', 'windows'),
+                      ('macos', 'macos'), ('mac-', 'macos')):
+        if key in r:
+            return [name]
+    return []
+
+
+def ci_invocations():
+    """{(directory, target): {platforms}} for everything CI invokes.
+
+    Jobs are walked in order so each `make` line can be attributed to the
+    runner of the job it sits in. Without that attribution the check cannot
+    tell "nothing runs this" from "only Linux runs this", which is the
+    distinction it exists for.
+    """
+    calls = {}
+    for wf in sorted(glob.glob('.github/workflows/*.yml')):
+        lines = open(wf, encoding='utf-8').read().split('\n')
+
+        # Resolve `runs-on: ${{ matrix.os }}` from the job's own matrix.
+        job_os = {}
+        job = None
+        for line in lines:
+            m = re.match(r'^  ([A-Za-z0-9_-]+):\s*$', line)
+            if m:
+                job = m.group(1)
+            m = re.match(r'^\s*os:\s*\[(.+)\]', line)
+            if m and job:
+                job_os[job] = [x.strip().strip('"\'') for x in m.group(1).split(',')]
+
+        job = None
+        plats = []
+        for line in lines:
+            m = re.match(r'^  ([A-Za-z0-9_-]+):\s*$', line)
+            if m:
+                job, plats = m.group(1), []
+            m = re.match(r'^\s*runs-on:\s*(.+)$', line)
+            if m:
+                plats = platform_of(m.group(1).strip(), job_os.get(job, []))
+            if not plats:
+                continue
+
+            for mm in re.finditer(
+                    r'\bmake\s+-C\s+([A-Za-z0-9_./-]+)((?:\s+[A-Za-z0-9_.\-]+)*)', line):
+                for t in mm.group(2).split():
+                    if '=' not in t and not t.startswith('-'):
+                        calls.setdefault((mm.group(1), t), set()).update(plats)
+            for mm in re.finditer(r'(?<![-\w])make((?:\s+[A-Za-z0-9_.\-]+)+)', line):
+                for t in mm.group(1).split():
+                    if '=' not in t and not t.startswith('-') and t != '-C':
+                        calls.setdefault(('.', t), set()).update(plats)
+
+            # Suites reached by a script rather than a target. Without this the
+            # six API e2e suites look Linux-only, because Windows runs them as
+            # `bash carta/api/test_api.sh` and nothing here was reading that.
+            for mm in re.finditer(r'\bbash\s+([A-Za-z0-9_./-]+\.sh)', line):
+                calls.setdefault(('script', mm.group(1)), set()).update(plats)
     return calls
 
 
@@ -108,43 +188,79 @@ def main():
         if os.path.isdir(m):
             subprocess.run([MAKE, '-C', m, 'lib'], capture_output=True, timeout=900)
 
-    calls = ci_make_calls()
+    calls = ci_invocations()
     log('CI invokes %d distinct (directory, target) pairs.' % len(calls))
 
-    reached = set()
-    for d, t in sorted(calls):
-        if not os.path.isdir(d):
-            continue
-        try:
-            r = subprocess.run([MAKE, '-C', d, '-n', t],
-                               capture_output=True, text=True, timeout=900)
-        except Exception:
-            continue
-        out = (r.stdout or '') + (r.stderr or '')
-        reached.update(re.findall(r'tests?/([A-Za-z0-9_]+)\.c', out))
-        reached.update(re.findall(r'(?:^|[\s/])(?:\./)?(test_[A-Za-z0-9_]+)(?:\.exe)?\b', out))
+    # program -> platforms that reach it. The union across every spelling is
+    # the point: `make test-carta` on Linux and `make -C carta test` on
+    # Windows are the same work, and dry-running both to their binaries is
+    # what makes them comparable.
+    where = {}
+    for (d, t), plats in sorted(calls.items()):
+        if d == 'script':
+            if not os.path.isfile(t):
+                continue
+            try:
+                out = open(t, encoding='utf-8', errors='replace').read()
+            except OSError:
+                continue
+        else:
+            if not os.path.isdir(d):
+                continue
+            try:
+                r = subprocess.run([MAKE, '-C', d, '-n', t],
+                                   capture_output=True, text=True, timeout=900)
+            except Exception:
+                continue
+            out = (r.stdout or '') + (r.stderr or '')
+        progs = set(re.findall(r'tests?/([A-Za-z0-9_]+)\.c', out))
+        progs |= set(re.findall(
+            r'(?:^|[\s/])(?:\./)?(test_[A-Za-z0-9_]+)(?:\.exe)?\b', out))
+        for prog in progs:
+            where.setdefault(prog, set()).update(plats)
+
+    reached = set(where)
 
     print()
-    print('%-10s %7s %9s  %s' % ('module', 'tests', 'unreached', 'reached by no CI target'))
+    print('%-10s %6s %10s %9s %8s' %
+          ('module', 'tests', 'unreached', 'no-windows', 'no-macos'))
     print('-' * 92)
 
     failures = []
+    gaps = []
+    advisory = []
     stale = set(ALLOWLIST)
+    stale_plat = set(PLATFORM_ALLOWLIST)
     for m in MODULES:
         if not os.path.isdir(m):
             continue
         progs = test_programs(m)
-        bad = []
-        for p in progs:
-            key = '%s/%s' % (m, p)
-            if p in reached:
+        bad, missing_win, missing_mac = [], [], []
+        for prog in progs:
+            key = '%s/%s' % (m, prog)
+            plats = where.get(prog, set())
+            if not plats:
+                if key in ALLOWLIST:
+                    stale.discard(key)
+                else:
+                    bad.append(prog)
                 continue
-            if key in ALLOWLIST:
-                stale.discard(key)
+            if key in PLATFORM_ALLOWLIST:
+                stale_plat.discard(key)
                 continue
-            bad.append(p)
-        failures += ['%s/%s' % (m, p) for p in bad]
-        print('%-10s %7d %9d  %s' % (m, len(progs), len(bad), ' '.join(bad) or '-'))
+            for want in REQUIRED:
+                if want not in plats:
+                    missing_win.append(prog)
+                    gaps.append('%s: runs on %s, not %s'
+                                % (key, '+'.join(sorted(plats)), want))
+                    break
+            for want in ADVISORY:
+                if want not in plats:
+                    missing_mac.append(prog)
+                    advisory.append(key)
+        failures += ['%s/%s' % (m, x) for x in bad]
+        print('%-10s %6d %10d %9d %8d'
+              % (m, len(progs), len(bad), len(missing_win), len(missing_mac)))
 
     print('-' * 92)
 
@@ -161,10 +277,36 @@ def main():
             print('    %s' % k)
         print('Remove them, so the allowlist keeps meaning what it says.')
 
-    if failures or stale:
+    if advisory:
         print()
-        print('FAIL: %d test programs nothing runs, %d stale allowlist entries.'
-              % (len(failures), len(stale)))
+        print('Not run on macOS (%d; advisory, does not fail the run):'
+              % len(advisory))
+        print('    %s' % ' '.join(sorted(advisory)[:12]))
+        if len(advisory) > 12:
+            print('    ... and %d more' % (len(advisory) - 12))
+
+    if stale_plat:
+        print()
+        print('Stale PLATFORM_ALLOWLIST entries (the gap is closed, or the')
+        print('file is gone):')
+        for k in sorted(stale_plat):
+            print('    %-44s %s' % (k, PLATFORM_ALLOWLIST[k]))
+
+    if gaps:
+        print()
+        print('Run on some platforms and not others:')
+        for g in sorted(gaps):
+            print('    %s' % g)
+        print()
+        print('Add the suite to that platform\'s job, or list it in')
+        print('PLATFORM_ALLOWLIST with the reason. "Something runs it" and')
+        print('"Windows runs it" are different claims.')
+
+    if failures or stale or gaps or stale_plat:
+        print()
+        print('FAIL: %d test programs nothing runs, %d with a platform gap, '
+              '%d stale allowlist entries.'
+              % (len(failures), len(gaps), len(stale) + len(stale_plat)))
         if failures:
             print()
             print('Wire each into a target CI invokes, or add it to ALLOWLIST in')
@@ -172,7 +314,8 @@ def main():
             print('test: it looks like coverage.')
         return 1
 
-    print('OK: every test program is reached by a CI target, or allowlisted with a reason.')
+    print('OK: every test program is reached by a CI target on every required '
+          'platform, or allowlisted with a reason.')
     return 0
 
 
