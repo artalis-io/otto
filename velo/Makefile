@@ -168,6 +168,7 @@ route-bench: $(ROUTE_BENCH)
 # CLI tools
 ROUTE_BATCH_BIN = route_batch
 MATRIX_BUILD_BIN = matrix_build
+ROUTE_GEOMETRY_BIN = route_geometry
 
 $(ROUTE_BATCH_BIN): tools/route_batch.c $(LIB_FILE) $(SHARED_DIR)/libshared.a
 	$(CC) $(CFLAGS) $(INCLUDES) $< $(call link_lib,.,velo) $(call link_lib,$(SHARED_DIR),shared) $(LDFLAGS) $(EXE_OUT)$@
@@ -175,7 +176,12 @@ $(ROUTE_BATCH_BIN): tools/route_batch.c $(LIB_FILE) $(SHARED_DIR)/libshared.a
 $(MATRIX_BUILD_BIN): tools/matrix_build.c $(LIB_FILE) $(SHARED_DIR)/libshared.a
 	$(CC) $(CFLAGS) $(INCLUDES) $< $(call link_lib,.,velo) $(call link_lib,$(SHARED_DIR),shared) $(LDFLAGS) $(EXE_OUT)$@
 
-tools: $(ROUTE_BATCH_BIN) $(MATRIX_BUILD_BIN)
+# route_geometry: stop-to-stop legs -> road-following path geometry (JSONL);
+# feeds surge/scripts/surge_map.py to build road-following GeoJSON routes.
+$(ROUTE_GEOMETRY_BIN): tools/route_geometry.c $(LIB_FILE) $(SHARED_DIR)/libshared.a
+	$(CC) $(CFLAGS) $(INCLUDES) $< $(call link_lib,.,velo) $(call link_lib,$(SHARED_DIR),shared) $(LDFLAGS) $(EXE_OUT)$@
+
+tools: $(ROUTE_BATCH_BIN) $(MATRIX_BUILD_BIN) $(ROUTE_GEOMETRY_BIN)
 
 # Debug build (with sanitizers)
 debug: CFLAGS = $(DEBUG_CFLAGS)

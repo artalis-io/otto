@@ -80,7 +80,7 @@ TSAN_CFLAGS = -Wall -Wextra -g -O1 -std=c11 -D_GNU_SOURCE -DSG_HAS_THREADS -DDEB
               -fsanitize=thread -fno-omit-frame-pointer
 TSAN_LDFLAGS = -fsanitize=thread
 
-.PHONY: all clean test test-transport lib debug bench bench-li-lim bench-cordeau \
+.PHONY: all clean test test-transport scripts-test tools lib debug bench bench-li-lim bench-cordeau \
         bench-quick bench-li-lim-quick bench-cordeau-quick bench-all-quick \
         bench-gh-200 bench-gh-all bench-ll-200 bench-ll-all bench-full \
         bench-tune tune-quick tune-all \
@@ -99,6 +99,15 @@ src/%.o: src/%.c
 
 $(TEST_BIN): tests/test_surge.c $(LIB_FILE) ../arbor/libarbor.a ../shared/libshared.a
 	$(CC) $(CFLAGS) $(INCLUDES) $< $(call link_lib,.,surge) $(call link_lib,../arbor,arbor) $(call link_lib,../shared,shared) $(LDFLAGS) $(EXE_OUT)$@
+
+# CLI tools. surge_solve: request JSON -> solution JSON (the CLI companion to the
+# HTTP /api/v1/solve endpoint; feeds surge/scripts/surge_map.py).
+SURGE_SOLVE_BIN = surge_solve
+
+$(SURGE_SOLVE_BIN): tools/surge_solve.c $(LIB_FILE) ../arbor/libarbor.a ../shared/libshared.a
+	$(CC) $(CFLAGS) $(INCLUDES) $< $(call link_lib,.,surge) $(call link_lib,../arbor,arbor) $(call link_lib,../shared,shared) $(LDFLAGS) $(EXE_OUT)$@
+
+tools: $(SURGE_SOLVE_BIN)
 
 $(TRANSPORT_TEST_BIN): tests/test_transport_direct.c $(LIB_FILE) ../arbor/libarbor.a ../shared/libshared.a
 	$(CC) $(CFLAGS) $(INCLUDES) $< $(call link_lib,.,surge) $(call link_lib,../arbor,arbor) $(call link_lib,../shared,shared) $(LDFLAGS) $(EXE_OUT)$@
@@ -141,6 +150,11 @@ test: $(TEST_BIN) $(TEST_TB_BIN) $(TEST_NB_BIN) $(TEST_PM_BIN) $(TRANSPORT_TEST_
 	./$(TEST_NB_BIN)
 	./$(TEST_PM_BIN)
 	./$(TEST_BIN)
+	$(MAKE) scripts-test
+
+# Python script self-tests (surge_map GeoJSON core). No solver/subprocess/files.
+scripts-test:
+	python3 scripts/surge_map_selftest.py
 
 bench: $(BENCH_SOL_BIN)
 	./$(BENCH_SOL_BIN) --dir benchmarks/solomon

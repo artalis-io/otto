@@ -113,6 +113,12 @@ $(COMPARE_BIN): tools/carta_compare.c $(LIB_FILE) $(SHARED_DIR)/libshared.a
 
 compare: $(COMPARE_BIN)
 
+# tiledump: pre-render a static PNG tile pyramid for a bbox/zoom range (offline
+# basemap for surge/scripts/surge_map.py). Built by name: `make tiledump`.
+TILEDUMP_BIN = tiledump
+$(TILEDUMP_BIN): tools/tiledump.c $(LIB_FILE) $(SHARED_DIR)/libshared.a
+	$(CC) $(CFLAGS) $(INCLUDES) $< $(call link_lib,.,carta) $(call link_lib,$(SHARED_DIR),shared) $(LDFLAGS) $(EXE_OUT)$@
+
 # Metatile test binary
 $(TEST_METATILE_BIN): tests/test_metatile.c $(LIB_FILE) $(SHARED_DIR)/libshared.a
 	$(CC) $(CFLAGS) $(INCLUDES) $< $(call link_lib,.,carta) $(call link_lib,$(SHARED_DIR),shared) $(LDFLAGS) $(EXE_OUT)$@
