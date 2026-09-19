@@ -153,6 +153,36 @@ Measured against GLPK 5.0 with `bench_mip`, every objective matching:
 - This makes GMI cuts mostly ineffective for >= constraints
 - See `cuts.c:generate_gmi_cut()` for the rejection logic
 
+### Ralph, Surge and FuelWise API servers fail in an unoptimised MSVC build
+
+Built with `cl` at `/Zi /Od` -- which is what `CC_DEBUG_OPT` is for MSVC,
+and therefore what every `test-asan` and `build-asan` target produces --
+the three solver-backed servers answer a solve request with:
+
+```json
+{"status":"error","solve_time_ms":0.0,"iterations":0,"num_vars":2,"num_cons":2}
+```
+
+Zero iterations and zero time: the solve is rejected before it starts, on a
+two-variable problem. The same binaries built at `/O2` pass; `Windows Suites
+MSVC` exercises exactly that and is green.
+
+Found while adding the Windows MSVC ASan job, but **not a sanitizer**
+**finding**: `build-asan CC_SANITIZE= LD_SANITIZE=` reproduces it exactly,
+so it is the unoptimised build alone. Nothing had ever built these servers
+that way -- the `*/api test-asan` targets run only on Linux, and
+`CC_SANITIZE` was empty for `cl` until now.
+
+The three that break are the three backed by a solver (ralph, surge,
+fuelwise); velo, locus and carta are unaffected and are in the ASan job.
+Reproduce with:
+
+```sh
+source scripts/msvc-env.sh
+mingw32-make -C ralph/api CC=cl build-asan CC_SANITIZE= LD_SANITIZE=
+unset MSYS_NO_PATHCONV MSYS2_ARG_CONV_EXCL
+bash ralph/api/test_api.sh      # 12/15, three solve assertions fail
+```
 ## Numerical Issues
 
 ### Artificial Variable Residuals
