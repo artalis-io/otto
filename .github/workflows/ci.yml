@@ -951,6 +951,17 @@ jobs:
       # rather than passing unnoticed.
       - name: Run the six API suites under ASan
         run: |
+          # msvc-env is sourced for PATH alone: the instrumented binaries link
+          # clang_rt.asan_dynamic-x86_64.dll, which lives in the MSVC toolchain
+          # directory and is otherwise not found -- the servers exit at startup
+          # with "error while loading shared libraries".
+          #
+          # Then the two variables that suppress MSYS path conversion are
+          # unset, because with them set the `curl -o /tmp/...` these suites
+          # use reaches native curl as a path it cannot write. The compiler
+          # needs them; curl must not have them.
+          source scripts/msvc-env.sh
+          unset MSYS_NO_PATHCONV MSYS2_ARG_CONV_EXCL
           bash ralph/api/test_api.sh
           (cd surge/api && bash test_api.sh)
           (cd fuelwise/api && bash test_api.sh)
