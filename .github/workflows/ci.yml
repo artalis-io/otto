@@ -907,10 +907,17 @@ jobs:
             mingw32-make -C $m CC=cl lib
           done
 
-      - name: Fetch fixtures
+      # Mirrors the Fetch Monaco fixtures step in windows-msvc, including its
+      # reason: the .vlg builder is bench_pbf, which is not part of `make velo`
+      # and would otherwise be built by the default compiler -- gcc, which this
+      # runner does not install. Writing this step from scratch rather than
+      # copying that one cost a red run whose failure was a missing compiler.
+      - name: Fetch Monaco fixtures
         run: |
+          source scripts/msvc-env.sh
           mingw32-make data/monaco-latest.osm.pbf
-          mingw32-make data/monaco.vlg
+          mingw32-make -C velo bench_pbf CC=cl
+          mingw32-make data/monaco.vlg CC=cl
 
       - name: Carta API under ASan
         run: |
