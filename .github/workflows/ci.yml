@@ -919,35 +919,43 @@ jobs:
           mingw32-make -C velo bench_pbf CC=cl
           mingw32-make data/monaco.vlg CC=cl
 
-      - name: Carta API under ASan
+      # Built and run in separate steps, because the two halves need
+      # opposite environments and `test-asan` does both at once.
+      #
+      # cl needs scripts/msvc-env.sh, which exports MSYS2_ARG_CONV_EXCL='*'
+      # so /Fo: and /std:c11 reach the compiler as flags rather than being
+      # rewritten as paths. But with conversion off, the `curl -o /tmp/...`
+      # these suites use reaches native curl as a literal path it cannot
+      # write -- which is why windows-suites-msvc deliberately does not
+      # source it. Sourcing it for the whole of test-asan cost a red run:
+      # carta reported 18/19 with `PNG tile has a PNG signature` failing,
+      # not because the PNG was wrong but because curl never wrote the file.
+      #
+      # `debug` is the build half of `test-asan` -- same DEBUG_CFLAGS, same
+      # DEBUG_LDFLAGS, no test run -- so the servers are instrumented here
+      # and exercised below.
+      - name: Build the six servers with ASan
         run: |
           source scripts/msvc-env.sh
-          mingw32-make -C carta/api CC=cl test-asan
+          for m in ralph surge fuelwise velo locus carta; do
+            mingw32-make -C $m/api CC=cl debug
+          done
 
-      - name: Velo API under ASan
+      # No msvc-env here, for the reason above. Nothing compiles: the
+      # binaries exist. Four suites run from the repo root and two from
+      # their own directory; that split is the scripts' own convention.
+      #
+      # Each script greps the server log and fails on anything a sanitizer
+      # printed, so an ASan report on the server's stderr fails the suite
+      # rather than passing unnoticed.
+      - name: Run the six API suites under ASan
         run: |
-          source scripts/msvc-env.sh
-          mingw32-make -C velo/api CC=cl test-asan
-
-      - name: Locus API under ASan
-        run: |
-          source scripts/msvc-env.sh
-          mingw32-make -C locus/api CC=cl test-asan
-
-      - name: Ralph API under ASan
-        run: |
-          source scripts/msvc-env.sh
-          mingw32-make -C ralph/api CC=cl test-asan
-
-      - name: Surge API under ASan
-        run: |
-          source scripts/msvc-env.sh
-          mingw32-make -C surge/api CC=cl test-asan
-
-      - name: FuelWise API under ASan
-        run: |
-          source scripts/msvc-env.sh
-          mingw32-make -C fuelwise/api CC=cl test-asan
+          bash ralph/api/test_api.sh
+          (cd surge/api && bash test_api.sh)
+          (cd fuelwise/api && bash test_api.sh)
+          bash velo/api/test_api.sh
+          bash carta/api/test_api.sh
+          bash locus/api/test_api.sh
   windows-msvc:
     name: Windows MSVC
     runs-on: windows-latest
