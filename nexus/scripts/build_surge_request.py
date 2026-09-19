@@ -88,12 +88,20 @@ def main():
     ap.add_argument("--max-duration-min", type=int, default=540, help="max on-duty minutes per vehicle")
     ap.add_argument("--sub-col", default="is_subcontractor", help="vehicle column flagging subcontractors")
     ap.add_argument("--sub-clones", type=int, default=5, help="times to replicate each subcontractor (unlimited-ish)")
+    ap.add_argument("--plate-col", default="plate",
+                    help="vehicle column holding the plate; the part before '+' is the physical base plate")
+    ap.add_argument("--dedupe-vehicle-configs", action=argparse.BooleanOptionalAction, default=True,
+                    help="collapse own vehicles that share a base plate (alternative configs of one "
+                         "physical truck, e.g. rigid-solo vs rigid+drawbar) to the highest-capacity "
+                         "config, so a truck can't be used in two configs at once")
     ap.add_argument("--own-fixed-cost", type=float, default=100.0)
     ap.add_argument("--sub-fixed-cost", type=float, default=100000.0)
     ap.add_argument("--objective", default="vehicles-then-distance",
                     choices=["vehicles-then-distance", "distance", "duration"])
     ap.add_argument("--hard-max-duration", action=argparse.BooleanOptionalAction, default=True,
                     help="treat vehicle max_duration as a hard (legal HoS) limit, not a penalty")
+    ap.add_argument("--hard-capacity", action=argparse.BooleanOptionalAction, default=True,
+                    help="treat vehicle capacity as a hard constraint, not a penalty")
     ap.add_argument("--max-iterations", type=int, default=20000)
     ap.add_argument("--demand-sign", type=int, default=1,
                     help="0=pickup+/delivery- (Surge default), 1=pickup-/delivery+ (matches positive delivery demand)")
@@ -113,8 +121,13 @@ def main():
     assert [r[oidx["key"]] for r in orows] == dkeys == ukeys, "keys not aligned across bundle files"
 
     vrows = read_csv(os.path.join(a.bundle, "vehicles.csv"))
-    req, n_own, n_sub = assemble_request(orows, oidx, dflat, uflat, N, vrows, a)
+    req, n_own, n_sub, collapsed = assemble_request(orows, oidx, dflat, uflat, N, vrows, a)
     json.dump(req, open(a.out, "w"))
+    if collapsed:
+        print(f"build_surge_request: collapsed {len(collapsed)} duplicate physical vehicle(s) "
+              f"(shared base plate, kept highest-capacity config):", file=sys.stderr)
+        for bp, dropped, kept in collapsed:
+            print(f"    {bp}: dropped cap {dropped} (kept {kept})", file=sys.stderr)
     print(f"build_surge_request: N={N} locations ({len(req['depots'])} depot, {len(req['tasks'])} deliveries), "
           f"{len(req['vehicles'])} vehicles ({n_own} own + {n_sub} sub-clones), dim={req['dimension_count']}, "
           f"max_trips={a.max_trips}, objective={a.objective} -> {a.out}", file=sys.stderr)
@@ -176,18 +189,48 @@ def assemble_request(orows, oidx, dflat, uflat, N, vrows, a):
             "cost_per_distance": 1.0 if a.objective != "duration" else 0.0,
             "cost_per_duration": 1.0 if a.objective == "duration" else 0.0,
         })
-    for row in vrows[1:]:
-        cap = cap_of(row)
-        if is_sub(row):
-            for _ in range(max(1, a.sub_clones)):
-                add_vehicle(cap, a.sub_fixed_cost); n_sub += 1
-        else:
-            add_vehicle(cap, a.own_fixed_cost); n_own += 1
+    own_rows = [r for r in vrows[1:] if not is_sub(r)]
+    sub_rows = [r for r in vrows[1:] if is_sub(r)]
+
+    # Collapse alternative configs of the same PHYSICAL vehicle. A drawbar truck
+    # appears twice in the fleet: once as a solo rigid and once as the rigid+trailer
+    # combo, sharing a base plate ("SLZ-098" vs "SLZ-098+WFB-869"). They are
+    # alternatives for one truck, so at most one may run at a time. Surge has no
+    # vehicle-level "use at most one" constraint, but the higher-capacity config
+    # dominates (same depot/shift/duration/cost/travel), so keeping only the
+    # max-capacity config per base plate is equivalent and keeps each truck a
+    # single asset. collapsed: list of (base_plate, dropped_cap, kept_cap).
+    collapsed = []
+    getattr_ok = getattr(a, "dedupe_vehicle_configs", True)
+    plate_col = getattr(a, "plate_col", "plate")
+    if getattr_ok and plate_col in vi:
+        def base_plate(r):
+            return str(r[vi[plate_col]]).split("+")[0].strip()
+        groups = {}
+        for r in own_rows:
+            groups.setdefault(base_plate(r), []).append(r)
+        kept = []
+        for bp, grp in groups.items():
+            best = max(grp, key=lambda r: sum(cap_of(r)))
+            kept.append(best)
+            for r in grp:
+                if r is not best:
+                    collapsed.append((bp, cap_of(r), cap_of(best)))
+        # preserve original file order of kept rows
+        keep_set = {id(r) for r in kept}
+        own_rows = [r for r in own_rows if id(r) in keep_set]
+
+    for row in own_rows:
+        add_vehicle(cap_of(row), a.own_fixed_cost); n_own += 1
+    for row in sub_rows:
+        for _ in range(max(1, a.sub_clones)):
+            add_vehicle(cap_of(row), a.sub_fixed_cost); n_sub += 1
 
     req = {
         "config": {"max_iterations": a.max_iterations, "max_time_seconds": a.max_time_seconds,
                    "seed": a.seed, "lexicographic_objective": a.objective == "vehicles-then-distance",
-                   "hard_max_duration": a.hard_max_duration},
+                   "hard_max_duration": a.hard_max_duration,
+                   "hard_capacity": a.hard_capacity},
         "dimension_count": dim,
         "demand_sign_convention": a.demand_sign,   # 1 = delivery demand positive
         "locations": locations,
@@ -197,7 +240,7 @@ def assemble_request(orows, oidx, dflat, uflat, N, vrows, a):
         "requests": requests,
         "travel": {"location_count": N, "distances": dflat, "durations": uflat},
     }
-    return req, n_own, n_sub
+    return req, n_own, n_sub, collapsed
 
 
 if __name__ == "__main__":

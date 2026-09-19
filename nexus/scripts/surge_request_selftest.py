@@ -46,9 +46,10 @@ def main():
         max_trips=2, trip_reload_seconds=1800,
         objective="vehicles-then-distance",
         max_iterations=20000, max_time_seconds=30, seed=42,
-        demand_sign=1, unassigned_penalty=1e6, hard_max_duration=True,
+        demand_sign=1, unassigned_penalty=1e6, hard_max_duration=True, hard_capacity=True,
+        plate_col="plate", dedupe_vehicle_configs=True,
     )
-    req, n_own, n_sub = bsr.assemble_request(orows, oidx, dflat, uflat, N, vrows, a)
+    req, n_own, n_sub, collapsed = bsr.assemble_request(orows, oidx, dflat, uflat, N, vrows, a)
 
     # depot at index 0
     assert len(req["depots"]) == 1
@@ -82,6 +83,26 @@ def main():
     assert own["fixed_cost"] == 100.0
     subs = req["vehicles"][1:]
     assert all(v["fixed_cost"] == 100000.0 and v["capacity"] == [17, 12000] for v in subs)
+    assert collapsed == []   # base fixture has no shared base plates
+
+    # vehicle-config dedup: a drawbar truck listed twice (solo rigid + rigid+trailer
+    # combo) shares a base plate; only the higher-capacity combo must survive.
+    vrows2 = [
+        ["id", "plate", "capacity_pallets", "capacity_kg", "is_subcontractor"],
+        ["r-solo",  "SLZ-098",         "17", "12000", "false"],   # rigid solo
+        ["r-combo", "SLZ-098+TRL-1",   "34", "24000", "false"],   # same truck + drawbar
+        ["r-plain", "OTH-2",           "17", "14000", "false"],   # unrelated own truck
+        ["v-sub",   "BBB-2",           "33", "24000", "true"],
+    ]
+    req2, n_own2, n_sub2, collapsed2 = bsr.assemble_request(orows, oidx, dflat, uflat, N, vrows2, a)
+    assert n_own2 == 2, f"expected 2 physical own trucks after dedup, got {n_own2}"   # combo + OTH-2
+    assert len(collapsed2) == 1 and collapsed2[0][0] == "SLZ-098"
+    own_caps = sorted(v["capacity"][1] for v in req2["vehicles"][:2])
+    assert own_caps == [14000, 24000], own_caps        # solo 12000 dropped, combo 24000 kept
+    # dedup can be turned off
+    a_off = SimpleNamespace(**{**a.__dict__, "dedupe_vehicle_configs": False})
+    _, n_own_off, _, collapsed_off = bsr.assemble_request(orows, oidx, dflat, uflat, N, vrows2, a_off)
+    assert n_own_off == 3 and collapsed_off == []
 
     # config
     assert req["config"]["max_iterations"] == 20000

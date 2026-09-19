@@ -201,6 +201,10 @@ typedef struct {
      * path (reject over-cap routes even during infeasible-space exploration),
      * not just a penalty. Off by default; use for legal HoS on-duty limits. */
     bool hard_max_duration;
+    /* Treat vehicle capacity as a HARD constraint in the insertion accept path
+     * (reject over-capacity routes even during infeasible-space exploration),
+     * not just a penalty. Off by default. */
+    bool hard_capacity;
     SGPriorityRemovalPolicy priority_removal_policy;
     bool lexicographic_objective;
     SGAcceptType accept_type;
