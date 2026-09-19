@@ -85,6 +85,12 @@ jobs:
           - name: Ralph Edge Cases
             build: make ralph
             test: make -C ralph test-edge
+          # The PAL is the platform seam, so running it on one platform
+          # tests half of it. Windows Core has run it since it was written;
+          # the POSIX branch was never executed by anything.
+          - name: Shared PAL
+            build: make shared
+            test: make -C shared test-pal
           - name: Shared pdf2struc
             build: make shared
             test: make -C shared test-pdf2struc
@@ -521,6 +527,18 @@ jobs:
 
       - name: Build and test Ralph Netlib
         run: make -C ralph test-netlib
+
+      # Benders, edge cases and optim ran on Linux and nowhere else. Not
+      # because they fail here -- they pass, 42/42, all edge cases, and 20/20
+      # -- but because no Windows job named them and nothing was asking.
+      - name: Build and test Ralph Benders
+        run: make -C ralph test-benders
+
+      - name: Build and test Ralph Edge Cases
+        run: make -C ralph test-edge
+
+      - name: Build and test Ralph Optim
+        run: make -C ralph test-optim
 
       # fuelwise and surge were missing here, and that is exactly why #63 shipped
       # a fuelwise link that had never been tried on Windows. Surge's own LDFLAGS
@@ -1083,7 +1101,7 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y build-essential
 
-      - name: Check that every test program is reached by a CI target
+      - name: Check that every test program is reached on every platform
         run: python3 scripts/check_test_coverage.py
 
   # ==========================================================================
