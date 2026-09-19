@@ -168,16 +168,19 @@ test-reconcile: $(NX_PIPELINE_BIN)
 # Travel-matrix builder self-test: proves the geocoded-orders -> Surge matrix
 # step keeps a strict 1:1 order<->index bijection (unique keys, split orders
 # distinct, zero diagonal) on canned route data -- no graph needed (graphs are
-# not committed). Where python3 is not on PATH (e.g. the Windows CI runners),
-# skip rather than fail, matching the reconcile self-test.
+# not committed).
+#
+# This used to skip when python3 was absent, which meant the Windows runners
+# printed "skipping" and reported green having run none of the three. They
+# pass on Windows -- all three do, verified before the runners were given
+# python3 -- so the skip was hiding working tests rather than protecting
+# anyone from broken ones. It now says what is missing and stops.
 test-matrix:
-	@if command -v python3 >/dev/null 2>&1; then \
-		python3 scripts/matrix_selftest.py; \
-		python3 scripts/vrp_bundle_selftest.py; \
-		python3 scripts/surge_request_selftest.py; \
-	else \
-		echo "skipping matrix/bundle self-tests: python3 not found" >&2; \
-	fi
+	@command -v python3 >/dev/null 2>&1 || { \
+		echo "nexus test-matrix needs python3 on PATH" >&2; exit 1; }
+	python3 scripts/matrix_selftest.py
+	python3 scripts/vrp_bundle_selftest.py
+	python3 scripts/surge_request_selftest.py
 
 debug: CFLAGS = $(DEBUG_CFLAGS)
 debug: LDFLAGS = -lm $(DEBUG_LDFLAGS)

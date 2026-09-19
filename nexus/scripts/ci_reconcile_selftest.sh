@@ -6,12 +6,14 @@
 #      (reconciler exits 1) -- i.e. the gate has teeth.
 set -eu
 
-# The reconciler is a Python tool. Where python3 is not on PATH (e.g. the Windows
-# CI runners), skip the gate rather than fail the build; it still runs everywhere
-# python3 exists (Linux CI, dev machines, and every real ingest).
+# The reconciler is a Python tool. This used to exit 0 when python3 was absent,
+# which is how the Windows runners reported a green reconciliation gate while
+# running none of it -- on the one check whose entire purpose is to prove the
+# reconciler CATCHES a schema that silently truncates data. It passes on
+# Windows; the runners simply had no python3. Missing python3 is now an error.
 if ! command -v python3 >/dev/null 2>&1; then
-    echo "skipping reconciliation self-test: python3 not found" >&2
-    exit 0
+    echo "reconciliation self-test needs python3 on PATH" >&2
+    exit 1
 fi
 
 NEXUS_DIR="$(cd "$(dirname "$0")/.." && pwd)"
