@@ -792,6 +792,7 @@ jobs:
           install: >-
             mingw-w64-ucrt-x86_64-make
             mingw-w64-ucrt-x86_64-glpk
+            mingw-w64-ucrt-x86_64-python
             jq
 
       - name: Report the toolchain
@@ -864,6 +865,7 @@ jobs:
           install: >-
             mingw-w64-ucrt-x86_64-make
             mingw-w64-ucrt-x86_64-curl
+            mingw-w64-ucrt-x86_64-python
             jq
 
       - name: Report the MSVC toolchain
