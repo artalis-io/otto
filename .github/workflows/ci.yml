@@ -931,14 +931,15 @@ jobs:
       # carta reported 18/19 with `PNG tile has a PNG signature` failing,
       # not because the PNG was wrong but because curl never wrote the file.
       #
-      # `debug` is the build half of `test-asan` -- same DEBUG_CFLAGS, same
-      # DEBUG_LDFLAGS, no test run -- so the servers are instrumented here
-      # and exercised below.
+      # `build-asan` is the build half of `test-asan` -- same DEBUG_CFLAGS,
+      # same DEBUG_LDFLAGS, no test run. Three of the six api Makefiles had a
+      # `debug` target and three did not, so the job now calls one name that
+      # all six define.
       - name: Build the six servers with ASan
         run: |
           source scripts/msvc-env.sh
           for m in ralph surge fuelwise velo locus carta; do
-            mingw32-make -C $m/api CC=cl debug
+            mingw32-make -C $m/api CC=cl build-asan
           done
 
       # No msvc-env here, for the reason above. Nothing compiles: the
