@@ -61,34 +61,24 @@ int main(int argc, char **argv) {
 
     SGStatus solve_status = sg_solve(ctx);
 
-    /* sg_solve commits its solution to the context (route/stop getters) before
-     * returning, but sg_api_write_solution only serializes routes when the
-     * passed status is OK/LIMIT. sg_solve can return ERROR while a complete,
-     * committed solution is present (notably max_trips=0 multi-trip solves,
-     * where the strict end-of-solve validator rejects a solution that is in
-     * fact feasible -- a known solver-status issue, tracked separately). So if
-     * a solution is present, serialize it and report the raw status on stderr;
-     * otherwise emit the status/error object the writer produces. */
+    /* sg_solve commits its best solution to the context before returning, and
+     * sg_api_write_solution now serializes a committed solution under any
+     * status (it can return a non-OK status -- e.g. a max_trips=0 multi-trip
+     * solve the strict end-of-solve validator rejects -- while a complete plan
+     * is present). Pass the raw status so the JSON reports it faithfully; note
+     * a non-OK status on stderr. Exit 0 if a solution was emitted. */
     uint32_t route_count = sg_solution_get_route_count(ctx);
-    SGStatus emit_status = solve_status;
     if (solve_status != SG_STATUS_OK && solve_status != SG_STATUS_LIMIT) {
-        if (route_count > 0) {
-            fprintf(stderr,
-                    "surge_solve: sg_solve returned status=%d but a solution with "
-                    "%u routes is present; emitting it as LIMIT\n",
-                    (int)solve_status, route_count);
-            emit_status = SG_STATUS_LIMIT;
-        } else {
-            fprintf(stderr, "surge_solve: solve failed (status=%d), no solution\n",
-                    (int)solve_status);
-        }
+        fprintf(stderr, "surge_solve: sg_solve status=%d (%u routes committed)\n",
+                (int)solve_status, route_count);
     }
 
     ShJsonWriter w;
     sh_json_writer_init(&w, write_stdout, stdout);
-    sg_api_write_solution(ctx, &w, emit_status);
+    sg_api_write_solution(ctx, &w, solve_status);
     fputc('\n', stdout);
 
     sg_free(ctx);
-    return (emit_status == SG_STATUS_OK || emit_status == SG_STATUS_LIMIT) ? 0 : 1;
+    return (solve_status == SG_STATUS_OK || solve_status == SG_STATUS_LIMIT ||
+            route_count > 0) ? 0 : 1;
 }
