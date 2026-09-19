@@ -843,6 +843,104 @@ jobs:
   # mingw32-make, not MSYS's make: /usr/bin/make strips TMPDIR/TMP/TEMP from the
   # environment, and cl.exe needs them for its intermediates.
   # ==========================================================================
+  # ==========================================================================
+  # Windows MSVC ASan
+  #
+  # Every sanitizer job in this file is ubuntu-latest, so a memory error
+  # reachable only through a Windows code path had nothing watching for it --
+  # it had to crash a test outright to be noticed. MSVC has supported
+  # /fsanitize=address since 16.9; mk/toolchain.mk now maps CC_SANITIZE to it,
+  # so the existing test-asan targets work under CC=cl unchanged.
+  #
+  # Narrower than the Linux jobs on purpose: MSVC has no UndefinedBehaviour
+  # and no Leak sanitizer, so this is address only and a UB finding stays
+  # Linux-only work.
+  #
+  # shared plus the six servers: the servers because they are the only OTTO
+  # code that reads bytes off a socket, and shared because they all sit on it.
+  # ==========================================================================
+  windows-msvc-asan:
+    name: Windows MSVC ASan
+    runs-on: windows-latest
+    timeout-minutes: 90
+
+    defaults:
+      run:
+        shell: msys2 {0}
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Set up MSYS2 (make and coreutils only; the compiler is MSVC)
+        uses: msys2/setup-msys2@v2
+        with:
+          msystem: UCRT64
+          update: false
+          install: >-
+            mingw-w64-ucrt-x86_64-make
+            mingw-w64-ucrt-x86_64-curl
+            mingw-w64-ucrt-x86_64-python
+            jq
+
+      - name: Report the MSVC toolchain
+        run: |
+          source scripts/msvc-env.sh
+          cl 2>&1 | head -2
+
+      - name: Shared under ASan
+        run: |
+          source scripts/msvc-env.sh
+          mingw32-make -C shared CC=cl test-asan
+
+      # The api test-asan targets instrument the server's own sources -- the
+      # socket-facing ones -- and link the module library built normally,
+      # which is the same shape the Linux jobs use. The libraries have to
+      # exist first; on Linux an earlier step in the same job has already
+      # built them.
+      - name: Build the module libraries
+        run: |
+          source scripts/msvc-env.sh
+          for m in shared ralph arbor surge fuelwise velo locus carta; do
+            mingw32-make -C $m CC=cl lib
+          done
+
+      - name: Fetch fixtures
+        run: |
+          mingw32-make data/monaco-latest.osm.pbf
+          mingw32-make data/monaco.vlg
+
+      - name: Carta API under ASan
+        run: |
+          source scripts/msvc-env.sh
+          mingw32-make -C carta/api CC=cl test-asan
+
+      - name: Velo API under ASan
+        run: |
+          source scripts/msvc-env.sh
+          mingw32-make -C velo/api CC=cl test-asan
+
+      - name: Locus API under ASan
+        run: |
+          source scripts/msvc-env.sh
+          mingw32-make -C locus/api CC=cl test-asan
+
+      - name: Ralph API under ASan
+        run: |
+          source scripts/msvc-env.sh
+          mingw32-make -C ralph/api CC=cl test-asan
+
+      - name: Surge API under ASan
+        run: |
+          source scripts/msvc-env.sh
+          mingw32-make -C surge/api CC=cl test-asan
+
+      - name: FuelWise API under ASan
+        run: |
+          source scripts/msvc-env.sh
+          mingw32-make -C fuelwise/api CC=cl test-asan
   windows-msvc:
     name: Windows MSVC
     runs-on: windows-latest
