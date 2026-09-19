@@ -20,6 +20,19 @@ NEXUS_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 FIX="$NEXUS_DIR/tests/reconcile"
 REC="$NEXUS_DIR/scripts/reconcile.py"
 
+# python3 on Windows is a native program and cannot read an MSYS path like
+# /c/Users/...; it resolves it against the drive root and looks for
+# C:/c/Users/... . MSYS normally rewrites arguments that look like paths, but
+# scripts/msvc-env.sh exports MSYS_NO_PATHCONV=1 and MSYS2_ARG_CONV_EXCL='*'
+# so that cl.exe receives /Fo: and /std:c11 verbatim -- and the windows-msvc
+# job sources it before running the nexus suite. Converting here rather than
+# relying on the ambient setting keeps this working under both.
+if command -v cygpath >/dev/null 2>&1; then
+    NEXUS_DIR="$(cygpath -m "$NEXUS_DIR")"
+    FIX="$(cygpath -m "$FIX")"
+    REC="$(cygpath -m "$REC")"
+fi
+
 # The Makefile writes `nx_pipeline`; on Windows the compiler appends `.exe`.
 # Checking only the bare name meant this rebuilt on every run there, and the
 # reconciler then could not find the binary it had just built.
