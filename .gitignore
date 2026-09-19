@@ -58,6 +58,13 @@ fuelwise-api
 carta-tile-server
 velo-route-server
 
+# CLI tool binaries (built from */tools/ and */scripts/)
+surge/surge_solve
+velo/route_geometry
+velo/route_batch
+velo/matrix_build
+carta/tiledump
+
 # WASM build output
 **/wasm/build/
 

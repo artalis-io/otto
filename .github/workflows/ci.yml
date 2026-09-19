@@ -160,6 +160,11 @@ jobs:
           make surge
           make test-surge
 
+      # surge_map GeoJSON core self-test (python3; Linux only -- kept out of the
+      # C `test` target so the Windows jobs without python3 stay green).
+      - name: Test Surge scripts
+        run: make -C surge scripts-test
+
       # Surge API is served by Keel (vendor/keel submodule)
       - name: Build Surge API
         run: |
