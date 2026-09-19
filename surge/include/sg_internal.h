@@ -1220,6 +1220,10 @@ ARStatus sg_route_postprocess_eject_over_duration(const SGContext *ctx, SGRouteS
  * exceeds the vehicle capacity until it fits (ejected go to the unassigned
  * pool). No-op when hard_capacity is off. */
 ARStatus sg_route_postprocess_eject_over_capacity(const SGContext *ctx, SGRouteSolution *sol);
+/* When config.hard_time_windows is set, eject the worst-late stop from any route
+ * that serves a stop past its tw_late, re-timing until none remain (ejected go to
+ * the unassigned pool). No-op when hard_time_windows is off. */
+ARStatus sg_route_postprocess_eject_over_tw(const SGContext *ctx, SGRouteSolution *sol);
 int sg_route_try_pd_reorder_once(const SGContext *ctx, SGRouteSolution *sol);
 int sg_route_try_2opt_intra_once(const SGContext *ctx, SGRouteSolution *sol);
 int sg_route_try_pd_relocate_intra_once(const SGContext *ctx, SGRouteSolution *sol);

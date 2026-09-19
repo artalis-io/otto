@@ -2122,6 +2122,56 @@ ARStatus sg_route_postprocess_eject_over_capacity(const SGContext *ctx, SGRouteS
     return AR_STATUS_OK;
 }
 
+ARStatus sg_route_postprocess_eject_over_tw(const SGContext *ctx, SGRouteSolution *sol) {
+    uint32_t v;
+
+    if (!ctx || !sol) {
+        return AR_STATUS_INVALID_ARG;
+    }
+    /* Only enforce when the caller asked for hard time windows. The insertion
+     * accept path rejects late placements, but greedy construction uses an
+     * approximate time budget and can seat a stop whose exact service_start is
+     * past its tw_late; eject the worst-late stop, re-time (downstream shifts
+     * earlier), and repeat until no route serves any stop late. Ejected requests
+     * go to the unassigned pool for the (hard) repair operators, or stay dropped
+     * if they can't be placed on time anywhere. */
+    if (!ctx->config.hard_time_windows) {
+        return AR_STATUS_OK;
+    }
+
+    for (v = 0; v < ctx->num_vehicles; v++) {
+        int progress = 1;
+        while (progress) {
+            const SGRouteStop *stops;
+            uint32_t n, s, eject_req = UINT32_MAX;
+            double worst_late = 1.0;   /* >1s past tw_late = a real violation */
+            progress = 0;
+            sg_route_update_timing((SGContext *)ctx, sol, v);
+            stops = sg_route_vehicle_stop_ptr_const(sol, v);
+            n = sol->route_stop_lengths[v];
+            for (s = 0; s < n; s++) {
+                const SGTaskRecord *t = &ctx->tasks[stops[s].task_id];
+                if (t->has_time_window) {
+                    double late = stops[s].service_start - (double)t->tw_late;
+                    if (late > worst_late) {
+                        worst_late = late;
+                        eject_req = stops[s].request_id;
+                    }
+                }
+            }
+            if (eject_req != UINT32_MAX) {
+                if (sg_route_unassign_request(ctx, sol, eject_req, NULL) != AR_STATUS_OK) {
+                    break;
+                }
+                sg_route_update_timing((SGContext *)ctx, sol, v);
+                sg_route_update_load((SGContext *)ctx, sol, v);
+                progress = 1;
+            }
+        }
+    }
+    return AR_STATUS_OK;
+}
+
 ARStatus sg_route_postprocess_ejection_reduce(const SGContext *ctx, SGRouteSolution *sol) {
     int restarted;
     uint8_t *chain_visited = NULL;
