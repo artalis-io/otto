@@ -8239,6 +8239,52 @@ static void test_json_api_write_solution(void) {
     sg_free(ctx);
 }
 
+/* A committed solution must be serialized even under a non-OK solve status.
+ * sg_solve commits its best solution before it may return a non-OK status
+ * (e.g. a multi-trip solve the strict end-of-solve validator rejects); the
+ * writer must not drop those routes on the floor -- the HTTP /api/v1/solve
+ * endpoint used to answer {"status":"ERROR"} with no routes for a plan the
+ * getters could still see. */
+static void test_json_api_write_solution_committed_under_error(void) {
+    SGContext *ctx = make_config(100, 42);
+    uint32_t depot;
+    add_depot_with_location(ctx, &depot, 0, 0);
+    assert(sg_depot_set_time_window(ctx, depot, 0, 10000) == SG_STATUS_OK);
+    add_vehicle_with_depot(ctx, depot, 0, 10000, 100);
+    add_delivery_request(ctx, 10, 0, 0, 10000, 60, -10.0);
+    assert(sg_validate_model(ctx) == SG_STATUS_OK);
+    SGStatus s = sg_solve(ctx);
+    assert(s == SG_STATUS_OK || s == SG_STATUS_LIMIT);
+    assert(sg_solution_get_route_count(ctx) > 0);
+
+    /* Write with a simulated non-OK status: routes must still appear, and the
+     * status string must report the truth (not be forced to OK/LIMIT). */
+    ShJsonBuf jb;
+    sh_json_buf_init(&jb);
+    ShJsonWriter w;
+    sh_json_writer_init(&w, sh_json_buf_write, &jb);
+    assert(sg_api_write_solution(ctx, &w, SG_STATUS_ERROR) == SG_STATUS_OK);
+    assert(jb.buf != NULL);
+    assert(strstr(jb.buf, "\"routes\"") != NULL);
+    assert(strstr(jb.buf, "\"stops\"") != NULL);
+    assert(strstr(jb.buf, "\"status\":\"ERROR\"") != NULL);
+    sh_json_buf_free(&jb);
+
+    sg_free(ctx);
+
+    /* Negative control: no committed solution + non-OK status -> no routes. */
+    SGContext *empty = make_config(100, 42);
+    ShJsonBuf jb2;
+    sh_json_buf_init(&jb2);
+    ShJsonWriter w2;
+    sh_json_writer_init(&w2, sh_json_buf_write, &jb2);
+    assert(sg_api_write_solution(empty, &w2, SG_STATUS_ERROR) == SG_STATUS_OK);
+    assert(strstr(jb2.buf, "\"routes\"") == NULL);
+    assert(strstr(jb2.buf, "\"status\":\"ERROR\"") != NULL);
+    sh_json_buf_free(&jb2);
+    sg_free(empty);
+}
+
 static void test_json_api_validation_error(void) {
     /* Build model with missing data — vehicle without depot causes validation error */
     const char *json =
@@ -18111,6 +18157,7 @@ int main(void) {
     RUN_TEST(test_json_api_full_features);
     RUN_TEST(test_json_api_handle_routing);
     RUN_TEST(test_json_api_write_solution);
+    RUN_TEST(test_json_api_write_solution_committed_under_error);
     RUN_TEST(test_json_api_validation_error);
 
     /* Break policy */
@@ -18455,9 +18502,9 @@ int main(void) {
     printf("================\n");
     printf("%d/%d tests passed\n", tests_passed, tests_run);
 #ifdef SG_HAS_THREADS
-    assert(tests_run == 474);
+    assert(tests_run == 475);
 #else
-    assert(tests_run == 450);
+    assert(tests_run == 451);
 #endif
     return tests_passed == tests_run ? 0 : 1;
 }

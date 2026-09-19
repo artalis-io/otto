@@ -1588,20 +1588,39 @@ static int parse_plan_routes(const ShJsonValue *plan_arr,
  * sg_api_write_solution — write solution to streaming JSON writer
  * ============================================================================ */
 
+static const char *sg_api_status_string(SGStatus s) {
+    switch (s) {
+        case SG_STATUS_OK:         return "OK";
+        case SG_STATUS_LIMIT:      return "LIMIT";
+        case SG_STATUS_INFEASIBLE: return "INFEASIBLE";
+        case SG_STATUS_INVALID_ARG:return "INVALID_ARG";
+        case SG_STATUS_OUT_OF_MEMORY: return "OUT_OF_MEMORY";
+        case SG_STATUS_NOT_IMPLEMENTED: return "NOT_IMPLEMENTED";
+        default:                   return "ERROR";
+    }
+}
+
 SGStatus sg_api_write_solution(const SGContext *ctx, ShJsonWriter *w,
                                 SGStatus solve_status) {
     if (!ctx || !w) return SG_STATUS_INVALID_ARG;
 
     sh_json_write_object_start(w);
 
-    if (solve_status == SG_STATUS_OK || solve_status == SG_STATUS_LIMIT) {
+    /* Serialize the solution whenever one is committed, even under a non-OK
+     * status. sg_solve commits its best solution to the context before it may
+     * return a non-OK status (e.g. a max_trips=0 multi-trip solve the strict
+     * end-of-solve validator rejects); gating the routes block on OK/LIMIT
+     * alone dropped that committed solution on the floor -- the HTTP
+     * /api/v1/solve endpoint answered {"status":"ERROR"} with no routes for a
+     * plan the getters could see. The status string still reports the truth. */
+    if (solve_status == SG_STATUS_OK || solve_status == SG_STATUS_LIMIT ||
+        sg_solution_get_route_count(ctx) > 0) {
         SGStats stats;
         uint32_t route_count, ri, unassigned_count;
 
         sg_get_stats(ctx, &stats);
 
-        sh_json_write_kv_string(w, "status",
-                                solve_status == SG_STATUS_OK ? "OK" : "LIMIT");
+        sh_json_write_kv_string(w, "status", sg_api_status_string(solve_status));
 
         /* Stats */
         sh_json_write_key(w, "stats");
