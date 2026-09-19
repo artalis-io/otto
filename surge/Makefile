@@ -150,9 +150,10 @@ test: $(TEST_BIN) $(TEST_TB_BIN) $(TEST_NB_BIN) $(TEST_PM_BIN) $(TRANSPORT_TEST_
 	./$(TEST_NB_BIN)
 	./$(TEST_PM_BIN)
 	./$(TEST_BIN)
-	$(MAKE) scripts-test
 
 # Python script self-tests (surge_map GeoJSON core). No solver/subprocess/files.
+# Kept out of `test` so the Windows C-test jobs (no python3) stay green; CI runs
+# it on Linux (see .github/workflows/ci.yml, Test Arbor + Surge).
 scripts-test:
 	python3 scripts/surge_map_selftest.py
 
