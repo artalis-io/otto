@@ -102,6 +102,10 @@ def main():
                     help="treat vehicle max_duration as a hard (legal HoS) limit, not a penalty")
     ap.add_argument("--hard-capacity", action=argparse.BooleanOptionalAction, default=True,
                     help="treat vehicle capacity as a hard constraint, not a penalty")
+    ap.add_argument("--hard-time-windows", action=argparse.BooleanOptionalAction, default=False,
+                    help="treat delivery time windows as hard (reject late insertions), not a "
+                         "time-warp penalty. Off by default (a feasible solve already respects "
+                         "windows; this also guarantees it during search)")
     ap.add_argument("--max-iterations", type=int, default=20000)
     ap.add_argument("--demand-sign", type=int, default=1,
                     help="0=pickup+/delivery- (Surge default), 1=pickup-/delivery+ (matches positive delivery demand)")
@@ -230,7 +234,8 @@ def assemble_request(orows, oidx, dflat, uflat, N, vrows, a):
         "config": {"max_iterations": a.max_iterations, "max_time_seconds": a.max_time_seconds,
                    "seed": a.seed, "lexicographic_objective": a.objective == "vehicles-then-distance",
                    "hard_max_duration": a.hard_max_duration,
-                   "hard_capacity": a.hard_capacity},
+                   "hard_capacity": a.hard_capacity,
+                   "hard_time_windows": a.hard_time_windows},
         "dimension_count": dim,
         "demand_sign_convention": a.demand_sign,   # 1 = delivery demand positive
         "locations": locations,

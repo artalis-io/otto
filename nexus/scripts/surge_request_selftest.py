@@ -47,7 +47,7 @@ def main():
         objective="vehicles-then-distance",
         max_iterations=20000, max_time_seconds=30, seed=42,
         demand_sign=1, unassigned_penalty=1e6, hard_max_duration=True, hard_capacity=True,
-        plate_col="plate", dedupe_vehicle_configs=True,
+        hard_time_windows=True, plate_col="plate", dedupe_vehicle_configs=True,
     )
     req, n_own, n_sub, collapsed = bsr.assemble_request(orows, oidx, dflat, uflat, N, vrows, a)
 
@@ -107,6 +107,7 @@ def main():
     # config
     assert req["config"]["max_iterations"] == 20000
     assert req["config"]["lexicographic_objective"] is True
+    assert req["config"]["hard_time_windows"] is True
 
     print("surge_request_selftest: OK (depot@0, task<->travel-index, 2D demand, "
           "delivery sign, own+sub fleet, multi-trip fields, config)")
