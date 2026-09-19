@@ -8820,6 +8820,38 @@ static void test_multi_trip_max_duration_new_trip(void) {
     sg_free(ctx);
 }
 
+static void test_validate_multitrip_distance_penalty(void) {
+    /* Regression: sg_route_solution_validate's penalty-enabled distance
+       recompute must include inter-trip depot returns. A cap-5 (1 stop/trip)
+       vehicle over DISTINCT locations yields a multi-trip route whose real
+       distance includes depot round-trips. Before the fix the penalty-enabled
+       recompute was single-trip and under-counted, so validate returned 0 under
+       infeasible-space search -- discarding valid multi-trip moves. */
+    SGContext *ctx = make_config(2000, 42);
+    uint32_t depot;
+    add_depot_with_location(ctx, &depot, 0, 0);
+    sg_depot_set_time_window(ctx, depot, 0, 86400);
+    add_vehicle_with_depot(ctx, depot, 0, 86400, 5.0);   /* cap 5 -> 1 stop/trip */
+    sg_vehicle_set_max_trips(ctx, 0, 0);                 /* unlimited trips */
+    sg_vehicle_set_trip_reload_seconds(ctx, 0, 600);
+    /* distinct locations so trip-boundary depot returns add real distance */
+    add_delivery_request(ctx, 100, 0, 0, 86400, 0, -5.0);
+    add_delivery_request(ctx, 0, 100, 0, 86400, 0, -5.0);
+    add_delivery_request(ctx, 100, 100, 0, 86400, 0, -5.0);
+    assert(sg_solve(ctx) == SG_STATUS_OK);
+    assert(sg_solution_get_route_trip_count(ctx, 0) > 1);   /* genuinely multi-trip */
+
+    /* The committed solution must validate under BOTH penalty states; the
+       penalty-enabled path is the one the fix corrects. */
+    SGRouteSolution *sol = ctx->final_solution;
+    assert(sol != NULL);
+    assert(sg_route_solution_validate(sol, ctx) == 1);      /* penalty disabled */
+    ctx->penalty.enabled = 1;
+    assert(sg_route_solution_validate(sol, ctx) == 1);      /* penalty enabled (fixed) */
+    ctx->penalty.enabled = 0;
+    sg_free(ctx);
+}
+
 static void test_hard_max_duration_existing_trip(void) {
     /* With sg_set_hard_max_duration, a route must never exceed max_duration even
        when packing stops into a single trip -- excess stays unassigned rather
@@ -18182,6 +18214,7 @@ int main(void) {
     RUN_TEST(test_multi_trip_no_change_default);
     RUN_TEST(test_multi_trip_capacity_reset);
     RUN_TEST(test_multi_trip_max_duration_new_trip);
+    RUN_TEST(test_validate_multitrip_distance_penalty);
     RUN_TEST(test_hard_max_duration_existing_trip);
     RUN_TEST(test_hard_max_duration_eject_pass);
     RUN_TEST(test_hard_capacity_eject_pass);
@@ -18502,9 +18535,9 @@ int main(void) {
     printf("================\n");
     printf("%d/%d tests passed\n", tests_passed, tests_run);
 #ifdef SG_HAS_THREADS
-    assert(tests_run == 475);
+    assert(tests_run == 476);
 #else
-    assert(tests_run == 451);
+    assert(tests_run == 452);
 #endif
     return tests_passed == tests_run ? 0 : 1;
 }

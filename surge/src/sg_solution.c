@@ -1316,17 +1316,36 @@ int sg_route_solution_validate(const void *solution, void *user_ctx) {
                     goto done;
                 }
             } else {
-                /* When penalty is enabled, recompute distance only (skip feasibility) */
+                /* When penalty is enabled, recompute distance only (skip
+                 * feasibility). Mirror sg_route_update_timing's trip handling:
+                 * at each trip boundary the vehicle returns to the end depot and
+                 * re-departs from the start depot, and an open start skips the
+                 * first leg. Without the trip-boundary legs this recompute was
+                 * single-trip and under-counted multi-trip routes, so the fabs()
+                 * check below spuriously rejected valid multi-trip solutions
+                 * during infeasible-space search. */
                 uint32_t ss;
-                uint32_t rloc = ctx->vehicles[v].start_location_id;
+                uint32_t start_loc = ctx->vehicles[v].start_location_id;
+                uint32_t end_loc = ctx->vehicles[v].end_location_id;
+                uint32_t rloc = start_loc;
                 recomputed_distance = 0.0;
                 for (ss = 0; ss < stop_len; ss++) {
                     uint32_t cloc = ctx->tasks[stops[ss].task_id].location_id;
-                    recomputed_distance += sg_travel_dist(ctx, rloc, cloc, v);
+                    int trip_boundary = (stops[ss].trip_start && ss > 0);
+                    if (trip_boundary) {
+                        /* return to end depot, then re-depart from start depot */
+                        recomputed_distance += sg_travel_dist(ctx, rloc, end_loc, v);
+                        rloc = start_loc;
+                    }
+                    if (ctx->vehicles[v].open_start && ss == 0 && !trip_boundary) {
+                        /* open start: skip the first leg from the start depot */
+                    } else {
+                        recomputed_distance += sg_travel_dist(ctx, rloc, cloc, v);
+                    }
                     rloc = cloc;
                 }
                 if (!ctx->vehicles[v].open_end) {
-                    recomputed_distance += sg_travel_dist(ctx, rloc, ctx->vehicles[v].end_location_id, v);
+                    recomputed_distance += sg_travel_dist(ctx, rloc, end_loc, v);
                 }
             }
             computed_vehicles++;
