@@ -249,6 +249,7 @@ void sg_config_default(SGConfig *config) {
     config->require_bound_requests_at_solve = true;
     config->hard_max_duration = false;  /* default: soft (penalized) as before */
     config->hard_capacity = false;      /* default: soft (penalized) as before */
+    config->hard_time_windows = false;  /* default: soft (time-warp penalty) as before */
     config->priority_removal_policy = SG_PRIORITY_REMOVE_LOWER_FIRST;
     config->lexicographic_objective = false;
     config->accept_type = SG_ACCEPT_SA;
@@ -538,6 +539,21 @@ SGStatus sg_set_hard_capacity(SGContext *ctx, bool hard) {
     }
     ctx->config.hard_capacity = hard;
     return SG_STATUS_OK;
+}
+
+SGStatus sg_set_hard_time_windows(SGContext *ctx, bool hard) {
+    if (!ctx) {
+        return SG_STATUS_INVALID_ARG;
+    }
+    ctx->config.hard_time_windows = hard;
+    return SG_STATUS_OK;
+}
+
+bool sg_get_hard_time_windows(const SGContext *ctx) {
+    if (!ctx) {
+        return false;
+    }
+    return ctx->config.hard_time_windows;
 }
 
 bool sg_get_hard_capacity(const SGContext *ctx) {

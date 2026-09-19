@@ -46,6 +46,12 @@ bool sg_get_hard_max_duration(const SGContext *ctx);
  * (over-capacity routes are rejected, not just penalized). Default false. */
 SGStatus sg_set_hard_capacity(SGContext *ctx, bool hard);
 bool sg_get_hard_capacity(const SGContext *ctx);
+/* When true, delivery time windows are hard in the insertion accept path (a stop
+ * is never served past its tw_late, and an insertion that would push a
+ * downstream stop past its window is rejected), not just a time-warp penalty.
+ * Depot/shift bounds stay governed by hard_max_duration. Default false. */
+SGStatus sg_set_hard_time_windows(SGContext *ctx, bool hard);
+bool sg_get_hard_time_windows(const SGContext *ctx);
 SGStatus sg_set_demand_sign_convention(SGContext *ctx, SGDemandSignConvention convention);
 SGDemandSignConvention sg_get_demand_sign_convention(const SGContext *ctx);
 SGStatus sg_set_dimension_count(SGContext *ctx, uint32_t dimension_count);

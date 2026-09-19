@@ -8935,6 +8935,41 @@ static void test_hard_capacity_eject_pass(void) {
     sg_free(ctx);
 }
 
+static void test_hard_time_windows(void) {
+    /* hard_time_windows makes a delivery window a hard accept-path constraint:
+       an insertion serving a stop past its tw_late is rejected outright (during
+       infeasible-space search too), not just time-warp-penalized. */
+    uint32_t depot;
+    /* (a) round-trip + no over-rejection: with satisfiable windows, hard tw must
+       still serve everything (nothing wrongly rejected). */
+    SGContext *ctx = make_config(2000, 42);
+    add_depot_with_location(ctx, &depot, 0, 0);
+    sg_depot_set_time_window(ctx, depot, 0, 86400);
+    add_vehicle_with_depot(ctx, depot, 0, 86400, 100.0);
+    assert(sg_set_hard_time_windows(ctx, true) == SG_STATUS_OK);
+    assert(sg_get_hard_time_windows(ctx) == true);
+    add_delivery_request(ctx, 10.0, 0, 0, 86400, 60, -10.0);
+    add_delivery_request(ctx, 20.0, 0, 0, 86400, 60, -10.0);
+    assert(sg_solve(ctx) == SG_STATUS_OK);
+    assert(sg_get_unassigned(ctx) == 0);
+    sg_free(ctx);
+
+    /* (b) an impossible window ([0,0], unreachable) is left unassigned rather
+       than served late; the servable order is still routed. */
+    SGContext *c2 = make_config(2000, 42);
+    add_depot_with_location(c2, &depot, 0, 0);
+    sg_depot_set_time_window(c2, depot, 0, 86400);
+    add_vehicle_with_depot(c2, depot, 0, 86400, 100.0);
+    assert(sg_set_hard_time_windows(c2, true) == SG_STATUS_OK);
+    add_delivery_request(c2, 10.0, 0, 0, 86400, 60, -10.0);   /* servable */
+    add_delivery_request(c2, 20.0, 0, 0, 0,     60, -10.0);   /* [0,0] impossible */
+    SGStatus s = sg_solve(c2);
+    assert(s == SG_STATUS_OK || s == SG_STATUS_LIMIT);
+    assert(sg_get_unassigned(c2) >= 1);
+    assert(sg_solution_get_route_count(c2) >= 1);
+    sg_free(c2);
+}
+
 static void test_multi_trip_capacity_reset(void) {
     /* Vehicle capacity=5, two requests each with demand=5.
        With 1 trip: need 2 vehicles or 1 unassigned.
@@ -18218,6 +18253,7 @@ int main(void) {
     RUN_TEST(test_hard_max_duration_existing_trip);
     RUN_TEST(test_hard_max_duration_eject_pass);
     RUN_TEST(test_hard_capacity_eject_pass);
+    RUN_TEST(test_hard_time_windows);
     RUN_TEST(test_multi_trip_timing);
     RUN_TEST(test_multi_trip_pd_same_trip);
     RUN_TEST(test_multi_trip_max_trips_enforced);
@@ -18535,9 +18571,9 @@ int main(void) {
     printf("================\n");
     printf("%d/%d tests passed\n", tests_passed, tests_run);
 #ifdef SG_HAS_THREADS
-    assert(tests_run == 476);
+    assert(tests_run == 477);
 #else
-    assert(tests_run == 452);
+    assert(tests_run == 453);
 #endif
     return tests_passed == tests_run ? 0 : 1;
 }
