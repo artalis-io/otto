@@ -6,17 +6,32 @@
 #      (reconciler exits 1) -- i.e. the gate has teeth.
 set -eu
 
-# The reconciler is a Python tool. Where python3 is not on PATH (e.g. the Windows
-# CI runners), skip the gate rather than fail the build; it still runs everywhere
-# python3 exists (Linux CI, dev machines, and every real ingest).
+# The reconciler is a Python tool. This used to exit 0 when python3 was absent,
+# which is how the Windows runners reported a green reconciliation gate while
+# running none of it -- on the one check whose entire purpose is to prove the
+# reconciler CATCHES a schema that silently truncates data. It passes on
+# Windows; the runners simply had no python3. Missing python3 is now an error.
 if ! command -v python3 >/dev/null 2>&1; then
-    echo "skipping reconciliation self-test: python3 not found" >&2
-    exit 0
+    echo "reconciliation self-test needs python3 on PATH" >&2
+    exit 1
 fi
 
 NEXUS_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 FIX="$NEXUS_DIR/tests/reconcile"
 REC="$NEXUS_DIR/scripts/reconcile.py"
+
+# python3 on Windows is a native program and cannot read an MSYS path like
+# /c/Users/...; it resolves it against the drive root and looks for
+# C:/c/Users/... . MSYS normally rewrites arguments that look like paths, but
+# scripts/msvc-env.sh exports MSYS_NO_PATHCONV=1 and MSYS2_ARG_CONV_EXCL='*'
+# so that cl.exe receives /Fo: and /std:c11 verbatim -- and the windows-msvc
+# job sources it before running the nexus suite. Converting here rather than
+# relying on the ambient setting keeps this working under both.
+if command -v cygpath >/dev/null 2>&1; then
+    NEXUS_DIR="$(cygpath -m "$NEXUS_DIR")"
+    FIX="$(cygpath -m "$FIX")"
+    REC="$(cygpath -m "$REC")"
+fi
 
 # The Makefile writes `nx_pipeline`; on Windows the compiler appends `.exe`.
 # Checking only the bare name meant this rebuilt on every run there, and the

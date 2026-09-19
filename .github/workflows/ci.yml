@@ -476,6 +476,7 @@ jobs:
             make
             mingw-w64-ucrt-x86_64-gcc
             mingw-w64-ucrt-x86_64-curl
+            mingw-w64-ucrt-x86_64-python
             jq
 
       - name: Build and run the PAL tests
@@ -733,12 +734,18 @@ jobs:
             make
             mingw-w64-ucrt-x86_64-gcc
             mingw-w64-ucrt-x86_64-glpk
+            mingw-w64-ucrt-x86_64-python
             jq
 
       # The full Surge suite. Windows Core runs its transport test, which is
       # the invariant; this is the solver behaviour.
       - name: Build and test Surge
         run: make -C surge test
+
+      # Linux-only until the runners had python3, which is the whole reason
+      # this suite was moved out of the C test target in the first place.
+      - name: Test Surge scripts
+        run: make -C surge scripts-test
 
       # The FuelWise benchmark regression compares Ralph's MILP objectives
       # against glpsol. Running that on Windows checks Ralph's numerics under a
@@ -785,6 +792,7 @@ jobs:
           install: >-
             mingw-w64-ucrt-x86_64-make
             mingw-w64-ucrt-x86_64-glpk
+            mingw-w64-ucrt-x86_64-python
             jq
 
       - name: Report the toolchain
@@ -857,6 +865,7 @@ jobs:
           install: >-
             mingw-w64-ucrt-x86_64-make
             mingw-w64-ucrt-x86_64-curl
+            mingw-w64-ucrt-x86_64-python
             jq
 
       - name: Report the MSVC toolchain

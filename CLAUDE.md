@@ -287,7 +287,13 @@ void *p = calloc(count, element_size);  /* Or use calloc */
 7. **Floating point**: Never add `-ffast-math`. The solvers compare nearly
    equal values to choose pivots, so reassociation changes the answer per CPU
    and has caused non-termination. See `mk/toolchain.mk`.
-8. **Windows**: Use `mingw32-make`, never `make` -- MSYS's make strips
+8. **python3** is a build dependency, not just a dev convenience: nexus's
+   reconciliation and travel-matrix self-tests, surge's script self-test, the
+   API docs generator and the two CI gates all need it. The Windows MSYS2
+   runners install `mingw-w64-ucrt-x86_64-python` for exactly this. Targets
+   that need it now fail with a message naming it rather than skipping --
+   a self-test that quietly does not run is worse than one that is absent.
+9. **Windows**: Use `mingw32-make`, never `make` -- MSYS's make strips
    `TMPDIR` and the build dies trying to write to `C:\WINDOWS`. And run
    `make clean` when switching between GCC and MSVC: the object and archive
    formats differ, and a mixed tree fails at link with undefined symbols.
