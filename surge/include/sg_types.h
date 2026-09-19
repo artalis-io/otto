@@ -210,6 +210,12 @@ typedef struct {
     SGAcceptType accept_type;
     bool adaptive_q;
     bool use_insertion_cache;
+    /* Treat delivery time windows as HARD in the insertion accept path (reject
+     * any insertion that serves a stop past its tw_late, or pushes a downstream
+     * stop past its latest feasible start), not just a time-warp penalty. Off by
+     * default. Depot/shift bounds remain governed by hard_max_duration.
+     * (Appended at struct end intentionally.) */
+    bool hard_time_windows;
 } SGConfig;
 
 /* Solve phase identifiers */

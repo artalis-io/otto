@@ -1550,7 +1550,7 @@ int sg_route_eval_insertion_cached(const SGContext *ctx, const SGRouteSolution *
             ins_work_since_break += setup;
             start_t = sg_task_snap_forward(task, arrival_t + setup);
             if (start_t > (double)task->tw_late + 1e-9) {
-                if (!pen_enabled) return 0;
+                if (!pen_enabled || ctx->config.hard_time_windows) return 0;
                 ins_violations[SG_PENALTY_TIME_WARP] += start_t - (double)task->tw_late;
                 start_t = (double)task->tw_late; /* warp: pretend on-time for downstream */
             }
@@ -1658,7 +1658,7 @@ int sg_route_eval_insertion_cached(const SGContext *ctx, const SGRouteSolution *
                 arr_next = reload_depart + sg_travel_dur(ctx, vehicle->start_location_id, next_loc, vehicle_id, reload_depart);
                 /* No setup across trip boundary */
                 if (arr_next > stops[next_stop_idx].latest_start + 1e-9) {
-                    if (!pen_enabled) return 0;
+                    if (!pen_enabled || ctx->config.hard_time_windows) return 0;
                     ins_violations[SG_PENALTY_TIME_WARP] += arr_next - stops[next_stop_idx].latest_start;
                 }
             } else {
@@ -1681,7 +1681,7 @@ int sg_route_eval_insertion_cached(const SGContext *ctx, const SGRouteSolution *
                 {
                 double new_arrival_at_next = cursor + next_break_time + travel_to_next_stop;
                 if (new_arrival_at_next + setup_at_next > stops[next_stop_idx].latest_start + 1e-9) {
-                    if (!pen_enabled) return 0;
+                    if (!pen_enabled || ctx->config.hard_time_windows) return 0;
                     ins_violations[SG_PENALTY_TIME_WARP] +=
                         (new_arrival_at_next + setup_at_next) - stops[next_stop_idx].latest_start;
                 }
@@ -2500,7 +2500,7 @@ int sg_route_eval_pd_best_insertion_cached(
                 d_wsb += d_setup;
                 d_start = sg_task_snap_forward(delivery_task, d_arrival + d_setup);
                 if (d_start > (double)delivery_task->tw_late + 1e-9) {
-                    if (!pen_enabled) break; /* Later j only makes it worse */
+                    if (!pen_enabled || ctx->config.hard_time_windows) break; /* Later j only makes it worse */
                     pd_viol[SG_PENALTY_TIME_WARP] += d_start - (double)delivery_task->tw_late;
                     d_start = (double)delivery_task->tw_late; /* warp */
                     break_j = 1;
@@ -2548,7 +2548,7 @@ int sg_route_eval_pd_best_insertion_cached(
                         }
                         arr_next_d = reload_dep_d + sg_travel_dur(ctx, vehicle->start_location_id, next_loc_d, vehicle_id, reload_dep_d);
                         if (arr_next_d > stops[j - 1].latest_start + 1e-9) {
-                            if (!pen_enabled) goto next_j;
+                            if (!pen_enabled || ctx->config.hard_time_windows) goto next_j;
                             pd_viol[SG_PENALTY_TIME_WARP] += arr_next_d - stops[j - 1].latest_start;
                         }
                     } else {
@@ -2572,7 +2572,7 @@ int sg_route_eval_pd_best_insertion_cached(
                     new_arrival_next = d_depart + next_brk_d + travel_d_to_next;
                     /* The pushed latest_start of stop[j-1] */
                     if (new_arrival_next + setup_after_d > stops[j - 1].latest_start + 1e-9) {
-                        if (!pen_enabled) goto next_j;
+                        if (!pen_enabled || ctx->config.hard_time_windows) goto next_j;
                         pd_viol[SG_PENALTY_TIME_WARP] += (new_arrival_next + setup_after_d) - stops[j - 1].latest_start;
                     }
                     } /* end else (non-trip-boundary push check) */
