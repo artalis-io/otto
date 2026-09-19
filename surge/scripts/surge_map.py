@@ -246,6 +246,11 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
  #panel{position:absolute;top:10px;right:10px;z-index:1000;background:#fffe;border:1px solid #ccc;
    border-radius:8px;padding:10px 12px;max-height:88vh;overflow:auto;box-shadow:0 2px 12px #0003;width:280px}
  #panel h1{font-size:14px;margin:0 0 4px} #panel .sum{color:#444;margin-bottom:8px;font-size:12px}
+ #stats{display:grid;grid-template-columns:auto 1fr;gap:1px 10px;margin:6px 0 8px;font-size:12px}
+ #stats .k{color:#888} #stats .v{text-align:right;font-variant-numeric:tabular-nums;font-weight:600}
+ #toggleAll{margin:0 0 8px;font-size:11px;padding:3px 9px;cursor:pointer;border:1px solid #bbb;
+   border-radius:4px;background:#f7f7f7}
+ #toggleAll:hover{background:#eee}
  .row{display:flex;align-items:center;gap:6px;padding:2px 0;cursor:pointer;border-radius:4px}
  .row:hover{background:#f0f0f0} .sw{width:14px;height:4px;border-radius:2px;flex:0 0 auto}
  .row small{color:#666} .muted{color:#999}
@@ -253,11 +258,12 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
    border-radius:6px;padding:4px 8px;font-size:11px;color:#a00;display:none}
 </style></head><body>
 <div id="map"></div>
-<div id="panel"><h1>__TITLE__</h1><div class="sum" id="sum">loading…</div><div id="list"></div></div>
+<div id="panel"><h1>__TITLE__</h1><div id="stats">loading…</div>
+<button id="toggleAll">hide all</button><div id="list"></div></div>
 <div id="banner">⚠ basemap tiles not loading (check the tile source / run a static server)</div>
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 <script>
-const TILES=__TILES__, ATTR=__ATTR__, TZ=__TILEOPTS__;
+const TILES=__TILES__, ATTR=__ATTR__, TZ=__TILEOPTS__, DSCALE=__DSCALE__, DUNIT=__DUNIT__;
 const map=L.map('map',{preferCanvas:true}).setView([__CLAT__,__CLON__],__ZOOM__);
 let te=0; const banner=document.getElementById('banner');
 L.tileLayer(TILES,Object.assign({attribution:ATTR},TZ)).addTo(map)
@@ -277,32 +283,54 @@ Promise.all([fetch('routes.geojson').then(r=>r.json()),fetch('stops.geojson').th
       .bindPopup('<b>'+p.label+'</b><br>route '+p.route+' · trip '+p.trip+(p.arr?(' · arr '+p.arr):''));
     (sl[p.route]=sl[p.route]||L.layerGroup().addTo(map)).addLayer(m);});
   if(bounds.isValid())map.fitBounds(bounds.pad(0.05));
+  // --- summary stats ---
+  const nveh=routes.features.length;
   const totStops=routes.features.reduce((a,f)=>a+(f.properties.n_stops||0),0);
+  const totTrips=routes.features.reduce((a,f)=>a+(f.properties.n_trips||0),0);
+  const totDist=routes.features.reduce((a,f)=>a+(f.properties.distance||0),0)*DSCALE;
   const nun=stops.features.filter(f=>f.properties.kind==='unassigned').length;
-  document.getElementById('sum').innerHTML=routes.features.length+' vehicles · '+totStops+
-    ' stops · <span style="color:#c00">'+nun+' unassigned</span>';
+  const served=totStops, total=served+nun;
+  const fmt=x=>x.toLocaleString(undefined,{maximumFractionDigits:0});
+  const st=[['vehicles',nveh],['trips',totTrips],['stops served',fmt(served)],
+    ['unassigned','<span style="color:#c00">'+nun+'</span>'],
+    ['served %',total?(100*served/total).toFixed(1)+'%':'—'],
+    ['total distance',fmt(totDist)+' '+DUNIT],
+    ['avg stops/veh',nveh?(served/nveh).toFixed(1):'—'],
+    ['avg dist/veh',nveh?fmt(totDist/nveh)+' '+DUNIT:'—']];
+  document.getElementById('stats').innerHTML=
+    st.map(([k,v])=>'<div class="k">'+k+'</div><div class="v">'+v+'</div>').join('');
   const list=document.getElementById('list');
   routes.features.forEach(f=>{const p=f.properties,d=document.createElement('div');d.className='row';
     d.innerHTML='<span class="sw" style="background:'+p.color+'"></span><span>#'+p.route+' <small>'+p.label+
       '</small><br><small class="muted">'+p.n_stops+' stops · '+p.n_trips+' trip(s)'+(p.on_duty?(' · '+p.on_duty):'')+'</small></span>';
-    let on=true;d.onclick=()=>{on=!on;const g=sl[p.route];
-      if(on){layers[p.route].addTo(map);g&&g.addTo(map);d.style.opacity=1;}
-      else{map.removeLayer(layers[p.route]);g&&map.removeLayer(g);d.style.opacity=.4;}};
+    d.onclick=()=>{const g=sl[p.route];const shown=map.hasLayer(layers[p.route]);
+      if(shown){map.removeLayer(layers[p.route]);g&&map.removeLayer(g);d.style.opacity=.4;}
+      else{layers[p.route].addTo(map);g&&g.addTo(map);d.style.opacity=1;}};
     list.appendChild(d);});
   if(nun){const d=document.createElement('div');d.className='row';
     d.innerHTML='<span class="sw" style="background:#c00"></span><span>Unassigned <small>('+nun+')</small></span>';
-    let on=true;d.onclick=()=>{on=!on;const g=sl.__un;if(on){g&&g.addTo(map);d.style.opacity=1}else{g&&map.removeLayer(g);d.style.opacity=.4}};
+    d.onclick=()=>{const g=sl.__un;const shown=g&&map.hasLayer(g);
+      if(shown){map.removeLayer(g);d.style.opacity=.4}else{g&&g.addTo(map);d.style.opacity=1}};
     list.appendChild(d);}
-}).catch(e=>{document.getElementById('sum').textContent='failed to load geojson: '+e;});
+  // toggle ALL routes + their stops on/off
+  let allOn=true; const tgl=document.getElementById('toggleAll');
+  tgl.onclick=()=>{allOn=!allOn; tgl.textContent=allOn?'hide all':'show all';
+    Object.values(layers).forEach(l=>allOn?l.addTo(map):map.removeLayer(l));
+    Object.values(sl).forEach(g=>allOn?g.addTo(map):map.removeLayer(g));
+    document.querySelectorAll('#list .row').forEach(r=>r.style.opacity=allOn?1:.4);};
+}).catch(e=>{document.getElementById('stats').textContent='failed to load geojson: '+e;});
 </script></body></html>"""
 
 
-def render_html(out_dir, tiles, title, center, zoom, tile_opts, attribution):
+def render_html(out_dir, tiles, title, center, zoom, tile_opts, attribution,
+                distance_scale, distance_unit):
     html = (HTML_TEMPLATE
             .replace("__TITLE__", title)
             .replace("__TILES__", json.dumps(tiles))
             .replace("__ATTR__", json.dumps(attribution))
             .replace("__TILEOPTS__", json.dumps(tile_opts))
+            .replace("__DSCALE__", repr(distance_scale))
+            .replace("__DUNIT__", json.dumps(distance_unit))
             .replace("__CLAT__", repr(center[0])).replace("__CLON__", repr(center[1]))
             .replace("__ZOOM__", str(zoom)))
     with open(os.path.join(out_dir, "index.html"), "w") as fh:
@@ -320,6 +348,10 @@ def main():
     ap.add_argument("--tile-size", type=int, default=256)
     ap.add_argument("--max-native-zoom", type=int, default=11)
     ap.add_argument("--attribution", default="Carta (OTTO) · OSM data")
+    ap.add_argument("--distance-scale", type=float, default=0.001,
+                    help="multiply solution route distances by this for the stats panel "
+                         "(default 0.001: meters -> km)")
+    ap.add_argument("--distance-unit", default="km", help="unit label for the distance stat")
     ap.add_argument("--no-html", action="store_true")
     # road-following geometry (optional)
     ap.add_argument("--velo-graph", help="Velo .vlg/.osm.pbf: route legs on real roads")
@@ -354,7 +386,8 @@ def main():
         tile_opts = {"tileSize": a.tile_size, "minZoom": a.min_zoom,
                      "maxZoom": max(a.max_zoom + 3, a.max_zoom),
                      "maxNativeZoom": a.max_native_zoom}
-        render_html(a.out_dir, a.tiles, a.title, center, a.min_zoom + 2, tile_opts, a.attribution)
+        render_html(a.out_dir, a.tiles, a.title, center, a.min_zoom + 2, tile_opts,
+                    a.attribution, a.distance_scale, a.distance_unit)
 
     npts = sum(len(l) for f in routes_fc["features"] for l in f["geometry"]["coordinates"])
     print(f"surge_map: {len(routes_fc['features'])} routes ({npts} geometry pts), "
