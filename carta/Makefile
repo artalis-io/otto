@@ -86,7 +86,18 @@ BENCH_BIN = bench_carta
 # WASM output
 WASM_OUT = carta.js
 
-.PHONY: all clean test test-transport bench lib debug wasm cli compare fuzz fuzz-lib fuzz-smoke help fuzz-api fuzz-api-smoke
+# Run the suite under AddressSanitizer + UBSan. Same flags as `debug`, but it
+# runs the tests instead of only building them.
+#
+# This module had no sanitizer target at all. Its api server has one, but that
+# instruments main.c and the HTTP helpers only -- the module is linked already
+# built, so its interior was never sanitized by anything. The same gap hid five
+# leaks in Ralph's solver core.
+test-asan: CFLAGS = $(DEBUG_CFLAGS)
+test-asan: LDFLAGS += $(DEBUG_LDFLAGS)
+test-asan: clean test
+
+.PHONY: all clean test test-transport bench lib debug wasm cli compare fuzz fuzz-lib fuzz-smoke help fuzz-api fuzz-api-smoke test-asan
 
 # Default target
 all: lib $(TEST_BIN)

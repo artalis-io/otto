@@ -105,7 +105,18 @@ ROUTE_BENCH = velo-route-bench
 # WASM output
 WASM_OUT = velo.js
 
-.PHONY: all clean test test-transport bench lib debug wasm route-bench omp-mode test-osrm help fuzz-api fuzz-api-smoke fuzz-smoke
+# Run the suite under AddressSanitizer + UBSan. Same flags as `debug`, but it
+# runs the tests instead of only building them.
+#
+# This module had no sanitizer target at all. Its api server has one, but that
+# instruments main.c and the HTTP helpers only -- the module is linked already
+# built, so its interior was never sanitized by anything. The same gap hid five
+# leaks in Ralph's solver core.
+test-asan: CFLAGS = $(DEBUG_CFLAGS)
+test-asan: LDFLAGS += $(DEBUG_LDFLAGS)
+test-asan: clean test
+
+.PHONY: all clean test test-transport bench lib debug wasm route-bench omp-mode test-osrm help fuzz-api fuzz-api-smoke fuzz-smoke test-asan
 
 # Default target
 all: lib $(TEST_BIN)

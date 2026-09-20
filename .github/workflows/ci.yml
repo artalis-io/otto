@@ -1198,6 +1198,26 @@ jobs:
           - name: Arbor
             target: test-asan
             dir: arbor
+          # The five module cores that had no sanitizer target at all. Their api
+          # servers run test-asan, but that instruments main.c and the HTTP
+          # helpers -- the module itself is linked already built, so its interior
+          # was never sanitized by anything. That is the same gap that left five
+          # leaks in Ralph's solver core undetected.
+          - name: Velo
+            target: test-asan
+            dir: velo
+          - name: Locus
+            target: test-asan
+            dir: locus
+          - name: Carta
+            target: test-asan
+            dir: carta
+          - name: Surge
+            target: test-asan
+            dir: surge
+          - name: Fuelwise
+            target: test-asan
+            dir: fuelwise
 
     env:
       # UBSan only prints and keeps going by default, so a finding would not
@@ -1214,7 +1234,7 @@ jobs:
       - name: Install dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y build-essential libomp-dev
+          sudo apt-get install -y build-essential libomp-dev glpk-utils
 
       - name: Sanitize ${{ matrix.suite.name }}
         run: make -C ${{ matrix.suite.dir }} ${{ matrix.suite.target }}
