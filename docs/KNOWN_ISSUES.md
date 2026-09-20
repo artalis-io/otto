@@ -153,36 +153,31 @@ Measured against GLPK 5.0 with `bench_mip`, every objective matching:
 - This makes GMI cuts mostly ineffective for >= constraints
 - See `cuts.c:generate_gmi_cut()` for the rejection logic
 
-### Ralph, Surge and FuelWise API servers fail in an unoptimised MSVC build
+### A sanitizer build of libshared.a is silently reused by later builds -- FIXED
 
-Built with `cl` at `/Zi /Od` -- which is what `CC_DEBUG_OPT` is for MSVC,
-and therefore what every `test-asan` and `build-asan` target produces --
-the three solver-backed servers answer a solve request with:
+`make -C shared test-asan` is `clean test`, so it rebuilds `libshared.a`
+with `DEBUG_CFLAGS`: `/Zi /Od`, `-DDEBUG` and the sanitizer. A subsequent
+`make -C shared lib` then sees an archive that exists, with no source newer
+than it, calls it up to date, and leaves the debug build in place. Anything
+linked afterwards gets it.
 
-```json
-{"status":"error","solve_time_ms":0.0,"iterations":0,"num_vars":2,"num_cons":2}
-```
+The symptom was remote from the cause: the three solver-backed API servers
+(ralph, surge, fuelwise) answered a solve request with
+`{"status":"error","iterations":0}` -- zero iterations on a two-variable
+problem -- while velo, locus and carta were unaffected. Nothing was wrong
+with the solvers, and nothing was wrong with `/Od`.
 
-Zero iterations and zero time: the solve is rejected before it starts, on a
-two-variable problem. The same binaries built at `/O2` pass; `Windows Suites
-MSVC` exercises exactly that and is green.
+Proved by isolation: with the server still built at `/Od` with ASan, but
+`libshared.a` rebuilt clean at `/O2`, all three pass. The Windows MSVC ASan
+job now does `clean lib` rather than `lib` for exactly this reason.
 
-Found while adding the Windows MSVC ASan job, but **not a sanitizer**
-**finding**: `build-asan CC_SANITIZE= LD_SANITIZE=` reproduces it exactly,
-so it is the unoptimised build alone. Nothing had ever built these servers
-that way -- the `*/api test-asan` targets run only on Linux, and
-`CC_SANITIZE` was empty for `cl` until now.
-
-The three that break are the three backed by a solver (ralph, surge,
-fuelwise); velo, locus and carta are unaffected and are in the ASan job.
-Reproduce with:
-
-```sh
-source scripts/msvc-env.sh
-mingw32-make -C ralph/api CC=cl build-asan CC_SANITIZE= LD_SANITIZE=
-unset MSYS_NO_PATHCONV MSYS2_ARG_CONV_EXCL
-bash ralph/api/test_api.sh      # 12/15, three solve assertions fail
-```
+Same shape as the stale `libkeel.a` in the API Makefiles (fixed separately):
+make treats an archive as current because the file is there, having no
+notion of the flags it was built with. **The hazard is not gone** -- a
+developer who runs `make -C shared test-asan` and then builds a server still
+gets a debug `libshared.a` with no diagnostic. The durable fix is for the
+sanitizer build to write a differently named archive, the way
+carta's `fuzz-lib` writes `libcarta_fuzz.a`.
 ## Numerical Issues
 
 ### Artificial Variable Residuals

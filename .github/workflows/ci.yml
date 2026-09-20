@@ -856,9 +856,8 @@ jobs:
   # and no Leak sanitizer, so this is address only and a UB finding stays
   # Linux-only work.
   #
-  # shared plus three of the six servers: the servers because they are the
-  # only OTTO code that reads bytes off a socket, and shared because they all
-  # sit on it. The other three are held out by a /Od bug, noted at the step.
+  # shared plus the six servers: the servers because they are the only OTTO
+  # code that reads bytes off a socket, and shared because they all sit on it.
   # ==========================================================================
   windows-msvc-asan:
     name: Windows MSVC ASan
@@ -901,10 +900,25 @@ jobs:
       # which is the same shape the Linux jobs use. The libraries have to
       # exist first; on Linux an earlier step in the same job has already
       # built them.
+      # `clean lib`, not `lib`. The step above is `shared test-asan`, which is
+      # `clean test` -- it rebuilds libshared.a with DEBUG_CFLAGS: /Zi /Od,
+      # -DDEBUG and the sanitizer. A plain `lib` then sees an archive that
+      # exists and sources no newer than it, calls it up to date, and leaves
+      # the debug build in place for every server to link.
+      #
+      # That is how this job first came to report the three solver-backed
+      # servers as broken: they linked an ASan/debug libshared.a and answered
+      # {"status":"error","iterations":0}. Rebuilding the archive clean fixes
+      # all three, which is what proved the cause.
+      #
+      # Same shape as the stale libkeel.a fixed in #190: make treats an
+      # archive as current because the file is there, with no notion of the
+      # flags it was built with.
       - name: Build the module libraries
         run: |
           source scripts/msvc-env.sh
           for m in shared ralph arbor surge fuelwise velo locus carta; do
+            mingw32-make -C $m CC=cl clean
             mingw32-make -C $m CC=cl lib
           done
 
@@ -936,20 +950,10 @@ jobs:
       # same DEBUG_LDFLAGS, no test run. Three of the six api Makefiles had a
       # `debug` target and three did not, so the job now calls one name that
       # all six define.
-      # Three of the six, not all six. ralph, surge and fuelwise return
-      # {"status":"error","iterations":0} from an unoptimised MSVC build --
-      # with ASan and equally without it, so this is not a sanitizer finding
-      # but a /Od finding that enabling the sanitizer exposed. CC_DEBUG_OPT is
-      # /Zi /Od for cl, nothing had ever built those servers that way, and the
-      # three that break are exactly the three backed by a solver.
-      #
-      # Recorded rather than papered over: see docs/KNOWN_ISSUES.md. When it is
-      # fixed, add them back to both lists below -- there is nothing else
-      # holding them out.
-      - name: Build the servers with ASan
+      - name: Build the six servers with ASan
         run: |
           source scripts/msvc-env.sh
-          for m in velo locus carta; do
+          for m in ralph surge fuelwise velo locus carta; do
             mingw32-make -C $m/api CC=cl build-asan
           done
 
@@ -960,7 +964,7 @@ jobs:
       # Each script greps the server log and fails on anything a sanitizer
       # printed, so an ASan report on the server's stderr fails the suite
       # rather than passing unnoticed.
-      - name: Run the API suites under ASan
+      - name: Run the six API suites under ASan
         run: |
           # msvc-env is sourced for PATH alone: the instrumented binaries link
           # clang_rt.asan_dynamic-x86_64.dll, which lives in the MSVC toolchain
@@ -973,6 +977,9 @@ jobs:
           # needs them; curl must not have them.
           source scripts/msvc-env.sh
           unset MSYS_NO_PATHCONV MSYS2_ARG_CONV_EXCL
+          bash ralph/api/test_api.sh
+          (cd surge/api && bash test_api.sh)
+          (cd fuelwise/api && bash test_api.sh)
           bash velo/api/test_api.sh
           bash carta/api/test_api.sh
           bash locus/api/test_api.sh
