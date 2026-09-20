@@ -349,8 +349,9 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
 <div id="banner">⚠ basemap tiles not loading (check the tile source / run a static server)</div>
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 <script>
-const TILES=__TILES__, ATTR=__ATTR__, TZ=__TILEOPTS__, DSCALE=__DSCALE__, DUNIT=__DUNIT__;
-const map=L.map('map',{preferCanvas:true}).setView([__CLAT__,__CLON__],__ZOOM__);
+const TILES=__TILES__, ATTR=__ATTR__, TZ=__TILEOPTS__, BOUNDS=__BOUNDS__, DSCALE=__DSCALE__, DUNIT=__DUNIT__;
+const map=L.map('map',Object.assign({preferCanvas:true,minZoom:TZ.minZoom,maxZoom:TZ.maxZoom},
+  BOUNDS?{maxBounds:BOUNDS,maxBoundsViscosity:0.7}:{})).setView([__CLAT__,__CLON__],__ZOOM__);
 let te=0; const banner=document.getElementById('banner');
 L.tileLayer(TILES,Object.assign({attribution:ATTR},TZ)).addTo(map)
   .on('tileerror',()=>{if(++te===4)banner.style.display='block'});
@@ -461,12 +462,13 @@ function initTimeline(anim, map, layers){
 
 
 def render_html(out_dir, tiles, title, center, zoom, tile_opts, attribution,
-                distance_scale, distance_unit):
+                distance_scale, distance_unit, maxbounds=None):
     html = (HTML_TEMPLATE
             .replace("__TITLE__", title)
             .replace("__TILES__", json.dumps(tiles))
             .replace("__ATTR__", json.dumps(attribution))
             .replace("__TILEOPTS__", json.dumps(tile_opts))
+            .replace("__BOUNDS__", json.dumps(maxbounds))
             .replace("__DSCALE__", repr(distance_scale))
             .replace("__DUNIT__", json.dumps(distance_unit))
             .replace("__CLAT__", repr(center[0])).replace("__CLON__", repr(center[1]))
@@ -524,11 +526,18 @@ def main():
 
     if not a.no_html:
         center = ((bbox[0] + bbox[2]) / 2, (bbox[1] + bbox[3]) / 2) if bbox else (0.0, 0.0)
-        tile_opts = {"tileSize": a.tile_size, "minZoom": a.min_zoom,
-                     "maxZoom": max(a.max_zoom + 3, a.max_zoom),
-                     "maxNativeZoom": a.max_native_zoom}
+        # cap zoom at the deepest available tile level (no upscaling past it) so
+        # the map never requests tiles that were not rendered.
+        top_z = min(a.max_native_zoom, a.max_zoom)
+        tile_opts = {"tileSize": a.tile_size, "minZoom": a.min_zoom, "maxZoom": top_z,
+                     "maxNativeZoom": top_z}
+        maxbounds = None
+        if bbox:
+            dla = (bbox[2] - bbox[0]) * 0.08 or 0.1
+            dlo = (bbox[3] - bbox[1]) * 0.08 or 0.1
+            maxbounds = [[bbox[0] - dla, bbox[1] - dlo], [bbox[2] + dla, bbox[3] + dlo]]
         render_html(a.out_dir, a.tiles, a.title, center, a.min_zoom + 2, tile_opts,
-                    a.attribution, a.distance_scale, a.distance_unit)
+                    a.attribution, a.distance_scale, a.distance_unit, maxbounds)
 
     npts = sum(len(l) for f in routes_fc["features"] for l in f["geometry"]["coordinates"])
     print(f"surge_map: {len(routes_fc['features'])} routes ({npts} geometry pts), "
