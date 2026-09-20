@@ -2350,6 +2350,12 @@ ARStatus sg_route_postprocess_ejection_reduce(const SGContext *ctx, SGRouteSolut
             }
             }
 
+            /* Done with the snapshot. Freed here rather than after the decision
+             * below, because that block can break out of the vehicle loop on
+             * SG_EJECTION_MAX_CONSECUTIVE_FAILS and skip the free entirely. */
+            free(requests);
+            requests = NULL;
+
             if (all_placed && sol->route_lengths[target_v] == 0 &&
                 sg_route_solution_cost(sol, (void *)ctx) < before_cost - 1e-9) {
                 /* Vehicle eliminated. */
@@ -2362,7 +2368,6 @@ ARStatus sg_route_postprocess_ejection_reduce(const SGContext *ctx, SGRouteSolut
                 if (consecutive_fails >= SG_EJECTION_MAX_CONSECUTIVE_FAILS) break;
             }
 
-            free(requests);
         }
         }
 
