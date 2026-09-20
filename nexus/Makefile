@@ -30,6 +30,14 @@ SRCS = src/nx_xlsx.c src/nx_pdf.c src/nx_csv.c src/nx_xform.c src/nx_slug.c src/
 OBJS = $(SRCS:.c=.o)
 
 LIB_FILE = libnexus.a
+
+# Discard objects built with different flags -- a sanitizer or debug
+# build must not be left behind for a release build to reuse. See
+# mk/flagstamp.mk for what that cost before it existed.
+DEBUG_GOALS = debug
+STAMP_ARTIFACTS = $(OBJS) $(LIB_FILE)
+include ../mk/flagstamp.mk
+
 TEST_INGEST_BIN = test_ingest
 TEST_XFORM_BIN = test_xform
 TEST_VALIDATE_BIN = test_validate
@@ -249,6 +257,7 @@ fuzz-smoke: fuzz
 		-max_total_time=$(FUZZ_SMOKE_SECONDS) -max_len=1000000 -print_final_stats=1
 
 clean:
+	rm -f $(BUILD_STAMP)
 	rm -f $(OBJS) $(TRE_OBJS) $(LIB_FILE) $(FUZZ_LIB) fuzz_xlsx fuzz_pdf fuzz_csv $(MINIZ_ZIP_OBJ)
 	rm -f $(notdir $(OBJS)) $(notdir $(TRE_OBJS))
 	rm -f $(TEST_INGEST_BIN) $(TEST_XFORM_BIN) $(TEST_VALIDATE_BIN) $(TEST_DISCOVER_BIN) $(TEST_MERGE_BIN) $(TEST_EMIT_BIN) $(TEST_ISSUE_BIN) $(TEST_DIFF_BIN) $(TEST_PIPELINE_BIN) $(TEST_REGEX_BIN) $(NX_RUN_BIN) $(NX_PDF_RUN_BIN) $(NX_XFORM_RUN_BIN) $(NX_PIPELINE_BIN)

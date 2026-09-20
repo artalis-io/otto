@@ -900,25 +900,16 @@ jobs:
       # which is the same shape the Linux jobs use. The libraries have to
       # exist first; on Linux an earlier step in the same job has already
       # built them.
-      # `clean lib`, not `lib`. The step above is `shared test-asan`, which is
-      # `clean test` -- it rebuilds libshared.a with DEBUG_CFLAGS: /Zi /Od,
-      # -DDEBUG and the sanitizer. A plain `lib` then sees an archive that
-      # exists and sources no newer than it, calls it up to date, and leaves
-      # the debug build in place for every server to link.
-      #
-      # That is how this job first came to report the three solver-backed
-      # servers as broken: they linked an ASan/debug libshared.a and answered
-      # {"status":"error","iterations":0}. Rebuilding the archive clean fixes
-      # all three, which is what proved the cause.
-      #
-      # Same shape as the stale libkeel.a fixed in #190: make treats an
-      # archive as current because the file is there, with no notion of the
-      # flags it was built with.
+      # Plain `lib`. The step above is `shared test-asan`, which rebuilds
+      # libshared.a with the sanitizer -- and this step used to need an
+      # explicit `clean` first, because make called that archive current and
+      # every server linked it. mk/flagstamp.mk now discards objects built
+      # with different flags, so the clean is redundant. Verified by removing
+      # it: this job is what proves the stamp works.
       - name: Build the module libraries
         run: |
           source scripts/msvc-env.sh
           for m in shared ralph arbor surge fuelwise velo locus carta; do
-            mingw32-make -C $m CC=cl clean
             mingw32-make -C $m CC=cl lib
           done
 

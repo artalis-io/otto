@@ -28,6 +28,14 @@ OBJS = $(SRCS:.c=.o)
 # Not LIB: that is MSVC's library search path, and make re-exports any
 # variable that also exists in the environment. See mk/toolchain.mk.
 LIB_FILE = libsurge.a
+
+# Discard objects built with different flags -- a sanitizer or debug
+# build must not be left behind for a release build to reuse. See
+# mk/flagstamp.mk for what that cost before it existed.
+DEBUG_GOALS = debug
+STAMP_ARTIFACTS = $(OBJS) $(LIB_FILE)
+include ../mk/flagstamp.mk
+
 TEST_BIN = test_surge
 # Transport abstraction leak detector -- builds with no transport library on
 # the include path. See docs/roadmaps/transport.md.
@@ -347,6 +355,7 @@ tsan: $(TSAN_TEST_BIN)
 	./$(TSAN_TEST_BIN)
 
 clean:
+	rm -f $(BUILD_STAMP)
 	rm -f $(OBJS) $(LIB_FILE) $(TEST_BIN) $(TEST_TB_BIN) $(TEST_NB_BIN) $(TEST_PM_BIN) $(TRANSPORT_TEST_BIN) $(BENCH_SOL_BIN) $(BENCH_PD_BIN) $(BENCH_CORD_BIN) $(BENCH_TUNE_BIN) $(SHARED_LIB) \
 	  $(FUZZ_BIN) $(TSAN_TEST_BIN)
 	rm -f $(FUZZ_API_BIN) $(FUZZ_API_BIN).exe

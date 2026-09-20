@@ -61,6 +61,14 @@ ALL_OBJS = $(CORE_OBJS) $(MINIZ_OBJS)
 # variable that also exists in the environment. See mk/toolchain.mk.
 LIB_FILE = libcarta.a
 
+# Discard objects built with different flags -- a sanitizer or debug
+# build must not be left behind for a release build to reuse. See
+# mk/flagstamp.mk for what that cost before it existed.
+DEBUG_GOALS = debug
+STAMP_ARTIFACTS = $(CORE_OBJS) $(LIB_FILE)
+include ../mk/flagstamp.mk
+
+
 # Test binaries
 TEST_BIN = test_carta
 TEST_METATILE_BIN = test_metatile
@@ -252,6 +260,7 @@ fuzz-api-smoke: fuzz-api
 
 # Clean
 clean:
+	rm -f $(BUILD_STAMP)
 	rm -f $(CORE_OBJS) $(LIB_FILE) libcarta_fuzz.a
 	# the fuzz build writes its objects here, not into src/
 	rm -f $(notdir $(CORE_OBJS))

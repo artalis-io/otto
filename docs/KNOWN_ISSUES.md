@@ -172,12 +172,15 @@ Proved by isolation: with the server still built at `/Od` with ASan, but
 job now does `clean lib` rather than `lib` for exactly this reason.
 
 Same shape as the stale `libkeel.a` in the API Makefiles (fixed separately):
-make treats an archive as current because the file is there, having no
-notion of the flags it was built with. **The hazard is not gone** -- a
-developer who runs `make -C shared test-asan` and then builds a server still
-gets a debug `libshared.a` with no diagnostic. The durable fix is for the
-sanitizer build to write a differently named archive, the way
-carta's `fuzz-lib` writes `libcarta_fuzz.a`.
+make treats an archive as current because the file is there, having no notion
+of the flags it was built with.
+
+**The hazard itself is now closed.** `mk/flagstamp.mk` records the compiler and
+flags each module was last built with, and discards objects built with
+different ones. It covers every variant, not just the sanitizer: release to
+debug, and GCC to MSVC, which previously needed a manual `make clean` that
+`CLAUDE.md` told the reader to remember. The explicit `clean` this job briefly
+carried has been removed, which is what demonstrates the stamp works.
 ## Numerical Issues
 
 ### Artificial Variable Residuals
