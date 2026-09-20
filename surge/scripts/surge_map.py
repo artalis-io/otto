@@ -354,7 +354,7 @@ const map=L.map('map',{preferCanvas:true}).setView([__CLAT__,__CLON__],__ZOOM__)
 let te=0; const banner=document.getElementById('banner');
 L.tileLayer(TILES,Object.assign({attribution:ATTR},TZ)).addTo(map)
   .on('tileerror',()=>{if(++te===4)banner.style.display='block'});
-const layers={};const bounds=L.latLngBounds([]);
+const layers={};const bounds=L.latLngBounds([]);let tlRefresh=null;
 Promise.all([fetch('routes.geojson').then(r=>r.json()),fetch('stops.geojson').then(r=>r.json()),
   fetch('anim.json').then(r=>r.json()).catch(()=>null)])
 .then(([routes,stops,anim])=>{
@@ -392,7 +392,8 @@ Promise.all([fetch('routes.geojson').then(r=>r.json()),fetch('stops.geojson').th
       '</small><br><small class="muted">'+p.n_stops+' stops · '+p.n_trips+' trip(s)'+(p.on_duty?(' · '+p.on_duty):'')+'</small></span>';
     d.onclick=()=>{const g=sl[p.route];const shown=map.hasLayer(layers[p.route]);
       if(shown){map.removeLayer(layers[p.route]);g&&map.removeLayer(g);d.style.opacity=.4;}
-      else{layers[p.route].addTo(map);g&&g.addTo(map);d.style.opacity=1;}};
+      else{layers[p.route].addTo(map);g&&g.addTo(map);d.style.opacity=1;}
+      tlRefresh&&tlRefresh();};
     list.appendChild(d);});
   if(nun){const d=document.createElement('div');d.className='row';
     d.innerHTML='<span class="sw" style="background:#c00"></span><span>Unassigned <small>('+nun+')</small></span>';
@@ -404,15 +405,19 @@ Promise.all([fetch('routes.geojson').then(r=>r.json()),fetch('stops.geojson').th
   tgl.onclick=()=>{allOn=!allOn; tgl.textContent=allOn?'hide all':'show all';
     Object.values(layers).forEach(l=>allOn?l.addTo(map):map.removeLayer(l));
     Object.values(sl).forEach(g=>allOn?g.addTo(map):map.removeLayer(g));
-    document.querySelectorAll('#list .row').forEach(r=>r.style.opacity=allOn?1:.4);};
-  initTimeline(anim, map);
+    document.querySelectorAll('#list .row').forEach(r=>r.style.opacity=allOn?1:.4);
+    tlRefresh&&tlRefresh();};
+  tlRefresh = initTimeline(anim, map, layers);
 }).catch(e=>{document.getElementById('stats').textContent='failed to load geojson: '+e;});
 
 // --- timeline animation: move a marker per vehicle along its road path by clock ---
-function initTimeline(anim, map){
+// Returns a refresh() the route toggles call so markers appear/disappear in sync
+// with their route lines. Markers show only when the timeline is on AND the
+// route is visible on the map.
+function initTimeline(anim, map, layers){
   const tlToggle=document.getElementById('tlToggle');
-  if(!anim || !anim.vehicles || !anim.vehicles.length){ tlToggle.style.display='none'; return; }
-  const [T0,T1]=anim.span, moveLayer=L.layerGroup(), markers={};
+  if(!anim || !anim.vehicles || !anim.vehicles.length){ tlToggle.style.display='none'; return null; }
+  const [T0,T1]=anim.span, moveLayer=L.layerGroup().addTo(map), markers={};
   anim.vehicles.forEach(v=>{markers[v.route]=L.circleMarker([0,0],
     {radius:6,color:'#111',weight:2,fillColor:v.color,fillOpacity:1,pane:'markerPane'})
     .bindTooltip('#'+v.route,{permanent:false});});
@@ -432,11 +437,14 @@ function initTimeline(anim, map){
       last=pts[pts.length-1];}   // between legs: dwelling at last stop
     return last;                 // before first departure: not yet on the road
   }
-  function render(T){ anim.vehicles.forEach(v=>{const p=posAt(v,T),m=markers[v.route];
-    if(p){m.setLatLng(p); if(!moveLayer.hasLayer(m))moveLayer.addLayer(m);}
-    else if(moveLayer.hasLayer(m))moveLayer.removeLayer(m);});}
   const range=document.getElementById('tlRange'),clock=document.getElementById('tlClock'),
     play=document.getElementById('tlPlay'),speed=document.getElementById('tlSpeed'),bar=document.getElementById('timeline');
+  // marker shows only when the timeline is on AND its route line is visible
+  function render(T){ const on=bar.classList.contains('on');
+    anim.vehicles.forEach(v=>{const m=markers[v.route];
+      const p=(on && map.hasLayer(layers[v.route]))?posAt(v,T):null;
+      if(p){m.setLatLng(p); if(!moveLayer.hasLayer(m))moveLayer.addLayer(m);}
+      else if(moveLayer.hasLayer(m))moveLayer.removeLayer(m);});}
   const curT=()=>T0+(T1-T0)*(range.value/100);
   function upd(){const T=curT(),s=Math.round(T);
     clock.textContent=String(Math.floor(s/3600)).padStart(2,'0')+':'+String(Math.floor((s%3600)/60)).padStart(2,'0');
@@ -446,8 +454,8 @@ function initTimeline(anim, map){
   play.onclick=()=>{ if(timer){stop();return;} play.innerHTML='&#10073;&#10073;';
     timer=setInterval(()=>{let T=curT()+(+speed.value)*0.1;
       if(T>=T1){range.value=100;upd();stop();return;} range.value=(T-T0)/((T1-T0)||1)*100;upd();},100);};
-  tlToggle.onclick=()=>{const on=bar.classList.toggle('on');
-    if(on){moveLayer.addTo(map);upd();} else {stop();map.removeLayer(moveLayer);}};
+  tlToggle.onclick=()=>{ bar.classList.toggle('on'); if(!bar.classList.contains('on')) stop(); upd(); };
+  return upd;   // route toggles call this to sync markers with route visibility
 }
 </script></body></html>"""
 
