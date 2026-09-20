@@ -198,6 +198,79 @@ def bbox_of(routes_fc, stops_fc):
     return (min(lats), min(lons), max(lats), max(lons))
 
 
+def _downsample(pts, cap):
+    """Keep at most `cap` points, evenly spaced, always including first + last."""
+    n = len(pts)
+    if n <= cap:
+        return pts
+    step = (n - 1) / (cap - 1)
+    out = [pts[int(round(i * step))] for i in range(cap)]
+    out[-1] = pts[-1]
+    return out
+
+
+def build_timeline(request, solution, geometry=None, max_pts_per_leg=48):
+    """Per-vehicle animation timeline: for each moving leg, (t0, t1, [[lat,lon],...])
+    where t0/t1 are the leg's clock times (seconds). A vehicle interpolates along
+    the leg between t0 and t1, dwells at a stop in the gaps, is absent before its
+    first departure and after its final return. Uses road geometry when supplied,
+    straight legs otherwise. Returns {"span": [tmin, tmax], "vehicles": [...]}."""
+    task_ll, depot_ll_for_vehicle, _req, tasks, vehicles = _coord_lookup(request)
+    travel = request.get("travel") or {}
+    L = travel.get("location_count"); dur = travel.get("durations")
+    def leg_dur(a_loc, b_loc):
+        if dur and L is not None and a_loc is not None and b_loc is not None:
+            return dur[a_loc * L + b_loc]
+        return 0.0
+    def task_loc(tid):
+        t = tasks.get(tid); return t.get("location_id") if t else None
+    def depot_loc(vid):
+        v = vehicles.get(vid, {}); did = v.get("start_depot_id", 0)
+        for d in request.get("depots", []):
+            if d.get("id") == did:
+                return d.get("location_id")
+        return request.get("depots", [{}])[0].get("location_id")
+
+    tmin, tmax = float("inf"), float("-inf")
+    veh_anim = []
+    for i, rt in enumerate(solution.get("routes", [])):
+        vid = rt.get("vehicle_id", i)
+        depot = depot_ll_for_vehicle(vid) or (0.0, 0.0)
+        dloc = depot_loc(vid)
+        stops = rt.get("stops", [])
+        trips = {}
+        for s in stops:
+            trips.setdefault(s.get("trip_index", 0), []).append(s)
+        segs = []
+        for trip in sorted(trips):
+            sts = trips[trip]
+            for k in range(len(sts) + 1):
+                lid = f"R{i}_T{trip}_{k:03d}"
+                if k == 0:                                   # depot -> first stop
+                    nxt = sts[0]; t1 = nxt.get("arrival", 0)
+                    t0 = t1 - leg_dur(dloc, task_loc(nxt["task_id"]))
+                    fallback = [list(depot), list(task_ll(nxt["task_id"]) or depot)]
+                elif k < len(sts):                           # stop[k-1] -> stop[k]
+                    t0 = sts[k - 1].get("departure", 0); t1 = sts[k].get("arrival", 0)
+                    fallback = [list(task_ll(sts[k - 1]["task_id"]) or depot),
+                                list(task_ll(sts[k]["task_id"]) or depot)]
+                else:                                        # last stop -> depot
+                    prev = sts[-1]; t0 = prev.get("departure", 0)
+                    t1 = t0 + leg_dur(task_loc(prev["task_id"]), dloc)
+                    fallback = [list(task_ll(prev["task_id"]) or depot), list(depot)]
+                pts = (geometry or {}).get(lid) or fallback
+                if t1 <= t0 or len(pts) < 2:
+                    continue
+                segs.append([round(t0, 1), round(t1, 1), _downsample(pts, max_pts_per_leg)])
+                tmin = min(tmin, t0); tmax = max(tmax, t1)
+        if segs:
+            veh_anim.append({"route": i, "vehicle_id": vid,
+                             "color": _color(i, len(solution.get("routes", []))), "segs": segs})
+    if tmin == float("inf"):
+        return {"span": [0, 0], "vehicles": []}
+    return {"span": [round(tmin, 1), round(tmax, 1)], "vehicles": veh_anim}
+
+
 # ---------------------------------------------------------------- externals ---
 def route_geometry(legs, graph, velo_bin, profile, weight):
     """Route each leg over a Velo graph -> {leg_id: [[lat,lon],...]}."""
@@ -254,12 +327,25 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
  .row{display:flex;align-items:center;gap:6px;padding:2px 0;cursor:pointer;border-radius:4px}
  .row:hover{background:#f0f0f0} .sw{width:14px;height:4px;border-radius:2px;flex:0 0 auto}
  .row small{color:#666} .muted{color:#999}
+ #tlToggle{margin:0 0 8px 6px;font-size:11px;padding:3px 9px;cursor:pointer;border:1px solid #bbb;border-radius:4px;background:#f7f7f7}
+ #tlToggle:hover{background:#eee}
+ #timeline{position:absolute;left:10px;right:300px;bottom:10px;z-index:1000;background:#fffe;border:1px solid #ccc;
+   border-radius:8px;padding:8px 12px;box-shadow:0 2px 12px #0003;display:none;align-items:center;gap:10px;font-size:12px}
+ #timeline.on{display:flex}
+ #timeline input[type=range]{flex:1;min-width:120px}
+ #tlPlay{cursor:pointer;border:1px solid #bbb;border-radius:4px;background:#f7f7f7;width:30px;padding:2px 0}
+ #tlClock{font-variant-numeric:tabular-nums;font-weight:600;min-width:46px;text-align:center}
  #banner{position:absolute;bottom:8px;left:8px;z-index:1000;background:#fffe;border:1px solid #ccc;
    border-radius:6px;padding:4px 8px;font-size:11px;color:#a00;display:none}
 </style></head><body>
 <div id="map"></div>
 <div id="panel"><h1>__TITLE__</h1><div id="stats">loading…</div>
-<button id="toggleAll">hide all</button><div id="list"></div></div>
+<button id="toggleAll">hide all</button><button id="tlToggle">&#9654; timeline</button><div id="list"></div></div>
+<div id="timeline"><button id="tlPlay">&#9654;</button>
+ <input id="tlRange" type="range" min="0" max="100" value="0" step="0.1"/>
+ <span id="tlClock">--:--</span>
+ <select id="tlSpeed"><option value="60">1&times;</option><option value="300" selected>5&times;</option>
+  <option value="900">15&times;</option><option value="1800">30&times;</option></select></div>
 <div id="banner">⚠ basemap tiles not loading (check the tile source / run a static server)</div>
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 <script>
@@ -269,8 +355,9 @@ let te=0; const banner=document.getElementById('banner');
 L.tileLayer(TILES,Object.assign({attribution:ATTR},TZ)).addTo(map)
   .on('tileerror',()=>{if(++te===4)banner.style.display='block'});
 const layers={};const bounds=L.latLngBounds([]);
-Promise.all([fetch('routes.geojson').then(r=>r.json()),fetch('stops.geojson').then(r=>r.json())])
-.then(([routes,stops])=>{
+Promise.all([fetch('routes.geojson').then(r=>r.json()),fetch('stops.geojson').then(r=>r.json()),
+  fetch('anim.json').then(r=>r.json()).catch(()=>null)])
+.then(([routes,stops,anim])=>{
   routes.features.forEach(f=>{const lyr=L.geoJSON(f,{style:{color:f.properties.color,weight:3,opacity:.85}}).addTo(map);
     layers[f.properties.route]=lyr; try{bounds.extend(lyr.getBounds())}catch(e){}});
   const sl={};
@@ -293,10 +380,10 @@ Promise.all([fetch('routes.geojson').then(r=>r.json()),fetch('stops.geojson').th
   const fmt=x=>x.toLocaleString(undefined,{maximumFractionDigits:0});
   const st=[['vehicles',nveh],['trips',totTrips],['stops served',fmt(served)],
     ['unassigned','<span style="color:#c00">'+nun+'</span>'],
-    ['served %',total?(100*served/total).toFixed(1)+'%':'—'],
+    ['served %',total?(100*served/total).toFixed(1)+'%':'-'],
     ['total distance',fmt(totDist)+' '+DUNIT],
-    ['avg stops/veh',nveh?(served/nveh).toFixed(1):'—'],
-    ['avg dist/veh',nveh?fmt(totDist/nveh)+' '+DUNIT:'—']];
+    ['avg stops/veh',nveh?(served/nveh).toFixed(1):'-'],
+    ['avg dist/veh',nveh?fmt(totDist/nveh)+' '+DUNIT:'-']];
   document.getElementById('stats').innerHTML=
     st.map(([k,v])=>'<div class="k">'+k+'</div><div class="v">'+v+'</div>').join('');
   const list=document.getElementById('list');
@@ -318,7 +405,50 @@ Promise.all([fetch('routes.geojson').then(r=>r.json()),fetch('stops.geojson').th
     Object.values(layers).forEach(l=>allOn?l.addTo(map):map.removeLayer(l));
     Object.values(sl).forEach(g=>allOn?g.addTo(map):map.removeLayer(g));
     document.querySelectorAll('#list .row').forEach(r=>r.style.opacity=allOn?1:.4);};
+  initTimeline(anim, map);
 }).catch(e=>{document.getElementById('stats').textContent='failed to load geojson: '+e;});
+
+// --- timeline animation: move a marker per vehicle along its road path by clock ---
+function initTimeline(anim, map){
+  const tlToggle=document.getElementById('tlToggle');
+  if(!anim || !anim.vehicles || !anim.vehicles.length){ tlToggle.style.display='none'; return; }
+  const [T0,T1]=anim.span, moveLayer=L.layerGroup(), markers={};
+  anim.vehicles.forEach(v=>{markers[v.route]=L.circleMarker([0,0],
+    {radius:6,color:'#111',weight:2,fillColor:v.color,fillOpacity:1,pane:'markerPane'})
+    .bindTooltip('#'+v.route,{permanent:false});});
+  function posAt(v,T){
+    let last=null;
+    for(const s of v.segs){const a=s[0],b=s[1],pts=s[2];
+      if(T<a) break;
+      if(T<=b){const f=(T-a)/((b-a)||1);
+        let tot=0; for(let i=1;i<pts.length;i++) tot+=Math.hypot(pts[i][0]-pts[i-1][0],pts[i][1]-pts[i-1][1]);
+        if(tot===0) return pts[0];
+        let target=f*tot,acc=0;
+        for(let i=1;i<pts.length;i++){const d=Math.hypot(pts[i][0]-pts[i-1][0],pts[i][1]-pts[i-1][1]);
+          if(acc+d>=target){const g=(target-acc)/((d)||1);
+            return [pts[i-1][0]+g*(pts[i][0]-pts[i-1][0]), pts[i-1][1]+g*(pts[i][1]-pts[i-1][1])];}
+          acc+=d;}
+        return pts[pts.length-1];}
+      last=pts[pts.length-1];}   // between legs: dwelling at last stop
+    return last;                 // before first departure: not yet on the road
+  }
+  function render(T){ anim.vehicles.forEach(v=>{const p=posAt(v,T),m=markers[v.route];
+    if(p){m.setLatLng(p); if(!moveLayer.hasLayer(m))moveLayer.addLayer(m);}
+    else if(moveLayer.hasLayer(m))moveLayer.removeLayer(m);});}
+  const range=document.getElementById('tlRange'),clock=document.getElementById('tlClock'),
+    play=document.getElementById('tlPlay'),speed=document.getElementById('tlSpeed'),bar=document.getElementById('timeline');
+  const curT=()=>T0+(T1-T0)*(range.value/100);
+  function upd(){const T=curT(),s=Math.round(T);
+    clock.textContent=String(Math.floor(s/3600)).padStart(2,'0')+':'+String(Math.floor((s%3600)/60)).padStart(2,'0');
+    render(T);}
+  range.oninput=upd;
+  let timer=null; const stop=()=>{if(timer){clearInterval(timer);timer=null;play.innerHTML='&#9654;';}};
+  play.onclick=()=>{ if(timer){stop();return;} play.innerHTML='&#10073;&#10073;';
+    timer=setInterval(()=>{let T=curT()+(+speed.value)*0.1;
+      if(T>=T1){range.value=100;upd();stop();return;} range.value=(T-T0)/((T1-T0)||1)*100;upd();},100);};
+  tlToggle.onclick=()=>{const on=bar.classList.toggle('on');
+    if(on){moveLayer.addTo(map);upd();} else {stop();map.removeLayer(moveLayer);}};
+}
 </script></body></html>"""
 
 
@@ -370,12 +500,15 @@ def main():
     os.makedirs(a.out_dir, exist_ok=True)
 
     routes_fc, stops_fc, legs = build_geojson(request, solution)
+    geom = None
     if a.velo_graph:
         geom = route_geometry(legs, a.velo_graph, a.velo_bin, a.profile, a.weight)
         routes_fc, stops_fc, _ = build_geojson(request, solution, geometry=geom)
 
     json.dump(routes_fc, open(os.path.join(a.out_dir, "routes.geojson"), "w"))
     json.dump(stops_fc, open(os.path.join(a.out_dir, "stops.geojson"), "w"))
+    anim = build_timeline(request, solution, geometry=geom)
+    json.dump(anim, open(os.path.join(a.out_dir, "anim.json"), "w"))
 
     bbox = bbox_of(routes_fc, stops_fc)
     if a.carta_graph and bbox:

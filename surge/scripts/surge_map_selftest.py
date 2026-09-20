@@ -110,8 +110,26 @@ def main():
     bb = sm.bbox_of(routes_fc, stops_fc)
     assert bb == (47.4, 19.0, 47.6, 19.2), bb
 
+    # --- build_timeline: timed move segments per vehicle, dwells as gaps ---
+    req_t = _base_request()
+    req_t["travel"] = {"location_count": 3,
+                       "durations": [0, 600, 700, 600, 0, 300, 700, 300, 0],
+                       "distances": [0, 1, 1, 1, 0, 1, 1, 1, 0]}
+    sol_t = {"routes": [{"vehicle_id": 0, "stops": [
+        {"task_id": 0, "request_id": 0, "trip_index": 0, "arrival": 600, "service_start": 600, "departure": 900},
+        {"task_id": 1, "request_id": 1, "trip_index": 0, "arrival": 1200, "service_start": 1200, "departure": 1500}]}],
+        "unassigned": []}
+    tl = sm.build_timeline(req_t, sol_t)
+    assert tl["span"] == [0, 2200], tl["span"]              # depot depart 600-600=0; return 1500+700=2200
+    assert len(tl["vehicles"]) == 1
+    segs = tl["vehicles"][0]["segs"]
+    assert len(segs) == 3                                   # depot->s0, s0->s1, s1->depot
+    assert segs[0][0] == 0 and segs[0][1] == 600            # first leg times
+    assert segs[1][0] == 900 and segs[1][1] == 1200         # dwell 600..900 is the gap before it
+    assert segs[-1][1] == 2200
+
     print("surge_map_selftest: OK (MultiLineString per route, [lon,lat], geometry stitch+dedup, "
-          "stop/depot/unassigned points, both request shapes, bbox)")
+          "stop/depot/unassigned points, both request shapes, bbox, timeline)")
     return 0
 
 

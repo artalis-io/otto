@@ -9,8 +9,15 @@ request.json ──▶ surge_solve ──▶ solution.json ─┐
                                                  ├─▶ surge_map.py ─▶ out/
 request.json ────────────────────────────────────┘                    routes.geojson
                                                                        stops.geojson
+                                                                       anim.json
                                                                        index.html
 ```
+
+The page has a toggleable **timeline**: click "timeline", then play/scrub to move
+each vehicle along its road path by the schedule clock (from `anim.json`, which
+holds per-vehicle timed move-segments derived from the solution's arrival/service/
+departure times). A vehicle appears on the road only between its first departure
+and final return, and dwells at each stop for its service time.
 
 Inputs are the two standard Surge JSON documents, so this works for **any**
 Surge model (VRPTW/PDPTW, single- or multi-depot, multi-trip):
