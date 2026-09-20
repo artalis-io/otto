@@ -193,10 +193,10 @@ different ones. It covers every variant, not just the sanitizer: release to
 debug, and GCC to MSVC, which previously needed a manual `make clean` that
 `CLAUDE.md` told the reader to remember. The explicit `clean` this job briefly
 carried has been removed, which is what demonstrates the stamp works.
-### Ralph's solver core leaks ~750 KB on the lazy-constraint path
+### Ralph's solver core leaked ~754 KB on any re-solve  (fixed)
 
-`make -C ralph test-asan` (added alongside this entry) builds the solver
-core under the sanitizers. On Linux, where LeakSanitizer runs, it reports:
+`make -C ralph test-asan` builds the solver core under the sanitizers. On
+Linux, where LeakSanitizer runs, it reported:
 
 ```
 SUMMARY: AddressSanitizer: 754436 byte(s) leaked in 327 allocation(s).
@@ -204,27 +204,33 @@ SUMMARY: AddressSanitizer: 754436 byte(s) leaked in 327 allocation(s).
   #13 test_lazy_constraints     tests/test_main.c:2812
 ```
 
-The trace is quoted as captured. Its line numbers predate the split of
-`ralph.c` into `ralph_params.c`, `ralph_basis_io.c` and `tuning_policy.c`,
-so match on the function names rather than the offsets.
+The trace is quoted as captured; its offsets predate the split of `ralph.c`,
+so match on the function names.
 
-Almost all of it is *indirect*: the allocation sites are `lu_create`,
-`ensure_basis_workspace`, `apply_scaling` and `build_basis_matrix`, reached
-through `lp_backend_run` -> `simplex_solve`. That shape says a root solver
-or factorisation object is not freed on a re-solve, and everything it owns
-goes with it. The lazy-constraint path re-solves in a loop, which is why it
-surfaces there.
+**Cause.** `ralph_optimize_with_mode` assigned over `model->lp_solver` and
+`model->mip_solver` without releasing what was already there. Every re-solve
+orphaned the previous solver and, with it, everything the solver owned --
+`lu_create`, `ensure_basis_workspace`, `apply_scaling`, `build_basis_matrix`.
+That is why almost all of the loss was *indirect* and why it surfaced on the
+lazy-constraint test: that path is the one that re-solves in a loop.
 
-Found by adding sanitizer coverage for the core, which never had any -- the
-CI matrix ran Ralph *Transport* and not the 80,000 lines underneath it.
-Not visible on Windows: LeakSanitizer is Linux-only, and the same suite is
-clean under MSVC ASan.
+It was not specific to lazy constraints. Any second `optimize()` on the same
+model leaked, which is the ordinary warm-start shape.
 
-**The `Sanitize Ralph Core` CI job is deliberately not wired up yet.** It
-would be red. Turning leak detection off to make it green would hide this
-and break parity with the Shared, Arbor and Ralph Transport jobs, which all
-run with leak detection on and pass. Wire it up in the same change that
-fixes the leaks -- it is one matrix entry.
+`ralph_core_add_lazy_constraint` had a comment saying it kept the LP solver
+"for potential warm start". Nothing read it: the next solve built a fresh
+`simplex_create` unconditionally. The retention bought no warm start and
+guaranteed the leak. Both handles are now freed at the point of replacement --
+not at the end of the previous solve, because the ray and tableau getters read
+the solver between `optimize()` calls.
+
+Found by adding sanitizer coverage for the core, which never had any -- the CI
+matrix ran Ralph *Transport* and not the 80,000 lines underneath it. Not
+visible on Windows: LeakSanitizer is Linux-only.
+
+**The `Sanitize Ralph Core` job is now wired up** and gates this, which is the
+condition the previous version of this entry set for closing it.
+
 ## Numerical Issues
 
 ### Artificial Variable Residuals

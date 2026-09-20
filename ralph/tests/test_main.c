@@ -2788,6 +2788,60 @@ void test_lp_iis_api(void) {
  *
  * Tests ralph_core_add_lazy_constraint() and ralph_core_add_lazy_constraints().
  * ============================================================================ */
+/* Re-solving the same model must not leak the previous solver.
+ *
+ * ralph_optimize_with_mode used to assign over model->lp_solver and
+ * model->mip_solver without releasing them, so every repeat optimize()
+ * orphaned a solver and everything it owned -- the LU factorisation, basis
+ * workspace and scaling arrays. That was 754 KB on the lazy-constraint test,
+ * but the lazy path was only where it showed: plain warm-start re-solving
+ * leaks the same way, and nothing exercised it.
+ *
+ * There is no assertion here that can see a leak. The check is the Sanitize
+ * Ralph Core job, which runs this suite under LeakSanitizer; this test exists
+ * so that both handles are actually replaced while that job is watching. It
+ * covers the MIP handle in particular, which the lazy-constraint test does
+ * not reach.
+ */
+void test_resolve_releases_solvers(void) {
+    printf("\n=== Test: Re-solve Releases Previous Solvers ===\n");
+
+    /* LP handle: solve the same continuous model three times. */
+    RalphModel *lp = ralph_test_create();
+    ASSERT(lp != NULL, "LP model created");
+    ralph_test_set_obj_sense(lp, RALPH_MINIMIZE);
+    ralph_test_add_var(lp, 0.0, 1e30, 1.0, RALPH_CONTINUOUS);
+    ralph_test_add_var(lp, 0.0, 1e30, 1.0, RALPH_CONTINUOUS);
+    int lidx[] = {0, 1};
+    double lval[] = {1.0, 1.0};
+    ralph_test_add_constraint(lp, 2, lidx, lval, RALPH_GREATER_EQUAL, 4.0);
+    for (int k = 0; k < 3; k++) {
+        ralph_test_optimize(lp);
+        ASSERT(ralph_test_get_status(lp) == RALPH_STATUS_OPTIMAL,
+               "Repeat LP solve is OPTIMAL");
+        ASSERT_NEAR(ralph_test_get_objval(lp), 4.0, TOLERANCE,
+                    "Repeat LP solve keeps the same objective");
+    }
+    ralph_test_free(lp);
+
+    /* MIP handle: same again with integer variables, so mip_create runs. */
+    RalphModel *mip = ralph_test_create();
+    ASSERT(mip != NULL, "MIP model created");
+    ralph_test_set_obj_sense(mip, RALPH_MINIMIZE);
+    ralph_test_add_var(mip, 0.0, 10.0, 1.0, RALPH_INTEGER);
+    ralph_test_add_var(mip, 0.0, 10.0, 1.0, RALPH_INTEGER);
+    int midx[] = {0, 1};
+    double mval[] = {1.0, 1.0};
+    ralph_test_add_constraint(mip, 2, midx, mval, RALPH_GREATER_EQUAL, 3.5);
+    for (int k = 0; k < 3; k++) {
+        ralph_test_optimize(mip);
+        ASSERT(ralph_test_get_status(mip) == RALPH_STATUS_OPTIMAL,
+               "Repeat MIP solve is OPTIMAL");
+        ASSERT_NEAR(ralph_test_get_objval(mip), 4.0, TOLERANCE,
+                    "Repeat MIP solve keeps the same objective");
+    }
+    ralph_test_free(mip);
+}
 void test_lazy_constraints(void) {
     printf("\n=== Test: Lazy Constraints API ===\n");
 
@@ -6437,6 +6491,7 @@ int main(int argc, char **argv) {
         test_row_col_deletion_api();
         test_lp_iis_api();
         test_lazy_constraints();
+        test_resolve_releases_solvers();
 
         /* Branching control tests */
         test_branching_control();

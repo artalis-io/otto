@@ -573,64 +573,50 @@ static RalphLapStatus lap_solve_internal(
      * ======================================================================== */
     int num_free = 0;
 
-    if (use_parallel && n >= LAP_PARALLEL_THRESHOLD) {
-        /* Parallel version: compute reductions in parallel */
-        /* First, compute all reductions (no dependencies between rows) */
-        #pragma omp parallel for schedule(static)
-        for (int ii = 0; ii < n; ii++) {
-            if (matches[ii] == 1) {
-                int j1 = row_assign[ii];
-                double min_reduced = DBL_MAX;
-                const double *row_costs = &work_cost[ii * n];
+    /* Reduction transfer is sequential by construction: row i reads col_price[j]
+     * for every j != j1, and rows before it have already written col_price at
+     * their own j1. The loop therefore carries a dependency through col_price.
+     *
+     * This was an `omp parallel for` whose comment argued "each singly-matched
+     * row has unique j1, so no race". That is true of the writes and says
+     * nothing about the reads: while one thread writes col_price[j1], every
+     * other thread reads that same element inside its inner loop. A read-write
+     * data race, and the resulting price vector depended on thread scheduling.
+     *
+     * It was reachable in release builds -- ralph CFLAGS carry $(CC_OMP), which
+     * is -fopenmp on GCC and Clang -- but no test or benchmark ever ran it: the
+     * gate is n >= 5000 and the largest LAP case in the tree is n = 1000. The
+     * sanitizer build hid it too, since CFLAGS_DEBUG omits CC_OMP.
+     *
+     * Running it serially is not a slowdown relative to what was verified: with
+     * the pragma ignored the two branches compute identical values, differing
+     * only in whether the free list is built in the same pass. A genuinely
+     * parallel form has to read a snapshot of col_price, which yields a
+     * different price vector than the sequential algorithm -- a separate change
+     * with its own measurements, not a bug fix. */
+    for (i = 0; i < n; i++) {
+        if (matches[i] == 0) {
+            /* Row not matched - add to free list */
+            free_rows[num_free++] = i;
+            in_free_list[i] = 1;
+        } else if (matches[i] == 1) {
+            /* Row matched exactly once - transfer reduction */
+            int j1 = row_assign[i];
+            double min_reduced = DBL_MAX;
+            const double *row_costs = &work_cost[i * n];
 
-                /* Find minimum reduced cost for columns other than j1 */
-                for (int jj = 0; jj < n; jj++) {
-                    if (jj != j1) {
-                        double reduced = row_costs[jj] - col_price[jj];
-                        if (reduced < min_reduced) {
-                            min_reduced = reduced;
-                        }
+            /* Find minimum reduced cost for columns other than j1 */
+            for (j = 0; j < n; j++) {
+                if (j != j1) {
+                    double reduced = row_costs[j] - col_price[j];
+                    if (reduced < min_reduced) {
+                        min_reduced = reduced;
                     }
                 }
-
-                /* Each singly-matched row has unique j1, so no race */
-                col_price[j1] -= min_reduced;
             }
-        }
 
-        /* Build free list sequentially (fast, just counting) */
-        for (i = 0; i < n; i++) {
-            if (matches[i] == 0) {
-                free_rows[num_free++] = i;
-                in_free_list[i] = 1;
-            }
-        }
-    } else {
-        /* Sequential version */
-        for (i = 0; i < n; i++) {
-            if (matches[i] == 0) {
-                /* Row not matched - add to free list */
-                free_rows[num_free++] = i;
-                in_free_list[i] = 1;
-            } else if (matches[i] == 1) {
-                /* Row matched exactly once - transfer reduction */
-                int j1 = row_assign[i];
-                double min_reduced = DBL_MAX;
-                const double *row_costs = &work_cost[i * n];
-
-                /* Find minimum reduced cost for columns other than j1 */
-                for (j = 0; j < n; j++) {
-                    if (j != j1) {
-                        double reduced = row_costs[j] - col_price[j];
-                        if (reduced < min_reduced) {
-                            min_reduced = reduced;
-                        }
-                    }
-                }
-
-                /* Reduce column price by the gap */
-                col_price[j1] -= min_reduced;
-            }
+            /* Reduce column price by the gap */
+            col_price[j1] -= min_reduced;
         }
     }
 
