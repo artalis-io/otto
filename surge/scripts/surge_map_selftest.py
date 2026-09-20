@@ -137,6 +137,19 @@ def main():
     # the ref rides onto the stop points too
     s_b = next(sf for sf in sfc_b["features"] if sf["properties"].get("task_id") == 0)
     assert s_b["properties"]["ref"] == "ORD-A"
+
+    # --- per-stop on-time / late flag (arrival vs task tw_late) ---
+    req_l = _base_request()
+    req_l["tasks"][0]["tw_late"] = 90       # arrival 100 -> 10s late (0.2 min)
+    req_l["tasks"][1]["tw_late"] = 100000   # arrival 200 -> on time
+    rfc_l, sfc_l, _ = sm.build_geojson(req_l, _base_solution())
+    dl = rfc_l["features"][0]["properties"]["stops"]
+    assert dl[0]["late_min"] > 0 and dl[1]["late_min"] == 0, [d["late_min"] for d in dl]
+    s_l = next(sf for sf in sfc_l["features"] if sf["properties"].get("task_id") == 0)
+    assert s_l["properties"]["late_min"] > 0
+    # no window -> never late
+    rfc_n2, _, _ = sm.build_geojson(_base_request(), _base_solution())
+    assert rfc_n2["features"][0]["properties"]["stops"][0]["late_min"] == 0
     # no demand/travel -> breakdown still present, load/dist empty (never crashes)
     rfc_n, _, _ = sm.build_geojson(_base_request(), _base_solution())
     assert rfc_n["features"][0]["properties"]["stops"][0]["dist_cum"] is None

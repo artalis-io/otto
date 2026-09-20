@@ -134,6 +134,15 @@ def build_geojson(request, solution, geometry=None):
         t = tasks.get(tid) or {}
         return t.get("demand") or []
 
+    def _late_min(tid, arr):
+        """Minutes a stop's committed arrival runs past its window close; 0 if on
+        time or the task has no window. Reflects the solver's own schedule."""
+        t = tasks.get(tid) or {}
+        twl = t.get("tw_late")
+        if twl is not None and arr is not None and arr > twl:
+            return round((arr - twl) / 60.0, 1)
+        return 0
+
     for i, rt in enumerate(routes):
         vid = rt.get("vehicle_id", i)
         color = _color(i, len(routes))
@@ -198,6 +207,7 @@ def build_geojson(request, solution, geometry=None):
                     "arr": _hms(s.get("arrival")), "dep": _hms(s.get("departure")),
                     "demand": dem, "load": [round(x, 3) for x in onboard],
                     "dist_cum": round(odo) if (tmatrix and tL) else None,
+                    "late_min": _late_min(tid, s.get("arrival")),
                 })
             leg = _matrix_dist(prev_loc, dloc)   # return to depot closes the odometer
             if leg is not None:
@@ -231,6 +241,7 @@ def build_geojson(request, solution, geometry=None):
                                "ref": _ref(tasks.get(s["task_id"])),
                                "type_": s.get("type"), "trip": s.get("trip_index", 0) + 1,
                                "arr": _hms(s.get("arrival")),
+                               "late_min": _late_min(s["task_id"], s.get("arrival")),
                                "label": f"task {s['task_id']}"},
             })
 
@@ -426,7 +437,9 @@ function routeDetailHTML(p, DIMS){
   stops.forEach(function(s){
     if((s.trip||1)!==curTrip){curTrip=s.trip||1;
       body+='<tr class="trip"><td colspan="'+span+'">trip '+curTrip+'</td></tr>';}
-    var row='<td>'+s.seq+'</td><td>'+(s.ref!=null?s.ref:('#'+s.task_id))+'</td><td>'+(s.arr||'')+'</td>';
+    var arr=(s.arr||'');
+    if(s.late_min>0) arr='<span style="color:#c00" title="past delivery window">'+arr+' +'+s.late_min+'m</span>';
+    var row='<td>'+s.seq+'</td><td>'+(s.ref!=null?s.ref:('#'+s.task_id))+'</td><td>'+arr+'</td>';
     dims.forEach(function(L,i){row+='<td>'+_fmtN(s.demand&&s.demand[i])+'</td><td>'+_fmtN(s.load&&s.load[i])+'</td>';});
     row+='<td>'+(s.dist_cum!=null?_fmtN(s.dist_cum/1000):'')+'</td>';
     body+='<tr>'+row+'</tr>';});
@@ -436,9 +449,11 @@ function routeDetailHTML(p, DIMS){
 // clicking the rest of the row is left to the caller (route show/hide toggle).
 function makeRouteRow(f, DIMS){
   var p=f.properties, d=document.createElement('div'); d.className='row';
+  var nlate=(p.stops||[]).filter(function(s){return s.late_min>0;}).length;
+  var lateTag=nlate?(' · <span style="color:#c00">'+nlate+' late</span>'):'';
   d.innerHTML='<span class="caret">&#9656;</span><span class="sw" style="background:'+p.color+'"></span>'+
     '<span>#'+p.route+' <small>'+(p.vehicle_ref?('<b>'+p.vehicle_ref+'</b> '):'')+p.label+'</small>'+
-    '<br><small class="muted">'+p.n_stops+' stops · '+p.n_trips+' trip(s)'+(p.on_duty?(' · '+p.on_duty):'')+'</small></span>';
+    '<br><small class="muted">'+p.n_stops+' stops · '+p.n_trips+' trip(s)'+(p.on_duty?(' · '+p.on_duty):'')+lateTag+'</small></span>';
   var det=document.createElement('div'); det.className='detail'; det.style.display='none';
   det.innerHTML=routeDetailHTML(p, DIMS);
   var car=d.querySelector('.caret');
@@ -504,13 +519,21 @@ Promise.all([fetch('routes.geojson').then(r=>r.json()),fetch('stops.geojson').th
   routes.features.forEach(f=>{const lyr=L.geoJSON(f,{style:{color:f.properties.color,weight:3,opacity:.85}}).addTo(map);
     layers[f.properties.route]=lyr; try{bounds.extend(lyr.getBounds())}catch(e){}});
   const sl={};
+  // Depot pin as an inline SVG divIcon, not the default L.marker (whose PNG icon
+  // is fetched by URL and so fails to render when the page is opened offline /
+  // from file:// with an inlined basemap). The SVG needs no external image.
+  const depotIcon=L.divIcon({className:'depot-pin',iconSize:[26,38],iconAnchor:[13,38],popupAnchor:[0,-34],
+    html:'<svg width="26" height="38" viewBox="0 0 26 38" xmlns="http://www.w3.org/2000/svg">'+
+      '<path d="M13 0C6 0 0 5.6 0 12.6 0 22 13 38 13 38s13-16 13-25.4C26 5.6 20 0 13 0z" fill="#1565c0" stroke="#fff" stroke-width="2"/>'+
+      '<circle cx="13" cy="12.5" r="4.5" fill="#fff"/></svg>'});
   stops.features.forEach(f=>{const [lo,la]=f.geometry.coordinates,p=f.properties;
-    if(p.kind==='depot'){L.marker([la,lo]).bindPopup('<b>'+p.label+'</b>').addTo(map);bounds.extend([la,lo]);return;}
+    if(p.kind==='depot'){L.marker([la,lo],{icon:depotIcon}).bindPopup('<b>'+p.label+'</b>')
+      .bindTooltip('Depot',{permanent:true,direction:'top',offset:[0,-34]}).addTo(map);bounds.extend([la,lo]);return;}
     if(p.kind==='unassigned'){(sl.__un=sl.__un||L.layerGroup().addTo(map)).addLayer(
        L.circleMarker([la,lo],{radius:5,color:'#c00',weight:2,fillColor:'#fff',fillOpacity:1}).bindPopup('<b>'+p.label+'</b>'));
        bounds.extend([la,lo]);return;}
     const m=L.circleMarker([la,lo],{radius:4,color:'#222',weight:1,fillColor:p.color,fillOpacity:1})
-      .bindPopup('<b>'+(p.ref!=null?p.ref:p.label)+'</b><br>'+p.label+' · route '+p.route+' · trip '+p.trip+(p.arr?(' · arr '+p.arr):''));
+      .bindPopup('<b>'+(p.ref!=null?p.ref:p.label)+'</b><br>'+p.label+' · route '+p.route+' · trip '+p.trip+(p.arr?(' · arr '+p.arr):'')+(p.late_min>0?(' <span style="color:#c00">(+'+p.late_min+'m late)</span>'):''));
     (sl[p.route]=sl[p.route]||L.layerGroup().addTo(map)).addLayer(m);});
   if(bounds.isValid())map.fitBounds(bounds.pad(0.05));
   // --- summary stats ---
