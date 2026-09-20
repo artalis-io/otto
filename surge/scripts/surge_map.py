@@ -46,6 +46,19 @@ def _color(i, n):
     return "#%02x%02x%02x" % (int(r * 255), int(g * 255), int(b * 255))
 
 
+def _ref(obj):
+    """Human-readable identity carried on a request node (order no, plate, name),
+    if the request author supplied one. Generic: first non-empty of ref/label/
+    name/plate. None when absent -- callers keep the generic id as a fallback."""
+    if not obj:
+        return None
+    for k in ("ref", "label", "name", "plate"):
+        v = obj.get(k)
+        if v not in (None, ""):
+            return str(v)
+    return None
+
+
 def _coord_lookup(request):
     """Return (task_coord, depot_coord, request_to_task) helpers as (lat, lon).
 
@@ -95,6 +108,32 @@ def build_geojson(request, solution, geometry=None):
     routes = solution.get("routes", [])
     route_feats, stop_feats, legs = [], [], []
 
+    # demand + travel matrix let us report a running load and a cumulative
+    # odometer per stop (the per-route breakdown). All optional: absent -> None.
+    travel = request.get("travel") or {}
+    tmatrix, tL = travel.get("distances"), travel.get("location_count")
+
+    def _matrix_dist(a_loc, b_loc):
+        if tmatrix and tL and a_loc is not None and b_loc is not None:
+            return tmatrix[a_loc * tL + b_loc]
+        return None
+
+    def _task_loc(tid):
+        t = tasks.get(tid)
+        return t.get("location_id") if t else None
+
+    def _depot_loc(vid):
+        v = vehicles.get(vid, {})
+        did = v.get("start_depot_id", 0)
+        for d in request.get("depots", []):
+            if d.get("id") == did:
+                return d.get("location_id")
+        return (request.get("depots") or [{}])[0].get("location_id")
+
+    def _demand(tid):
+        t = tasks.get(tid) or {}
+        return t.get("demand") or []
+
     for i, rt in enumerate(routes):
         vid = rt.get("vehicle_id", i)
         color = _color(i, len(routes))
@@ -105,6 +144,7 @@ def build_geojson(request, solution, geometry=None):
         for s in stops:
             trips.setdefault(s.get("trip_index", 0), []).append(s)
         multiline = []
+        detail, peak, seq_n, odo, dloc = [], [], 0, 0.0, _depot_loc(vid)
         for trip in sorted(trips):
             sts = trips[trip]
             seq = [depot] + [task_ll(s["task_id"]) or depot for s in sts] + [depot]
@@ -126,17 +166,57 @@ def build_geojson(request, solution, geometry=None):
                 line_ll.extend([[la, lo] for la, lo in pts])
             if line_ll:
                 multiline.append([[lo, la] for la, lo in line_ll])  # GeoJSON [lon,lat]
+            # per-stop breakdown for this trip: the truck departs the depot
+            # loaded with the trip's total delivery demand and sheds it stop by
+            # stop; `load` is what remains on board after each drop.
+            trip_total = []
+            for s in sts:
+                for j, dv in enumerate(_demand(s["task_id"])):
+                    if j >= len(trip_total):
+                        trip_total.append(0.0)
+                    trip_total[j] += dv
+            for j, tv in enumerate(trip_total):
+                if j >= len(peak):
+                    peak.append(0.0)
+                peak[j] = max(peak[j], tv)
+            onboard = list(trip_total)
+            prev_loc = dloc
+            for s in sts:
+                seq_n += 1
+                tid = s["task_id"]
+                dem = _demand(tid)
+                for j, dv in enumerate(dem):
+                    if j < len(onboard):
+                        onboard[j] -= dv
+                leg = _matrix_dist(prev_loc, _task_loc(tid))
+                if leg is not None:
+                    odo += leg
+                prev_loc = _task_loc(tid)
+                detail.append({
+                    "seq": seq_n, "trip": trip + 1, "task_id": tid,
+                    "ref": _ref(tasks.get(tid)),
+                    "arr": _hms(s.get("arrival")), "dep": _hms(s.get("departure")),
+                    "demand": dem, "load": [round(x, 3) for x in onboard],
+                    "dist_cum": round(odo) if (tmatrix and tL) else None,
+                })
+            leg = _matrix_dist(prev_loc, dloc)   # return to depot closes the odometer
+            if leg is not None:
+                odo += leg
         v = vehicles.get(vid, {})
         cap = v.get("capacity")
+        vref = _ref(v)
         route_feats.append({
             "type": "Feature",
             "geometry": {"type": "MultiLineString", "coordinates": multiline},
             "properties": {
                 "route": i, "vehicle_id": vid, "color": color,
                 "label": f"vehicle {vid}" + (f" (cap {cap})" if cap is not None else ""),
+                "vehicle_ref": vref,
                 "n_stops": len(stops), "n_trips": len(trips),
                 "distance": rt.get("distance"), "duration": rt.get("duration"),
                 "on_duty": _hms(rt.get("duration")),
+                "capacity": cap, "peak": [round(x, 3) for x in peak] if peak else None,
+                "stops": detail,
             },
         })
         for s in stops:
@@ -148,6 +228,7 @@ def build_geojson(request, solution, geometry=None):
                 "geometry": {"type": "Point", "coordinates": [ll[1], ll[0]]},
                 "properties": {"kind": "stop", "route": i, "color": color,
                                "task_id": s["task_id"], "request_id": s.get("request_id"),
+                               "ref": _ref(tasks.get(s["task_id"])),
                                "type_": s.get("type"), "trip": s.get("trip_index", 0) + 1,
                                "arr": _hms(s.get("arrival")),
                                "label": f"task {s['task_id']}"},
@@ -176,6 +257,7 @@ def build_geojson(request, solution, geometry=None):
             stop_feats.append({"type": "Feature",
                                "geometry": {"type": "Point", "coordinates": [ll[1], ll[0]]},
                                "properties": {"kind": "unassigned", "request_id": rid,
+                                              "ref": _ref(tasks.get(tid)),
                                               "label": f"request {rid} (unassigned)"}})
 
     routes_fc = {"type": "FeatureCollection", "features": route_feats}
@@ -265,6 +347,7 @@ def build_timeline(request, solution, geometry=None, max_pts_per_leg=48):
                 tmin = min(tmin, t0); tmax = max(tmax, t1)
         if segs:
             veh_anim.append({"route": i, "vehicle_id": vid,
+                             "vehicle_ref": _ref(vehicles.get(vid)),
                              "color": _color(i, len(solution.get("routes", []))), "segs": segs})
     if tmin == float("inf"):
         return {"span": [0, 0], "vehicles": []}
@@ -308,6 +391,64 @@ def prerender_tiles(graph, carta_bin, out_dir, bbox, zmin, zmax, pad=0.05):
                     f"{mxla + dla:.5f}", f"{mxlo + dlo:.5f}"], check=True)
 
 
+# --- shared panel widgets (single-sourced; the standalone emitter imports these) ---
+# CSS + JS for the per-route foldable breakdown panel and the route legend rows.
+# Both this module's served page and the client offline standalone inject these,
+# so the panel behaves identically in both.
+ROUTE_DETAIL_CSS = r"""
+ .caret{width:12px;flex:0 0 auto;color:#999;cursor:pointer;user-select:none;text-align:center;font-size:11px}
+ .caret:hover{color:#000}
+ .detail{margin:0 2px 6px 20px;overflow:auto}
+ .capline{font-size:11px;color:#555;margin:2px 0 3px 0}
+ table.det{border-collapse:collapse;font-size:11px;width:100%}
+ table.det th,table.det td{padding:1px 5px;text-align:right;white-space:nowrap}
+ table.det th{color:#999;font-weight:600;border-bottom:1px solid #ddd}
+ table.det td:nth-child(2),table.det th:nth-child(2){text-align:left}
+ table.det tr.trip td{text-align:left;color:#555;font-weight:600;padding-top:4px;background:#f4f4f4}
+"""
+
+ROUTE_DETAIL_JS = r"""
+function _fmtN(x){return (x==null||x==='')?'':Number(x).toLocaleString(undefined,{maximumFractionDigits:0});}
+// Foldable per-route breakdown: exact stop order with this-stop demand, load left
+// on board after each drop, and the cumulative odometer. DIMS labels the demand
+// dimensions (e.g. ["kg","pallets"]); falls back to d0,d1,... when unlabelled.
+function routeDetailHTML(p, DIMS){
+  var stops=p.stops||[]; if(!stops.length) return '<div class="capline">no stop detail</div>';
+  var dims=DIMS&&DIMS.length?DIMS:((p.capacity||[]).map(function(_,i){return 'd'+i;}));
+  var cap=p.capacity||[], peak=p.peak||[];
+  var capline='';
+  if(cap.length){capline='<div class="capline">peak load '+dims.map(function(L,i){
+    return _fmtN(peak[i])+' / '+_fmtN(cap[i])+' '+L;}).join(' · ')+'</div>';}
+  var head='<tr><th>#</th><th>order</th><th>arr</th>';
+  dims.forEach(function(L){head+='<th>'+L+'</th><th title="on board after this stop">'+L+' load</th>';});
+  head+='<th>km</th></tr>';
+  var body='', curTrip=0, span=3+dims.length*2+1;
+  stops.forEach(function(s){
+    if((s.trip||1)!==curTrip){curTrip=s.trip||1;
+      body+='<tr class="trip"><td colspan="'+span+'">trip '+curTrip+'</td></tr>';}
+    var row='<td>'+s.seq+'</td><td>'+(s.ref!=null?s.ref:('#'+s.task_id))+'</td><td>'+(s.arr||'')+'</td>';
+    dims.forEach(function(L,i){row+='<td>'+_fmtN(s.demand&&s.demand[i])+'</td><td>'+_fmtN(s.load&&s.load[i])+'</td>';});
+    row+='<td>'+(s.dist_cum!=null?_fmtN(s.dist_cum/1000):'')+'</td>';
+    body+='<tr>'+row+'</tr>';});
+  return capline+'<table class="det">'+head+body+'</table>';
+}
+// Build one legend row + its (hidden) detail panel. The caret folds the detail;
+// clicking the rest of the row is left to the caller (route show/hide toggle).
+function makeRouteRow(f, DIMS){
+  var p=f.properties, d=document.createElement('div'); d.className='row';
+  d.innerHTML='<span class="caret">&#9656;</span><span class="sw" style="background:'+p.color+'"></span>'+
+    '<span>#'+p.route+' <small>'+(p.vehicle_ref?('<b>'+p.vehicle_ref+'</b> '):'')+p.label+'</small>'+
+    '<br><small class="muted">'+p.n_stops+' stops · '+p.n_trips+' trip(s)'+(p.on_duty?(' · '+p.on_duty):'')+'</small></span>';
+  var det=document.createElement('div'); det.className='detail'; det.style.display='none';
+  det.innerHTML=routeDetailHTML(p, DIMS);
+  var car=d.querySelector('.caret');
+  car.onclick=function(e){e.stopPropagation(); var open=det.style.display==='none';
+    det.style.display=open?'block':'none'; car.innerHTML=open?'&#9662;':'&#9656;';};
+  return {row:d, detail:det};
+}
+"""
+
+
 HTML_TEMPLATE = r"""<!DOCTYPE html>
 <html lang="en"><head><meta charset="utf-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1"/>
@@ -337,7 +478,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
  #tlClock{font-variant-numeric:tabular-nums;font-weight:600;min-width:46px;text-align:center}
  #banner{position:absolute;bottom:8px;left:8px;z-index:1000;background:#fffe;border:1px solid #ccc;
    border-radius:6px;padding:4px 8px;font-size:11px;color:#a00;display:none}
-</style></head><body>
+__DETAIL_CSS__</style></head><body>
 <div id="map"></div>
 <div id="panel"><h1>__TITLE__</h1><div id="stats">loading…</div>
 <button id="toggleAll">hide all</button><button id="tlToggle">&#9654; timeline</button><div id="list"></div></div>
@@ -349,7 +490,8 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
 <div id="banner">⚠ basemap tiles not loading (check the tile source / run a static server)</div>
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 <script>
-const TILES=__TILES__, ATTR=__ATTR__, TZ=__TILEOPTS__, BOUNDS=__BOUNDS__, DSCALE=__DSCALE__, DUNIT=__DUNIT__;
+__DETAIL_JS__
+const TILES=__TILES__, ATTR=__ATTR__, TZ=__TILEOPTS__, BOUNDS=__BOUNDS__, DSCALE=__DSCALE__, DUNIT=__DUNIT__, DIMS=__DIMS__;
 const map=L.map('map',Object.assign({preferCanvas:true,minZoom:TZ.minZoom,maxZoom:TZ.maxZoom},
   BOUNDS?{maxBounds:BOUNDS,maxBoundsViscosity:0.7}:{})).setView([__CLAT__,__CLON__],__ZOOM__);
 let te=0; const banner=document.getElementById('banner');
@@ -368,7 +510,7 @@ Promise.all([fetch('routes.geojson').then(r=>r.json()),fetch('stops.geojson').th
        L.circleMarker([la,lo],{radius:5,color:'#c00',weight:2,fillColor:'#fff',fillOpacity:1}).bindPopup('<b>'+p.label+'</b>'));
        bounds.extend([la,lo]);return;}
     const m=L.circleMarker([la,lo],{radius:4,color:'#222',weight:1,fillColor:p.color,fillOpacity:1})
-      .bindPopup('<b>'+p.label+'</b><br>route '+p.route+' · trip '+p.trip+(p.arr?(' · arr '+p.arr):''));
+      .bindPopup('<b>'+(p.ref!=null?p.ref:p.label)+'</b><br>'+p.label+' · route '+p.route+' · trip '+p.trip+(p.arr?(' · arr '+p.arr):''));
     (sl[p.route]=sl[p.route]||L.layerGroup().addTo(map)).addLayer(m);});
   if(bounds.isValid())map.fitBounds(bounds.pad(0.05));
   // --- summary stats ---
@@ -388,14 +530,12 @@ Promise.all([fetch('routes.geojson').then(r=>r.json()),fetch('stops.geojson').th
   document.getElementById('stats').innerHTML=
     st.map(([k,v])=>'<div class="k">'+k+'</div><div class="v">'+v+'</div>').join('');
   const list=document.getElementById('list');
-  routes.features.forEach(f=>{const p=f.properties,d=document.createElement('div');d.className='row';
-    d.innerHTML='<span class="sw" style="background:'+p.color+'"></span><span>#'+p.route+' <small>'+p.label+
-      '</small><br><small class="muted">'+p.n_stops+' stops · '+p.n_trips+' trip(s)'+(p.on_duty?(' · '+p.on_duty):'')+'</small></span>';
+  routes.features.forEach(f=>{const p=f.properties;const {row:d,detail}=makeRouteRow(f,DIMS);
     d.onclick=()=>{const g=sl[p.route];const shown=map.hasLayer(layers[p.route]);
       if(shown){map.removeLayer(layers[p.route]);g&&map.removeLayer(g);d.style.opacity=.4;}
       else{layers[p.route].addTo(map);g&&g.addTo(map);d.style.opacity=1;}
       tlRefresh&&tlRefresh();};
-    list.appendChild(d);});
+    list.appendChild(d);list.appendChild(detail);});
   if(nun){const d=document.createElement('div');d.className='row';
     d.innerHTML='<span class="sw" style="background:#c00"></span><span>Unassigned <small>('+nun+')</small></span>';
     d.onclick=()=>{const g=sl.__un;const shown=g&&map.hasLayer(g);
@@ -421,7 +561,7 @@ function initTimeline(anim, map, layers){
   const [T0,T1]=anim.span, moveLayer=L.layerGroup().addTo(map), markers={};
   anim.vehicles.forEach(v=>{markers[v.route]=L.circleMarker([0,0],
     {radius:6,color:'#111',weight:2,fillColor:v.color,fillOpacity:1,pane:'markerPane'})
-    .bindTooltip('#'+v.route,{permanent:false});});
+    .bindTooltip(v.vehicle_ref?('#'+v.route+' '+v.vehicle_ref):('#'+v.route),{permanent:false});});
   function posAt(v,T){
     let last=null;
     for(const s of v.segs){const a=s[0],b=s[1],pts=s[2];
@@ -462,13 +602,16 @@ function initTimeline(anim, map, layers){
 
 
 def render_html(out_dir, tiles, title, center, zoom, tile_opts, attribution,
-                distance_scale, distance_unit, maxbounds=None):
+                distance_scale, distance_unit, maxbounds=None, dim_labels=None):
     html = (HTML_TEMPLATE
+            .replace("__DETAIL_CSS__", ROUTE_DETAIL_CSS)
+            .replace("__DETAIL_JS__", ROUTE_DETAIL_JS)
             .replace("__TITLE__", title)
             .replace("__TILES__", json.dumps(tiles))
             .replace("__ATTR__", json.dumps(attribution))
             .replace("__TILEOPTS__", json.dumps(tile_opts))
             .replace("__BOUNDS__", json.dumps(maxbounds))
+            .replace("__DIMS__", json.dumps(dim_labels or []))
             .replace("__DSCALE__", repr(distance_scale))
             .replace("__DUNIT__", json.dumps(distance_unit))
             .replace("__CLAT__", repr(center[0])).replace("__CLON__", repr(center[1]))
@@ -492,6 +635,9 @@ def main():
                     help="multiply solution route distances by this for the stats panel "
                          "(default 0.001: meters -> km)")
     ap.add_argument("--distance-unit", default="km", help="unit label for the distance stat")
+    ap.add_argument("--demand-labels", default="",
+                    help="comma-separated names for the demand dimensions shown in the per-route "
+                         "breakdown (e.g. 'kg,pallets'); defaults to d0,d1,... ")
     ap.add_argument("--no-html", action="store_true")
     # road-following geometry (optional)
     ap.add_argument("--velo-graph", help="Velo .vlg/.osm.pbf: route legs on real roads")
@@ -536,8 +682,12 @@ def main():
             dla = (bbox[2] - bbox[0]) * 0.08 or 0.1
             dlo = (bbox[3] - bbox[1]) * 0.08 or 0.1
             maxbounds = [[bbox[0] - dla, bbox[1] - dlo], [bbox[2] + dla, bbox[3] + dlo]]
+        dim_labels = [c for c in a.demand_labels.split(",") if c]
+        if not dim_labels:
+            ndim = request.get("dimension_count") or len((request.get("tasks") or [{}])[0].get("demand", []))
+            dim_labels = [f"d{j}" for j in range(ndim)]
         render_html(a.out_dir, a.tiles, a.title, center, a.min_zoom + 2, tile_opts,
-                    a.attribution, a.distance_scale, a.distance_unit, maxbounds)
+                    a.attribution, a.distance_scale, a.distance_unit, maxbounds, dim_labels)
 
     npts = sum(len(l) for f in routes_fc["features"] for l in f["geometry"]["coordinates"])
     print(f"surge_map: {len(routes_fc['features'])} routes ({npts} geometry pts), "

@@ -110,6 +110,39 @@ def main():
     bb = sm.bbox_of(routes_fc, stops_fc)
     assert bb == (47.4, 19.0, 47.6, 19.2), bb
 
+    # --- human refs + per-stop breakdown (demand, running load, odometer) ---
+    req_b = _base_request()
+    req_b["dimension_count"] = 2
+    req_b["tasks"][0]["demand"] = [10, 1]; req_b["tasks"][0]["ref"] = "ORD-A"
+    req_b["tasks"][1]["demand"] = [30, 2]; req_b["tasks"][1]["ref"] = "ORD-B"
+    req_b["vehicles"][0]["plate"] = "ABC-123"
+    req_b["depots"][0]["location_id"] = 0
+    # travel matrix (3 locations): distances in meters, symmetric-ish
+    req_b["travel"] = {"location_count": 3,
+                       "distances": [0, 1000, 2000, 1000, 0, 1500, 2000, 1500, 0]}
+    rfc_b, sfc_b, _ = sm.build_geojson(req_b, _base_solution())
+    rp = rfc_b["features"][0]["properties"]
+    assert rp["vehicle_ref"] == "ABC-123", rp["vehicle_ref"]
+    assert rp["capacity"] == [100] or rp["capacity"] == [100.0] or rp["capacity"], rp["capacity"]
+    # trip total demand = [40,3]; peak load on board leaving depot = [40,3]
+    assert rp["peak"] == [40, 3], rp["peak"]
+    det = rp["stops"]
+    assert len(det) == 2 and det[0]["seq"] == 1 and det[1]["seq"] == 2
+    assert det[0]["ref"] == "ORD-A" and det[1]["ref"] == "ORD-B"
+    # deliver t0 [10,1]: load left on board = [30,2]; then t1 [30,2]: [0,0]
+    assert det[0]["load"] == [30, 2], det[0]["load"]
+    assert det[1]["load"] == [0, 0], det[1]["load"]
+    # odometer: depot(0)->t0(loc1)=1000; ->t1(loc2)=1500 -> cum 2500
+    assert det[0]["dist_cum"] == 1000 and det[1]["dist_cum"] == 2500, (det[0]["dist_cum"], det[1]["dist_cum"])
+    # the ref rides onto the stop points too
+    s_b = next(sf for sf in sfc_b["features"] if sf["properties"].get("task_id") == 0)
+    assert s_b["properties"]["ref"] == "ORD-A"
+    # no demand/travel -> breakdown still present, load/dist empty (never crashes)
+    rfc_n, _, _ = sm.build_geojson(_base_request(), _base_solution())
+    assert rfc_n["features"][0]["properties"]["stops"][0]["dist_cum"] is None
+    # timeline carries the plate for the animated marker tooltip
+    assert sm.build_timeline(req_b, _base_solution())["vehicles"][0]["vehicle_ref"] == "ABC-123"
+
     # --- build_timeline: timed move segments per vehicle, dwells as gaps ---
     req_t = _base_request()
     req_t["travel"] = {"location_count": 3,
