@@ -468,7 +468,7 @@ function makeRouteRow(f, DIMS){
 # Explains the fixed symbols on the map. Route colours are per-vehicle, so they
 # are not enumerated here.
 LEGEND_CSS = r"""
- #legend{position:absolute;left:10px;bottom:10px;z-index:1000;background:#fffe;border:1px solid #ccc;
+ #legend{position:absolute;left:10px;top:76px;z-index:900;background:#fffe;border:1px solid #ccc;
    border-radius:8px;padding:8px 10px;box-shadow:0 2px 12px #0003;font-size:11px;line-height:1.7}
  #legend b{display:block;margin-bottom:2px;font-size:11px}
  #legend .lg{display:flex;align-items:center;gap:6px}
