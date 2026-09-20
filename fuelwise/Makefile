@@ -220,7 +220,12 @@ uninstall:
 # leaks in Ralph's solver core.
 test-asan: CFLAGS = $(DEBUG_CFLAGS)
 test-asan: LDFLAGS += $(DEBUG_LDFLAGS)
-test-asan: clean test
+# test-bench is deliberately not included. It shells into bench/, which has its
+# own Makefile and so does not inherit these flags: libfuelwise compiled with
+# ASan then fails to link there on undefined __asan_*/__ubsan_* symbols. It also
+# needs glpsol. What is covered here is the module's own suites -- the unit and
+# transport binaries -- which is the same scope the other modules' targets have.
+test-asan: clean test-transport test-unit
 
 .PHONY: all lib clean clean-all debug test test-regression test-unit test-bench test-transport wasm install uninstall ralph shared help fuzz-api fuzz-api-smoke fuzz-smoke test-asan
 
