@@ -193,43 +193,49 @@ different ones. It covers every variant, not just the sanitizer: release to
 debug, and GCC to MSVC, which previously needed a manual `make clean` that
 `CLAUDE.md` told the reader to remember. The explicit `clean` this job briefly
 carried has been removed, which is what demonstrates the stamp works.
-### Ralph's solver core leaked ~754 KB on any re-solve  (fixed)
+### Ralph's solver core leaked on every re-solve  (fixed)
 
-`make -C ralph test-asan` builds the solver core under the sanitizers. On
-Linux, where LeakSanitizer runs, it reported:
+`make -C ralph test-asan` builds the core under the sanitizers. The first
+reported figure was 754,436 bytes in 327 allocations, attributed to the
+lazy-constraint path. That turned out to be one of **five** leaks and not the
+largest; the attribution was an artifact of LeakSanitizer aborting at the
+first test that leaked.
 
-```
-SUMMARY: AddressSanitizer: 754436 byte(s) leaked in 327 allocation(s).
-  #9  ralph_optimize_with_mode  src/ralph.c:2809
-  #13 test_lazy_constraints     tests/test_main.c:2812
-```
+All five are the same defect: **a pointer field on a long-lived object,
+assigned on a path that runs more than once, with the free only in the
+destructor.** Found one at a time, because `halt_on_error` stops at the first
+finding and each fix let the suite run further:
 
-The trace is quoted as captured; its offsets predate the split of `ralph.c`,
-so match on the function names.
+| # | site | orphaned on |
+|---|------|-------------|
+| 1 | `ralph.c` — `model->lp_solver`, `model->mip_solver` | every `optimize()` after the first |
+| 2 | `simplex.c` — `setup_primal_tableau` | a second `simplex_solve()`, or `prepare` after a solve |
+| 3 | `mip.c` — `generate_node_cuts` success path | every node that applied a cut |
+| 4 | `simplex_scaling.c` — `apply_scaling` | every Benders subproblem re-solve |
+| 5 | `benders.c` — `ctx->num_cuts = 0` | every cut, in every Benders round |
 
-**Cause.** `ralph_optimize_with_mode` assigned over `model->lp_solver` and
-`model->mip_solver` without releasing what was already there. Every re-solve
-orphaned the previous solver and, with it, everything the solver owned --
-`lu_create`, `ensure_basis_workspace`, `apply_scaling`, `build_basis_matrix`.
-That is why almost all of the loss was *indirect* and why it surfaced on the
-lazy-constraint test: that path is the one that re-solves in a loop.
+Only #1 was specific to anything resembling the lazy-constraint path, and even
+that one is really the ordinary re-solve shape: any second `optimize()` on a
+model leaked. #3 and #5 scale with how *well* the solver works -- more cuts
+means more leak.
 
-It was not specific to lazy constraints. Any second `optimize()` on the same
-model leaked, which is the ordinary warm-start shape.
+A sixth was in a test rather than the library: the lifted-cover validity
+harness leaked its LP point once per instance, 2.6 MB over 50,000 instances.
 
-`ralph_core_add_lazy_constraint` had a comment saying it kept the LP solver
-"for potential warm start". Nothing read it: the next solve built a fresh
-`simplex_create` unconditionally. The retention bought no warm start and
-guaranteed the leak. Both handles are now freed at the point of replacement --
-not at the end of the previous solve, because the ray and tableau getters read
-the solver between `optimize()` calls.
+One UB finding surfaced on the way, unrelated to the leaks and older than all
+of them: `tableau_clone_with_augmented_rows` passed a null `artificial_vars`
+to `memcpy` with a zero count, which is undefined. The first sanitizer run
+aborted there before leak detection ran at all.
 
-Found by adding sanitizer coverage for the core, which never had any -- the CI
-matrix ran Ralph *Transport* and not the 80,000 lines underneath it. Not
-visible on Windows: LeakSanitizer is Linux-only.
+`ralph_core_add_lazy_constraint` also claimed it kept the LP solver "for
+potential warm start". Nothing read it -- the next solve called
+`simplex_create` unconditionally -- so the retention bought no warm start and
+guaranteed leak #1. Comment corrected.
 
-**The `Sanitize Ralph Core` job is now wired up** and gates this, which is the
-condition the previous version of this entry set for closing it.
+None of this was visible on Windows: LeakSanitizer is Linux-only.
+
+**The `Sanitize Ralph Core` job is wired up and green**, which was the stated
+condition for closing this.
 
 ## Numerical Issues
 
