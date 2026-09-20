@@ -733,6 +733,16 @@ static SolveResult solve_with_ralph(MIPProblem *prob, double time_limit, int use
     ralph_test_set_int_param(model, "max_nodes", 100000);
     ralph_test_set_int_param(model, "presolve", 1);  /* Enable presolve for MIP */
 
+    /* Branching rule override, for measuring what a rule costs rather than
+     * arguing about it. 0 max-infeasible, 1 pseudo-cost, 2 strong branch,
+     * 3 reliability (the default), 4 SCP. Reliability bootstraps its
+     * pseudo-costs with strong branching, which is 45% of the solve time on
+     * the multiknapsacks -- a tree of 69 nodes never amortises it. */
+    {
+        const char *vs = getenv("RALPH_BENCH_VAR_SELECT");
+        if (vs && vs[0]) ralph_test_set_int_param(model, "var_select", atoi(vs));
+    }
+
     /* Enable specialized solvers (LAP, Network Simplex, SCP Lagrangian) */
     if (use_specialized) {
         ralph_test_set_int_param(model, "detect_special", 1);
