@@ -4374,6 +4374,16 @@ static int setup_primal_tableau(SimplexSolver *solver, int allow_crash) {
     if (!solver) return -1;
 
     if (solver->verbose) LP_LOG_STDOUT("[simplex_solve] Creating tableau...\n");
+
+    /* Release whatever is already on the solver. This was the one assignment
+     * to solver->tableau that did not, so a second simplex_solve() on the same
+     * solver -- or simplex_prepare_primal_tableau() after a solve, which comes
+     * straight here -- orphaned the first tableau and everything it owned. One
+     * caller in simplex_solve already frees before calling; that is now
+     * redundant rather than load-bearing. */
+    tableau_free(solver->tableau);
+    solver->tableau = NULL;
+
     solver->tableau = tableau_create_ex(solver->model, solver->force_two_phase, 0);
     if (!solver->tableau) {
         solver->status = RALPH_STATUS_ERROR;
