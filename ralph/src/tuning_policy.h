@@ -83,4 +83,18 @@ int simplex_should_use_fit2p_phase2_heap(const SimplexSolver *solver,
 int simplex_should_use_sparse_fit_phase1_partial(const SimplexSolver *solver,
                                                          const SimplexTableau *tab);
 
+/* From ralph.c. Seven more of the same kind, on the presolve and dual-simplex
+ * paths rather than pricing: each is a hardcoded band on the problem shape that
+ * turns one strategy on or off. They read exactly two fields, num_cons and
+ * num_vars, so they are pure functions of (m, n) and fold into the same shape
+ * descriptor the predicates above want. Signatures unchanged; the seven call
+ * sites in ralph.c are untouched. */
+int ralph_should_skip_sparse_mid_presolve(const LPModel *model);
+int ralph_should_skip_dense_compact_bound_tightening(const LPModel *model);
+int ralph_should_use_fixed_bound_tightening_presolve(const LPModel *model);
+int ralph_should_control_mid_sparse_reinvert(const LPModel *model);
+int ralph_should_disable_dual_dse_wide_ship(const LPModel *model);
+int ralph_should_use_relaxed_dual_rc_cadence_compact_sparse(const LPModel *model);
+int ralph_should_use_shift_off_dual_start(const LPModel *model);
+
 #endif /* TUNING_POLICY_H */
