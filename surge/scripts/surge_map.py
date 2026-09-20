@@ -519,8 +519,16 @@ Promise.all([fetch('routes.geojson').then(r=>r.json()),fetch('stops.geojson').th
   routes.features.forEach(f=>{const lyr=L.geoJSON(f,{style:{color:f.properties.color,weight:3,opacity:.85}}).addTo(map);
     layers[f.properties.route]=lyr; try{bounds.extend(lyr.getBounds())}catch(e){}});
   const sl={};
+  // Depot pin as an inline SVG divIcon, not the default L.marker (whose PNG icon
+  // is fetched by URL and so fails to render when the page is opened offline /
+  // from file:// with an inlined basemap). The SVG needs no external image.
+  const depotIcon=L.divIcon({className:'depot-pin',iconSize:[26,38],iconAnchor:[13,38],popupAnchor:[0,-34],
+    html:'<svg width="26" height="38" viewBox="0 0 26 38" xmlns="http://www.w3.org/2000/svg">'+
+      '<path d="M13 0C6 0 0 5.6 0 12.6 0 22 13 38 13 38s13-16 13-25.4C26 5.6 20 0 13 0z" fill="#1565c0" stroke="#fff" stroke-width="2"/>'+
+      '<circle cx="13" cy="12.5" r="4.5" fill="#fff"/></svg>'});
   stops.features.forEach(f=>{const [lo,la]=f.geometry.coordinates,p=f.properties;
-    if(p.kind==='depot'){L.marker([la,lo]).bindPopup('<b>'+p.label+'</b>').addTo(map);bounds.extend([la,lo]);return;}
+    if(p.kind==='depot'){L.marker([la,lo],{icon:depotIcon}).bindPopup('<b>'+p.label+'</b>')
+      .bindTooltip('Depot',{permanent:true,direction:'top',offset:[0,-34]}).addTo(map);bounds.extend([la,lo]);return;}
     if(p.kind==='unassigned'){(sl.__un=sl.__un||L.layerGroup().addTo(map)).addLayer(
        L.circleMarker([la,lo],{radius:5,color:'#c00',weight:2,fillColor:'#fff',fillOpacity:1}).bindPopup('<b>'+p.label+'</b>'));
        bounds.extend([la,lo]);return;}
