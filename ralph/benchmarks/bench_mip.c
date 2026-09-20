@@ -1202,8 +1202,11 @@ int main(int argc, char **argv) {
      * benchmark that never finishes. These sizes branch and terminate.
      */
     if (!problem_filter || strstr(problem_filter, "knapsack")) {
-        int knap_items  = quick_mode ? 32 : 56;
-        int mknap_items = quick_mode ? 28 : 48;
+        /* --size applies here too. It is documented as "Override problem
+         * size" and silently did not reach the knapsack generators, which is
+         * where the family that resists lives. */
+        int knap_items  = size_override > 0 ? size_override : (quick_mode ? 32 : 56);
+        int mknap_items = size_override > 0 ? size_override : (quick_mode ? 28 : 48);
 
         printf("\n");
         printf("--------------------------------------------------------------------------------\n");

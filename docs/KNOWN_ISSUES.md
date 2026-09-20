@@ -17,12 +17,24 @@ Measured against GLPK 5.0 with `bench_mip`, every objective matching:
 | FacilityLocation | GLPK 5x faster |
 | SetPartitioning, SetCovering, LinearAssignment, NetworkFlow | parity |
 
-- **Knapsack is the outlier.** The generator builds strongly correlated
-  instances (profit tracks weight) at the classic hard capacity ratio, which is
-  among the hardest knapsack families for branch and bound; Ralph explores
-  hundreds of thousands of nodes where GLPK needs milliseconds. The gap is
-  bounding strength, not per-node cost -- strong branching is under 5% of solve
-  time and the node count is the whole story.
+- **Knapsack was the outlier, and is fixed.** The generator builds strongly
+  correlated instances (profit tracks weight) at the classic hard capacity
+  ratio. Ralph explored hundreds of thousands of nodes where GLPK needed
+  milliseconds. The node count was indeed the whole story -- strong branching
+  is under 5% of solve time -- but the cause was not bounding strength, which
+  is what this entry used to say. The root LP bound is 0.96% from the optimum
+  on the 32-item instance; the bound was never the problem.
+
+  Every objective coefficient in these models is an integer on an integer
+  variable, so every feasible objective is an integer, and a node bound can be
+  rounded towards the incumbent before it is compared. Ralph compared the raw
+  bound, so a node at -1028.4 under an incumbent of -1028 survived along with
+  its whole subtree. With the rounding: 32 items 14,705 nodes -> 339; 56
+  1,123 -> 5; 90 2,493 -> 33; 110 100,000 (the node limit, never proving
+  optimality) -> 7. Against GLPK the 32-item case went from 50x slower to
+  1.8x, and 110 items from not finishing to 180x faster.
+
+  Guarded by `ralph/tests/test_obj_integrality_prune.c`.
 - **Two earlier entries here were stale** and are removed rather than carried
   forward. "Set partitioning: 37s vs 0.0002s on 30-variable problems" and
   "Large facility location: times out at 210 variables" were both written on

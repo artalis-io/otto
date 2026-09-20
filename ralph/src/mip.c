@@ -672,6 +672,32 @@ MIPSolver* mip_create(LPModel *model, int detect_special, int pool_capacity) {
         }
     }
 
+    /* Is every feasible objective value an integer?
+     *
+     * True when each objective coefficient is itself integral and belongs to
+     * an integer variable. A continuous variable with any objective weight,
+     * or a fractional coefficient, breaks it -- the objective can then land
+     * anywhere.
+     *
+     * Detected once here rather than per node: it is a property of the model.
+     */
+    solver->obj_is_integral = 1;
+    solver->obj_round_prunes = 0;
+    for (int j = 0; j < model->num_vars; j++) {
+        double c = model->c[j];
+        if (c == 0.0) continue;                 /* no weight, no constraint */
+        if (!solver->is_integer[j] ||
+            fabs(c - floor(c + 0.5)) > RALPH_OPT_TOL) {
+            solver->obj_is_integral = 0;
+            break;
+        }
+    }
+    /* A fractional constant term shifts every value off the integers. */
+    if (fabs(model->obj_offset - floor(model->obj_offset + 0.5)) > RALPH_OPT_TOL) {
+        solver->obj_is_integral = 0;
+    }
+    if (getenv("RALPH_DISABLE_OBJ_ROUNDING")) solver->obj_is_integral = 0;
+
     /* Initialize best solution tracking */
     solver->best_bound = (model->obj_sense == 1) ? -RALPH_INFINITY : RALPH_INFINITY;
     solver->best_obj = (model->obj_sense == 1) ? RALPH_INFINITY : -RALPH_INFINITY;
@@ -2513,8 +2539,31 @@ static int process_node(MIPSolver *solver, BBNode *node) {
         }
     }
 
-    /* Check if node can be pruned by bound */
+    /* Check if node can be pruned by bound.
+     *
+     * With an integral objective the LP bound is rounded towards the
+     * incumbent first. A minimising node with lp_obj = -1028.4 under an
+     * incumbent of -1028 cannot produce anything better: every value it can
+     * reach is an integer no smaller than -1028.4, so no smaller than -1028.
+     * Comparing the raw bound keeps that node and its whole subtree.
+     */
     if (solver->has_incumbent) {
+        double bound_obj = lp_obj;
+        if (solver->obj_is_integral) {
+            bound_obj = (model->obj_sense == 1)
+                      ? ceil(lp_obj - RALPH_OPT_TOL)
+                      : floor(lp_obj + RALPH_OPT_TOL);
+            if (bound_obj != lp_obj) {
+                int raw_kept = (model->obj_sense == 1)
+                             ? (lp_obj < solver->best_obj - RALPH_OPT_TOL)
+                             : (lp_obj > solver->best_obj + RALPH_OPT_TOL);
+                int rounded_prunes = (model->obj_sense == 1)
+                                   ? (bound_obj >= solver->best_obj - RALPH_OPT_TOL)
+                                   : (bound_obj <= solver->best_obj + RALPH_OPT_TOL);
+                if (raw_kept && rounded_prunes) solver->obj_round_prunes++;
+            }
+            lp_obj = bound_obj;
+        }
         if (model->obj_sense == 1) {  /* Minimize */
             if (lp_obj >= solver->best_obj - RALPH_OPT_TOL) {
                 if (solver->verbose) {
@@ -3472,6 +3521,8 @@ void mip_print_stats(const MIPSolver *solver) {
     LP_LOG_STDOUT("Max depth: %d\n", solver->max_depth);
     LP_LOG_STDOUT("Cuts generated: %d\n", solver->cuts_generated);
     LP_LOG_STDOUT("RC fixings: %d\n", solver->rc_fixings);
+    LP_LOG_STDOUT("Objective integral: %s (rounding pruned %d nodes the raw bound kept)\n",
+           solver->obj_is_integral ? "yes" : "no", solver->obj_round_prunes);
     LP_LOG_STDOUT("RINS calls: %d (found %d incumbents)\n", solver->rins_calls, solver->rins_found);
     LP_LOG_STDOUT("Strong probes: %d (failures=%d, recovered=%d)\n",
            solver->strong_branch_probes, solver->strong_branch_failures,

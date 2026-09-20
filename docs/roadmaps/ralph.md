@@ -236,7 +236,15 @@ success criterion ("milp15 gap from ~25% to <5%") remains unevaluable: there is
 no milp15 in the repository, and the number came from
 `docs/archive/ralph-roadmap-pre-r4.md`.
 
-**Separate finding worth its own work.** Ralph is weak on single-row knapsacks.
+**Separate finding worth its own work -- DONE.** The cause was not branching
+or bounding: every objective coefficient here is an integer on an integer
+variable, so a node bound can be rounded towards the incumbent before it is
+compared, and Ralph compared the raw bound. 110 items went from exhausting the
+100,000 node limit to 7 nodes. See docs/KNOWN_ISSUES.md and
+ralph/tests/test_obj_integrality_prune.c. The paragraph below is the original
+measurement, kept because its diagnosis was wrong and that is worth seeing.
+
+Ralph is weak on single-row knapsacks.
 On 32 strongly correlated items it takes 14,705 nodes and 0.58s where GLPK takes
 0.012s -- 48x slower -- and at around 90 to 110 items it exceeds the 100,000
 node limit entirely while GLPK still solves in milliseconds. The family jumps
