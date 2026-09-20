@@ -204,6 +204,10 @@ SUMMARY: AddressSanitizer: 754436 byte(s) leaked in 327 allocation(s).
   #13 test_lazy_constraints     tests/test_main.c:2812
 ```
 
+The trace is quoted as captured. Its line numbers predate the split of
+`ralph.c` into `ralph_params.c`, `ralph_basis_io.c` and `tuning_policy.c`,
+so match on the function names rather than the offsets.
+
 Almost all of it is *indirect*: the allocation sites are `lu_create`,
 `ensure_basis_workspace`, `apply_scaling` and `build_basis_matrix`, reached
 through `lp_backend_run` -> `simplex_solve`. That shape says a root solver
