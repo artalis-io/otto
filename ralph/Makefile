@@ -178,6 +178,12 @@ GMI_CUT_VALIDITY_TEST_SOURCES = $(TEST_DIR)/test_gmi_cut_validity.c
 GMI_CUT_VALIDITY_TEST_EXEC = test_gmi_cut_validity
 COVER_GEN_TEST_SOURCES = $(TEST_DIR)/test_cover_cuts_generated.c
 COVER_GEN_TEST_EXEC = test_cover_cuts_generated
+
+# Guards the objective-integrality prune: without it the 110-item
+# knapsack in this test exhausts 100,000 nodes without proving
+# optimality.
+OBJ_INT_TEST_SOURCES = $(TEST_DIR)/test_obj_integrality_prune.c
+OBJ_INT_TEST_EXEC = test_obj_integrality_prune
 SPP_CONTEXT_TEST_SOURCES = $(TEST_DIR)/test_spp_context.c
 SPP_CONTEXT_TEST_EXEC = test_spp_context
 SPP_CUTS_TEST_SOURCES = $(TEST_DIR)/test_spp_cuts.c
@@ -480,7 +486,7 @@ debug: LDFLAGS += $(DEBUG_LDFLAGS)
 debug: clean all
 
 # Run tests
-test: $(TEST_EXEC) $(LP_TEST_EXEC) $(PRESOLVE_TEST_EXEC) $(BANDM_TEST_EXEC) $(BLEND_TEST_EXEC) $(LOTFI_TEST_EXEC) $(SIMPLEX_POLICY_TEST_EXEC) $(PHASE1_RECOVERY_TEST_EXEC) $(PHASE1_ENGINE_TEST_EXEC) $(PHASE1_ZONES_TEST_EXEC) $(DUAL_RATIO_FLIP_TEST_EXEC) $(LP_REFACTOR_POLICY_TEST_EXEC) $(LP_REINVERT_CONTROLLER_TEST_EXEC) $(LP_BASIS_GOVERNOR_TEST_EXEC) $(LP_BASIS_GOVERNOR_RUNTIME_TEST_EXEC) $(LP_DETERMINISM_TEST_EXEC) $(LP_SENSITIVITY_TEST_EXEC) $(LP_CONFLICT_TEST_EXEC) $(LP_ALGORITHM_API_TEST_EXEC) $(LP_POLICY_GLPK_COMPAT_TEST_EXEC) $(LP_GLPK_STRICT_TEST_EXEC) $(LP_BFCP_POLICY_TEST_EXEC) $(LP_DISPATCH_TEST_EXEC) $(LP_EXTERNAL_ADAPTER_TEST_EXEC) $(LP_EXTERNAL_ADAPTER_API_TEST_EXEC) $(LP_EXTERNAL_INTROSPECTION_API_TEST_EXEC) $(LP_EXTERNAL_FAILURE_API_TEST_EXEC) $(LP_EXTERNAL_OOP_RUNNER_TEST_EXEC) $(LP_REPAIR_DEADLINE_TEST_EXEC) $(LP_EXTERNAL_GLPK_OOP_TEST_EXEC) $(LP_TELEMETRY_TEST_EXECS) $(LP_PUBLIC_API_SPLIT_TEST_EXEC) $(MIP_PUBLIC_API_SPLIT_TEST_EXEC) $(LP_ERROR_API_TEST_EXEC) $(MPS_PARSER_TEST_EXEC) $(API_TEST_EXEC) $(MIP_WARMSTART_TEST_EXEC) $(MIP_LP_RECOVERY_TEST_EXEC) $(MIP_START_SPARSE_TEST_EXEC) $(MIP_START_REPAIR_TEST_EXEC) $(MIP_BUG_TEST_EXEC) $(BB_NODE_POOL_TEST_EXEC) $(GMI_CUT_VALIDITY_TEST_EXEC) $(COVER_GEN_TEST_EXEC) $(WARMSTART_SERDE_TEST_EXEC) $(LIFTED_COVER_TEST_EXEC) $(PRESOLVE_DIFF_TEST_EXEC) $(NODE_CUTS_DIFF_TEST_EXEC) $(TIME_LIMIT_TEST_EXEC) $(UNBOUNDED_INF_TEST_EXEC) $(INFEAS_EQ_TEST_EXEC) $(REFUELING_TEST_EXEC) $(BENDERS_MASTER_START_TEST_EXEC) $(BENDERS_WARMSTART_TEST_EXEC)
+test: $(TEST_EXEC) $(LP_TEST_EXEC) $(PRESOLVE_TEST_EXEC) $(BANDM_TEST_EXEC) $(BLEND_TEST_EXEC) $(LOTFI_TEST_EXEC) $(SIMPLEX_POLICY_TEST_EXEC) $(PHASE1_RECOVERY_TEST_EXEC) $(PHASE1_ENGINE_TEST_EXEC) $(PHASE1_ZONES_TEST_EXEC) $(DUAL_RATIO_FLIP_TEST_EXEC) $(LP_REFACTOR_POLICY_TEST_EXEC) $(LP_REINVERT_CONTROLLER_TEST_EXEC) $(LP_BASIS_GOVERNOR_TEST_EXEC) $(LP_BASIS_GOVERNOR_RUNTIME_TEST_EXEC) $(LP_DETERMINISM_TEST_EXEC) $(LP_SENSITIVITY_TEST_EXEC) $(LP_CONFLICT_TEST_EXEC) $(LP_ALGORITHM_API_TEST_EXEC) $(LP_POLICY_GLPK_COMPAT_TEST_EXEC) $(LP_GLPK_STRICT_TEST_EXEC) $(LP_BFCP_POLICY_TEST_EXEC) $(LP_DISPATCH_TEST_EXEC) $(LP_EXTERNAL_ADAPTER_TEST_EXEC) $(LP_EXTERNAL_ADAPTER_API_TEST_EXEC) $(LP_EXTERNAL_INTROSPECTION_API_TEST_EXEC) $(LP_EXTERNAL_FAILURE_API_TEST_EXEC) $(LP_EXTERNAL_OOP_RUNNER_TEST_EXEC) $(LP_REPAIR_DEADLINE_TEST_EXEC) $(LP_EXTERNAL_GLPK_OOP_TEST_EXEC) $(LP_TELEMETRY_TEST_EXECS) $(LP_PUBLIC_API_SPLIT_TEST_EXEC) $(MIP_PUBLIC_API_SPLIT_TEST_EXEC) $(LP_ERROR_API_TEST_EXEC) $(MPS_PARSER_TEST_EXEC) $(API_TEST_EXEC) $(MIP_WARMSTART_TEST_EXEC) $(MIP_LP_RECOVERY_TEST_EXEC) $(MIP_START_SPARSE_TEST_EXEC) $(MIP_START_REPAIR_TEST_EXEC) $(MIP_BUG_TEST_EXEC) $(BB_NODE_POOL_TEST_EXEC) $(GMI_CUT_VALIDITY_TEST_EXEC) $(COVER_GEN_TEST_EXEC) $(OBJ_INT_TEST_EXEC) $(WARMSTART_SERDE_TEST_EXEC) $(LIFTED_COVER_TEST_EXEC) $(PRESOLVE_DIFF_TEST_EXEC) $(NODE_CUTS_DIFF_TEST_EXEC) $(TIME_LIMIT_TEST_EXEC) $(UNBOUNDED_INF_TEST_EXEC) $(INFEAS_EQ_TEST_EXEC) $(REFUELING_TEST_EXEC) $(BENDERS_MASTER_START_TEST_EXEC) $(BENDERS_WARMSTART_TEST_EXEC)
 	./$(TEST_EXEC)
 	./$(LP_TEST_EXEC)
 	./$(PRESOLVE_TEST_EXEC)
@@ -528,6 +534,7 @@ test: $(TEST_EXEC) $(LP_TEST_EXEC) $(PRESOLVE_TEST_EXEC) $(BANDM_TEST_EXEC) $(BL
 	./$(BB_NODE_POOL_TEST_EXEC)
 	./$(GMI_CUT_VALIDITY_TEST_EXEC)
 	./$(COVER_GEN_TEST_EXEC)
+	./$(OBJ_INT_TEST_EXEC)
 	./$(WARMSTART_SERDE_TEST_EXEC)
 	./$(LIFTED_COVER_TEST_EXEC)
 	./$(PRESOLVE_DIFF_TEST_EXEC)
@@ -713,6 +720,9 @@ $(GMI_CUT_VALIDITY_TEST_EXEC): $(GMI_CUT_VALIDITY_TEST_SOURCES) $(LIB_NAME) $(SH
 $(COVER_GEN_TEST_EXEC): $(COVER_GEN_TEST_SOURCES) $(LIB_NAME) $(SHARED_LIB)
 	$(CC) $(CFLAGS) $(INCLUDES) $< $(call link_lib,.,ralph) $(call link_lib,../shared,shared) $(LDFLAGS) $(EXE_OUT)$@
 
+$(OBJ_INT_TEST_EXEC): $(OBJ_INT_TEST_SOURCES) $(LIB_NAME) $(SHARED_LIB)
+	$(CC) $(CFLAGS) $(INCLUDES) $< $(call link_lib,.,ralph) $(call link_lib,../shared,shared) $(LDFLAGS) $(EXE_OUT)$@
+
 # Run MIP regression reproducer test
 test-mip-bug: $(MIP_BUG_TEST_EXEC)
 	./$(MIP_BUG_TEST_EXEC)
@@ -728,6 +738,9 @@ test-gmi-cut-validity: $(GMI_CUT_VALIDITY_TEST_EXEC)
 # Run cover cut generation test
 test-cover-cuts-generated: $(COVER_GEN_TEST_EXEC)
 	./$(COVER_GEN_TEST_EXEC)
+
+test-obj-integrality: $(OBJ_INT_TEST_EXEC)
+	./$(OBJ_INT_TEST_EXEC)
 
 # Build standalone SPP context tests
 $(SPP_CONTEXT_TEST_EXEC): $(SPP_CONTEXT_TEST_SOURCES) $(LIB_NAME) $(SHARED_LIB)
@@ -1398,7 +1411,7 @@ uninstall:
 	rm -rf /usr/local/include/ralph
 	rm -f /usr/local/lib/$(LIB_NAME)
 
-.PHONY: all lib clean debug test test-transport test-transport-asan test-core test-lp-suite test-mip-suite test-regression-suites test-edge test-lap test-netflow test-detect test-optim test-api test-benders test-benders-debug test-benders-known-regression test-benders-warmstart test-mip-bug test-bb-node-pool test-gmi-cut-validity test-cover-cuts-generated test-mip-warmstart test-mip-lp-recovery test-mip-start-sparse test-mip-start-repair test-spp-context test-spp-cuts test-lifted-cover test-presolve-differential test-spp-heuristic test-spp-branch test-benders-master-start test-warmstart-serde test-beaconfd test-beaconfd-trace test-phase1-recovery test-phase1-engine test-phase1-zones test-simplex-policy test-dual-ratio-flip test-lp-refactor-policy test-lp-reinvert-controller test-lp-basis-governor test-lp-basis-governor-runtime test-lp-determinism test-lp-sensitivity test-lp-conflict test-lp-algorithm-api test-lp-policy-glpk-compat test-lp-glpk-strict test-lp-glpk-strict-bfcp test-lp-bfcp-policy test-lp-dispatch test-lp-external-adapter test-lp-external-adapter-api test-lp-external-introspection-api test-lp-external-failure-api test-lp-external-oop-runner test-lp-external-glpk-oop test-lp-external-glpk-oop-integration test-lp-telemetry test-lp-telemetry-solver test-lp-telemetry-lu test-lp-telemetry-gate test-lp-telemetry-lu-sparse test-lp-public-api-split test-mip-public-api-split test-lp-error-api test-lu-markowitz test-lu-supernode test-netlib test-netlib-full test-netlib-gate test-netlib-gate-small test-netlib-gate-stress-fit1p-nesm test-netlib-gate-stress-fit1p-nesm-gating test-netlib-gate-stress-fit1p-nesm-non-gating test-netlib-gate-pilot-focus test-netlib-gate-timeout22 test-netlib-gate-crash6-norelax-noflip test-netlib-gate-control-all-canary phase1-canaries glpk-strict-plan-init glpk-strict-plan-status glpk-strict-plan-next glpk-strict-plan-phase1 glpk-strict-plan-phase2 glpk-strict-plan-phase3 bench bench-lap bench-lap-perf bench-lap-perf-quick bench-netflow compare-glpk bench-glpk bench-glpk-quick bench-mip bench-mip-quick bench-mip-cover-effect bench-mip-specialized bench-mip-compare profile-bench build-ralph-benchmark download-netlib install uninstall help test-mps-parser test-node-cuts-diff test-time-limit test-unbounded-infinite-bound test-infeasible-equality-bounds test-phase1-oracle-glpk test-bandm test-blend test-lotfi test-lp-repair-deadline repro-cfl-crash bench-mip-specialized-quick bench-mip-compare-quick test-lp test-presolve fuzz-api fuzz-api-smoke fuzz-smoke
+.PHONY: all lib clean debug test test-transport test-transport-asan test-core test-lp-suite test-mip-suite test-regression-suites test-edge test-lap test-netflow test-detect test-optim test-api test-benders test-benders-debug test-benders-known-regression test-benders-warmstart test-mip-bug test-bb-node-pool test-gmi-cut-validity test-cover-cuts-generated test-mip-warmstart test-mip-lp-recovery test-mip-start-sparse test-mip-start-repair test-spp-context test-spp-cuts test-lifted-cover test-presolve-differential test-spp-heuristic test-spp-branch test-benders-master-start test-warmstart-serde test-beaconfd test-beaconfd-trace test-phase1-recovery test-phase1-engine test-phase1-zones test-simplex-policy test-dual-ratio-flip test-lp-refactor-policy test-lp-reinvert-controller test-lp-basis-governor test-lp-basis-governor-runtime test-lp-determinism test-lp-sensitivity test-lp-conflict test-lp-algorithm-api test-lp-policy-glpk-compat test-lp-glpk-strict test-lp-glpk-strict-bfcp test-lp-bfcp-policy test-lp-dispatch test-lp-external-adapter test-lp-external-adapter-api test-lp-external-introspection-api test-lp-external-failure-api test-lp-external-oop-runner test-lp-external-glpk-oop test-lp-external-glpk-oop-integration test-lp-telemetry test-lp-telemetry-solver test-lp-telemetry-lu test-lp-telemetry-gate test-lp-telemetry-lu-sparse test-lp-public-api-split test-mip-public-api-split test-lp-error-api test-lu-markowitz test-lu-supernode test-netlib test-netlib-full test-netlib-gate test-netlib-gate-small test-netlib-gate-stress-fit1p-nesm test-netlib-gate-stress-fit1p-nesm-gating test-netlib-gate-stress-fit1p-nesm-non-gating test-netlib-gate-pilot-focus test-netlib-gate-timeout22 test-netlib-gate-crash6-norelax-noflip test-netlib-gate-control-all-canary phase1-canaries glpk-strict-plan-init glpk-strict-plan-status glpk-strict-plan-next glpk-strict-plan-phase1 glpk-strict-plan-phase2 glpk-strict-plan-phase3 bench bench-lap bench-lap-perf bench-lap-perf-quick bench-netflow compare-glpk bench-glpk bench-glpk-quick bench-mip bench-mip-quick bench-mip-cover-effect bench-mip-specialized bench-mip-compare profile-bench build-ralph-benchmark download-netlib install uninstall help test-mps-parser test-node-cuts-diff test-time-limit test-unbounded-infinite-bound test-infeasible-equality-bounds test-phase1-oracle-glpk test-bandm test-blend test-lotfi test-lp-repair-deadline repro-cfl-crash bench-mip-specialized-quick bench-mip-compare-quick test-lp test-presolve fuzz-api fuzz-api-smoke fuzz-smoke test-obj-integrality
 
 # MIP benchmark with specialized solvers (LAP, Network, SCP)
 bench-mip-specialized: $(BENCH_MIP_EXEC)

@@ -187,6 +187,14 @@ typedef struct {
     double *best_solution;  /* Best integer solution found */
     int has_incumbent;
 
+    /* Every feasible objective value is an integer: each objective
+     * coefficient is integral and sits on an integer variable. When that
+     * holds, a node bound can be rounded towards the incumbent before it is
+     * compared, which prunes nodes whose LP bound is fractional but whose
+     * best reachable integer value cannot beat what we already have. */
+    int obj_is_integral;
+    int obj_round_prunes;   /* Nodes pruned only because of that rounding */
+
     /* User-provided MIP incumbent start (full vector, original model space) */
     double *mip_start;
     int *mip_start_mask;     /* 1=specified by user, 0=imputed/default */

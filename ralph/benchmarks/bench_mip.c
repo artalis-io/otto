@@ -733,6 +733,16 @@ static SolveResult solve_with_ralph(MIPProblem *prob, double time_limit, int use
     ralph_test_set_int_param(model, "max_nodes", 100000);
     ralph_test_set_int_param(model, "presolve", 1);  /* Enable presolve for MIP */
 
+    /* Branching rule override, for measuring what a rule costs rather than
+     * arguing about it. 0 max-infeasible, 1 pseudo-cost, 2 strong branch,
+     * 3 reliability (the default), 4 SCP. Reliability bootstraps its
+     * pseudo-costs with strong branching, which is 45% of the solve time on
+     * the multiknapsacks -- a tree of 69 nodes never amortises it. */
+    {
+        const char *vs = getenv("RALPH_BENCH_VAR_SELECT");
+        if (vs && vs[0]) ralph_test_set_int_param(model, "var_select", atoi(vs));
+    }
+
     /* Enable specialized solvers (LAP, Network Simplex, SCP Lagrangian) */
     if (use_specialized) {
         ralph_test_set_int_param(model, "detect_special", 1);
@@ -1202,8 +1212,11 @@ int main(int argc, char **argv) {
      * benchmark that never finishes. These sizes branch and terminate.
      */
     if (!problem_filter || strstr(problem_filter, "knapsack")) {
-        int knap_items  = quick_mode ? 32 : 56;
-        int mknap_items = quick_mode ? 28 : 48;
+        /* --size applies here too. It is documented as "Override problem
+         * size" and silently did not reach the knapsack generators, which is
+         * where the family that resists lives. */
+        int knap_items  = size_override > 0 ? size_override : (quick_mode ? 32 : 56);
+        int mknap_items = size_override > 0 ? size_override : (quick_mode ? 28 : 48);
 
         printf("\n");
         printf("--------------------------------------------------------------------------------\n");
