@@ -90,6 +90,9 @@ def main():
     ap.add_argument("--sub-clones", type=int, default=5, help="times to replicate each subcontractor (unlimited-ish)")
     ap.add_argument("--plate-col", default="plate",
                     help="vehicle column holding the plate; the part before '+' is the physical base plate")
+    ap.add_argument("--task-ref-col", default="order_no",
+                    help="order column holding the human order id, carried onto each task as 'ref' "
+                         "(surfaced in the map/plan; falls back to task id when the column is absent)")
     ap.add_argument("--dedupe-vehicle-configs", action=argparse.BooleanOptionalAction, default=True,
                     help="collapse own vehicles that share a base plate (alternative configs of one "
                          "physical truck, e.g. rigid-solo vs rigid+drawbar) to the highest-capacity "
@@ -166,13 +169,17 @@ def assemble_request(orows, oidx, dflat, uflat, N, vrows, a):
         tid = len(tasks)
         tw_e = hhmm_to_sec(r[oidx["tw_start"]]) if "tw_start" in oidx else None
         tw_l = hhmm_to_sec(r[oidx["tw_end"]]) if "tw_end" in oidx else None
-        tasks.append({
+        task = {
             "id": tid, "type": "delivery", "location_id": i,
             "tw_early": shift_early if tw_e is None else tw_e,
             "tw_late": shift_late if tw_l is None else tw_l,
             "service_seconds": int(to_num(r[oidx["service_min"]]) * 60) if "service_min" in oidx else 0,
             "demand": [to_num(r[oidx[c]]) if c in oidx else 0.0 for c in demand_cols],
-        })
+        }
+        task_ref_col = getattr(a, "task_ref_col", "order_no")
+        if task_ref_col in oidx and str(r[oidx[task_ref_col]]).strip():
+            task["ref"] = str(r[oidx[task_ref_col]]).strip()   # human order id for the map/plan
+        tasks.append(task)
         requests.append({"id": tid, "delivery_task_id": tid,
                          "unassigned_penalty": a.unassigned_penalty})
 
@@ -183,8 +190,8 @@ def assemble_request(orows, oidx, dflat, uflat, N, vrows, a):
     def cap_of(row):
         return [to_num(row[vi[c]]) if c in vi else 0.0 for c in cap_cols]
     vehicles, n_own, n_sub = [], 0, 0
-    def add_vehicle(cap, fixed):
-        vehicles.append({
+    def add_vehicle(cap, fixed, ref=None):
+        v = {
             "id": len(vehicles), "start_depot_id": 0, "end_depot_id": 0,
             "capacity": cap, "shift_early": shift_early, "shift_late": shift_late,
             "max_duration": max_dur,
@@ -192,7 +199,10 @@ def assemble_request(orows, oidx, dflat, uflat, N, vrows, a):
             "fixed_cost": fixed,
             "cost_per_distance": 1.0 if a.objective != "duration" else 0.0,
             "cost_per_duration": 1.0 if a.objective == "duration" else 0.0,
-        })
+        }
+        if ref:
+            v["ref"] = ref   # base plate, for the map/plan legend
+        vehicles.append(v)
     own_rows = [r for r in vrows[1:] if not is_sub(r)]
     sub_rows = [r for r in vrows[1:] if is_sub(r)]
 
@@ -224,11 +234,14 @@ def assemble_request(orows, oidx, dflat, uflat, N, vrows, a):
         keep_set = {id(r) for r in kept}
         own_rows = [r for r in own_rows if id(r) in keep_set]
 
+    def plate_of(row):
+        return str(row[vi[plate_col]]).split("+")[0].strip() if plate_col in vi else None
     for row in own_rows:
-        add_vehicle(cap_of(row), a.own_fixed_cost); n_own += 1
+        add_vehicle(cap_of(row), a.own_fixed_cost, plate_of(row)); n_own += 1
     for row in sub_rows:
-        for _ in range(max(1, a.sub_clones)):
-            add_vehicle(cap_of(row), a.sub_fixed_cost); n_sub += 1
+        for c in range(max(1, a.sub_clones)):
+            ref = f"{plate_of(row)}#{c + 1}" if plate_of(row) else None
+            add_vehicle(cap_of(row), a.sub_fixed_cost, ref); n_sub += 1
 
     req = {
         "config": {"max_iterations": a.max_iterations, "max_time_seconds": a.max_time_seconds,

@@ -9,8 +9,23 @@ request.json ──▶ surge_solve ──▶ solution.json ─┐
                                                  ├─▶ surge_map.py ─▶ out/
 request.json ────────────────────────────────────┘                    routes.geojson
                                                                        stops.geojson
+                                                                       anim.json
                                                                        index.html
 ```
+
+The page has a toggleable **timeline**: click "timeline", then play/scrub to move
+each vehicle along its road path by the schedule clock (from `anim.json`, which
+holds per-vehicle timed move-segments derived from the solution's arrival/service/
+departure times). A vehicle appears on the road only between its first departure
+and final return, and dwells at each stop for its service time.
+
+Each legend row has a **caret** that folds open a per-route breakdown table: the
+exact stop order with each stop's demand, the load left on board after it, and a
+running odometer. If the request carries human ids -- a `ref` (or `label`/`name`/
+`plate`) on a task or vehicle -- they are shown alongside the generic `task N` /
+`vehicle N`: the order id labels each stop and popup, the plate labels the route
+and its animated marker. Name the demand dimensions with `--demand-labels
+kg,pallets` (defaults to `d0,d1,...`); peak load vs capacity is shown per route.
 
 Inputs are the two standard Surge JSON documents, so this works for **any**
 Surge model (VRPTW/PDPTW, single- or multi-depot, multi-trip):
@@ -77,6 +92,7 @@ The tile bounding box is taken from the solution's geometry automatically.
 | `--profile` / `--weight` | `truck` / `distance` | Velo routing profile / objective |
 | `--carta-graph` | — | pre-render an offline tile basemap into `out/tiles` |
 | `--min-zoom` / `--max-zoom` | `6` / `11` | pre-rendered zoom range |
+| `--demand-labels` | `d0,d1,...` | names for the demand dimensions in the breakdown (e.g. `kg,pallets`) |
 | `--no-html` | off | emit only the GeoJSON, skip `index.html` |
 
 `build_geojson()` is a pure function (request + solution → GeoJSON); the
