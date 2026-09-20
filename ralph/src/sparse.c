@@ -136,15 +136,28 @@ int triplets_add(SparseTriplets *trips, int row, int col, double val) {
     /* Expand if needed */
     if (trips->nnz >= trips->capacity) {
         int new_cap = trips->capacity * 2;
-        int *new_row = (int*)realloc(trips->row, new_cap * sizeof(int));
-        int *new_col = (int*)realloc(trips->col, new_cap * sizeof(int));
-        double *new_val = (double*)realloc(trips->val, new_cap * sizeof(double));
+        int *new_row, *new_col;
+        double *new_val;
 
-        if (!new_row || !new_col || !new_val) return -1;
-
+        /* Written back one at a time, because realloc frees the old block on
+         * success. Issuing all three and checking once left trips->row
+         * pointing at memory realloc had already freed whenever the second
+         * or third failed -- and every caller that checks the -1 goes on to
+         * call triplets_free(), which frees it again. An MPS file with more
+         * than 1024 nonzeros re-enters this path on every growth, so it is
+         * reachable from any parse under allocation pressure. */
+        new_row = (int*)realloc(trips->row, (size_t)new_cap * sizeof(int));
+        if (!new_row) return -1;
         trips->row = new_row;
+
+        new_col = (int*)realloc(trips->col, (size_t)new_cap * sizeof(int));
+        if (!new_col) return -1;
         trips->col = new_col;
+
+        new_val = (double*)realloc(trips->val, (size_t)new_cap * sizeof(double));
+        if (!new_val) return -1;
         trips->val = new_val;
+
         trips->capacity = new_cap;
     }
 

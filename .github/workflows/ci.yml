@@ -1184,6 +1184,14 @@ jobs:
           - name: Shared
             target: test-asan
             dir: shared
+          # The solver core, not just the HTTP layer beside it. Until this
+          # entry existed the sanitizer matrix covered Ralph's transport and
+          # nothing underneath it -- and an ASan run of the core found a
+          # stack-buffer-overflow in the public ralph_lp_write_solution_buf(),
+          # reached by a test that had been passing for as long as it existed.
+          - name: Ralph Core
+            target: test-asan
+            dir: ralph
           - name: Ralph Transport
             target: test-transport-asan
             dir: ralph
