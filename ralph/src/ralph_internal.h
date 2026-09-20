@@ -26,6 +26,13 @@
 #include "benders.h"
 #include "lp_error.h"
 
+struct RalphBasis {
+    int m;              /* Number of constraints */
+    int n;              /* Number of extended variables */
+    int *basis;         /* Basic variable indices (size m) */
+    VarStatus *var_status;  /* Variable status array (size n) */
+};
+
 struct RalphModel {
     LPModel *lp_model;
     SimplexSolver *lp_solver;
@@ -194,4 +201,9 @@ void ralph_clear_api_error(const RalphModel *model);
         return NULL; \
     } while (0)
 
+/* Shared between ralph.c and ralph_basis_io.c: the MIP-start reader hands
+ * its parsed vector to the same copy-and-validate path the API setter
+ * uses, so the file format and the in-memory contract cannot drift. */
+int ralph_set_mip_start_copy(RalphModel *model, const double *x,
+                             const int *mask, int n);
 #endif /* RALPH_INTERNAL_H */
