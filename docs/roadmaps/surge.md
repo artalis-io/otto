@@ -1805,6 +1805,40 @@ These are real-world features that require larger architectural changes:
 | **Driver breaks / HoSE** | ✅ Complete. Abstract break model — generic `(max_work, break_duration, max_total_work)` maps to both EU EC 561 and US FMCSA rules. |
 | **Multiple trips** | ✅ Complete. Multi-route-per-vehicle state with depot reload modeling. `sg_vehicle_set_max_trips()`. |
 | **Time-dependent travel** | ✅ Complete. Speed profiles (step-function multipliers), per-vehicle travel profiles, and time-indexed travel brackets (multiple complete matrices by departure time). `sg_set_travel_time_bracket()` + `sg_travel_profile_add_time_bracket()`. |
+| **Load stacking / 3D loading constraints** | 🔲 Not started. Per-order stack compatibility, max stack height, weight-on-top limits, non-stackable/orientation flags, and LIFO unload order (2L/3L-CVRP). Needs a loading-feasibility check in the insertion evaluator. See below. |
+
+#### Load stacking / 3D loading constraints
+
+Today capacity is additive and scalar per dimension (weight, volume, pallets, ...):
+a trip is feasible when the summed demand stays under the vehicle's capacity
+vector. That does not capture *which* orders may be physically stacked on which.
+Real distribution fleets stack freight (partial and half-height pallets), with
+rules such as a max stack height, weight-on-top limits, non-stackable or fragile
+items, orientation, and sometimes a LIFO unload order. This came up in a real
+distribution deployment where freight stacks, so effective pallet capacity
+exceeds the floor-slot count and some orders cannot go on top of others.
+
+Two tiers, increasing in effort:
+
+1. **Data-side effective footprint (no solver change).** When the rules are simple
+   (max stack height, non-stackable flag, weight-on-top), encode each order's
+   *effective* floor-slot footprint into the existing scalar pallet/volume
+   dimension during request construction: stackable orders consume fractional
+   slots, non-stackable ones a full slot. Captures most of the value with zero
+   solver change, and is enough when stacking is roughly uniform. A scalar cap
+   (effective max pallets per trip) is the current first-order proxy.
+2. **True loading-feasibility module (2L/3L-CVRP).** For per-order compatibility,
+   orientation, weight-on-top, and LIFO unload order, add an optional
+   loading-feasibility check invoked from `sg_feasibility` when evaluating an
+   insertion, gated like `hard_capacity` / `hard_time_windows`. This is the
+   architecturally clean home (hard constraints are already pluggable and checked
+   per insertion), but packing is NP-hard: it needs a fast packing heuristic with
+   per-trip caching, and it slows the solve. Distinct from the existing LIFO/FIFO
+   PD policy, which governs *visit order*; this governs *physical placement*.
+
+Inputs required from the data: a stack-compatibility class per order or product,
+max stack height, max weight on top, non-stackable/orientation flags, and whether
+unload order matters. Without these it cannot be modeled.
 
 ---
 
