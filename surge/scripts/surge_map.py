@@ -464,6 +464,27 @@ function makeRouteRow(f, DIMS){
 """
 
 
+# --- shared map legend (single-sourced; the standalone emitter imports these) ---
+# Explains the fixed symbols on the map. Route colours are per-vehicle, so they
+# are not enumerated here.
+LEGEND_CSS = r"""
+ #legend{position:absolute;left:10px;bottom:10px;z-index:1000;background:#fffe;border:1px solid #ccc;
+   border-radius:8px;padding:8px 10px;box-shadow:0 2px 12px #0003;font-size:11px;line-height:1.7}
+ #legend b{display:block;margin-bottom:2px;font-size:11px}
+ #legend .lg{display:flex;align-items:center;gap:6px}
+ #legend .pin{width:12px;height:12px;border-radius:50% 50% 50% 0;transform:rotate(-45deg);flex:0 0 auto}
+ #legend .dot{width:11px;height:11px;border-radius:50%;flex:0 0 auto}
+ #legend .ln{width:16px;height:0;border-top:3px solid #888;flex:0 0 auto}
+"""
+
+LEGEND_HTML = r"""<div id="legend"><b>Legend</b>
+ <div class="lg"><span class="pin" style="background:#1565c0"></span>depot</div>
+ <div class="lg"><span class="ln" style="border-top-color:#888"></span>vehicle route (one colour each)</div>
+ <div class="lg"><span class="dot" style="background:#c00"></span>late arrival</div>
+ <div class="lg"><span class="dot" style="background:#fff;border:2px solid #c00"></span>unassigned</div>
+</div>"""
+
+
 HTML_TEMPLATE = r"""<!DOCTYPE html>
 <html lang="en"><head><meta charset="utf-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1"/>
@@ -493,7 +514,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
  #tlClock{font-variant-numeric:tabular-nums;font-weight:600;min-width:46px;text-align:center}
  #banner{position:absolute;bottom:8px;left:8px;z-index:1000;background:#fffe;border:1px solid #ccc;
    border-radius:6px;padding:4px 8px;font-size:11px;color:#a00;display:none}
-__DETAIL_CSS__</style></head><body>
+__DETAIL_CSS____LEGEND_CSS__</style></head><body>
 <div id="map"></div>
 <div id="panel"><h1>__TITLE__</h1><div id="stats">loading…</div>
 <button id="toggleAll">hide all</button><button id="tlToggle">&#9654; timeline</button><div id="list"></div></div>
@@ -503,6 +524,7 @@ __DETAIL_CSS__</style></head><body>
  <select id="tlSpeed"><option value="60">1&times;</option><option value="300" selected>5&times;</option>
   <option value="900">15&times;</option><option value="1800">30&times;</option></select></div>
 <div id="banner">⚠ basemap tiles not loading (check the tile source / run a static server)</div>
+__LEGEND_HTML__
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 <script>
 __DETAIL_JS__
@@ -542,11 +564,13 @@ Promise.all([fetch('routes.geojson').then(r=>r.json()),fetch('stops.geojson').th
   const totTrips=routes.features.reduce((a,f)=>a+(f.properties.n_trips||0),0);
   const totDist=routes.features.reduce((a,f)=>a+(f.properties.distance||0),0)*DSCALE;
   const nun=stops.features.filter(f=>f.properties.kind==='unassigned').length;
+  const nlate=routes.features.reduce((a,f)=>a+((f.properties.stops||[]).filter(s=>s.late_min>0).length),0);
   const served=totStops, total=served+nun;
   const fmt=x=>x.toLocaleString(undefined,{maximumFractionDigits:0});
   const st=[['vehicles',nveh],['trips',totTrips],['stops served',fmt(served)],
     ['unassigned','<span style="color:#c00">'+nun+'</span>'],
     ['served %',total?(100*served/total).toFixed(1)+'%':'-'],
+    ['late arrivals',nlate?('<span style="color:#c00">'+nlate+'</span>'):'0'],
     ['total distance',fmt(totDist)+' '+DUNIT],
     ['avg stops/veh',nveh?(served/nveh).toFixed(1):'-'],
     ['avg dist/veh',nveh?fmt(totDist/nveh)+' '+DUNIT:'-']];
@@ -629,6 +653,8 @@ def render_html(out_dir, tiles, title, center, zoom, tile_opts, attribution,
     html = (HTML_TEMPLATE
             .replace("__DETAIL_CSS__", ROUTE_DETAIL_CSS)
             .replace("__DETAIL_JS__", ROUTE_DETAIL_JS)
+            .replace("__LEGEND_CSS__", LEGEND_CSS)
+            .replace("__LEGEND_HTML__", LEGEND_HTML)
             .replace("__TITLE__", title)
             .replace("__TILES__", json.dumps(tiles))
             .replace("__ATTR__", json.dumps(attribution))
