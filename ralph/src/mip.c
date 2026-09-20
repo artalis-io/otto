@@ -2485,6 +2485,9 @@ static int generate_node_cuts(MIPSolver *solver, BBNode *node)
         }
     }
     free(applied_cuts);
+    /* Both early-return paths above free the pool; the success path did not,
+     * so every node that generated cuts leaked one. */
+    cut_pool_free(pool);
     solver->time_node_cuts += mip_cpu_time_now() - t_start;
     return applied;
 }
