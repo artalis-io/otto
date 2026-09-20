@@ -125,6 +125,18 @@ test-asan: CFLAGS = $(DEBUG_CFLAGS)
 test-asan: LDFLAGS += $(DEBUG_LDFLAGS)
 test-asan: clean test
 
+# The build half of test-asan: identical flags, no test run.
+#
+# It exists because compiling and testing sometimes need different
+# environments. The Windows MSVC ASan job is the case: cl must be invoked with
+# scripts/msvc-env.sh sourced, so /Fo: and /std:c11 survive as flags, and the
+# suites must be invoked without it, because with MSYS2_ARG_CONV_EXCL='*' set
+# the `curl -o /tmp/...` they use reaches native curl as a path it cannot
+# write. One target that does both cannot satisfy both.
+build-asan: CFLAGS = $(DEBUG_CFLAGS)
+build-asan: LDFLAGS += $(DEBUG_LDFLAGS)
+build-asan: clean all
+
 # Test the API endpoints
 test: $(TARGET)
 	@./test_api.sh
@@ -145,4 +157,4 @@ test-queue: $(TARGET)
 clean:
 	rm -rf $(TARGET) $(SRC_DIR)/*.o $(BUILD_DIR)
 
-.PHONY: all clean run run-port test test-quick test-ratelimit test-queue test-asan FORCE
+.PHONY: all clean run run-port test test-quick test-ratelimit test-queue test-asan FORCE build-asan

@@ -164,8 +164,20 @@ CC_OMP_SIMD :=
 LD_OMP      :=
 
 CC_DEBUG_OPT := /Zi /Od
-CC_SANITIZE  :=
-LD_SANITIZE  :=
+
+# Address only. MSVC has no UndefinedBehaviorSanitizer and no LeakSanitizer,
+# so this is narrower than the GNU line above (address,undefined) and the
+# comparison is not like for like: a UB finding is still Linux-only work.
+# What it does add is the half nobody had -- a heap overflow reachable only
+# through a Windows code path had nothing watching for it, because the
+# sanitizer jobs are all ubuntu-latest.
+#
+# /fsanitize=address goes on the compile and the link; MSVC pulls in its own
+# runtime. /Zi above is what turns the report into source lines rather than
+# addresses. ASan is incompatible with /RTC, /INCREMENTAL and /GL, none of
+# which this toolchain sets.
+CC_SANITIZE  := /fsanitize=address
+LD_SANITIZE  := /fsanitize=address
 
 LD_MATH   :=
 LD_THREAD :=

@@ -45,7 +45,7 @@ HTTPSERVER_OBJ = build/sh_httpserver.o build/sh_httpasync.o
 
 TARGET = velo-route-server
 
-.PHONY: all clean deps run debug build test test-asan FORCE
+.PHONY: all clean deps run debug build test test-asan FORCE build-asan
 
 all: deps $(TARGET)
 
@@ -117,6 +117,18 @@ run: all
 test-asan: CFLAGS = $(DEBUG_CFLAGS)
 test-asan: LDFLAGS += $(DEBUG_LDFLAGS)
 test-asan: clean test
+
+# The build half of test-asan: identical flags, no test run.
+#
+# It exists because compiling and testing sometimes need different
+# environments. The Windows MSVC ASan job is the case: cl must be invoked with
+# scripts/msvc-env.sh sourced, so /Fo: and /std:c11 survive as flags, and the
+# suites must be invoked without it, because with MSYS2_ARG_CONV_EXCL='*' set
+# the `curl -o /tmp/...` they use reaches native curl as a path it cannot
+# write. One target that does both cannot satisfy both.
+build-asan: CFLAGS = $(DEBUG_CFLAGS)
+build-asan: LDFLAGS += $(DEBUG_LDFLAGS)
+build-asan: clean all
 
 # Test the API endpoints (uses --no-landmarks for faster startup)
 # The heavy lifting lives in test_api.sh, which starts its own server, asserts

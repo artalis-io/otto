@@ -47,7 +47,7 @@ KEEL_LIB = $(KEEL_DIR)/libkeel.a
 
 TARGET = ralph-solver-server
 
-.PHONY: all clean deps run debug test build test-asan FORCE
+.PHONY: all clean deps run debug test build test-asan FORCE build-asan
 
 all: deps $(TARGET)
 
@@ -121,6 +121,18 @@ run: all
 test-asan: CFLAGS = $(DEBUG_CFLAGS)
 test-asan: LDFLAGS += $(DEBUG_LDFLAGS)
 test-asan: clean test
+
+# The build half of test-asan: identical flags, no test run.
+#
+# It exists because compiling and testing sometimes need different
+# environments. The Windows MSVC ASan job is the case: cl must be invoked with
+# scripts/msvc-env.sh sourced, so /Fo: and /std:c11 survive as flags, and the
+# suites must be invoked without it, because with MSYS2_ARG_CONV_EXCL='*' set
+# the `curl -o /tmp/...` they use reaches native curl as a path it cannot
+# write. One target that does both cannot satisfy both.
+build-asan: CFLAGS = $(DEBUG_CFLAGS)
+build-asan: LDFLAGS += $(DEBUG_LDFLAGS)
+build-asan: clean all
 
 # Integration test. test_api.sh starts the server itself, picks its own
 # port, and exits non-zero on failure -- so this target actually gates.

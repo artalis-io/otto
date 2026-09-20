@@ -843,6 +843,139 @@ jobs:
   # mingw32-make, not MSYS's make: /usr/bin/make strips TMPDIR/TMP/TEMP from the
   # environment, and cl.exe needs them for its intermediates.
   # ==========================================================================
+  # ==========================================================================
+  # Windows MSVC ASan
+  #
+  # Every sanitizer job in this file is ubuntu-latest, so a memory error
+  # reachable only through a Windows code path had nothing watching for it --
+  # it had to crash a test outright to be noticed. MSVC has supported
+  # /fsanitize=address since 16.9; mk/toolchain.mk now maps CC_SANITIZE to it,
+  # so the existing test-asan targets work under CC=cl unchanged.
+  #
+  # Narrower than the Linux jobs on purpose: MSVC has no UndefinedBehaviour
+  # and no Leak sanitizer, so this is address only and a UB finding stays
+  # Linux-only work.
+  #
+  # shared plus three of the six servers: the servers because they are the
+  # only OTTO code that reads bytes off a socket, and shared because they all
+  # sit on it. The other three are held out by a /Od bug, noted at the step.
+  # ==========================================================================
+  windows-msvc-asan:
+    name: Windows MSVC ASan
+    runs-on: windows-latest
+    timeout-minutes: 90
+
+    defaults:
+      run:
+        shell: msys2 {0}
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Set up MSYS2 (make and coreutils only; the compiler is MSVC)
+        uses: msys2/setup-msys2@v2
+        with:
+          msystem: UCRT64
+          update: false
+          install: >-
+            mingw-w64-ucrt-x86_64-make
+            mingw-w64-ucrt-x86_64-curl
+            mingw-w64-ucrt-x86_64-python
+            jq
+
+      - name: Report the MSVC toolchain
+        run: |
+          source scripts/msvc-env.sh
+          cl 2>&1 | head -2
+
+      - name: Shared under ASan
+        run: |
+          source scripts/msvc-env.sh
+          mingw32-make -C shared CC=cl test-asan
+
+      # The api test-asan targets instrument the server's own sources -- the
+      # socket-facing ones -- and link the module library built normally,
+      # which is the same shape the Linux jobs use. The libraries have to
+      # exist first; on Linux an earlier step in the same job has already
+      # built them.
+      - name: Build the module libraries
+        run: |
+          source scripts/msvc-env.sh
+          for m in shared ralph arbor surge fuelwise velo locus carta; do
+            mingw32-make -C $m CC=cl lib
+          done
+
+      # Mirrors the Fetch Monaco fixtures step in windows-msvc, including its
+      # reason: the .vlg builder is bench_pbf, which is not part of `make velo`
+      # and would otherwise be built by the default compiler -- gcc, which this
+      # runner does not install. Writing this step from scratch rather than
+      # copying that one cost a red run whose failure was a missing compiler.
+      - name: Fetch Monaco fixtures
+        run: |
+          source scripts/msvc-env.sh
+          mingw32-make data/monaco-latest.osm.pbf
+          mingw32-make -C velo bench_pbf CC=cl
+          mingw32-make data/monaco.vlg CC=cl
+
+      # Built and run in separate steps, because the two halves need
+      # opposite environments and `test-asan` does both at once.
+      #
+      # cl needs scripts/msvc-env.sh, which exports MSYS2_ARG_CONV_EXCL='*'
+      # so /Fo: and /std:c11 reach the compiler as flags rather than being
+      # rewritten as paths. But with conversion off, the `curl -o /tmp/...`
+      # these suites use reaches native curl as a literal path it cannot
+      # write -- which is why windows-suites-msvc deliberately does not
+      # source it. Sourcing it for the whole of test-asan cost a red run:
+      # carta reported 18/19 with `PNG tile has a PNG signature` failing,
+      # not because the PNG was wrong but because curl never wrote the file.
+      #
+      # `build-asan` is the build half of `test-asan` -- same DEBUG_CFLAGS,
+      # same DEBUG_LDFLAGS, no test run. Three of the six api Makefiles had a
+      # `debug` target and three did not, so the job now calls one name that
+      # all six define.
+      # Three of the six, not all six. ralph, surge and fuelwise return
+      # {"status":"error","iterations":0} from an unoptimised MSVC build --
+      # with ASan and equally without it, so this is not a sanitizer finding
+      # but a /Od finding that enabling the sanitizer exposed. CC_DEBUG_OPT is
+      # /Zi /Od for cl, nothing had ever built those servers that way, and the
+      # three that break are exactly the three backed by a solver.
+      #
+      # Recorded rather than papered over: see docs/KNOWN_ISSUES.md. When it is
+      # fixed, add them back to both lists below -- there is nothing else
+      # holding them out.
+      - name: Build the servers with ASan
+        run: |
+          source scripts/msvc-env.sh
+          for m in velo locus carta; do
+            mingw32-make -C $m/api CC=cl build-asan
+          done
+
+      # No msvc-env here, for the reason above. Nothing compiles: the
+      # binaries exist. Four suites run from the repo root and two from
+      # their own directory; that split is the scripts' own convention.
+      #
+      # Each script greps the server log and fails on anything a sanitizer
+      # printed, so an ASan report on the server's stderr fails the suite
+      # rather than passing unnoticed.
+      - name: Run the API suites under ASan
+        run: |
+          # msvc-env is sourced for PATH alone: the instrumented binaries link
+          # clang_rt.asan_dynamic-x86_64.dll, which lives in the MSVC toolchain
+          # directory and is otherwise not found -- the servers exit at startup
+          # with "error while loading shared libraries".
+          #
+          # Then the two variables that suppress MSYS path conversion are
+          # unset, because with them set the `curl -o /tmp/...` these suites
+          # use reaches native curl as a path it cannot write. The compiler
+          # needs them; curl must not have them.
+          source scripts/msvc-env.sh
+          unset MSYS_NO_PATHCONV MSYS2_ARG_CONV_EXCL
+          bash velo/api/test_api.sh
+          bash carta/api/test_api.sh
+          bash locus/api/test_api.sh
   windows-msvc:
     name: Windows MSVC
     runs-on: windows-latest
