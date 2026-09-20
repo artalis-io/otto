@@ -193,6 +193,34 @@ different ones. It covers every variant, not just the sanitizer: release to
 debug, and GCC to MSVC, which previously needed a manual `make clean` that
 `CLAUDE.md` told the reader to remember. The explicit `clean` this job briefly
 carried has been removed, which is what demonstrates the stamp works.
+### Ralph's solver core leaks ~750 KB on the lazy-constraint path
+
+`make -C ralph test-asan` (added alongside this entry) builds the solver
+core under the sanitizers. On Linux, where LeakSanitizer runs, it reports:
+
+```
+SUMMARY: AddressSanitizer: 754436 byte(s) leaked in 327 allocation(s).
+  #9  ralph_optimize_with_mode  src/ralph.c:2809
+  #13 test_lazy_constraints     tests/test_main.c:2812
+```
+
+Almost all of it is *indirect*: the allocation sites are `lu_create`,
+`ensure_basis_workspace`, `apply_scaling` and `build_basis_matrix`, reached
+through `lp_backend_run` -> `simplex_solve`. That shape says a root solver
+or factorisation object is not freed on a re-solve, and everything it owns
+goes with it. The lazy-constraint path re-solves in a loop, which is why it
+surfaces there.
+
+Found by adding sanitizer coverage for the core, which never had any -- the
+CI matrix ran Ralph *Transport* and not the 80,000 lines underneath it.
+Not visible on Windows: LeakSanitizer is Linux-only, and the same suite is
+clean under MSVC ASan.
+
+**The `Sanitize Ralph Core` CI job is deliberately not wired up yet.** It
+would be red. Turning leak detection off to make it green would hide this
+and break parity with the Shared, Arbor and Ralph Transport jobs, which all
+run with leak detection on and pass. Wire it up in the same change that
+fixes the leaks -- it is one matrix entry.
 ## Numerical Issues
 
 ### Artificial Variable Residuals
