@@ -88,6 +88,12 @@ ALL_OBJS = $(OBJS) $(MINIZ_OBJS)
 # linker's search path with this filename and nothing would link.
 LIB_FILE = libshared.a
 
+# Discard objects built with different flags. See mk/flagstamp.mk -- this
+# is the guard for `test-asan` leaving an ASan libshared.a that a later
+# `make lib` calls current.
+DEBUG_GOALS = debug test-asan
+include ../mk/flagstamp.mk
+
 # Test binaries
 TEST_BIN = test_shared
 TEST_FONT_BIN = test_font
@@ -345,6 +351,7 @@ FUZZ_WORK ?= build/fuzz-corpus
 
 # Clean
 clean:
+	rm -f $(BUILD_STAMP)
 	rm -f $(OBJS) $(MINIZ_OBJS) $(LIB_FILE) $(TEST_BIN) $(TEST_FONT_BIN) $(TEST_JSON_BIN) $(TEST_XML_BIN) $(TEST_CSV_BIN) $(TEST_GEOJSON_BIN) $(TEST_FS_BIN) $(TEST_SHA256_BIN) $(TEST_EOV_BIN) $(TEST_PROTOBUF_BIN) $(TEST_INFLATE_BIN) $(FONT_COMPARE_BIN) $(FUZZ_LIB) fuzz_inflate fuzz_protobuf fuzz_pdf2struc fuzz_json
 	@rm -f *.obj *.pdb *.ilk *.exp 2>/dev/null || true
 	rm -f $(PDF2STRUC_OBJS) $(PDF2STRUC_LIB) $(TEST_PDF2STRUC_BIN)

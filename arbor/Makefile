@@ -26,6 +26,14 @@ OBJS = $(SRCS:.c=.o)
 # Not LIB: that is MSVC's library search path, and make re-exports any
 # variable that also exists in the environment. See mk/toolchain.mk.
 LIB_FILE = libarbor.a
+
+# Discard objects built with different flags -- a sanitizer or debug
+# build must not be left behind for a release build to reuse. See
+# mk/flagstamp.mk for what that cost before it existed.
+DEBUG_GOALS = debug test-asan
+STAMP_ARTIFACTS = $(OBJS) $(LIB_FILE)
+include ../mk/flagstamp.mk
+
 TEST_BIN = test_arbor
 TEST_OP_BIN = test_ar_operators
 
@@ -65,6 +73,7 @@ debug: LDFLAGS = -lm $(DEBUG_LDFLAGS)
 debug: clean all
 
 clean:
+	rm -f $(BUILD_STAMP)
 	rm -f $(OBJS) $(LIB_FILE) $(TEST_BIN) $(TEST_OP_BIN)
 
 help:

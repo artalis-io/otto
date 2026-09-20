@@ -295,8 +295,11 @@ void *p = calloc(count, element_size);  /* Or use calloc */
    a self-test that quietly does not run is worse than one that is absent.
 9. **Windows**: Use `mingw32-make`, never `make` -- MSYS's make strips
    `TMPDIR` and the build dies trying to write to `C:\WINDOWS`. And run
-   `make clean` when switching between GCC and MSVC: the object and archive
-   formats differ, and a mixed tree fails at link with undefined symbols.
+   switching between GCC and MSVC no longer needs a manual `make clean`:
+   mk/flagstamp.mk records what each module was compiled with and discards
+   objects built with different flags. Before it existed, a mixed tree failed
+   at link with undefined symbols such as `__stack_chk_fail`, and the reader
+   was expected to remember.
 
 ## Build Commands
 

@@ -60,6 +60,15 @@ OBJECTS = $(SOURCES:.c=.o)
 # Library
 LIB_NAME = libfuelwise.a
 
+# Discard objects built with different flags -- a sanitizer or debug
+# build must not be left behind for a release build to reuse. See
+# mk/flagstamp.mk for what that cost before it existed.
+DEBUG_GOALS = debug
+STAMP_ARTIFACTS = $(OBJECTS) $(LIB_NAME)
+DEBUG_CFLAGS = $(CFLAGS_DEBUG)
+include ../mk/flagstamp.mk
+
+
 # Ralph library
 RALPH_LIB = $(RALPH_DIR)/libralph.a
 
@@ -181,6 +190,7 @@ fuzz-api-smoke: fuzz-api
 		-max_total_time=$(FUZZ_SMOKE_SECONDS) -print_final_stats=1
 
 clean:
+	rm -f $(BUILD_STAMP)
 	rm -f $(OBJECTS) $(LIB_NAME) $(TEST_EXEC) $(TRANSPORT_TEST_EXEC)
 	$(MAKE) -C bench clean
 	rm -f $(FUZZ_API_BIN) $(FUZZ_API_BIN).exe

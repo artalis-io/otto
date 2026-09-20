@@ -216,6 +216,10 @@ carta/build/
 nexus/build/
 surge/build/
 
+# The build-flag stamp (mk/flagstamp.mk). Records what a module was last
+# compiled with, so a sanitizer or cross-compiler build is not left behind
+# for a release build to reuse.
+*/.build-flags
 # libFuzzer scratch corpora for the *_api_handle() harnesses
 ralph/build/
 fuelwise/build/

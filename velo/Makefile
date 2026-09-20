@@ -84,6 +84,14 @@ ALL_OBJS = $(CORE_OBJS) $(MINIZ_OBJS)
 # that also exists in the environment. See mk/toolchain.mk.
 LIB_FILE = libvelo.a
 
+# Discard objects built with different flags -- a sanitizer or debug
+# build must not be left behind for a release build to reuse. See
+# mk/flagstamp.mk for what that cost before it existed.
+DEBUG_GOALS = debug
+STAMP_ARTIFACTS = $(CORE_OBJS) $(LIB_FILE)
+include ../mk/flagstamp.mk
+
+
 # Test binary
 TEST_BIN = test_velo
 TEST_TRANSPORT_BIN = test_transport_direct
@@ -250,6 +258,7 @@ fuzz-smoke: fuzz-api-smoke
 
 # Clean
 clean:
+	rm -f $(BUILD_STAMP)
 	rm -f $(CORE_OBJS) $(LIB_FILE) $(OMP_STAMP)
 	rm -f $(TEST_BIN) $(TEST_TRANSPORT_BIN) $(TEST_OSRM) $(BENCH_ROUTING) $(BENCH_PBF) $(ROUTE_BENCH) $(ROUTE_BATCH_BIN) $(MATRIX_BUILD_BIN)
 	rm -f $(WASM_OUT) velo.wasm
