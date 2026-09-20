@@ -632,6 +632,91 @@ typedef struct {
     int iterations;
 } SolveResult;
 
+/* ============================================================================
+ * Root LP bound
+ *
+ * The same model with every variable continuous, solved once. That is the
+ * bound branch and bound starts from, before any cut or any branching, and
+ * comparing it against the proven optimum separates the two reasons a tree
+ * gets big:
+ *
+ *   - a weak bound, where the relaxation is far from the optimum and the
+ *     search has to close the distance by enumeration;
+ *   - a slow primal, where the bound is tight but no incumbent arrives to
+ *     prune against.
+ *
+ * They call for opposite work -- cuts and better bounding for the first,
+ * heuristics and better branching for the second -- so guessing between them
+ * is expensive. The knapsack family is where Ralph is furthest behind GLPK,
+ * and this is the number that says which kind of problem it is.
+ * ============================================================================ */
+
+static double root_lp_bound(MIPProblem *prob) {
+    RalphModel *model = ralph_test_create();
+    int *row_start, *row_idx, *row_pos;
+    double *row_val;
+    double bound;
+    int i, j, k;
+
+    if (!model) return NAN;
+
+    ralph_test_set_int_param(model, "verbose", 0);
+    ralph_test_set_obj_sense(model, prob->sense);
+
+    /* 'C' throughout: this is the relaxation, not the problem. */
+    for (j = 0; j < prob->num_vars; j++) {
+        ralph_test_add_var(model, prob->lb[j], prob->ub[j], prob->obj[j], 'C');
+    }
+
+    row_start = (int *)calloc(prob->num_cons + 1, sizeof(int));
+    for (k = 0; k < prob->nnz; k++) row_start[prob->con_row[k] + 1]++;
+    for (i = 0; i < prob->num_cons; i++) row_start[i + 1] += row_start[i];
+
+    row_idx = (int *)malloc(prob->nnz * sizeof(int));
+    row_val = (double *)malloc(prob->nnz * sizeof(double));
+    row_pos = (int *)malloc(prob->num_cons * sizeof(int));
+    memcpy(row_pos, row_start, prob->num_cons * sizeof(int));
+
+    for (k = 0; k < prob->nnz; k++) {
+        int r = prob->con_row[k];
+        int pos = row_pos[r]++;
+        row_idx[pos] = prob->con_col[k];
+        row_val[pos] = prob->con_val[k];
+    }
+    for (i = 0; i < prob->num_cons; i++) {
+        ralph_test_add_constraint(model, row_start[i + 1] - row_start[i],
+                                  &row_idx[row_start[i]], &row_val[row_start[i]],
+                                  prob->sense_con[i], prob->rhs[i]);
+    }
+
+    free(row_start); free(row_idx); free(row_val); free(row_pos);
+
+    ralph_test_optimize(model);
+    bound = (ralph_test_get_status(model) == RALPH_STATUS_OPTIMAL)
+          ? ralph_test_get_objval(model) : NAN;
+    ralph_test_free(model);
+    return bound;
+}
+
+/* How far the root relaxation sits from the proven optimum, as a percentage
+ * of the optimum. Guarded against a zero optimum, which would otherwise print
+ * an infinity and say nothing. */
+static void print_root_gap(MIPProblem *prob, double optimum, int solved)
+{
+    double bound = root_lp_bound(prob);
+
+    if (!solved || bound != bound) {          /* NaN */
+        printf("  Root LP bound: n/a\n");
+        return;
+    }
+    if (fabs(optimum) < 1e-9) {
+        printf("  Root LP bound: %.2f (optimum %.2f)\n", bound, optimum);
+        return;
+    }
+    printf("  Root LP bound: %.2f vs optimum %.2f -- gap %.2f%%\n",
+           bound, optimum, 100.0 * fabs(optimum - bound) / fabs(optimum));
+}
+
 static SolveResult solve_with_ralph(MIPProblem *prob, double time_limit, int use_specialized) {
     SolveResult result = {0};
     const char *stats_env = getenv("RALPH_MIP_STATS");
@@ -989,6 +1074,9 @@ static void run_mip_benchmark(MIPProblem *prob, double time_limit, BenchMode mod
             } else {
                 printf("  Objectives match (OK)\n");
             }
+
+            /* Which kind of problem this instance is: see root_lp_bound(). */
+            print_root_gap(prob, ralph_res.objective, ralph_res.status == 0);
             if (ralph_res.solve_time > 0 && glpk_res.solve_time > 0) {
                 double ratio = ralph_res.solve_time / glpk_res.solve_time;
                 if (ratio > 1.0) {
