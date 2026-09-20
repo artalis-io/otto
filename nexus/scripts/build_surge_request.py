@@ -176,8 +176,9 @@ def assemble_request(orows, oidx, dflat, uflat, N, vrows, a):
             "service_seconds": int(to_num(r[oidx["service_min"]]) * 60) if "service_min" in oidx else 0,
             "demand": [to_num(r[oidx[c]]) if c in oidx else 0.0 for c in demand_cols],
         }
-        if a.task_ref_col in oidx and str(r[oidx[a.task_ref_col]]).strip():
-            task["ref"] = str(r[oidx[a.task_ref_col]]).strip()   # human order id for the map/plan
+        task_ref_col = getattr(a, "task_ref_col", "order_no")
+        if task_ref_col in oidx and str(r[oidx[task_ref_col]]).strip():
+            task["ref"] = str(r[oidx[task_ref_col]]).strip()   # human order id for the map/plan
         tasks.append(task)
         requests.append({"id": tid, "delivery_task_id": tid,
                          "unassigned_penalty": a.unassigned_penalty})
