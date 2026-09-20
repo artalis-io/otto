@@ -1377,7 +1377,18 @@ int benders_solve_classic(BendersContext *ctx) {
             final_status = RALPH_STATUS_ERROR;
             goto done;
         }
-        ctx->num_cuts = 0; /* Clear applied cuts */
+        /* Clear applied cuts. benders_apply_cuts_to_master has copied each cut
+         * into the master model, so the staging arrays are dead here -- but
+         * resetting the counter alone left them unreachable, and only the cuts
+         * still staged when the context is destroyed were ever freed. Every
+         * round of every Benders solve leaked the ones it had just applied. */
+        for (int c = 0; c < ctx->num_cuts; c++) {
+            free(ctx->cuts[c].master_var_indices);
+            ctx->cuts[c].master_var_indices = NULL;
+            free(ctx->cuts[c].coeffs);
+            ctx->cuts[c].coeffs = NULL;
+        }
+        ctx->num_cuts = 0;
 
         if (ctx->config.verbose >= 2) {
             printf("  Master model after adding cuts: %d vars, %d cons\n",
