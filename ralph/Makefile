@@ -81,6 +81,9 @@ SOURCES = $(SRC_DIR)/sparse.c \
           $(SRC_DIR)/lp_reader.c \
           $(SRC_DIR)/lp_writer.c \
           $(SRC_DIR)/ralph.c \
+          $(SRC_DIR)/ralph_params.c \
+          $(SRC_DIR)/ralph_basis_io.c \
+          $(SRC_DIR)/tuning_policy.c \
           $(SRC_DIR)/ralph_test_mod_api.c \
           $(SRC_DIR)/ralph_lp_public.c \
           $(SRC_DIR)/ralph_mip_public.c \
