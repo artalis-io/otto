@@ -1294,7 +1294,16 @@ jobs:
 
     env:
       # A race that only prints is a race nobody acts on.
-      TSAN_OPTIONS: halt_on_error=1:second_deadlock_stack=1
+      #
+      # ignore_noninstrumented_modules drops reports whose frames lie entirely
+      # inside a library built without instrumentation. Archer supplies the
+      # happens-before for our own OpenMP regions, but libomp still does its
+      # internal locking uninstrumented, and that surfaced as a race between
+      # pthread_mutex_init and pthread_mutex_lock with no frame of ours in it.
+      # This is narrower than a suppressions file: our code stays instrumented
+      # and a real race in it still reports. It does mean a race inside
+      # libshared, which is linked prebuilt, would not be seen here.
+      TSAN_OPTIONS: halt_on_error=1:second_deadlock_stack=1:ignore_noninstrumented_modules=1
 
     steps:
       - name: Checkout code
