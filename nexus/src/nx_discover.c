@@ -559,7 +559,16 @@ NxDiscoverStatus nx_discover_schema(const char *raw_json, size_t raw_len,
         for (size_t j = 0; j < c; j++) {
             if (strcmp(targets[c], targets[j]) == 0) {
                 char tmp[64];
-                snprintf(tmp, sizeof(tmp), "%s_%zu", targets[c], c);
+                /* Truncate the stem, never the suffix. "%s_%zu" into a
+                 * buffer the same size as the stem can drop the _N when
+                 * the header is long, and the deduplicated name then
+                 * collides again with the one it was renamed away from.
+                 * Bounding the stem explicitly also settles the
+                 * -Wformat-truncation that nexus builds with -Werror. */
+                int suffix = snprintf(NULL, 0, "_%zu", c);
+                int stem = (int)sizeof(tmp) - 1 - suffix;
+                if (stem < 0) stem = 0;
+                snprintf(tmp, sizeof(tmp), "%.*s_%zu", stem, targets[c], c);
                 snprintf(targets[c], sizeof(targets[c]), "%s", tmp);
                 break;
             }

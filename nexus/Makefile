@@ -76,7 +76,16 @@ TRE_OBJS = $(TRE_SRCS:.c=.o)
 LINK_LIBS = $(call link_lib,.,nexus) $(MINIZ_ZIP_OBJ) $(call link_lib,../shared,shared) $(LDFLAGS)
 LINK_LIBS_PDF = $(call link_lib,.,nexus) $(MINIZ_ZIP_OBJ) $(call link_lib,../shared,sh_pdf2struc) $(call link_lib,../shared,shared) $(LDFLAGS)
 
-.PHONY: all clean test lib debug tools fuzz fuzz-lib fuzz-xlsx fuzz-pdf fuzz-csv fuzz-smoke help
+# Run the suite under AddressSanitizer + UBSan. Same flags as `debug`, but
+# it runs the tests instead of only building them.
+#
+# nexus had no sanitizer target, so all eleven of its suites ran
+# uninstrumented everywhere. `test` already reaches all of them.
+test-asan: CFLAGS = $(DEBUG_CFLAGS)
+test-asan: LDFLAGS += $(DEBUG_LDFLAGS)
+test-asan: clean test
+
+.PHONY: all clean test lib debug tools fuzz fuzz-lib fuzz-xlsx fuzz-pdf fuzz-csv fuzz-smoke help test-asan
 
 all: lib $(TEST_REGEX_BIN) $(TEST_INGEST_BIN) $(TEST_XFORM_BIN) $(TEST_VALIDATE_BIN) $(TEST_DISCOVER_BIN) $(TEST_MERGE_BIN) $(TEST_EMIT_BIN) $(TEST_ISSUE_BIN) $(TEST_DIFF_BIN) $(TEST_PIPELINE_BIN) $(TEST_VERIFY_BIN)
 

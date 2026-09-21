@@ -273,7 +273,10 @@ test-pal: $(TEST_PAL_BIN)
 
 test-asan: CFLAGS = $(DEBUG_CFLAGS)
 test-asan: LDFLAGS += $(DEBUG_LDFLAGS)
-test-asan: clean test
+# test-pal is named separately because it is not part of `test`: it is the
+# only shared suite with its own target, and so was the only one never
+# sanitized.
+test-asan: clean test test-pal
 
 debug: CFLAGS = $(DEBUG_CFLAGS)
 debug: LDFLAGS += $(DEBUG_LDFLAGS)
