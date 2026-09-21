@@ -2350,6 +2350,12 @@ ARStatus sg_route_postprocess_ejection_reduce(const SGContext *ctx, SGRouteSolut
             }
             }
 
+            /* Done with the snapshot. Freed here rather than after the decision
+             * below, because that block can break out of the vehicle loop on
+             * SG_EJECTION_MAX_CONSECUTIVE_FAILS and skip the free entirely. */
+            free(requests);
+            requests = NULL;
+
             if (all_placed && sol->route_lengths[target_v] == 0 &&
                 sg_route_solution_cost(sol, (void *)ctx) < before_cost - 1e-9) {
                 /* Vehicle eliminated. */
@@ -2362,7 +2368,6 @@ ARStatus sg_route_postprocess_ejection_reduce(const SGContext *ctx, SGRouteSolut
                 if (consecutive_fails >= SG_EJECTION_MAX_CONSECUTIVE_FAILS) break;
             }
 
-            free(requests);
         }
         }
 
@@ -2679,7 +2684,17 @@ int sg_route_try_pd_relocate_intra_once(const SGContext *ctx, SGRouteSolution *s
         route = sg_route_vehicle_ptr_const(sol, v);
 
         for (ri = 0; ri < route_len && !improved; ri++) {
-            uint32_t req = route[ri];
+            uint32_t req;
+
+            /* Re-acquire the route pointer every iteration.
+             * sg_route_restore_from_backup below does `*sol = *backup`, which
+             * replaces the solution arena wholesale, so a pointer taken before
+             * a rejected move dangles on the next iteration. `stops` was already
+             * re-fetched per iteration; `route` was hoisted out of the loop and
+             * was not. The restore reverts to a copy taken before the move, so
+             * route_len itself is unchanged -- only the storage moves. */
+            route = sg_route_vehicle_ptr_const(sol, v);
+            req = route[ri];
             uint32_t pp, dp;
             SGRouteStop pickup_stop, delivery_stop;
             uint32_t reduced_len;

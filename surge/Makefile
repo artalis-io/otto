@@ -88,12 +88,23 @@ TSAN_CFLAGS = -Wall -Wextra -g -O1 -std=c11 -D_GNU_SOURCE -DSG_HAS_THREADS -DDEB
               -fsanitize=thread -fno-omit-frame-pointer
 TSAN_LDFLAGS = -fsanitize=thread
 
+# Run the suite under AddressSanitizer + UBSan. Same flags as `debug`, but it
+# runs the tests instead of only building them.
+#
+# This module had no sanitizer target at all. Its api server has one, but that
+# instruments main.c and the HTTP helpers only -- the module is linked already
+# built, so its interior was never sanitized by anything. The same gap hid five
+# leaks in Ralph's solver core.
+test-asan: CFLAGS = $(DEBUG_CFLAGS)
+test-asan: LDFLAGS += $(DEBUG_LDFLAGS)
+test-asan: clean test
+
 .PHONY: all clean test test-transport scripts-test tools lib debug bench bench-li-lim bench-cordeau \
         bench-quick bench-li-lim-quick bench-cordeau-quick bench-all-quick \
         bench-gh-200 bench-gh-all bench-ll-200 bench-ll-all bench-full \
         bench-tune tune-quick tune-all \
         bench-download bench-validate \
-        shared-lib python-test node-test cppcheck fuzz tsan fuzz-smoke cppcheck-all help fuzz-api fuzz-api-smoke
+        shared-lib python-test node-test cppcheck fuzz tsan fuzz-smoke cppcheck-all help fuzz-api fuzz-api-smoke test-asan
 
 all: lib $(TEST_BIN)
 

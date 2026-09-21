@@ -211,7 +211,23 @@ uninstall:
 	rm -rf /usr/local/include/fuelwise
 	rm -f /usr/local/lib/$(LIB_NAME)
 
-.PHONY: all lib clean clean-all debug test test-regression test-unit test-bench test-transport wasm install uninstall ralph shared help fuzz-api fuzz-api-smoke fuzz-smoke
+# Run the suite under AddressSanitizer + UBSan. Same flags as `debug`, but it
+# runs the tests instead of only building them.
+#
+# This module had no sanitizer target at all. Its api server has one, but that
+# instruments main.c and the HTTP helpers only -- the module is linked already
+# built, so its interior was never sanitized by anything. The same gap hid five
+# leaks in Ralph's solver core.
+test-asan: CFLAGS = $(DEBUG_CFLAGS)
+test-asan: LDFLAGS += $(DEBUG_LDFLAGS)
+# test-bench is deliberately not included. It shells into bench/, which has its
+# own Makefile and so does not inherit these flags: libfuelwise compiled with
+# ASan then fails to link there on undefined __asan_*/__ubsan_* symbols. It also
+# needs glpsol. What is covered here is the module's own suites -- the unit and
+# transport binaries -- which is the same scope the other modules' targets have.
+test-asan: clean test-transport test-unit
+
+.PHONY: all lib clean clean-all debug test test-regression test-unit test-bench test-transport wasm install uninstall ralph shared help fuzz-api fuzz-api-smoke fuzz-smoke test-asan
 
 # Build WASM (delegates to wasm/ subdirectory)
 wasm:
