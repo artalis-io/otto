@@ -1842,6 +1842,49 @@ unload order matters. Without these it cannot be modeled.
 
 ---
 
+## Solver-quality catch-up: closing the HGS benchmark gap
+
+**Why.** On an internal real-world distribution instance (~263 stops, 2-D
+capacity, hard time windows, 13 h on-duty, multi-trip), Surge was benchmarked
+head-to-head against PyVRP (the open-source HGS solver from the DIMACS-winning
+lineage) on the exact same matrix, fleet, constraints, and lexicographic
+objective (vehicles, then distance). PyVRP reached **21 vehicles / ~7,590 km**;
+Surge's frozen best was **25 vehicles / ~8,140 km**, i.e. about **4 more vehicles
+and ~7% more distance**. The comparison is apples-to-apples (both plans
+independently re-validated), so this is genuine solver quality, not modelling.
+That is the gap to close.
+
+**Target.** Within **3% distance and +/-1 vehicle of PyVRP** on that saved
+instance, plus no regression on the Solomon / Li & Lim suites. Tracked by a
+benchmark harness that re-runs both and diffs (the PyVRP baseline is
+reproducible; see the dataset's `run_pyvrp_baseline.py`).
+
+**Levers, roughly in order of expected payoff:**
+
+1. **Iteration budget / convergence (tuning).** The frozen best was a
+   wall-clock-bounded run that reached only ~35k iterations (under-converged).
+   Make comparison runs iteration-bounded, profile the convergence curve, and
+   re-tune ALNS operator weights, the acceptance criterion, and penalty weights.
+   Expected to recover part of the gap on its own (~23-24 veh).
+2. **Population + crossover (algorithmic).** Mature the population mode
+   (Phase S13-S17) toward HGS: biased-fitness parent selection and **SREX**
+   (Selective Route Exchange) crossover, which is central to why HGS/PyVRP wins.
+3. **Vehicle-minimization operators (algorithmic).** The 25 -> 21 gap is mostly
+   a min-vehicle problem: add stronger route-elimination / empty-vehicle and
+   vehicle-target operators so the lexicographic first objective is pushed harder.
+4. **Education / local search intensity.** Apply a stronger intra/inter-route
+   local search (relocate, swap, 2-opt*, or-opt) as HGS-style "education" on
+   offspring, not only inside repair.
+5. **Penalty management.** Extend the adaptive infeasible-space penalty
+   (Phase S12) so tight-window instances converge without stalling.
+
+**Sequencing.** Lever 1 is tuning (days); levers 2-4 are real engineering (weeks
+to months). Mature VRP solvers on the same instance typically differ by only a
+few percent, so the target is reachable, but it needs the algorithmic work, not
+tuning alone.
+
+---
+
 ## Solver Profiles
 
 Three built-in iteration profiles for different use cases. The API default is 1000 (batch).
