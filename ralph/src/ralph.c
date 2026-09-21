@@ -1876,6 +1876,14 @@ static int ralph_optimize_with_mode(RalphModel *model, RalphSolveMode mode) {
 
     if (solve_as_mip) {
         /* MIP solve - LAP and network problems were already handled above before presolve */
+        /* A re-solve replaces the solver. Release the previous one first:
+         * assigning over the handle would orphan it and everything it owns
+         * (LU factorisation, basis workspace, scaling), which is where the
+         * ~754 KB reported in KNOWN_ISSUES.md went. Freeing here rather than
+         * at the end of the previous solve keeps the solver readable between
+         * optimize() calls, which the ray and tableau getters rely on. */
+        mip_free(model->mip_solver);
+        model->mip_solver = NULL;
         model->mip_solver = mip_create(solve_model, model->detect_special, model->node_pool_capacity);
         if (!model->mip_solver) {
             if (presolved) presolve_free(presolved);
@@ -2072,6 +2080,9 @@ static int ralph_optimize_with_mode(RalphModel *model, RalphSolveMode mode) {
         if (lp_smcp_tol_bnd > 0.0) solve_model->feas_tol = lp_smcp_tol_bnd;
         if (lp_smcp_tol_dj > 0.0) solve_model->opt_tol = lp_smcp_tol_dj;
         if (lp_smcp_tol_piv > 0.0) solve_model->pivot_tol = lp_smcp_tol_piv;
+        /* Same contract as the MIP handle above: release before replacing. */
+        simplex_free(model->lp_solver);
+        model->lp_solver = NULL;
         model->lp_solver = simplex_create(solve_model);
         if (!model->lp_solver) {
             if (presolved) presolve_free(presolved);
@@ -4234,7 +4245,12 @@ int ralph_core_add_lazy_constraint(RalphModel *model, const RalphCut *cut) {
     mip_free(model->mip_solver);
     model->mip_solver = NULL;
 
-    /* Keep LP solver for potential warm start, but invalidate cached solution */
+    /* Invalidate the cached LP result so a stale status cannot be read back
+     * before the re-solve. The solver object itself is not reused: the next
+     * optimize() builds a fresh one (see simplex_create above), so despite
+     * what this comment used to claim there is no warm start on this path.
+     * Holding the object here bought nothing and leaked it; it is now freed
+     * at the point of replacement. */
     if (model->lp_solver) {
         model->lp_solver->status = RALPH_STATUS_UNKNOWN;
     }

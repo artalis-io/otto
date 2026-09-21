@@ -1187,6 +1187,14 @@ jobs:
           - name: Ralph Transport
             target: test-transport-asan
             dir: ralph
+          # The solver core itself. This entry was written when test-asan was
+          # added but left unwired, because the core leaked ~754 KB on any
+          # re-solve and the job could only have failed. That leak is fixed
+          # (the LP and MIP solver handles were assigned over without being
+          # released), so the job now gates the thing it was written for.
+          - name: Ralph Core
+            target: test-asan
+            dir: ralph
           - name: Arbor
             target: test-asan
             dir: arbor

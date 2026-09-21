@@ -35,7 +35,14 @@ int apply_scaling(SimplexSolver *solver) {
     int geo_rounds = solver->scaling;    /* N geometric mean rounds */
     int eq_rounds = (geo_rounds > 1) ? 20 : 0;  /* equilibrium only for multi-round */
 
-    /* Allocate scaling factors */
+    /* Allocate scaling factors. Release any from a previous solve on this
+     * solver first: assigning over them orphaned the old pair, which Benders
+     * hits on every subproblem re-solve. */
+    free(solver->row_scale);
+    free(solver->col_scale);
+    solver->row_scale = NULL;
+    solver->col_scale = NULL;
+
     solver->row_scale = (double*)calloc(m, sizeof(double));
     solver->col_scale = (double*)calloc(n, sizeof(double));
     if (!solver->row_scale || !solver->col_scale) {

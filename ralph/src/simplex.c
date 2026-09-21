@@ -4073,6 +4073,17 @@ static int lp_augment_row_normalize(const LPAugmentRow *row,
     return 0;
 }
 
+/* memcpy is undefined if either pointer is null, even when the count is zero,
+ * and several tableau arrays are legitimately null at zero count --
+ * artificial_vars is assigned NULL outright when num_artificial == 0. The
+ * copy is harmless; making the call is not. UBSan reports it as "null pointer
+ * passed as argument 2, which is declared to never be null", which is what
+ * turned the Sanitize Ralph Core job red the first time it ran. */
+static void tableau_copy_n(void *dst, const void *src, size_t nbytes)
+{
+    if (nbytes && dst && src) memcpy(dst, src, nbytes);
+}
+
 static SimplexTableau *tableau_clone_with_augmented_rows(SimplexSolver *solver,
                                                          const LPAugmentRow *rows,
                                                          int num_rows,
@@ -4132,18 +4143,18 @@ static SimplexTableau *tableau_clone_with_augmented_rows(SimplexSolver *solver,
         return NULL;
     }
 
-    memcpy(dst->lb_ext, src->lb_ext, (size_t)src->n * sizeof(double));
-    memcpy(dst->ub_ext, src->ub_ext, (size_t)src->n * sizeof(double));
-    memcpy(dst->free_split_col, src->free_split_col, (size_t)src->n * sizeof(int));
-    memcpy(dst->free_split_orig, src->free_split_orig, (size_t)src->n * sizeof(int));
-    memcpy(dst->c_original, src->c_original, (size_t)src->n * sizeof(double));
-    memcpy(dst->rhs, src->rhs, (size_t)src->m * sizeof(double));
-    memcpy(dst->row_sign, src->row_sign, (size_t)src->m * sizeof(double));
-    memcpy(dst->aux_row, src->aux_row, (size_t)src->num_aux * sizeof(int));
-    memcpy(dst->aux_coef, src->aux_coef, (size_t)src->num_aux * sizeof(double));
-    memcpy(dst->artificial_vars, src->artificial_vars,
+    tableau_copy_n(dst->lb_ext, src->lb_ext, (size_t)src->n * sizeof(double));
+    tableau_copy_n(dst->ub_ext, src->ub_ext, (size_t)src->n * sizeof(double));
+    tableau_copy_n(dst->free_split_col, src->free_split_col, (size_t)src->n * sizeof(int));
+    tableau_copy_n(dst->free_split_orig, src->free_split_orig, (size_t)src->n * sizeof(int));
+    tableau_copy_n(dst->c_original, src->c_original, (size_t)src->n * sizeof(double));
+    tableau_copy_n(dst->rhs, src->rhs, (size_t)src->m * sizeof(double));
+    tableau_copy_n(dst->row_sign, src->row_sign, (size_t)src->m * sizeof(double));
+    tableau_copy_n(dst->aux_row, src->aux_row, (size_t)src->num_aux * sizeof(int));
+    tableau_copy_n(dst->aux_coef, src->aux_coef, (size_t)src->num_aux * sizeof(double));
+    tableau_copy_n(dst->artificial_vars, src->artificial_vars,
            (size_t)src->num_artificial * sizeof(int));
-    memcpy(dst->redundant_rows, src->redundant_rows, (size_t)src->m * sizeof(int));
+    tableau_copy_n(dst->redundant_rows, src->redundant_rows, (size_t)src->m * sizeof(int));
     dst->num_redundant = src->num_redundant;
     dst->redundant_rows_zeroed = src->redundant_rows_zeroed;
     dst->perturb_scale = src->perturb_scale;
@@ -4363,6 +4374,16 @@ static int setup_primal_tableau(SimplexSolver *solver, int allow_crash) {
     if (!solver) return -1;
 
     if (solver->verbose) LP_LOG_STDOUT("[simplex_solve] Creating tableau...\n");
+
+    /* Release whatever is already on the solver. This was the one assignment
+     * to solver->tableau that did not, so a second simplex_solve() on the same
+     * solver -- or simplex_prepare_primal_tableau() after a solve, which comes
+     * straight here -- orphaned the first tableau and everything it owned. One
+     * caller in simplex_solve already frees before calling; that is now
+     * redundant rather than load-bearing. */
+    tableau_free(solver->tableau);
+    solver->tableau = NULL;
+
     solver->tableau = tableau_create_ex(solver->model, solver->force_two_phase, 0);
     if (!solver->tableau) {
         solver->status = RALPH_STATUS_ERROR;

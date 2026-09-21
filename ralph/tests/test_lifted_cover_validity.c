@@ -66,6 +66,7 @@ static int check_instance(int n, const double *a, double b, const double *lp_x,
     if (!solver->lp_solver) { mip_free(solver); lp_model_free(model); return 0; }
 
     double *xin = (double *)malloc((size_t)n * sizeof(double));
+    if (!xin) { mip_free(solver); lp_model_free(model); return 0; }
     for (int j = 0; j < n; j++) xin[j] = lp_x[j];
     double *saved = solver->lp_solver->solution;
     solver->lp_solver->solution = xin;
@@ -117,6 +118,10 @@ static int check_instance(int n, const double *a, double b, const double *lp_x,
     cut_pool_free(pool);
     mip_free(solver);
     lp_model_free(model);
+    /* The restore above deliberately takes xin back off the solver so that
+     * mip_free does not free a buffer it never allocated -- which left nobody
+     * owning it. 50,000 instances, 2.6 MB. */
+    free(xin);
     (void)verbose;
     return invalid_cuts;
 }

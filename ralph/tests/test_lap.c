@@ -1227,6 +1227,62 @@ static void test_parallel_setting(void) {
 }
 
 /* ============================================================================
+ * Test: the parallel gate (n >= LAP_PARALLEL_THRESHOLD)
+ *
+ * Until this test existed nothing in the tree solved a LAP at or above the
+ * n >= 5000 gate -- the largest case anywhere was n = 1000 -- so the branch
+ * the gate selects had never been executed by a test or a benchmark, while
+ * release builds did take it (ralph CFLAGS carry $(CC_OMP)). The reduction
+ * transfer on that branch raced on col_price.
+ *
+ * The property asserted here is the one that made the race a bug rather than
+ * a preference: a solve at or above the gate must agree with the same solve
+ * below it. Exact equality, not a tolerance -- both paths run the same
+ * arithmetic in the same order, so any difference is a scheduling artifact.
+ * ============================================================================ */
+static void test_parallel_gate_agrees_with_sequential(void) {
+    printf("\n=== Test: Parallel Gate Agrees With Sequential ===\n");
+
+    /* Above LAP_PARALLEL_THRESHOLD (5000), which is the point. */
+    const int n = 5000;
+    double *cost = malloc((size_t)n * n * sizeof(double));
+    int *sol_par = malloc((size_t)n * sizeof(int));
+    int *sol_seq = malloc((size_t)n * sizeof(int));
+    ASSERT(cost && sol_par && sol_seq, "Large LAP allocated");
+    if (!cost || !sol_par || !sol_seq) { free(cost); free(sol_par); free(sol_seq); return; }
+
+    srand(4242);
+    for (size_t i = 0; i < (size_t)n * n; i++) {
+        cost[i] = (rand() % 10000) / 100.0;
+    }
+
+    double cost_par = 0.0, cost_seq = 0.0;
+    int saved = ralph_lap_get_parallel();
+
+    ralph_lap_set_parallel(1);
+    RalphLapStatus st_par = ralph_lap_solve(n, cost, RALPH_LAP_MINIMIZE,
+                                            sol_par, NULL, NULL, NULL, &cost_par);
+    ralph_lap_set_parallel(0);
+    RalphLapStatus st_seq = ralph_lap_solve(n, cost, RALPH_LAP_MINIMIZE,
+                                            sol_seq, NULL, NULL, NULL, &cost_seq);
+    ralph_lap_set_parallel(saved);
+
+    ASSERT(st_par == RALPH_LAP_SUCCESS, "Solve at the gate succeeded");
+    ASSERT(st_seq == RALPH_LAP_SUCCESS, "Solve with parallel disabled succeeded");
+    ASSERT(ralph_lap_verify(n, cost, sol_par, NULL), "Gated solution is a valid assignment");
+    ASSERT(cost_par == cost_seq, "Gated and sequential objectives are bit-identical");
+
+    int same = 1;
+    for (int i = 0; i < n; i++) {
+        if (sol_par[i] != sol_seq[i]) { same = 0; break; }
+    }
+    ASSERT(same, "Gated and sequential assignments are identical");
+
+    free(cost);
+    free(sol_par);
+    free(sol_seq);
+}
+/* ============================================================================
  * Test 22: Repeated solves with workspace (performance)
  * ============================================================================ */
 static void test_workspace_repeated(void) {
@@ -4742,6 +4798,7 @@ int main(void) {
     test_sparse_infeasible();
     test_sparse_vs_dense();
     test_parallel_setting();
+    test_parallel_gate_agrees_with_sequential();
     test_workspace_repeated();
     test_epsilon_scaling();
     test_epsilon_scaling_maximize();
