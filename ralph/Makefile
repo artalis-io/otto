@@ -1439,7 +1439,37 @@ uninstall:
 	rm -rf /usr/local/include/ralph
 	rm -f /usr/local/lib/$(LIB_NAME)
 
-.PHONY: all lib clean debug test test-transport test-transport-asan test-core test-lp-suite test-mip-suite test-regression-suites test-edge test-lap test-netflow test-detect test-optim test-api test-benders test-benders-debug test-benders-known-regression test-benders-warmstart test-mip-bug test-bb-node-pool test-gmi-cut-validity test-cover-cuts-generated test-mip-warmstart test-mip-lp-recovery test-mip-start-sparse test-mip-start-repair test-spp-context test-spp-cuts test-lifted-cover test-presolve-differential test-spp-heuristic test-spp-branch test-benders-master-start test-warmstart-serde test-beaconfd test-beaconfd-trace test-phase1-recovery test-phase1-engine test-phase1-zones test-simplex-policy test-dual-ratio-flip test-lp-refactor-policy test-lp-reinvert-controller test-lp-basis-governor test-lp-basis-governor-runtime test-lp-determinism test-lp-sensitivity test-lp-conflict test-lp-algorithm-api test-lp-policy-glpk-compat test-lp-glpk-strict test-lp-glpk-strict-bfcp test-lp-bfcp-policy test-lp-dispatch test-lp-external-adapter test-lp-external-adapter-api test-lp-external-introspection-api test-lp-external-failure-api test-lp-external-oop-runner test-lp-external-glpk-oop test-lp-external-glpk-oop-integration test-lp-telemetry test-lp-telemetry-solver test-lp-telemetry-lu test-lp-telemetry-gate test-lp-telemetry-lu-sparse test-lp-public-api-split test-mip-public-api-split test-lp-error-api test-lu-markowitz test-lu-supernode test-netlib test-netlib-full test-netlib-gate test-netlib-gate-small test-netlib-gate-stress-fit1p-nesm test-netlib-gate-stress-fit1p-nesm-gating test-netlib-gate-stress-fit1p-nesm-non-gating test-netlib-gate-pilot-focus test-netlib-gate-timeout22 test-netlib-gate-crash6-norelax-noflip test-netlib-gate-control-all-canary phase1-canaries glpk-strict-plan-init glpk-strict-plan-status glpk-strict-plan-next glpk-strict-plan-phase1 glpk-strict-plan-phase2 glpk-strict-plan-phase3 bench bench-lap bench-lap-perf bench-lap-perf-quick bench-netflow compare-glpk bench-glpk bench-glpk-quick bench-mip bench-mip-quick bench-mip-cover-effect bench-mip-specialized bench-mip-compare profile-bench build-ralph-benchmark download-netlib install uninstall help test-mps-parser test-node-cuts-diff test-time-limit test-unbounded-infinite-bound test-infeasible-equality-bounds test-phase1-oracle-glpk test-bandm test-blend test-lotfi test-lp-repair-deadline repro-cfl-crash bench-mip-specialized-quick bench-mip-compare-quick test-lp test-presolve fuzz-api fuzz-api-smoke fuzz-smoke test-obj-integrality test-asan test-suites-asan
+# ThreadSanitizer build. Cannot be combined with AddressSanitizer, so it is
+# a separate binary and a separate CI job.
+#
+# Built from sources rather than linked against the prebuilt library. A TSan
+# binary that links a .a does not instrument its interior -- that is how the
+# api/* asan jobs ended up covering main.c and nothing underneath it.
+#
+# CC_OMP is kept deliberately. The modules' DEBUG_CFLAGS omit it, so every
+# sanitizer build we had was single-threaded and structurally unable to see a
+# race. That is exactly how the one in lap.c survived: ASan, UBSan and LSan
+# all ran, and none of them ever ran the parallel branch.
+#
+# test_lap is the target: lap.c carries ralph's only omp parallel region,
+# the block-decomposed one immediately above the reduction transfer whose
+# race was removed. Both sit behind the same n >= 5000 gate, which nothing
+# in the tree reached until test_parallel_gate_agrees_with_sequential was
+# added -- so this region has run about as many times as that test has, and
+# never under instrumentation.
+TSAN_TEST_BIN = test_lap_tsan
+TSAN_CFLAGS = $(strip $(CC_WARN) -g -O1 $(CC_STD_BASELINE) $(CC_PORT_DEFS) \
+              $(CC_OMP) -DDEBUG -fsanitize=thread -fno-omit-frame-pointer)
+TSAN_LDFLAGS = $(strip -fsanitize=thread $(LD_OMP) $(LD_MATH))
+
+$(TSAN_TEST_BIN): $(LAP_TEST_SOURCES) $(SOURCES) $(SHARED_LIB)
+	$(CC) $(TSAN_CFLAGS) $(INCLUDES) $(LAP_TEST_SOURCES) $(SOURCES) \
+	  $(call link_lib,../shared,shared) $(TSAN_LDFLAGS) $(EXE_OUT)$@
+
+tsan: $(TSAN_TEST_BIN)
+	./$(TSAN_TEST_BIN)
+
+.PHONY: all lib clean debug test test-transport test-transport-asan test-core test-lp-suite test-mip-suite test-regression-suites test-edge test-lap test-netflow test-detect test-optim test-api test-benders test-benders-debug test-benders-known-regression test-benders-warmstart test-mip-bug test-bb-node-pool test-gmi-cut-validity test-cover-cuts-generated test-mip-warmstart test-mip-lp-recovery test-mip-start-sparse test-mip-start-repair test-spp-context test-spp-cuts test-lifted-cover test-presolve-differential test-spp-heuristic test-spp-branch test-benders-master-start test-warmstart-serde test-beaconfd test-beaconfd-trace test-phase1-recovery test-phase1-engine test-phase1-zones test-simplex-policy test-dual-ratio-flip test-lp-refactor-policy test-lp-reinvert-controller test-lp-basis-governor test-lp-basis-governor-runtime test-lp-determinism test-lp-sensitivity test-lp-conflict test-lp-algorithm-api test-lp-policy-glpk-compat test-lp-glpk-strict test-lp-glpk-strict-bfcp test-lp-bfcp-policy test-lp-dispatch test-lp-external-adapter test-lp-external-adapter-api test-lp-external-introspection-api test-lp-external-failure-api test-lp-external-oop-runner test-lp-external-glpk-oop test-lp-external-glpk-oop-integration test-lp-telemetry test-lp-telemetry-solver test-lp-telemetry-lu test-lp-telemetry-gate test-lp-telemetry-lu-sparse test-lp-public-api-split test-mip-public-api-split test-lp-error-api test-lu-markowitz test-lu-supernode test-netlib test-netlib-full test-netlib-gate test-netlib-gate-small test-netlib-gate-stress-fit1p-nesm test-netlib-gate-stress-fit1p-nesm-gating test-netlib-gate-stress-fit1p-nesm-non-gating test-netlib-gate-pilot-focus test-netlib-gate-timeout22 test-netlib-gate-crash6-norelax-noflip test-netlib-gate-control-all-canary phase1-canaries glpk-strict-plan-init glpk-strict-plan-status glpk-strict-plan-next glpk-strict-plan-phase1 glpk-strict-plan-phase2 glpk-strict-plan-phase3 bench bench-lap bench-lap-perf bench-lap-perf-quick bench-netflow compare-glpk bench-glpk bench-glpk-quick bench-mip bench-mip-quick bench-mip-cover-effect bench-mip-specialized bench-mip-compare profile-bench build-ralph-benchmark download-netlib install uninstall help test-mps-parser test-node-cuts-diff test-time-limit test-unbounded-infinite-bound test-infeasible-equality-bounds test-phase1-oracle-glpk test-bandm test-blend test-lotfi test-lp-repair-deadline repro-cfl-crash bench-mip-specialized-quick bench-mip-compare-quick test-lp test-presolve fuzz-api fuzz-api-smoke fuzz-smoke test-obj-integrality test-asan test-suites-asan tsan
 
 # MIP benchmark with specialized solvers (LAP, Network, SCP)
 bench-mip-specialized: $(BENCH_MIP_EXEC)

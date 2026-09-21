@@ -116,7 +116,33 @@ test-asan: CFLAGS = $(DEBUG_CFLAGS)
 test-asan: LDFLAGS += $(DEBUG_LDFLAGS)
 test-asan: clean test
 
-.PHONY: all clean test test-transport bench lib debug wasm route-bench omp-mode test-osrm help fuzz-api fuzz-api-smoke fuzz-smoke test-asan
+# ThreadSanitizer build. Cannot be combined with AddressSanitizer, so it is
+# a separate binary and a separate CI job.
+#
+# Built from sources rather than linked against the prebuilt library. A TSan
+# binary that links a .a does not instrument its interior -- that is how the
+# api/* asan jobs ended up covering main.c and nothing underneath it.
+#
+# CC_OMP is kept deliberately. The modules' DEBUG_CFLAGS omit it, so every
+# sanitizer build we had was single-threaded and structurally unable to see a
+# race. That is exactly how the one in lap.c survived: ASan, UBSan and LSan
+# all ran, and none of them ever ran the parallel branch.
+#
+# vl_graph.c and vl_landmarks.c hold all 14 of velo's OpenMP parallel
+# regions, and both are inside libvelo.
+TSAN_TEST_BIN = test_velo_tsan
+TSAN_CFLAGS = $(strip $(CC_WARN) -g -O1 $(CC_STD) $(CC_DEFS) $(CC_PORT_DEFS) \
+              $(CC_OMP) -DDEBUG -fsanitize=thread -fno-omit-frame-pointer)
+TSAN_LDFLAGS = $(strip -fsanitize=thread $(LD_OMP) $(LD_MATH))
+
+$(TSAN_TEST_BIN): tests/test_velo.c $(CORE_SRCS) $(SHARED_DIR)/libshared.a
+	$(CC) $(TSAN_CFLAGS) $(INCLUDES) $< $(CORE_SRCS) \
+	  $(call link_lib,$(SHARED_DIR),shared) $(TSAN_LDFLAGS) $(EXE_OUT)$@
+
+tsan: $(TSAN_TEST_BIN)
+	./$(TSAN_TEST_BIN)
+
+.PHONY: all clean test test-transport bench lib debug wasm route-bench omp-mode test-osrm help fuzz-api fuzz-api-smoke fuzz-smoke test-asan tsan
 
 # Default target
 all: lib $(TEST_BIN)

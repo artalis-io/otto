@@ -1251,6 +1251,65 @@ jobs:
         run: make -C ${{ matrix.suite.dir }} ${{ matrix.suite.target }}
 
   # ==========================================================================
+  # ThreadSanitizer
+  #
+  # Separate from the matrix above because TSan and ASan cannot be combined
+  # in one binary.
+  #
+  # This is the sanitizer class we had no coverage of, and the one that would
+  # have caught the race in ralph's LAP. That race was live in release builds
+  # and invisible to everything we ran: no test reached the branch (it needs
+  # n >= 5000, and the largest case in the tree was 1000), and the sanitizer
+  # builds omit CC_OMP, so the instrumented binary was single-threaded. It was
+  # found by reading the code, which does not scale.
+  #
+  # surge already had a `tsan` target. Nothing invoked it -- the same shape as
+  # ralph's test-asan sitting unwired while the solver core leaked.
+  #
+  # Where the threading actually is: velo has 14 omp parallel regions
+  # (vl_graph.c, vl_landmarks.c), ralph has one in lap.c, surge uses pthreads.
+  # ==========================================================================
+  thread-sanitizer:
+    name: Thread-Sanitize ${{ matrix.suite.name }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+
+    strategy:
+      fail-fast: false
+      matrix:
+        suite:
+          - name: Surge
+            target: tsan
+            dir: surge
+          - name: Velo
+            target: tsan
+            dir: velo
+          - name: Ralph LAP
+            target: tsan
+            dir: ralph
+
+    env:
+      # A race that only prints is a race nobody acts on.
+      TSAN_OPTIONS: halt_on_error=1:second_deadlock_stack=1
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential libomp-dev
+
+      - name: Build the shared library
+        run: make -C shared lib
+
+      - name: Thread-sanitize ${{ matrix.suite.name }}
+        run: make -C ${{ matrix.suite.dir }} ${{ matrix.suite.target }}
+
+  # ==========================================================================
   # Test coverage of the test suite itself
   #
   # Not "how much code is covered" -- whether anything runs the tests that are
