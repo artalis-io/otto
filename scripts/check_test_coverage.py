@@ -91,6 +91,7 @@ ADVISORY = ('macos',)
 # longer applies fails the run.
 PLATFORM_ALLOWLIST = {}
 
+LF = chr(10)
 MAKE = 'mingw32-make' if shutil.which('mingw32-make') else 'make'
 QUIET = '--quiet' in sys.argv
 
@@ -135,6 +136,35 @@ def ci_invocations():
             if m and job:
                 job_os[job] = [x.strip().strip('"\'') for x in m.group(1).split(',')]
 
+        # Matrix entries that name a directory and a target, per job.
+        #
+        # A job whose step is
+        #     make -C ${{ matrix.suite.dir }} ${{ matrix.suite.target }}
+        # spells no target anywhere the scan below can read, so without this
+        # every such job is invisible. That had really happened: nine module
+        # suites were being sanitized and this file could see only the six api
+        # ones, whose paths are written out literally.
+        #
+        # The test-c matrix is unaffected either way -- its entries carry the
+        # whole command (`test: make -C ralph test`), which the scan reads as
+        # ordinary text.
+        job_matrix = {}
+        job = None
+        entry = {}
+        for line in lines:
+            m = re.match(r'^  ([A-Za-z0-9_-]+):\s*$', line)
+            if m:
+                job, entry = m.group(1), {}
+                continue
+            if re.match(r'^\s*-\s', line):
+                entry = {}          # a new list item starts a new entry
+            m = re.match(r'^\s*(?:-\s+)?(target|dir):\s*([A-Za-z0-9_./-]+)\s*$', line)
+            if m and job:
+                entry[m.group(1)] = m.group(2)
+                if 'dir' in entry and 'target' in entry:
+                    job_matrix.setdefault(job, []).append((entry['dir'], entry['target']))
+                    entry = {}
+
         job = None
         plats = []
         for line in lines:
@@ -146,6 +176,12 @@ def ci_invocations():
                 plats = platform_of(m.group(1).strip(), job_os.get(job, []))
             if not plats:
                 continue
+
+            # make -C ${{ matrix.X.dir }} ${{ matrix.X.target }}
+            if re.search(r'\bmake\s+-C\s+\$\{\{\s*matrix\.[A-Za-z0-9_]+\.dir\s*\}\}'
+                         r'\s+\$\{\{\s*matrix\.[A-Za-z0-9_]+\.target\s*\}\}', line):
+                for _d, _t in job_matrix.get(job, []):
+                    calls.setdefault((_d, _t), set()).update(plats)
 
             for mm in re.finditer(
                     r'\bmake\s+-C\s+([A-Za-z0-9_./-]+)((?:\s+[A-Za-z0-9_.\-]+)*)', line):
@@ -213,6 +249,15 @@ def main():
             except Exception:
                 continue
             out = (r.stdout or '') + (r.stderr or '')
+        # Drop deletion lines before reading program names out of the recipe.
+        # A target like `test-asan: clean test` dry-runs its clean first, and
+        # clean's `rm -f` names every test binary in the module -- which would
+        # otherwise read as 'CI runs all of them'. That is the opposite of what
+        # this file is for, and it is how the check first reported a suite as
+        # covered when the only thing touching it was its own removal.
+        out = LF.join(l for l in out.split(LF)
+                      if not re.match(r'^\s*(rm|del)\b', l))
+
         progs = set(re.findall(r'tests?/([A-Za-z0-9_]+)\.c', out))
         progs |= set(re.findall(
             r'(?:^|[\s/])(?:\./)?(test_[A-Za-z0-9_]+)(?:\.exe)?\b', out))

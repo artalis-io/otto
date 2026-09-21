@@ -1218,6 +1218,17 @@ jobs:
           - name: Fuelwise
             target: test-asan
             dir: fuelwise
+          # nexus had no sanitizer target at all; `test` reaches all eleven
+          # of its suites.
+          - name: Nexus
+            target: test-asan
+            dir: nexus
+          # Ralph's fourteen suites that live outside `test`. Its own entry
+          # rather than folding them into Ralph Core, so the two run in
+          # parallel instead of serialising into one long job.
+          - name: Ralph Suites
+            target: test-suites-asan
+            dir: ralph
 
     env:
       # UBSan only prints and keeps going by default, so a finding would not
@@ -1271,6 +1282,50 @@ jobs:
 
       - name: Check that every test program is reached on every platform
         run: python3 scripts/check_test_coverage.py
+
+  # ==========================================================================
+  # Sanitizer coverage of the test suite
+  #
+  # The job above asks whether anything runs a test. This asks whether
+  # anything runs it *instrumented*, which turned out to be a different
+  # question with a different answer.
+  #
+  # Ralph's solver core passed the first check on three platforms and had
+  # never been compiled with AddressSanitizer by anything. 80,000 lines of
+  # simplex, LU, branch-and-bound and cuts. The matrix ran Ralph *Transport*,
+  # the HTTP layer, and the name was close enough to read as covered. Pointing
+  # a sanitizer at the core produced five leaks, a use-after-free next door in
+  # surge, and a UB memcpy older than all of them -- none of which any
+  # assertion was ever going to catch.
+  #
+  # The near-misses are the argument for gating rather than auditing:
+  # `<mod>/api test-asan` runs for six modules and instruments only main.c and
+  # the HTTP helpers, with the module linked in prebuilt; Windows cannot stand
+  # in, because LeakSanitizer is Linux-only and MSVC has neither LSan nor
+  # UBSan; and five modules defined DEBUG_CFLAGS with -fsanitize while having
+  # nothing that used them to run a suite.
+  #
+  # It reads the compile lines a target would issue rather than its name, so a
+  # `test-asan` that quietly stopped passing the flag fails here.
+  # ==========================================================================
+  sanitizer-coverage:
+    name: Every Test Is Sanitized
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential
+
+      - name: Check that every test program is run under a sanitizer
+        run: python3 scripts/check_sanitizer_coverage.py
 
   # ==========================================================================
   # The CLAUDE.md files are instructions, and nothing compiles them, so they
