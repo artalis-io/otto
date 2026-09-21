@@ -1281,12 +1281,16 @@ jobs:
           - name: Surge
             target: tsan
             dir: surge
+          # OpenMP modules: built with clang against LLVM's runtime so Archer
+          # can instrument the barriers and critical sections libgomp hides.
           - name: Velo
             target: tsan
             dir: velo
+            omp: llvm
           - name: Ralph LAP
             target: tsan
             dir: ralph
+            omp: llvm
 
     env:
       # A race that only prints is a race nobody acts on.
@@ -1301,13 +1305,36 @@ jobs:
       - name: Install dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y build-essential libomp-dev
+          sudo apt-get install -y build-essential libomp-dev clang
 
       - name: Build the shared library
         run: make -C shared lib
 
+      # Archer is LLVM's OpenMP-aware TSan plugin. Without it every barrier
+      # and critical section reads as a race, because libgomp carries no
+      # instrumentation. Located rather than hardcoded: the llvm-NN path moves
+      # with the runner image.
+      - name: Locate Archer
+        if: matrix.suite.omp == 'llvm'
+        run: |
+          set -euo pipefail
+          archer=$(find /usr/lib -name 'libarcher.so*' -print -quit 2>/dev/null || true)
+          if [ -z "$archer" ]; then
+            echo "::error::libarcher.so not found; TSan on OpenMP would report only false positives" >&2
+            exit 1
+          fi
+          echo "OMP_TOOL_LIBRARIES=$archer" >> "$GITHUB_ENV"
+          echo "OMP_TOOL=enabled" >> "$GITHUB_ENV"
+          echo "Archer: $archer"
+
       - name: Thread-sanitize ${{ matrix.suite.name }}
-        run: make -C ${{ matrix.suite.dir }} ${{ matrix.suite.target }}
+        run: |
+          if [ "${{ matrix.suite.omp }}" = "llvm" ]; then
+            make -C ${{ matrix.suite.dir }} ${{ matrix.suite.target }} \
+                 TSAN_CC=clang TSAN_OMP=-fopenmp TSAN_OMP_LD=-fopenmp
+          else
+            make -C ${{ matrix.suite.dir }} ${{ matrix.suite.target }}
+          fi
 
   # ==========================================================================
   # Test coverage of the test suite itself

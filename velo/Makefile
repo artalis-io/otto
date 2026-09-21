@@ -130,13 +130,25 @@ test-asan: clean test
 #
 # vl_graph.c and vl_landmarks.c hold all 14 of velo's OpenMP parallel
 # regions, and both are inside libvelo.
+#
+# TSAN_CC / TSAN_OMP exist so CI can build this with clang and LLVM's OpenMP
+# runtime. GCC's libgomp is not instrumented, so TSan cannot see an OpenMP
+# barrier or a critical section and reports every one of them as a race --
+# verified on this job's first run, which flagged a read and a write that sit
+# inside the same `omp critical`. Suppressing those would suppress real races
+# in the same regions, which is worse than not running the check. Archer,
+# shipped with libomp, is the instrumented runtime that makes the answer mean
+# something.
+TSAN_CC ?= $(CC)
+TSAN_OMP ?= $(CC_OMP)
+TSAN_OMP_LD ?= $(LD_OMP)
 TSAN_TEST_BIN = test_velo_tsan
 TSAN_CFLAGS = $(strip $(CC_WARN) -g -O1 $(CC_STD) $(CC_DEFS) $(CC_PORT_DEFS) \
-              $(CC_OMP) -DDEBUG -fsanitize=thread -fno-omit-frame-pointer)
-TSAN_LDFLAGS = $(strip -fsanitize=thread $(LD_OMP) $(LD_MATH))
+              $(TSAN_OMP) -DDEBUG -fsanitize=thread -fno-omit-frame-pointer)
+TSAN_LDFLAGS = $(strip -fsanitize=thread $(TSAN_OMP_LD) $(LD_MATH))
 
 $(TSAN_TEST_BIN): tests/test_velo.c $(CORE_SRCS) $(SHARED_DIR)/libshared.a
-	$(CC) $(TSAN_CFLAGS) $(INCLUDES) $< $(CORE_SRCS) \
+	$(TSAN_CC) $(TSAN_CFLAGS) $(INCLUDES) $< $(CORE_SRCS) \
 	  $(call link_lib,$(SHARED_DIR),shared) $(TSAN_LDFLAGS) $(EXE_OUT)$@
 
 tsan: $(TSAN_TEST_BIN)
