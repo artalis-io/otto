@@ -4001,6 +4001,10 @@ static RalphLapStatus lap_solve_k_best_unified(
     RalphLapResult *result,
     RalphLapWorkspace *ws
 ) {
+    /* opts->k is read unguarded further down while the same function tests
+     * `opts && opts->num_forbidden`. k-best has no meaning without opts, so
+     * the entry is the right place to settle it. */
+    if (!prob || !opts || !result) return RALPH_LAP_INVALID_INPUT;
     int m = prob->n;  /* rows (workers) */
     int n = prob->m;  /* cols (jobs) */
     int is_rect = (m != n);
@@ -4131,10 +4135,7 @@ static RalphLapStatus lap_solve_k_best_unified(
 
     if (is_rect) {
         /* Allocate for padded k×k solutions - may find fewer valid solutions */
-        /* opts is optional on this path -- the same function tests it as
-         * `opts && opts->num_forbidden` elsewhere -- so it cannot be
-         * dereferenced bare here. */
-        int max_solutions = (opts ? opts->k : 1) * 2;  /* Over-allocate to find enough valid ones */
+        int max_solutions = opts->k * 2;  /* Over-allocate to find enough valid ones */
         padded_solutions = (int *)calloc((size_t)max_solutions * k, sizeof(int));
         padded_costs = (double *)calloc(max_solutions, sizeof(double));
         if (!padded_solutions || !padded_costs) {

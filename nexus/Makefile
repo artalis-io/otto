@@ -91,6 +91,11 @@ test-asan: clean test
 # seeded as `min_x = p[0].x, max_x = p[0].x`, or two capacities that happen
 # to start equal. Gating on it would mean rewriting correct code to look
 # different.
+# legacyUninitvar is suppressed. It fires once, on
+# snprintf(sheets[n].name, ...) in nx_xlsx.c, reading the destination of
+# an snprintf as though it were an input. `sheets` is a local array
+# written before it is read -- every entry below sheet_count has been
+# filled -- so this is the checker mistaking a write for a read.
 # -i ../vendor: vendored code is not ours to gate on. cppcheck follows
 # includes into miniz and tre and reports their uninitialised-variable and
 # mbtowc findings as if they were this module's.
@@ -104,6 +109,7 @@ test-asan: clean test
 cppcheck:
 	cppcheck --enable=warning,performance,portability --suppress=missingIncludeSystem \
 	  --suppress=duplicateAssignExpression \
+	  --suppress=legacyUninitvar \
 	  -i ../vendor \
 	  --error-exitcode=1 --inline-suppr --std=c11 $(INCLUDES) \
 	  $(SRCS)

@@ -646,6 +646,7 @@ int strong_branch(MIPSolver *solver, int var, double val,
 
     SimplexSolver *lp = solver->lp_solver;
     SimplexTableau *tab = lp->tableau;
+    if (!tab) return -1;   /* tested as !lp->tableau elsewhere in this file */
     int num_struct = solver->working_model->num_vars;
     if (var < 0 || var >= num_struct || num_struct <= 0) return -1;
     if (!tab->lb_ext || !tab->ub_ext || !tab->basis || !tab->var_status) return -1;

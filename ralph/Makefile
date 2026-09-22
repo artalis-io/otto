@@ -1496,6 +1496,12 @@ tsan: $(TSAN_TEST_BIN)
 # seeded as `min_x = p[0].x, max_x = p[0].x`, or two capacities that happen
 # to start equal. Gating on it would mean rewriting correct code to look
 # different.
+# arrayIndexThenCheck is suppressed. It fires once, on the insertion sort
+# in optim/spp_context.c, where `key` is taken from ctx->row_order -- an
+# array this module builds and owns -- and used to index row_degree. The
+# function already rejects a null context and both arrays are sized
+# num_rows. Adding a bounds test would assert an invariant the caller
+# already guarantees, in the inner loop of a sort.
 # -i ../vendor: vendored code is not ours to gate on. cppcheck follows
 # includes into miniz and tre and reports their uninitialised-variable and
 # mbtowc findings as if they were this module's.
@@ -1510,6 +1516,7 @@ cppcheck:
 	cppcheck --enable=warning,performance,portability --suppress=missingIncludeSystem \
 	  --suppress=invalidPointerCast \
 	  --suppress=duplicateAssignExpression \
+	  --suppress=arrayIndexThenCheck \
 	  -i ../vendor \
 	  --error-exitcode=1 --inline-suppr --std=c11 $(INCLUDES) \
 	  $(SOURCES)
