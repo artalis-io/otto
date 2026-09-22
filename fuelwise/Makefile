@@ -63,7 +63,7 @@ LIB_NAME = libfuelwise.a
 # Discard objects built with different flags -- a sanitizer or debug
 # build must not be left behind for a release build to reuse. See
 # mk/flagstamp.mk for what that cost before it existed.
-DEBUG_GOALS = debug
+DEBUG_GOALS = debug test-asan
 STAMP_ARTIFACTS = $(OBJECTS) $(LIB_NAME)
 DEBUG_CFLAGS = $(CFLAGS_DEBUG)
 include ../mk/flagstamp.mk

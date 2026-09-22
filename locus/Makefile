@@ -47,7 +47,7 @@ LIB_FILE = liblocus.a
 # Discard objects built with different flags -- a sanitizer or debug
 # build must not be left behind for a release build to reuse. See
 # mk/flagstamp.mk for what that cost before it existed.
-DEBUG_GOALS = debug
+DEBUG_GOALS = debug test-asan
 STAMP_ARTIFACTS = $(CORE_OBJS) $(LIB_FILE)
 include ../mk/flagstamp.mk
 
