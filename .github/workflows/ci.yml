@@ -1251,6 +1251,101 @@ jobs:
         run: make -C ${{ matrix.suite.dir }} ${{ matrix.suite.target }}
 
   # ==========================================================================
+  # ThreadSanitizer
+  #
+  # Separate from the matrix above because TSan and ASan cannot be combined
+  # in one binary.
+  #
+  # This is the sanitizer class we had no coverage of, and the one that would
+  # have caught the race in ralph's LAP. That race was live in release builds
+  # and invisible to everything we ran: no test reached the branch (it needs
+  # n >= 5000, and the largest case in the tree was 1000), and the sanitizer
+  # builds omit CC_OMP, so the instrumented binary was single-threaded. It was
+  # found by reading the code, which does not scale.
+  #
+  # surge already had a `tsan` target. Nothing invoked it -- the same shape as
+  # ralph's test-asan sitting unwired while the solver core leaked.
+  #
+  # Where the threading actually is: velo has 14 omp parallel regions
+  # (vl_graph.c, vl_landmarks.c), ralph has one in lap.c, surge uses pthreads.
+  # ==========================================================================
+  thread-sanitizer:
+    name: Thread-Sanitize ${{ matrix.suite.name }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+
+    strategy:
+      fail-fast: false
+      matrix:
+        suite:
+          - name: Surge
+            target: tsan
+            dir: surge
+          # OpenMP modules: built with clang against LLVM's runtime so Archer
+          # can instrument the barriers and critical sections libgomp hides.
+          - name: Velo
+            target: tsan
+            dir: velo
+            omp: llvm
+          - name: Ralph LAP
+            target: tsan
+            dir: ralph
+            omp: llvm
+
+    env:
+      # A race that only prints is a race nobody acts on.
+      #
+      # ignore_noninstrumented_modules drops reports whose frames lie entirely
+      # inside a library built without instrumentation. Archer supplies the
+      # happens-before for our own OpenMP regions, but libomp still does its
+      # internal locking uninstrumented, and that surfaced as a race between
+      # pthread_mutex_init and pthread_mutex_lock with no frame of ours in it.
+      # This is narrower than a suppressions file: our code stays instrumented
+      # and a real race in it still reports. It does mean a race inside
+      # libshared, which is linked prebuilt, would not be seen here.
+      TSAN_OPTIONS: halt_on_error=1:second_deadlock_stack=1:ignore_noninstrumented_modules=1
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential libomp-dev clang
+
+      - name: Build the shared library
+        run: make -C shared lib
+
+      # Archer is LLVM's OpenMP-aware TSan plugin. Without it every barrier
+      # and critical section reads as a race, because libgomp carries no
+      # instrumentation. Located rather than hardcoded: the llvm-NN path moves
+      # with the runner image.
+      - name: Locate Archer
+        if: matrix.suite.omp == 'llvm'
+        run: |
+          set -euo pipefail
+          archer=$(find /usr/lib -name 'libarcher.so*' -print -quit 2>/dev/null || true)
+          if [ -z "$archer" ]; then
+            echo "::error::libarcher.so not found; TSan on OpenMP would report only false positives" >&2
+            exit 1
+          fi
+          echo "OMP_TOOL_LIBRARIES=$archer" >> "$GITHUB_ENV"
+          echo "OMP_TOOL=enabled" >> "$GITHUB_ENV"
+          echo "Archer: $archer"
+
+      - name: Thread-sanitize ${{ matrix.suite.name }}
+        run: |
+          if [ "${{ matrix.suite.omp }}" = "llvm" ]; then
+            make -C ${{ matrix.suite.dir }} ${{ matrix.suite.target }} \
+                 TSAN_CC=clang TSAN_OMP=-fopenmp TSAN_OMP_LD=-fopenmp
+          else
+            make -C ${{ matrix.suite.dir }} ${{ matrix.suite.target }}
+          fi
+
+  # ==========================================================================
   # Test coverage of the test suite itself
   #
   # Not "how much code is covered" -- whether anything runs the tests that are
