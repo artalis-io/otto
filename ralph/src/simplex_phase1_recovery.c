@@ -15,6 +15,7 @@
 #include "lp_glpk_strict.h"
 #include "simplex_perturb.h"
 #include "lp_log.h"
+#include "lp_telemetry.h"
 
 /* Progress window constants (moved from simplex.c) */
 #define PHASE1_NO_PIVOT_PROGRESS_WINDOW 6

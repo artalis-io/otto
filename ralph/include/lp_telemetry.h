@@ -772,4 +772,585 @@ void lp_telemetry_snapshot_solver(const SimplexSolver *solver,
 void lp_telemetry_snapshot_lu(const LUFactorization *lu,
                               LUTelemetrySnapshot *out);
 
+
+/* The recording API, moved out of lp.h.
+ *
+ * 217 of the 313 functions lp.h declared were these, against roughly 96
+ * genuine solver entry points -- lu_*, the tableau and pricing calls, the
+ * ratio tests. A reader opening lp.h to find the solver interface was
+ * reading a telemetry header with a solver in it.
+ *
+ * What stays behind in lp.h is LPSolverTelemetryState and LUTelemetryState,
+ * which are members of SimplexSolver and LUFactorization by value. Those
+ * cannot move without making the state opaque and going through accessors,
+ * and they are written on the pricing and refactorisation paths -- a
+ * question about field access, not a place to put a struct. */
+/* Telemetry helpers */
+double lp_telemetry_now_ms(void);
+double lp_telemetry_timer_start(void);
+double lp_telemetry_timer_elapsed_ms(double start_ms);
+int lp_telemetry_refactor_reason_is_safety_forced(int reason);
+void lp_telemetry_reset_solver(SimplexSolver *solver);
+void lp_telemetry_reset_lu(LUFactorization *lu);
+void lp_telemetry_prepare_lu_factorize(LUFactorization *lu, const SparseMatrix *B);
+void lp_telemetry_record_basis_build(SimplexSolver *owner,
+                                     int fastpath_hit,
+                                     int cols_rewritten,
+                                     unsigned long long tail_shift_bytes);
+void lp_telemetry_begin_refactor(SimplexSolver *owner, int *reason_out);
+void lp_telemetry_set_refactor_next_reason(SimplexSolver *owner, int reason);
+void lp_telemetry_record_refactor(SimplexSolver *owner,
+                                  int phase,
+                                  int reason,
+                                  double elapsed_ms,
+                                  int m,
+                                  int lu_last_k,
+                                  int lu_last_basis_nnz);
+void lp_telemetry_record_refactor_with_lu(SimplexSolver *owner,
+                                          int phase,
+                                          int reason,
+                                          double elapsed_ms,
+                                          int m,
+                                          const LUFactorization *lu);
+void lp_telemetry_record_refactor_with_lu_timed(SimplexSolver *owner,
+                                                int phase,
+                                                int reason,
+                                                double start_ms,
+                                                int m,
+                                                const LUFactorization *lu);
+void lp_telemetry_record_refactor_repair_outcome(
+    SimplexSolver *owner,
+    int phase,
+    int original_lu_failure_reason,
+    int original_sparse_numeric_failure_reason,
+    int repair_status);
+void lp_telemetry_add_solver_stage_ms(SimplexSolver *solver,
+                                      LPSolverStage stage,
+                                      double elapsed_ms);
+void lp_telemetry_add_solver_stage_timed(SimplexSolver *solver,
+                                         LPSolverStage stage,
+                                         double start_ms);
+void lp_telemetry_add_refactor_runtime_ms(SimplexSolver *solver,
+                                          double elapsed_ms);
+void lp_telemetry_add_refactor_runtime_timed(SimplexSolver *solver,
+                                             double start_ms);
+void lp_telemetry_add_ftran_ms(SimplexSolver *solver,
+                               double elapsed_ms);
+void lp_telemetry_add_ftran_timed(SimplexSolver *solver,
+                                  double start_ms);
+void lp_telemetry_add_ftran_base_ms(SimplexSolver *solver,
+                                    double elapsed_ms);
+void lp_telemetry_add_ftran_base_timed(SimplexSolver *solver,
+                                       double start_ms);
+void lp_telemetry_add_ftran_update_apply_ms(SimplexSolver *solver,
+                                            double elapsed_ms);
+void lp_telemetry_add_ftran_update_apply_timed(SimplexSolver *solver,
+                                               double start_ms);
+void lp_telemetry_record_ftran_nnz(SimplexSolver *solver,
+                                   int rhs_nnz,
+                                   int sol_nnz);
+void lp_telemetry_add_btran_ms(SimplexSolver *solver,
+                               double elapsed_ms);
+void lp_telemetry_add_btran_timed(SimplexSolver *solver,
+                                  double start_ms);
+void lp_telemetry_add_btran_base_ms(SimplexSolver *solver,
+                                    double elapsed_ms);
+void lp_telemetry_add_btran_base_timed(SimplexSolver *solver,
+                                       double start_ms);
+void lp_telemetry_add_btran_update_apply_ms(SimplexSolver *solver,
+                                            double elapsed_ms);
+void lp_telemetry_add_btran_update_apply_timed(SimplexSolver *solver,
+                                               double start_ms);
+void lp_telemetry_record_btran_nnz(SimplexSolver *solver,
+                                   int rhs_nnz,
+                                   int sol_nnz);
+void lp_telemetry_add_lu_update_ms(SimplexSolver *solver,
+                                   double elapsed_ms);
+void lp_telemetry_add_lu_update_timed(SimplexSolver *solver,
+                                      double start_ms);
+void lp_telemetry_record_compute_solution(SimplexSolver *solver,
+                                          int phase,
+                                          double elapsed_ms);
+void lp_telemetry_record_compute_solution_timed(SimplexSolver *solver,
+                                                int phase,
+                                                double start_ms);
+void lp_telemetry_record_compute_reduced_costs(SimplexSolver *solver,
+                                               int phase,
+                                               double elapsed_ms);
+void lp_telemetry_record_phase1_compute_solution_context(SimplexSolver *solver,
+                                                         LPPhase1ComputeContext context);
+void lp_telemetry_record_phase1_compute_rc_context(SimplexSolver *solver,
+                                                   LPPhase1ComputeContext context);
+void lp_telemetry_record_phase1_entering_exclusion(SimplexSolver *solver,
+                                                   int repeated_slot);
+void lp_telemetry_record_phase1_entering_exclusion_hit(SimplexSolver *solver,
+                                                       int rerouted);
+void lp_telemetry_record_phase1_dir_skip_entering(SimplexSolver *solver,
+                                                  int same_entering,
+                                                  int streak);
+void lp_telemetry_record_phase1_failed_stabilize_entering(
+    SimplexSolver *solver,
+    int same_entering,
+    int streak);
+void lp_telemetry_record_phase1_failed_stabilize_site(
+    SimplexSolver *solver,
+    int used_alternate);
+void lp_telemetry_record_phase1_failed_stabilize_retry_penalty_arm(
+    SimplexSolver *solver);
+void lp_telemetry_record_phase1_failed_stabilize_retry_penalty_alternate(
+    SimplexSolver *solver,
+    int same_alt,
+    int streak);
+void lp_telemetry_record_phase1_failed_stabilize_retry_penalty_no_alt(
+    SimplexSolver *solver);
+void lp_telemetry_record_phase1_failed_stabilize_retry_penalty_outcome(
+    SimplexSolver *solver,
+    int stabilized);
+void lp_telemetry_record_phase1_failed_stabilize_retry_local_memory_arm(
+    SimplexSolver *solver);
+void lp_telemetry_record_phase1_failed_stabilize_retry_local_memory_alternate(
+    SimplexSolver *solver);
+void lp_telemetry_record_phase1_failed_stabilize_retry_local_memory_no_alt(
+    SimplexSolver *solver);
+void lp_telemetry_record_phase1_failed_stabilize_retry_local_memory_fallback_same_alt(
+    SimplexSolver *solver);
+void lp_telemetry_record_phase1_failed_stabilize_retry_local_memory_outcome(
+    SimplexSolver *solver,
+    int stabilized);
+void lp_telemetry_record_phase1_failed_stabilize_retry_pool_sample(
+    SimplexSolver *solver,
+    int eligible_count,
+    int best_differs_from_bland);
+void lp_telemetry_record_phase1_failed_stabilize_retry_selector_eval(
+    SimplexSolver *solver,
+    int best_differs_from_bland,
+    double bland_score,
+    double best_score);
+void lp_telemetry_record_phase1_failed_stabilize_retry_shadow(
+    SimplexSolver *solver,
+    int ratio_success,
+    int dir_stable,
+    double dir_inf,
+    int dir_nnz,
+    double pivot_abs);
+void lp_telemetry_record_phase1_failed_stabilize_retry_shadow_guard_arm(
+    SimplexSolver *solver);
+void lp_telemetry_record_phase1_failed_stabilize_retry_shadow_guard_original_exclusion(
+    SimplexSolver *solver);
+void lp_telemetry_record_phase1_failed_stabilize_retry_shadow_post_dir_skip_retry(
+    SimplexSolver *solver);
+void lp_telemetry_record_phase1_failed_stabilize_retry_shadow_post_dir_skip_dual_rescue(
+    SimplexSolver *solver);
+void lp_telemetry_record_phase1_failed_stabilize_retry_shadow_post_dir_skip_forced_refactor(
+    SimplexSolver *solver);
+void lp_telemetry_record_phase1_failed_stabilize_retry_shadow_next_failed_stabilize(
+    SimplexSolver *solver);
+void lp_telemetry_record_phase1_failed_stabilize_retry_shadow_next_ratio_breakdown(
+    SimplexSolver *solver);
+void lp_telemetry_record_phase1_failed_stabilize_retry_shadow_next_pivot_fail(
+    SimplexSolver *solver);
+void lp_telemetry_record_phase1_failed_stabilize_retry_shadow_next_pivot_success(
+    SimplexSolver *solver);
+void lp_telemetry_record_phase1_force_extreme_followup_stabilized(
+    SimplexSolver *solver);
+void lp_telemetry_record_phase1_force_extreme_followup_ratio_breakdown(
+    SimplexSolver *solver);
+void lp_telemetry_record_phase1_force_extreme_followup_failed_stabilize(
+    SimplexSolver *solver);
+void lp_telemetry_record_phase1_force_extreme_followup_post_dir_skip_retry(
+    SimplexSolver *solver);
+void lp_telemetry_record_phase1_force_extreme_followup_post_dir_skip_dual_rescue(
+    SimplexSolver *solver);
+void lp_telemetry_record_phase1_force_extreme_followup_post_dir_skip_forced_refactor(
+    SimplexSolver *solver);
+void lp_telemetry_record_phase1_force_extreme_followup_next_failed_stabilize(
+    SimplexSolver *solver);
+void lp_telemetry_record_phase1_force_extreme_followup_next_ratio_breakdown(
+    SimplexSolver *solver);
+void lp_telemetry_record_phase1_force_extreme_followup_next_pivot_fail(
+    SimplexSolver *solver);
+void lp_telemetry_record_phase1_force_extreme_followup_next_pivot_success(
+    SimplexSolver *solver);
+void lp_telemetry_record_phase1_force_extreme_followup_direction(
+    SimplexSolver *solver,
+    int leaving,
+    double theta,
+    double dir_inf,
+    int dir_nnz,
+    double pivot_abs);
+void lp_telemetry_record_phase1_failed_stabilize_retry_shadow_followup_direction(
+    SimplexSolver *solver,
+    int leaving,
+    double theta,
+    double dir_inf,
+    int dir_nnz,
+    double pivot_abs);
+void lp_telemetry_record_phase1_failed_stabilize_retry_selector_choice(
+    SimplexSolver *solver,
+    int used_guarded,
+    int eligible_count);
+void lp_telemetry_record_phase1_failed_stabilize_retry_selector_outcome(
+    SimplexSolver *solver,
+    int used_guarded,
+    int stabilized);
+void lp_telemetry_record_phase1_failed_stabilize_retry_selector_ratio_failure(
+    SimplexSolver *solver,
+    int used_guarded);
+void lp_telemetry_record_phase1_failed_stabilize_retry_selector_dir_failure(
+    SimplexSolver *solver,
+    int used_guarded);
+void lp_telemetry_record_phase1_failed_stabilize_retry_selector_guarded_fallback(
+    SimplexSolver *solver);
+void lp_telemetry_record_phase1_failed_stabilize_retry_dir_fail_shape(
+    SimplexSolver *solver,
+    double dir_inf,
+    int dir_nnz,
+    double pivot_abs);
+void lp_telemetry_record_phase1_failed_stabilize_retry_dir_second_chance_arm(
+    SimplexSolver *solver);
+void lp_telemetry_record_phase1_failed_stabilize_retry_dir_second_chance_no_alt(
+    SimplexSolver *solver);
+void lp_telemetry_record_phase1_failed_stabilize_retry_dir_second_chance_outcome(
+    SimplexSolver *solver,
+    int stabilized);
+void lp_telemetry_record_phase1_failed_stabilize_retry_dir_guard_arm(
+    SimplexSolver *solver);
+void lp_telemetry_record_phase1_failed_stabilize_retry_dir_guard_original_exclusion(
+    SimplexSolver *solver);
+void lp_telemetry_record_phase1_window_pressure_event(
+    SimplexSolver *solver,
+    int failed_stabilize_event,
+    int dir_skip_event,
+    int local_memory_fail_event,
+    int alternated,
+    int window_events,
+    int window_failed_stabilize,
+    int window_dir_skip,
+    int window_local_memory_fail,
+    int window_alternations);
+void lp_telemetry_record_phase1_window_pressure_progress_reset(
+    SimplexSolver *solver);
+void lp_telemetry_record_phase1_window_pressure_force_pivot_arm(
+    SimplexSolver *solver);
+void lp_telemetry_record_phase1_window_pressure_force_pivot_reject(
+    SimplexSolver *solver,
+    int reject_reason);
+void lp_telemetry_record_phase1_window_pressure_force_pivot_blocked_pending(
+    SimplexSolver *solver);
+void lp_telemetry_record_phase1_window_pressure_force_pivot_blocked_budget(
+    SimplexSolver *solver);
+void lp_telemetry_record_phase2_pivot_geometry(SimplexSolver *solver,
+                                               double theta,
+                                               double dir_inf,
+                                               double pivot_abs);
+void lp_telemetry_record_phase2_devex_reset(SimplexSolver *solver,
+                                            int devex_age);
+void lp_telemetry_record_phase2_degenerate_refactor(SimplexSolver *solver,
+                                                    int reason,
+                                                    int lu_health_triggered,
+                                                    int safety_forced);
+void lp_telemetry_record_compute_reduced_costs_timed(SimplexSolver *solver,
+                                                     int phase,
+                                                     double start_ms);
+void lp_telemetry_record_pricing(SimplexSolver *solver,
+                                 int phase,
+                                 double elapsed_ms);
+void lp_telemetry_record_pricing_timed(SimplexSolver *solver,
+                                       int phase,
+                                       double start_ms);
+void lp_telemetry_record_ratio(SimplexSolver *solver,
+                               int phase,
+                               double elapsed_ms);
+void lp_telemetry_record_ratio_timed(SimplexSolver *solver,
+                                     int phase,
+                                     double start_ms);
+void lp_telemetry_record_pivot(SimplexSolver *solver,
+                               int phase,
+                               double elapsed_ms);
+void lp_telemetry_record_pivot_timed(SimplexSolver *solver,
+                                     int phase,
+                                     double start_ms);
+void lp_telemetry_record_periodic_refactor_trigger(SimplexSolver *solver,
+                                                   int phase,
+                                                   int lu_health_triggered);
+void lp_telemetry_record_phase1_dir_stabilize_force(SimplexSolver *solver,
+                                                    int force_extreme_dir,
+                                                    int force_lu_health);
+void lp_telemetry_record_phase1_dir_stabilize_cooldown_candidate(
+    SimplexSolver *solver,
+    double dir_inf_ratio);
+void lp_telemetry_record_phase1_dir_stabilize_skip(SimplexSolver *solver,
+                                                   int used_full_recompute);
+void lp_telemetry_record_phase1_dir_stabilize_skip_no_recompute(
+    SimplexSolver *solver);
+void lp_telemetry_record_phase1_dir_stabilize_skip_guard_refresh(
+    SimplexSolver *solver);
+void lp_telemetry_record_phase1_dir_stabilize_escape_gate(
+    SimplexSolver *solver,
+    int event);
+void lp_telemetry_record_phase1_dir_stabilize_refactor_trigger(
+    SimplexSolver *solver,
+    int trigger);
+void lp_telemetry_record_phase1_force_pivot_budget_dir_event_seen(
+    SimplexSolver *solver);
+void lp_telemetry_record_phase1_force_pivot_budget_pivot_spend(
+    SimplexSolver *solver);
+void lp_telemetry_record_phase1_force_pivot_relax(SimplexSolver *solver);
+void lp_telemetry_record_phase1_force_extreme_relax(SimplexSolver *solver);
+void lp_telemetry_record_phase1_force_extreme_bound_flip_relax(
+    SimplexSolver *solver);
+void lp_telemetry_record_phase1_force_extreme_catastrophic_tiny_theta_relax(
+    SimplexSolver *solver);
+void lp_telemetry_record_phase1_force_extreme_tiny_theta_relax(
+    SimplexSolver *solver);
+void lp_telemetry_record_phase1_force_extreme_tiny_theta_relax_post_dir_skip_retry(
+    SimplexSolver *solver);
+void lp_telemetry_record_phase1_force_extreme_tiny_theta_relax_post_dir_skip_dual_rescue(
+    SimplexSolver *solver);
+void lp_telemetry_record_phase1_force_extreme_tiny_theta_relax_post_dir_skip_forced_refactor(
+    SimplexSolver *solver);
+void lp_telemetry_record_phase1_force_extreme_tiny_theta_relax_refactor(
+    SimplexSolver *solver,
+    int reason);
+void lp_telemetry_record_phase1_force_extreme_tiny_theta_relax_next_failed_stabilize(
+    SimplexSolver *solver);
+void lp_telemetry_record_phase1_force_extreme_tiny_theta_relax_next_ratio_breakdown(
+    SimplexSolver *solver);
+void lp_telemetry_record_phase1_force_extreme_tiny_theta_relax_next_pivot_fail(
+    SimplexSolver *solver);
+void lp_telemetry_record_phase1_force_extreme_tiny_theta_relax_next_pivot_success(
+    SimplexSolver *solver);
+void lp_telemetry_record_phase1_recompute(SimplexSolver *solver,
+                                          LPPhase1RecomputeReason reason);
+void lp_telemetry_record_phase1_recompute_rc_only(SimplexSolver *solver);
+void lp_telemetry_record_phase1_recompute_guard_forced_full(SimplexSolver *solver);
+void lp_telemetry_record_phase1_cleanup_attempt(SimplexSolver *solver);
+void lp_telemetry_record_phase1_cleanup_accepted(SimplexSolver *solver);
+void lp_telemetry_record_phase1_cleanup_rejected(SimplexSolver *solver);
+void lp_telemetry_record_phase1_cleanup_candidate_probe_reject(SimplexSolver *solver);
+void lp_telemetry_record_phase1_progress_window_refactor(SimplexSolver *solver);
+void lp_telemetry_record_phase1_progress_window_cleanup(SimplexSolver *solver);
+void lp_telemetry_record_phase1_progress_window_perturb(SimplexSolver *solver);
+void lp_telemetry_record_phase1_ratio_breakdown_retry(SimplexSolver *solver);
+void lp_telemetry_record_phase1_ratio_breakdown_escalation(SimplexSolver *solver);
+void lp_telemetry_record_phase1_pivot_fail_recovery_exclusion(SimplexSolver *solver);
+void lp_telemetry_record_phase1_no_pivot_event(SimplexSolver *solver,
+                                               LPPhase1NoPivotForceReason reason);
+void lp_telemetry_record_phase1_no_pivot_force(SimplexSolver *solver,
+                                               LPPhase1NoPivotForceReason reason);
+void lp_telemetry_record_phase1_no_pivot_no_progress(SimplexSolver *solver);
+void lp_telemetry_record_phase1_no_pivot_ladder_retry(SimplexSolver *solver,
+                                                      LPPhase1NoPivotForceReason reason);
+void lp_telemetry_record_phase1_no_pivot_ladder_dual_rescue(SimplexSolver *solver,
+                                                             LPPhase1NoPivotForceReason reason,
+                                                             int success);
+void lp_telemetry_record_phase1_no_pivot_ladder_forced_refactor(
+    SimplexSolver *solver,
+    LPPhase1NoPivotForceReason reason);
+void lp_telemetry_record_phase1_no_pivot_ladder_rescue_guard(
+    SimplexSolver *solver,
+    int forced_refactor);
+void lp_telemetry_record_phase1_direct_dual_rescue(SimplexSolver *solver,
+                                                   int success);
+void lp_telemetry_record_phase1_direct_dual_rescue_guard(
+    SimplexSolver *solver,
+    int fail_cap_block);
+
+void lp_telemetry_record_phase1_dual_rescue_exit(
+    SimplexSolver *solver,
+    LPPhase1DualRescueExitReason reason);
+void lp_telemetry_record_phase1_soft_lu_policy_cooldown_defer(
+    SimplexSolver *solver);
+void lp_telemetry_record_dual_ratio_no_entering(SimplexSolver *solver);
+void lp_telemetry_record_dual_theta_nonpositive(SimplexSolver *solver);
+void lp_telemetry_record_dual_pivot_reject_small(SimplexSolver *solver);
+void lp_telemetry_record_dual_bound_flip_applied(SimplexSolver *solver,
+                                                 int flips);
+void lp_telemetry_record_dual_bound_flip_applied_startup(SimplexSolver *solver,
+                                                         int flips);
+void lp_telemetry_record_dual_bound_flip_applied_iterative(SimplexSolver *solver,
+                                                           int flips);
+void lp_telemetry_record_dual_lu_hard_trigger(SimplexSolver *solver);
+void lp_telemetry_record_reinvert_shadow(SimplexSolver *solver,
+                                         int phase,
+                                         LPReinvertDecision suggested_decision,
+                                         LPReinvertReason suggested_reason,
+                                         int suggested_refactor,
+                                         int actual_refactor);
+void lp_telemetry_lu_record_dense_factorize_ms(LUFactorization *lu,
+                                               double elapsed_ms);
+void lp_telemetry_lu_record_dense_factorize_timed(LUFactorization *lu,
+                                                  double start_ms);
+void lp_telemetry_lu_record_update_apply_forward_ms(LUFactorization *lu,
+                                                    double elapsed_ms);
+void lp_telemetry_lu_record_update_apply_backward_ms(LUFactorization *lu,
+                                                     double elapsed_ms);
+void lp_telemetry_lu_record_compact_factor_ms(LUFactorization *lu,
+                                              double elapsed_ms);
+void lp_telemetry_lu_record_compact_solve_ms(LUFactorization *lu,
+                                             double elapsed_ms);
+void lp_telemetry_lu_record_symbolic_cache_hit(LUFactorization *lu);
+void lp_telemetry_lu_record_symbolic_cache_miss(LUFactorization *lu);
+void lp_telemetry_lu_record_symbolic_call(LUFactorization *lu,
+                                          double elapsed_ms);
+void lp_telemetry_lu_record_symbolic_call_timed(LUFactorization *lu,
+                                                double start_ms);
+void lp_telemetry_lu_mark_identity_sep_failure(LUFactorization *lu);
+void lp_telemetry_lu_record_numeric_stages(LUFactorization *lu,
+                                           int last_k,
+                                           double a_struct_build_ms,
+                                           double markowitz_numeric_ms,
+                                           double supernode_numeric_ms,
+                                           double dense_ge_numeric_ms,
+                                           double identity_placement_ms,
+                                           double coo_to_csc_ms);
+void lp_telemetry_lu_mark_sparse_numeric_failure(LUFactorization *lu,
+                                                 int reason);
+void lp_telemetry_lu_set_sparse_fallback_reason(LUFactorization *lu,
+                                                int reason);
+void lp_telemetry_lu_mark_numeric_full_retry_attempt(LUFactorization *lu);
+void lp_telemetry_lu_mark_numeric_full_retry_success(LUFactorization *lu);
+void lp_telemetry_lu_mark_numeric_full_retry_failure(LUFactorization *lu);
+void lp_telemetry_lu_mark_symbolic_failure(LUFactorization *lu,
+                                           int reason);
+void lp_telemetry_lu_mark_symbolic_full_retry_attempt(LUFactorization *lu);
+void lp_telemetry_lu_mark_symbolic_full_retry_success(LUFactorization *lu);
+void lp_telemetry_lu_mark_symbolic_full_retry_numeric_failure(LUFactorization *lu);
+void lp_telemetry_lu_mark_symbolic_full_retry_mkz_attempt(LUFactorization *lu);
+void lp_telemetry_lu_mark_symbolic_full_retry_mkz_success(LUFactorization *lu);
+void lp_telemetry_lu_mark_symbolic_full_retry_mkz_failure(LUFactorization *lu);
+void lp_telemetry_lu_mark_numeric_backend_markowitz(LUFactorization *lu);
+void lp_telemetry_lu_mark_numeric_backend_supernode(LUFactorization *lu);
+void lp_telemetry_lu_mark_numeric_backend_dense_ge(LUFactorization *lu);
+void lp_telemetry_lu_mark_identity_sep_retry_lane_chosen(LUFactorization *lu,
+                                                         int lane);
+void lp_telemetry_lu_mark_identity_sep_retry_lane_success(LUFactorization *lu,
+                                                          int lane);
+void lp_telemetry_lu_mark_sn_cost_gate_trip(LUFactorization *lu);
+void lp_telemetry_lu_mark_sn_cost_gate_skip(LUFactorization *lu);
+void lp_telemetry_lu_mark_sn_cost_gate_reset(LUFactorization *lu);
+void lp_telemetry_lu_mark_sparse_success(LUFactorization *lu);
+void lp_telemetry_lu_mark_dense_fallback(LUFactorization *lu);
+void lp_telemetry_lu_clear_mkz_last_failure(LUFactorization *lu);
+void lp_telemetry_lu_mark_mkz_attempt(LUFactorization *lu);
+void lp_telemetry_lu_mark_mkz_success(LUFactorization *lu);
+void lp_telemetry_lu_mark_mkz_failure_reason(LUFactorization *lu,
+                                             int rc);
+void lp_telemetry_lu_mark_mkz_failure(LUFactorization *lu,
+                                      int rc);
+void lp_telemetry_lu_mark_mkz_singular_retry_attempt(LUFactorization *lu);
+void lp_telemetry_lu_mark_mkz_singular_retry_success(LUFactorization *lu);
+void lp_telemetry_lu_mark_mkz_singular_retry_failure(LUFactorization *lu);
+void lp_telemetry_lu_mark_mkz_reserved_fallback_attempt(LUFactorization *lu);
+void lp_telemetry_lu_mark_mkz_reserved_fallback_accept(LUFactorization *lu);
+void lp_telemetry_lu_mark_mkz_reserved_fallback_reject(LUFactorization *lu);
+void lp_telemetry_lu_mark_mkz_circuit_trip(LUFactorization *lu);
+void lp_telemetry_lu_mark_mkz_circuit_skip(LUFactorization *lu);
+void lp_telemetry_lu_mark_mkz_circuit_reset(LUFactorization *lu);
+void lp_telemetry_lu_mark_mkz_global_skip_trip(LUFactorization *lu);
+void lp_telemetry_lu_mark_mkz_global_skip_skip(LUFactorization *lu);
+void lp_telemetry_lu_mark_mkz_global_skip_reset(LUFactorization *lu);
+void lp_telemetry_lu_mark_mkz_profile_retry_attempt(LUFactorization *lu);
+void lp_telemetry_lu_mark_mkz_profile_retry_success(LUFactorization *lu);
+void lp_telemetry_lu_mark_mkz_profile_retry_failure(LUFactorization *lu);
+void lp_telemetry_lu_mark_mkz_profile_retry_terminal_failure(LUFactorization *lu,
+                                                             int reason);
+void lp_telemetry_lu_add_mkz_scan_work(LUFactorization *lu,
+                                       uint64_t primary_scan_entries,
+                                       uint64_t rescue_scan_entries,
+                                       uint64_t reserved_scan_entries,
+                                       uint64_t update_existing_entries,
+                                       uint64_t update_fill_candidates,
+                                       uint64_t hint_fallback_scans,
+                                       uint64_t hint_fallback_scan_entries);
+void lp_telemetry_lu_add_mkz_colmax_work(LUFactorization *lu,
+                                         uint64_t affected_columns,
+                                         uint64_t affected_columns_max,
+                                         uint64_t col_max_scan_entries);
+void lp_telemetry_lu_add_supernode_work(LUFactorization *lu,
+                                        uint64_t phase_samples,
+                                        double panel_factor_ms,
+                                        double panel_pivot_search_ms,
+                                        double panel_swap_scatter_ms,
+                                        double panel_eliminate_ms,
+                                        uint64_t panel_pivot_search_calls,
+                                        uint64_t panel_pivot_search_entries_total,
+                                        uint64_t panel_pivot_search_size1_calls,
+                                        double panel_pivot_search_size1_ms,
+                                        uint64_t panel_pivot_search_size2_calls,
+                                        double panel_pivot_search_size2_ms,
+                                        uint64_t panel_pivot_search_size3_4_calls,
+                                        double panel_pivot_search_size3_4_ms,
+                                        uint64_t panel_pivot_search_size5_8_calls,
+                                        double panel_pivot_search_size5_8_ms,
+                                        uint64_t panel_pivot_search_size9p_calls,
+                                        double panel_pivot_search_size9p_ms,
+                                        uint64_t panel_pivot_search_reserved_present_calls,
+                                        uint64_t panel_pivot_search_reserved_present_entries,
+                                        double panel_pivot_search_reserved_present_ms,
+                                        uint64_t panel_pivot_search_reserved_alt_chosen_calls,
+                                        double panel_pivot_search_reserved_alt_chosen_ms,
+                                        uint64_t size1_u_emit_calls,
+                                        double size1_u_emit_ms,
+                                        uint64_t size1_update_scan_calls,
+                                        double size1_update_scan_ms,
+                                        uint64_t size1_update_apply_calls,
+                                        double size1_update_apply_ms,
+                                        double size1_update_row_gather_ms,
+                                        double size1_update_col_indirection_ms,
+                                        double size1_update_outer_product_ms,
+                                        uint64_t size1_update_full_calls,
+                                        double size1_update_full_ms,
+                                        uint64_t size1_update_cols1_calls,
+                                        double size1_update_cols1_ms,
+                                        uint64_t size1_update_cols2_calls,
+                                        double size1_update_cols2_ms,
+                                        uint64_t size1_update_cols3_calls,
+                                        double size1_update_cols3_ms,
+                                        uint64_t size1_update_cols4_calls,
+                                        double size1_update_cols4_ms,
+                                        uint64_t size1_update_cols5p_calls,
+                                        double size1_update_cols5p_ms,
+                                        uint64_t size1_update_cols5p_rows1_8_calls,
+                                        double size1_update_cols5p_rows1_8_ms,
+                                        uint64_t size1_update_cols5p_rows9_32_calls,
+                                        double size1_update_cols5p_rows9_32_ms,
+                                        uint64_t size1_update_cols5p_rows33_128_calls,
+                                        double size1_update_cols5p_rows33_128_ms,
+                                        uint64_t size1_update_cols5p_rows129p_calls,
+                                        double size1_update_cols5p_rows129p_ms,
+                                        double u_emit_ms,
+                                        double active_set_ms,
+                                        double pack_blocks_ms,
+                                        double full_update_ms,
+                                        double compact_update_ms,
+                                        uint64_t active_row_scan_entries,
+                                        uint64_t active_col_scan_entries,
+                                        uint64_t trailing_rows_total,
+                                        uint64_t trailing_cols_total,
+                                        uint64_t active_rows_total,
+                                        uint64_t active_cols_total,
+                                        uint64_t pack_l_entries_total,
+                                        uint64_t pack_u_entries_total,
+                                        uint64_t dense_triplets_total,
+                                        uint64_t compact_triplets_total,
+                                        uint64_t full_update_calls,
+                                        uint64_t compact_update_calls,
+                                        uint64_t skipped_update_calls,
+                                        uint64_t compact_cols1_calls,
+                                        uint64_t compact_cols1_rows_total,
+                                        double compact_cols1_ms,
+                                        uint64_t compact_cols2_calls,
+                                        uint64_t compact_cols2_rows_total,
+                                        double compact_cols2_ms,
+                                        uint64_t compact_cols3_calls,
+                                        uint64_t compact_cols3_rows_total,
+                                        double compact_cols3_ms,
+                                        uint64_t compact_cols4_calls,
+                                        uint64_t compact_cols4_rows_total,
+                                        double compact_cols4_ms,
+                                        uint64_t compact_cols5p_calls,
+                                        uint64_t compact_cols5p_rows_total,
+                                        double compact_cols5p_ms);
+
 #endif /* LP_TELEMETRY_H */

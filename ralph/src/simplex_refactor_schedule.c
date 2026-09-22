@@ -12,6 +12,7 @@
 #include "simplex_refactor_schedule.h"
 #include "simplex_internal.h"
 #include "lp_reinvert_controller.h"
+#include "lp_telemetry.h"
 
 /* ── Constants (previously in simplex.c, only used by moved functions) ── */
 
