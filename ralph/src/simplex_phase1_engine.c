@@ -7,6 +7,7 @@
 #include <string.h>
 #include "simplex_phase1_engine.h"
 #include "simplex_internal.h"
+#include "lp_telemetry.h"
 
 static double p1_entering_bound_flip_distance(const SimplexTableau *tab,
                                               int entering) {

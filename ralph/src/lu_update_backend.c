@@ -4,6 +4,7 @@
 #include "lp.h"
 #include "lp_bfcp_policy.h"
 #include "lu_update_backend.h"
+#include "lp_telemetry.h"
 
 static int lu_update_backend_is_schur_backend(const LUFactorization *lu) {
     if (!lu) return 0;

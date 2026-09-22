@@ -16,6 +16,7 @@
 #include "lp_glpk_strict.h"
 #include "lp_basis_governor.h"
 #include "lp_log.h"
+#include "lp_telemetry.h"
 
 #include <math.h>
 #include <stdlib.h>
