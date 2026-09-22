@@ -26,6 +26,7 @@
 #include "ralph_internal.h"
 #include "tuning_policy.h"
 #include "ralph_params.h"
+#include "lp_telemetry.h"
 
 #define RALPH_VERSION "0.1.0"
 

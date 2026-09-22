@@ -13,6 +13,7 @@
 #include <math.h>
 #include "lp.h"
 #include "lp_refactor_policy.h"
+#include "lp_telemetry.h"
 
 static int tests_run = 0;
 static int tests_passed = 0;
