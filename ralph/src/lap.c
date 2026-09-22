@@ -4094,7 +4094,7 @@ static RalphLapStatus lap_solve_k_best_unified(
         final_cost = padded_cost;
 
         /* Apply forbidden to padded cost */
-        if (opts && opts->num_forbidden > 0) {
+        if (opts->num_forbidden > 0) {
             for (int f = 0; f < opts->num_forbidden; f++) {
                 int i = opts->forbidden_rows[f];
                 int j = opts->forbidden_cols[f];
@@ -4105,7 +4105,7 @@ static RalphLapStatus lap_solve_k_best_unified(
         }
     } else {
         /* Square - apply forbidden as before */
-        if (opts && opts->num_forbidden > 0) {
+        if (opts->num_forbidden > 0) {
             if (ws && ws->work_cost) {
                 memcpy(ws->work_cost, cost, n * n * sizeof(double));
                 for (int f = 0; f < opts->num_forbidden; f++) {
