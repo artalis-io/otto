@@ -119,6 +119,9 @@ TEST_INFLATE_BIN = test_inflate
 # seeded as `min_x = p[0].x, max_x = p[0].x`, or two capacities that happen
 # to start equal. Gating on it would mean rewriting correct code to look
 # different.
+# -i ../vendor: vendored code is not ours to gate on. cppcheck follows
+# includes into miniz and tre and reports their uninitialised-variable and
+# mbtowc findings as if they were this module's.
 # Static analysis. Complements the sanitizers rather than repeating them:
 # those need a path to be executed, cppcheck reads code no test reaches.
 #
@@ -129,6 +132,7 @@ TEST_INFLATE_BIN = test_inflate
 cppcheck:
 	cppcheck --enable=warning,performance,portability --suppress=missingIncludeSystem \
 	  --suppress=duplicateAssignExpression \
+	  -i ../vendor \
 	  --error-exitcode=1 --inline-suppr --std=c11 $(INCLUDES) \
 	  $(SRCS)
 

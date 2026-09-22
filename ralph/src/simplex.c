@@ -1863,6 +1863,11 @@ fail:
 }
 
 int tableau_refactorize(SimplexTableau *tab) {
+    /* The three expressions below already treat tab as optional
+     * (`tab ? tab->owner : NULL`, `(tab && tab->lu)`), and then the phase
+     * check dereferences it bare. Guard once, at the top, so the function
+     * has one answer to whether tab can be null. */
+    if (!tab) return -1;
     double t_refactor_ms = lp_telemetry_timer_start();
     SimplexSolver *owner = tab ? tab->owner : NULL;
     int reason = RALPH_REFACTOR_REASON_OTHER;
