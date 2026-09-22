@@ -89,6 +89,7 @@ LIB_FILE = libvelo.a
 # mk/flagstamp.mk for what that cost before it existed.
 DEBUG_GOALS = debug test-asan
 STAMP_ARTIFACTS = $(CORE_OBJS) $(LIB_FILE)
+STAMP_REQUIRE_DIRS = ../shared
 include ../mk/flagstamp.mk
 
 
