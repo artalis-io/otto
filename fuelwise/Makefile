@@ -227,7 +227,22 @@ test-asan: LDFLAGS += $(DEBUG_LDFLAGS)
 # transport binaries -- which is the same scope the other modules' targets have.
 test-asan: clean test-transport test-unit
 
-.PHONY: all lib clean clean-all debug test test-regression test-unit test-bench test-transport wasm install uninstall ralph shared help fuzz-api fuzz-api-smoke fuzz-smoke test-asan
+# Static analysis. Complements the sanitizers rather than repeating them:
+# those need a path to be executed, cppcheck reads code no test reaches.
+#
+# The gating set is warning,performance,portability with
+# --error-exitcode=1. `style` and `information` are left out deliberately --
+# they report on taste and on headers cppcheck could not resolve, and
+# neither should fail a build. cppcheck-all turns them on for reading.
+cppcheck:
+	cppcheck --enable=warning,performance,portability --suppress=missingIncludeSystem \
+	  --error-exitcode=1 --inline-suppr --std=c11 $(INCLUDES) \
+	  $(SOURCES)
+
+cppcheck-all:
+	cppcheck --enable=all --suppress=missingIncludeSystem --suppress=unusedFunction \
+	  --std=c11 $(INCLUDES) $(SOURCES)
+.PHONY: all lib clean clean-all debug test test-regression test-unit test-bench test-transport wasm install uninstall ralph shared help fuzz-api fuzz-api-smoke fuzz-smoke test-asan cppcheck cppcheck-all
 
 # Build WASM (delegates to wasm/ subdirectory)
 wasm:

@@ -37,7 +37,22 @@ include ../mk/flagstamp.mk
 TEST_BIN = test_arbor
 TEST_OP_BIN = test_ar_operators
 
-.PHONY: all clean test test-asan lib debug help
+# Static analysis. Complements the sanitizers rather than repeating them:
+# those need a path to be executed, cppcheck reads code no test reaches.
+#
+# The gating set is warning,performance,portability with
+# --error-exitcode=1. `style` and `information` are left out deliberately --
+# they report on taste and on headers cppcheck could not resolve, and
+# neither should fail a build. cppcheck-all turns them on for reading.
+cppcheck:
+	cppcheck --enable=warning,performance,portability --suppress=missingIncludeSystem \
+	  --error-exitcode=1 --inline-suppr --std=c11 $(INCLUDES) \
+	  $(SRCS)
+
+cppcheck-all:
+	cppcheck --enable=all --suppress=missingIncludeSystem --suppress=unusedFunction \
+	  --std=c11 $(INCLUDES) $(SRCS)
+.PHONY: all clean test test-asan lib debug help cppcheck cppcheck-all
 
 all: lib $(TEST_BIN) $(TEST_OP_BIN)
 

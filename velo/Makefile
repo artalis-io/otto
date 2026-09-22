@@ -154,7 +154,22 @@ $(TSAN_TEST_BIN): tests/test_velo.c $(CORE_SRCS) $(SHARED_DIR)/libshared.a
 tsan: $(TSAN_TEST_BIN)
 	./$(TSAN_TEST_BIN)
 
-.PHONY: all clean test test-transport bench lib debug wasm route-bench omp-mode test-osrm help fuzz-api fuzz-api-smoke fuzz-smoke test-asan tsan
+# Static analysis. Complements the sanitizers rather than repeating them:
+# those need a path to be executed, cppcheck reads code no test reaches.
+#
+# The gating set is warning,performance,portability with
+# --error-exitcode=1. `style` and `information` are left out deliberately --
+# they report on taste and on headers cppcheck could not resolve, and
+# neither should fail a build. cppcheck-all turns them on for reading.
+cppcheck:
+	cppcheck --enable=warning,performance,portability --suppress=missingIncludeSystem \
+	  --error-exitcode=1 --inline-suppr --std=c11 $(INCLUDES) \
+	  $(CORE_SRCS)
+
+cppcheck-all:
+	cppcheck --enable=all --suppress=missingIncludeSystem --suppress=unusedFunction \
+	  --std=c11 $(INCLUDES) $(CORE_SRCS)
+.PHONY: all clean test test-transport bench lib debug wasm route-bench omp-mode test-osrm help fuzz-api fuzz-api-smoke fuzz-smoke test-asan tsan cppcheck cppcheck-all
 
 # Default target
 all: lib $(TEST_BIN)

@@ -85,7 +85,22 @@ test-asan: CFLAGS = $(DEBUG_CFLAGS)
 test-asan: LDFLAGS += $(DEBUG_LDFLAGS)
 test-asan: clean test
 
-.PHONY: all clean test lib debug tools fuzz fuzz-lib fuzz-xlsx fuzz-pdf fuzz-csv fuzz-smoke help test-asan
+# Static analysis. Complements the sanitizers rather than repeating them:
+# those need a path to be executed, cppcheck reads code no test reaches.
+#
+# The gating set is warning,performance,portability with
+# --error-exitcode=1. `style` and `information` are left out deliberately --
+# they report on taste and on headers cppcheck could not resolve, and
+# neither should fail a build. cppcheck-all turns them on for reading.
+cppcheck:
+	cppcheck --enable=warning,performance,portability --suppress=missingIncludeSystem \
+	  --error-exitcode=1 --inline-suppr --std=c11 $(INCLUDES) \
+	  $(SRCS)
+
+cppcheck-all:
+	cppcheck --enable=all --suppress=missingIncludeSystem --suppress=unusedFunction \
+	  --std=c11 $(INCLUDES) $(SRCS)
+.PHONY: all clean test lib debug tools fuzz fuzz-lib fuzz-xlsx fuzz-pdf fuzz-csv fuzz-smoke help test-asan cppcheck cppcheck-all
 
 all: lib $(TEST_REGEX_BIN) $(TEST_INGEST_BIN) $(TEST_XFORM_BIN) $(TEST_VALIDATE_BIN) $(TEST_DISCOVER_BIN) $(TEST_MERGE_BIN) $(TEST_EMIT_BIN) $(TEST_ISSUE_BIN) $(TEST_DIFF_BIN) $(TEST_PIPELINE_BIN) $(TEST_VERIFY_BIN)
 

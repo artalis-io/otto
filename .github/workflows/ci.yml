@@ -1430,10 +1430,9 @@ jobs:
   # sitting unwired while the solver core leaked, and surge's own `tsan`
   # target, which had never run when it was wired up in #216.
   #
-  # surge is the only module with these targets. Extending them to the rest
-  # is a separate change: this one establishes that the existing target is
-  # green and stays green, rather than bundling nine modules of new findings
-  # into the same commit.
+  # Every module now has the pair. surge carried them for a long time and
+  # nothing ran either; the other eight were added when the audit that
+  # wanted them found regex-based checking too unreliable to trust.
   #
   # It complements the sanitizers rather than repeating them. Those need a
   # path to be executed; cppcheck reads code that no test reaches, which is
@@ -1447,7 +1446,8 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        module: [surge]
+        module: [surge, shared, ralph, arbor, velo, carta, locus,
+                 fuelwise, nexus]
 
     steps:
       - name: Checkout code
