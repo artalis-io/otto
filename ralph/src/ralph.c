@@ -818,9 +818,13 @@ int ralph_set_mip_start_copy(RalphModel *model, const double *x,
 
     double *copy = (double*)malloc((size_t)n * sizeof(double));
     int *mask_copy = (int*)calloc((size_t)n, sizeof(int));
-    if (!copy) return -1;
-    if (!mask_copy) {
+    /* One exit for both. The previous form returned on !copy before looking
+     * at mask_copy, so a failure of the first allocation leaked the second
+     * whenever it had succeeded. free(NULL) is defined, so this needs no
+     * further guarding. */
+    if (!copy || !mask_copy) {
         free(copy);
+        free(mask_copy);
         return -1;
     }
     memcpy(copy, x, (size_t)n * sizeof(double));

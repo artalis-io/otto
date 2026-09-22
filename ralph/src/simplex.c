@@ -1494,6 +1494,7 @@ full_rebuild_basis:
  * 2. If that fails, try crash basis (all slacks where possible)
  */
 int repair_singular_basis(SimplexTableau *tab) {
+    if (!tab) return 0;   /* reachable per cppcheck CTU analysis */
     int m = tab->m;
     int n = tab->n;
     int num_struct = tab->num_structural_ext;

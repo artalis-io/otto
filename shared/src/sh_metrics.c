@@ -666,38 +666,37 @@ void sh_metrics_http_request(const char *method, const char *path,
     sh_metrics_counter_inc("http_requests_total", 1,
                            method ? method : "UNKNOWN",
                            status_class,
-                           NULL);
-
+                           (const char *)NULL);
     if (duration_ms >= 0) {
         sh_metrics_histogram_observe("http_request_duration_ms", duration_ms,
                                      method ? method : "UNKNOWN",
-                                     NULL);
+                                     (const char *)NULL);
     }
 
     if (request_bytes > 0) {
         sh_metrics_histogram_observe("http_request_size_bytes", (double)request_bytes,
-                                     NULL);
+                                     (const char *)NULL);
     }
 
     if (response_bytes > 0) {
         sh_metrics_histogram_observe("http_response_size_bytes", (double)response_bytes,
-                                     NULL);
+                                     (const char *)NULL);
     }
 }
 
 void sh_metrics_http_connections(int active) {
-    sh_metrics_gauge_set("http_active_connections", (double)active, NULL);
+    sh_metrics_gauge_set("http_active_connections", (double)active, (const char *)NULL);
 }
 
 void sh_metrics_workqueue(int depth, int capacity, int dropped, int expired) {
-    sh_metrics_gauge_set("workqueue_depth", (double)depth, NULL);
-    sh_metrics_gauge_set("workqueue_capacity", (double)capacity, NULL);
-    sh_metrics_counter_inc("workqueue_dropped_total", dropped, NULL);
-    sh_metrics_counter_inc("workqueue_expired_total", expired, NULL);
+    sh_metrics_gauge_set("workqueue_depth", (double)depth, (const char *)NULL);
+    sh_metrics_gauge_set("workqueue_capacity", (double)capacity, (const char *)NULL);
+    sh_metrics_counter_inc("workqueue_dropped_total", dropped, (const char *)NULL);
+    sh_metrics_counter_inc("workqueue_expired_total", expired, (const char *)NULL);
 }
 
 void sh_metrics_ratelimit(int allowed, int denied, int active_entries) {
-    sh_metrics_counter_inc("ratelimit_allowed_total", allowed, NULL);
-    sh_metrics_counter_inc("ratelimit_denied_total", denied, NULL);
-    sh_metrics_gauge_set("ratelimit_active_entries", (double)active_entries, NULL);
+    sh_metrics_counter_inc("ratelimit_allowed_total", allowed, (const char *)NULL);
+    sh_metrics_counter_inc("ratelimit_denied_total", denied, (const char *)NULL);
+    sh_metrics_gauge_set("ratelimit_active_entries", (double)active_entries, (const char *)NULL);
 }

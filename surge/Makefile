@@ -268,8 +268,12 @@ debug: clean all
 
 # --- Static Analysis ---
 
+# duplicateAssignExpression is suppressed: it is a `style` check this target
+# does not enable, cppcheck reports it anyway, and on this codebase it fires
+# on ordinary idiom such as a bbox seeded as `min_x = p[0].x, max_x = p[0].x`.
 cppcheck:
 	cppcheck --enable=warning,performance,portability --suppress=missingIncludeSystem \
+	  --suppress=duplicateAssignExpression \
 	  --error-exitcode=1 --inline-suppr --std=c11 \
 	  -I include -I ../arbor/include -I ../shared/include \
 	  $(SRCS)

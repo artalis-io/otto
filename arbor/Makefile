@@ -37,6 +37,12 @@ include ../mk/flagstamp.mk
 TEST_BIN = test_arbor
 TEST_OP_BIN = test_ar_operators
 
+# duplicateAssignExpression is suppressed everywhere. It is a `style` check,
+# which this target deliberately does not enable -- cppcheck reports it
+# regardless -- and on this codebase it fires on ordinary idiom: a bbox
+# seeded as `min_x = p[0].x, max_x = p[0].x`, or two capacities that happen
+# to start equal. Gating on it would mean rewriting correct code to look
+# different.
 # Static analysis. Complements the sanitizers rather than repeating them:
 # those need a path to be executed, cppcheck reads code no test reaches.
 #
@@ -46,6 +52,7 @@ TEST_OP_BIN = test_ar_operators
 # neither should fail a build. cppcheck-all turns them on for reading.
 cppcheck:
 	cppcheck --enable=warning,performance,portability --suppress=missingIncludeSystem \
+	  --suppress=duplicateAssignExpression \
 	  --error-exitcode=1 --inline-suppr --std=c11 $(INCLUDES) \
 	  $(SRCS)
 

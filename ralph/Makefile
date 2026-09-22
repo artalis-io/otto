@@ -1490,6 +1490,12 @@ tsan: $(TSAN_TEST_BIN)
 # partitioning rather than value punning. Rewriting 51 sites in the numerical
 # core to satisfy the checker would be real risk for no defect fixed. Written
 # down rather than left to a future reader to rediscover.
+# duplicateAssignExpression is suppressed everywhere. It is a `style` check,
+# which this target deliberately does not enable -- cppcheck reports it
+# regardless -- and on this codebase it fires on ordinary idiom: a bbox
+# seeded as `min_x = p[0].x, max_x = p[0].x`, or two capacities that happen
+# to start equal. Gating on it would mean rewriting correct code to look
+# different.
 # Static analysis. Complements the sanitizers rather than repeating them:
 # those need a path to be executed, cppcheck reads code no test reaches.
 #
@@ -1500,6 +1506,7 @@ tsan: $(TSAN_TEST_BIN)
 cppcheck:
 	cppcheck --enable=warning,performance,portability --suppress=missingIncludeSystem \
 	  --suppress=invalidPointerCast \
+	  --suppress=duplicateAssignExpression \
 	  --error-exitcode=1 --inline-suppr --std=c11 $(INCLUDES) \
 	  $(SOURCES)
 

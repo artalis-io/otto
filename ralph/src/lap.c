@@ -421,6 +421,7 @@ static RalphLapStatus lap_solve_internal(
     double *total_cost,
     RalphLapWorkspace *ws
 ) {
+    if (!ws) return RALPH_LAP_INVALID_INPUT;   /* reachable per cppcheck CTU */
     int i, j, k;
     RalphLapStatus status = RALPH_LAP_SUCCESS;
 
