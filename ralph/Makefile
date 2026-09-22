@@ -1481,7 +1481,50 @@ $(TSAN_TEST_BIN): $(LAP_TEST_SOURCES) $(SOURCES) $(SHARED_LIB)
 tsan: $(TSAN_TEST_BIN)
 	./$(TSAN_TEST_BIN)
 
-.PHONY: all lib clean debug test test-transport test-transport-asan test-core test-lp-suite test-mip-suite test-regression-suites test-edge test-lap test-netflow test-detect test-optim test-api test-benders test-benders-debug test-benders-known-regression test-benders-warmstart test-mip-bug test-bb-node-pool test-gmi-cut-validity test-cover-cuts-generated test-mip-warmstart test-mip-lp-recovery test-mip-start-sparse test-mip-start-repair test-spp-context test-spp-cuts test-lifted-cover test-presolve-differential test-spp-heuristic test-spp-branch test-benders-master-start test-warmstart-serde test-beaconfd test-beaconfd-trace test-phase1-recovery test-phase1-engine test-phase1-zones test-simplex-policy test-dual-ratio-flip test-lp-refactor-policy test-lp-reinvert-controller test-lp-basis-governor test-lp-basis-governor-runtime test-lp-determinism test-lp-sensitivity test-lp-conflict test-lp-algorithm-api test-lp-policy-glpk-compat test-lp-glpk-strict test-lp-glpk-strict-bfcp test-lp-bfcp-policy test-lp-dispatch test-lp-external-adapter test-lp-external-adapter-api test-lp-external-introspection-api test-lp-external-failure-api test-lp-external-oop-runner test-lp-external-glpk-oop test-lp-external-glpk-oop-integration test-lp-telemetry test-lp-telemetry-solver test-lp-telemetry-lu test-lp-telemetry-gate test-lp-telemetry-lu-sparse test-lp-public-api-split test-mip-public-api-split test-lp-error-api test-lu-markowitz test-lu-supernode test-netlib test-netlib-full test-netlib-gate test-netlib-gate-small test-netlib-gate-stress-fit1p-nesm test-netlib-gate-stress-fit1p-nesm-gating test-netlib-gate-stress-fit1p-nesm-non-gating test-netlib-gate-pilot-focus test-netlib-gate-timeout22 test-netlib-gate-crash6-norelax-noflip test-netlib-gate-control-all-canary phase1-canaries glpk-strict-plan-init glpk-strict-plan-status glpk-strict-plan-next glpk-strict-plan-phase1 glpk-strict-plan-phase2 glpk-strict-plan-phase3 bench bench-lap bench-lap-perf bench-lap-perf-quick bench-netflow compare-glpk bench-glpk bench-glpk-quick bench-mip bench-mip-quick bench-mip-cover-effect bench-mip-specialized bench-mip-compare profile-bench build-ralph-benchmark download-netlib install uninstall help test-mps-parser test-node-cuts-diff test-time-limit test-unbounded-infinite-bound test-infeasible-equality-bounds test-phase1-oracle-glpk test-bandm test-blend test-lotfi test-lp-repair-deadline repro-cfl-crash bench-mip-specialized-quick bench-mip-compare-quick test-lp test-presolve fuzz-api fuzz-api-smoke fuzz-smoke test-obj-integrality test-asan test-suites-asan tsan
+# invalidPointerCast is suppressed here, and only here. It fires 51 times
+# across lap.c, lu.c, lu_sparse.c, netflow.c and simplex.c on one idiom: an
+# int array carved out of a double-typed scratch buffer, as in
+#     int *ib = (int *)(workspace + dbl_need);
+# The alignment is sound -- double is at least as strict as int -- and the
+# bytes are never read as both types in one lifetime, so this is scratch
+# partitioning rather than value punning. Rewriting 51 sites in the numerical
+# core to satisfy the checker would be real risk for no defect fixed. Written
+# down rather than left to a future reader to rediscover.
+# duplicateAssignExpression is suppressed everywhere. It is a `style` check,
+# which this target deliberately does not enable -- cppcheck reports it
+# regardless -- and on this codebase it fires on ordinary idiom: a bbox
+# seeded as `min_x = p[0].x, max_x = p[0].x`, or two capacities that happen
+# to start equal. Gating on it would mean rewriting correct code to look
+# different.
+# arrayIndexThenCheck is suppressed. It fires once, on the insertion sort
+# in optim/spp_context.c, where `key` is taken from ctx->row_order -- an
+# array this module builds and owns -- and used to index row_degree. The
+# function already rejects a null context and both arrays are sized
+# num_rows. Adding a bounds test would assert an invariant the caller
+# already guarantees, in the inner loop of a sort.
+# -i ../vendor: vendored code is not ours to gate on. cppcheck follows
+# includes into miniz and tre and reports their uninitialised-variable and
+# mbtowc findings as if they were this module's.
+# Static analysis. Complements the sanitizers rather than repeating them:
+# those need a path to be executed, cppcheck reads code no test reaches.
+#
+# The gating set is warning,performance,portability with
+# --error-exitcode=1. `style` and `information` are left out deliberately --
+# they report on taste and on headers cppcheck could not resolve, and
+# neither should fail a build. cppcheck-all turns them on for reading.
+cppcheck:
+	cppcheck --enable=warning,performance,portability --suppress=missingIncludeSystem \
+	  --suppress=invalidPointerCast \
+	  --suppress=duplicateAssignExpression \
+	  --suppress=arrayIndexThenCheck \
+	  -i ../vendor \
+	  --error-exitcode=1 --inline-suppr --std=c11 $(INCLUDES) \
+	  $(SOURCES)
+
+cppcheck-all:
+	cppcheck --enable=all --suppress=missingIncludeSystem --suppress=unusedFunction \
+	  --std=c11 $(INCLUDES) $(SOURCES)
+.PHONY: all lib clean debug test test-transport test-transport-asan test-core test-lp-suite test-mip-suite test-regression-suites test-edge test-lap test-netflow test-detect test-optim test-api test-benders test-benders-debug test-benders-known-regression test-benders-warmstart test-mip-bug test-bb-node-pool test-gmi-cut-validity test-cover-cuts-generated test-mip-warmstart test-mip-lp-recovery test-mip-start-sparse test-mip-start-repair test-spp-context test-spp-cuts test-lifted-cover test-presolve-differential test-spp-heuristic test-spp-branch test-benders-master-start test-warmstart-serde test-beaconfd test-beaconfd-trace test-phase1-recovery test-phase1-engine test-phase1-zones test-simplex-policy test-dual-ratio-flip test-lp-refactor-policy test-lp-reinvert-controller test-lp-basis-governor test-lp-basis-governor-runtime test-lp-determinism test-lp-sensitivity test-lp-conflict test-lp-algorithm-api test-lp-policy-glpk-compat test-lp-glpk-strict test-lp-glpk-strict-bfcp test-lp-bfcp-policy test-lp-dispatch test-lp-external-adapter test-lp-external-adapter-api test-lp-external-introspection-api test-lp-external-failure-api test-lp-external-oop-runner test-lp-external-glpk-oop test-lp-external-glpk-oop-integration test-lp-telemetry test-lp-telemetry-solver test-lp-telemetry-lu test-lp-telemetry-gate test-lp-telemetry-lu-sparse test-lp-public-api-split test-mip-public-api-split test-lp-error-api test-lu-markowitz test-lu-supernode test-netlib test-netlib-full test-netlib-gate test-netlib-gate-small test-netlib-gate-stress-fit1p-nesm test-netlib-gate-stress-fit1p-nesm-gating test-netlib-gate-stress-fit1p-nesm-non-gating test-netlib-gate-pilot-focus test-netlib-gate-timeout22 test-netlib-gate-crash6-norelax-noflip test-netlib-gate-control-all-canary phase1-canaries glpk-strict-plan-init glpk-strict-plan-status glpk-strict-plan-next glpk-strict-plan-phase1 glpk-strict-plan-phase2 glpk-strict-plan-phase3 bench bench-lap bench-lap-perf bench-lap-perf-quick bench-netflow compare-glpk bench-glpk bench-glpk-quick bench-mip bench-mip-quick bench-mip-cover-effect bench-mip-specialized bench-mip-compare profile-bench build-ralph-benchmark download-netlib install uninstall help test-mps-parser test-node-cuts-diff test-time-limit test-unbounded-infinite-bound test-infeasible-equality-bounds test-phase1-oracle-glpk test-bandm test-blend test-lotfi test-lp-repair-deadline repro-cfl-crash bench-mip-specialized-quick bench-mip-compare-quick test-lp test-presolve fuzz-api fuzz-api-smoke fuzz-smoke test-obj-integrality test-asan test-suites-asan tsan cppcheck cppcheck-all
 
 # MIP benchmark with specialized solvers (LAP, Network, SCP)
 bench-mip-specialized: $(BENCH_MIP_EXEC)

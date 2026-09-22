@@ -2587,6 +2587,7 @@ static void apply_bound_perturbation(SimplexTableau *tab) {
      * Re-perturbation (for cycling) adds more perturbation but must
      * NOT overwrite the backup — remove_bound_perturbation must always restore
      * to the original (unperturbed) bounds. */
+    if (!tab) return;   /* tested as !tab elsewhere on this path */
     int is_mip = (tab->model && tab->model->num_integers > 0);
     int fresh = 0;
     if (!tab->perturb_backup) {

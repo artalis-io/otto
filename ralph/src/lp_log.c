@@ -55,7 +55,7 @@ void lp_log_emitvf(ShLogLevel level,
         return;
     }
 
-    sh_log(level, file, line, msg, NULL);
+    sh_log(level, file, line, msg, (const char *)NULL);
 
     if (msg != stack_buf) free(msg);
 }

@@ -104,8 +104,13 @@ static void enc_write_varint(CTMVTEncoder *enc, uint64_t value)
 
 static void enc_write_svarint(CTMVTEncoder *enc, int64_t value)
 {
-    /* Zigzag encode: cast to unsigned before left shift to avoid UB */
-    uint64_t uval = ((uint64_t)value << 1) ^ (uint64_t)(value >> 63);
+    /* Zigzag encode. The left shift is done unsigned to avoid overflow UB,
+     * which the previous version already handled. The sign mask no longer
+     * comes from (value >> 63): right-shifting a negative signed value is
+     * implementation-defined, and while every compiler we build with does an
+     * arithmetic shift, the encoding does not need to rely on that. */
+    uint64_t sign_mask = (value < 0) ? ~(uint64_t)0 : (uint64_t)0;
+    uint64_t uval = ((uint64_t)value << 1) ^ sign_mask;
     enc_write_varint(enc, uval);
 }
 

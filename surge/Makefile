@@ -268,8 +268,16 @@ debug: clean all
 
 # --- Static Analysis ---
 
+# -i ../vendor: vendored code is not ours to gate on. cppcheck follows
+# includes into miniz and tre and reports their uninitialised-variable and
+# mbtowc findings as if they were this module's.
+# duplicateAssignExpression is suppressed: it is a `style` check this target
+# does not enable, cppcheck reports it anyway, and on this codebase it fires
+# on ordinary idiom such as a bbox seeded as `min_x = p[0].x, max_x = p[0].x`.
 cppcheck:
 	cppcheck --enable=warning,performance,portability --suppress=missingIncludeSystem \
+	  --suppress=duplicateAssignExpression \
+	  -i ../vendor \
 	  --error-exitcode=1 --inline-suppr --std=c11 \
 	  -I include -I ../arbor/include -I ../shared/include \
 	  $(SRCS)

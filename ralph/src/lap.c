@@ -421,6 +421,7 @@ static RalphLapStatus lap_solve_internal(
     double *total_cost,
     RalphLapWorkspace *ws
 ) {
+    if (!ws) return RALPH_LAP_INVALID_INPUT;   /* reachable per cppcheck CTU */
     int i, j, k;
     RalphLapStatus status = RALPH_LAP_SUCCESS;
 
@@ -4000,6 +4001,10 @@ static RalphLapStatus lap_solve_k_best_unified(
     RalphLapResult *result,
     RalphLapWorkspace *ws
 ) {
+    /* opts->k is read unguarded further down while the same function tests
+     * `opts && opts->num_forbidden`. k-best has no meaning without opts, so
+     * the entry is the right place to settle it. */
+    if (!prob || !opts || !result) return RALPH_LAP_INVALID_INPUT;
     int m = prob->n;  /* rows (workers) */
     int n = prob->m;  /* cols (jobs) */
     int is_rect = (m != n);
@@ -4089,7 +4094,7 @@ static RalphLapStatus lap_solve_k_best_unified(
         final_cost = padded_cost;
 
         /* Apply forbidden to padded cost */
-        if (opts && opts->num_forbidden > 0) {
+        if (opts->num_forbidden > 0) {
             for (int f = 0; f < opts->num_forbidden; f++) {
                 int i = opts->forbidden_rows[f];
                 int j = opts->forbidden_cols[f];
@@ -4100,7 +4105,7 @@ static RalphLapStatus lap_solve_k_best_unified(
         }
     } else {
         /* Square - apply forbidden as before */
-        if (opts && opts->num_forbidden > 0) {
+        if (opts->num_forbidden > 0) {
             if (ws && ws->work_cost) {
                 memcpy(ws->work_cost, cost, n * n * sizeof(double));
                 for (int f = 0; f < opts->num_forbidden; f++) {

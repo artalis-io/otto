@@ -113,7 +113,33 @@ TEST_PDF2STRUC_BIN = test_pdf2struc
 TEST_PROTOBUF_BIN = test_protobuf
 TEST_INFLATE_BIN = test_inflate
 
-.PHONY: all clean test test-asan test-pal test-font test-json test-xml test-csv test-geojson test-fs test-sha256 test-eov test-pdf2struc test-protobuf test-inflate fuzz fuzz-lib fuzz-inflate fuzz-protobuf fuzz-pdf2struc fuzz-json fuzz-smoke font-compare lib debug generate-font-data help
+# duplicateAssignExpression is suppressed everywhere. It is a `style` check,
+# which this target deliberately does not enable -- cppcheck reports it
+# regardless -- and on this codebase it fires on ordinary idiom: a bbox
+# seeded as `min_x = p[0].x, max_x = p[0].x`, or two capacities that happen
+# to start equal. Gating on it would mean rewriting correct code to look
+# different.
+# -i ../vendor: vendored code is not ours to gate on. cppcheck follows
+# includes into miniz and tre and reports their uninitialised-variable and
+# mbtowc findings as if they were this module's.
+# Static analysis. Complements the sanitizers rather than repeating them:
+# those need a path to be executed, cppcheck reads code no test reaches.
+#
+# The gating set is warning,performance,portability with
+# --error-exitcode=1. `style` and `information` are left out deliberately --
+# they report on taste and on headers cppcheck could not resolve, and
+# neither should fail a build. cppcheck-all turns them on for reading.
+cppcheck:
+	cppcheck --enable=warning,performance,portability --suppress=missingIncludeSystem \
+	  --suppress=duplicateAssignExpression \
+	  -i ../vendor \
+	  --error-exitcode=1 --inline-suppr --std=c11 $(INCLUDES) \
+	  $(SRCS)
+
+cppcheck-all:
+	cppcheck --enable=all --suppress=missingIncludeSystem --suppress=unusedFunction \
+	  --std=c11 $(INCLUDES) $(SRCS)
+.PHONY: all clean test test-asan test-pal test-font test-json test-xml test-csv test-geojson test-fs test-sha256 test-eov test-pdf2struc test-protobuf test-inflate fuzz fuzz-lib fuzz-inflate fuzz-protobuf fuzz-pdf2struc fuzz-json fuzz-smoke font-compare lib debug generate-font-data help cppcheck cppcheck-all
 
 # Default target
 all: lib $(TEST_BIN)

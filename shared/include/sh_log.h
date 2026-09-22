@@ -141,34 +141,39 @@ void sh_log_v(ShLogLevel level, const char *file, int line,
  *
  * Fields are optional key-value string pairs.
  */
+/* The sentinel is cast deliberately. sh_log reads it back with
+ * va_arg(fields, const char *), and a bare NULL is allowed to be plain 0 --
+ * an int pushed where a pointer is read, which is undefined wherever the two
+ * differ in size. glibc defines NULL as ((void*)0) so it happens to work
+ * there; the standard does not promise it. */
 #define SH_LOG_TRACE(msg, ...) \
     do { if (sh_log_enabled(SH_LOG_LEVEL_TRACE)) \
-        sh_log(SH_LOG_LEVEL_TRACE, __FILE__, __LINE__, msg, ##__VA_ARGS__, NULL); \
+        sh_log(SH_LOG_LEVEL_TRACE, __FILE__, __LINE__, msg, ##__VA_ARGS__, (const char *)NULL); \
     } while(0)
 
 #define SH_LOG_DEBUG(msg, ...) \
     do { if (sh_log_enabled(SH_LOG_LEVEL_DEBUG)) \
-        sh_log(SH_LOG_LEVEL_DEBUG, __FILE__, __LINE__, msg, ##__VA_ARGS__, NULL); \
+        sh_log(SH_LOG_LEVEL_DEBUG, __FILE__, __LINE__, msg, ##__VA_ARGS__, (const char *)NULL); \
     } while(0)
 
 #define SH_LOG_INFO(msg, ...) \
     do { if (sh_log_enabled(SH_LOG_LEVEL_INFO)) \
-        sh_log(SH_LOG_LEVEL_INFO, __FILE__, __LINE__, msg, ##__VA_ARGS__, NULL); \
+        sh_log(SH_LOG_LEVEL_INFO, __FILE__, __LINE__, msg, ##__VA_ARGS__, (const char *)NULL); \
     } while(0)
 
 #define SH_LOG_WARN(msg, ...) \
     do { if (sh_log_enabled(SH_LOG_LEVEL_WARN)) \
-        sh_log(SH_LOG_LEVEL_WARN, __FILE__, __LINE__, msg, ##__VA_ARGS__, NULL); \
+        sh_log(SH_LOG_LEVEL_WARN, __FILE__, __LINE__, msg, ##__VA_ARGS__, (const char *)NULL); \
     } while(0)
 
 #define SH_LOG_ERROR(msg, ...) \
     do { if (sh_log_enabled(SH_LOG_LEVEL_ERROR)) \
-        sh_log(SH_LOG_LEVEL_ERROR, __FILE__, __LINE__, msg, ##__VA_ARGS__, NULL); \
+        sh_log(SH_LOG_LEVEL_ERROR, __FILE__, __LINE__, msg, ##__VA_ARGS__, (const char *)NULL); \
     } while(0)
 
 #define SH_LOG_FATAL(msg, ...) \
     do { if (sh_log_enabled(SH_LOG_LEVEL_FATAL)) \
-        sh_log(SH_LOG_LEVEL_FATAL, __FILE__, __LINE__, msg, ##__VA_ARGS__, NULL); \
+        sh_log(SH_LOG_LEVEL_FATAL, __FILE__, __LINE__, msg, ##__VA_ARGS__, (const char *)NULL); \
     } while(0)
 
 /* ============================================================================
