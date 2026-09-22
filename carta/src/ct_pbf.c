@@ -1089,8 +1089,16 @@ static CTStatus parse_dense_nodes(CTPBFContext *ctx, const uint8_t *data, size_t
     size_t kv_pos = 0;  /* Position in keys_vals array */
 
     for (size_t i = 0; i < count; i++) {
-        double lat = (lat_offset + lats[i] * granularity) * 1e-9;
-        double lon = (lon_offset + lons[i] * granularity) * 1e-9;
+        /* In double, not int64. lats[i] is a delta-decoded value straight from
+         * the file and granularity is read from it too, so the product is
+         * attacker-controlled: the nightly fuzzer reached
+         * "574490427367577984 * 100 cannot be represented in type int64_t".
+         * Signed overflow is undefined, and the result is only ever used as a
+         * double anyway. A double holds every value this can legitimately
+         * produce exactly -- a latitude in nanodegrees peaks near 9e10, far
+         * inside the 53-bit mantissa -- so nothing valid loses precision. */
+        double lat = ((double)lat_offset + (double)lats[i] * granularity) * 1e-9;
+        double lon = ((double)lon_offset + (double)lons[i] * granularity) * 1e-9;
 
         size_t idx = ctx->nodes.count++;
         ctx->nodes.ids[idx] = ids[i];
