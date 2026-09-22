@@ -4131,7 +4131,10 @@ static RalphLapStatus lap_solve_k_best_unified(
 
     if (is_rect) {
         /* Allocate for padded k×k solutions - may find fewer valid solutions */
-        int max_solutions = opts->k * 2;  /* Over-allocate to find enough valid ones */
+        /* opts is optional on this path -- the same function tests it as
+         * `opts && opts->num_forbidden` elsewhere -- so it cannot be
+         * dereferenced bare here. */
+        int max_solutions = (opts ? opts->k : 1) * 2;  /* Over-allocate to find enough valid ones */
         padded_solutions = (int *)calloc((size_t)max_solutions * k, sizeof(int));
         padded_costs = (double *)calloc(max_solutions, sizeof(double));
         if (!padded_solutions || !padded_costs) {

@@ -1678,8 +1678,11 @@ repair_fail:
 }
 
 static void column_to_dense(const SimplexTableau *tab, int col, double *out) {
-    vec_set_zero(out, tab->m);
+    /* Guard before the first dereference, not after it. vec_set_zero read
+     * tab->m on the line above the `!tab` test, so a null tableau crashed
+     * before reaching the check written to prevent exactly that. */
     if (!tab || !tab->A_ext || col < 0 || col >= tab->A_ext->ncols) return;
+    vec_set_zero(out, tab->m);
     for (int p = tab->A_ext->colptr[col]; p < tab->A_ext->colptr[col + 1]; p++) {
         out[tab->A_ext->rowidx[p]] = tab->A_ext->values[p];
     }
