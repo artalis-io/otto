@@ -1423,6 +1423,54 @@ jobs:
         run: python3 scripts/check_sanitizer_coverage.py
 
   # ==========================================================================
+  # Static analysis
+  #
+  # surge has carried `cppcheck` and `cppcheck-all` targets for a long time
+  # and nothing invoked either of them. The same shape as ralph's test-asan
+  # sitting unwired while the solver core leaked, and surge's own `tsan`
+  # target, which had never run when it was wired up in #216.
+  #
+  # surge is the only module with these targets. Extending them to the rest
+  # is a separate change: this one establishes that the existing target is
+  # green and stays green, rather than bundling nine modules of new findings
+  # into the same commit.
+  #
+  # It complements the sanitizers rather than repeating them. Those need a
+  # path to be executed; cppcheck reads code that no test reaches, which is
+  # the half the 20-second fuzz smoke and the suites both miss.
+  # ==========================================================================
+  static-analysis:
+    name: Static Analysis (${{ matrix.module }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    strategy:
+      fail-fast: false
+      matrix:
+        module: [surge]
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential cppcheck
+
+      - name: Report the analyser version
+        run: cppcheck --version
+
+      # The gating target: --error-exitcode=1, warning/performance/portability.
+      # cppcheck-all exists alongside it and is deliberately not run here --
+      # it enables `style` and `information`, which report on taste and on
+      # headers it could not find, neither of which should fail a build.
+      - name: cppcheck ${{ matrix.module }}
+        run: make -C ${{ matrix.module }} cppcheck
+
+  # ==========================================================================
   # The CLAUDE.md files are instructions, and nothing compiles them, so they
   # rot silently while still giving confident directions. When this was added
   # they named a feature-class table of four values that were never in the
