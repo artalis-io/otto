@@ -85,7 +85,18 @@ static SGStatus build_config(SGContext *ctx, const ShJsonValue *cfg_val) {
         if (v) cfg.q_max = sh_json_as_int(v, cfg.q_max);
 
         v = sh_json_get(cfg_val, "seed");
-        if (v) cfg.seed = (uint64_t)sh_json_as_double(v, (double)cfg.seed);
+        if (v) {
+            double sd = sh_json_as_double(v, (double)cfg.seed);
+            /* Converting a double to uint64_t is undefined unless the value is
+             * already in range. The nightly fuzzer reached this with -2:
+             * "-2 is outside the range of representable values of type
+             * unsigned long". Out-of-range and non-finite seeds keep the
+             * default, which is how every other field here treats input it
+             * cannot use. */
+            if (sd >= 0.0 && sd < 18446744073709551616.0) {
+                cfg.seed = (uint64_t)sd;
+            }
+        }
 
         v = sh_json_get(cfg_val, "deterministic");
         if (v) cfg.deterministic = sh_json_as_bool(v, cfg.deterministic);
