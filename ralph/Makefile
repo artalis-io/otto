@@ -1481,6 +1481,15 @@ $(TSAN_TEST_BIN): $(LAP_TEST_SOURCES) $(SOURCES) $(SHARED_LIB)
 tsan: $(TSAN_TEST_BIN)
 	./$(TSAN_TEST_BIN)
 
+# invalidPointerCast is suppressed here, and only here. It fires 51 times
+# across lap.c, lu.c, lu_sparse.c, netflow.c and simplex.c on one idiom: an
+# int array carved out of a double-typed scratch buffer, as in
+#     int *ib = (int *)(workspace + dbl_need);
+# The alignment is sound -- double is at least as strict as int -- and the
+# bytes are never read as both types in one lifetime, so this is scratch
+# partitioning rather than value punning. Rewriting 51 sites in the numerical
+# core to satisfy the checker would be real risk for no defect fixed. Written
+# down rather than left to a future reader to rediscover.
 # Static analysis. Complements the sanitizers rather than repeating them:
 # those need a path to be executed, cppcheck reads code no test reaches.
 #
@@ -1490,6 +1499,7 @@ tsan: $(TSAN_TEST_BIN)
 # neither should fail a build. cppcheck-all turns them on for reading.
 cppcheck:
 	cppcheck --enable=warning,performance,portability --suppress=missingIncludeSystem \
+	  --suppress=invalidPointerCast \
 	  --error-exitcode=1 --inline-suppr --std=c11 $(INCLUDES) \
 	  $(SOURCES)
 
