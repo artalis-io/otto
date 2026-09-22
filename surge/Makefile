@@ -34,6 +34,7 @@ LIB_FILE = libsurge.a
 # mk/flagstamp.mk for what that cost before it existed.
 DEBUG_GOALS = debug test-asan
 STAMP_ARTIFACTS = $(OBJS) $(LIB_FILE)
+STAMP_REQUIRE_DIRS = ../shared ../arbor
 include ../mk/flagstamp.mk
 
 TEST_BIN = test_surge

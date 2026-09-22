@@ -66,6 +66,7 @@ LIB_NAME = libfuelwise.a
 DEBUG_GOALS = debug test-asan
 STAMP_ARTIFACTS = $(OBJECTS) $(LIB_NAME)
 DEBUG_CFLAGS = $(CFLAGS_DEBUG)
+STAMP_REQUIRE_DIRS = ../shared ../ralph
 include ../mk/flagstamp.mk
 
 

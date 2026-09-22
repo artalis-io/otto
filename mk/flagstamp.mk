@@ -73,3 +73,55 @@ $(shell \
       rm -f $(STAMP_ARTIFACTS); \
       printf '%s' '$(STAMP_FLAGS)' > $(BUILD_STAMP); \
   fi)
+
+# ---------------------------------------------------------------------------
+# Cross-module compatibility
+#
+# The stamp above protects a module from its own past. It says nothing about
+# the libraries it links, which a separate make invocation built under a
+# separate stamp: `make -C ralph` never re-derives shared. Two ways that has
+# actually bitten:
+#
+#   - a module built with gcc linking a libshared.a that cl produced. The
+#     diagnostic is "corrupt .drectve", then ld exiting 5 with nothing more
+#     to say.
+#
+#   - an unsanitized link line picking up a library that test-asan left
+#     sanitized: undefined __asan_report_load4 and friends, which is what
+#     fuelwise/bench hit when its sanitizer job was first wired up.
+#
+# Set STAMP_REQUIRE_DIRS to the directories whose libraries this module
+# links. The comparison itself, and why it is only two properties, is in
+# mk/stamp_compat.sh.
+#
+#     STAMP_REQUIRE_DIRS = ../shared
+#     include ../mk/flagstamp.mk
+STAMP_REQUIRE_DIRS ?=
+
+STAMP_CC     := $(firstword $(STAMP_FLAGS))
+STAMP_FAMILY := $(if $(filter cl cl.exe,$(notdir $(STAMP_CC))),msvc,gnu)
+STAMP_SAN    := $(if $(findstring fsanitize,$(STAMP_FLAGS)),yes,no)
+STAMP_COMPAT := $(dir $(lastword $(MAKEFILE_LIST)))stamp_compat.sh
+
+# A warning, not an error, and that is a deliberate downgrade. The check runs
+# when the makefile is parsed, which is before a module that rebuilds its own
+# dependencies has had the chance to: `make -C fuelwise all` has `shared` as a
+# prerequisite and would have fixed a stale libshared.a by itself, so stopping
+# at parse time broke a build that was going to succeed. Measured, not
+# supposed -- it was tried as an error first.
+#
+# What it is for is turning "corrupt .drectve", "ld returned 5" and undefined
+# __asan_report_load4 into a sentence naming the directory to rebuild. A
+# warning does that. When the mismatch is real the link fails immediately
+# afterwards, now explained; when the module heals itself the warning is
+# spurious and nothing is lost.
+# Not while cleaning: the check would refuse to let you fix the state it is
+# objecting to. Everything else, including a bare `make`, is checked.
+STAMP_CLEAN_ONLY := $(if $(MAKECMDGOALS),$(if $(filter-out clean clean-all distclean,$(MAKECMDGOALS)),,yes),)
+
+ifneq ($(STAMP_CLEAN_ONLY),yes)
+STAMP_CONFLICTS := $(strip $(foreach d,$(STAMP_REQUIRE_DIRS),$(shell sh $(STAMP_COMPAT) $(d) $(notdir $(BUILD_STAMP)) $(STAMP_FAMILY) $(STAMP_SAN))))
+ifneq ($(STAMP_CONFLICTS),)
+$(warning $(STAMP_CONFLICTS) The link will fail or misbehave; rebuild it: make -C <dir> clean lib)
+endif
+endif

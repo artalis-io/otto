@@ -114,6 +114,7 @@ LIB_NAME = libralph.a
 DEBUG_GOALS = debug test-transport-asan test-asan test-suites-asan
 STAMP_ARTIFACTS = $(OBJECTS) $(LIB_NAME)
 DEBUG_CFLAGS = $(CFLAGS_DEBUG)
+STAMP_REQUIRE_DIRS = ../shared
 include ../mk/flagstamp.mk
 
 
