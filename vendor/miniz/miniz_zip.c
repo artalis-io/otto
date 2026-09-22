@@ -1037,7 +1037,15 @@ static int mz_stat64(const char *path, struct __stat64 *buffer)
     {
         mz_zip_archive *pZip = (mz_zip_archive *)pOpaque;
         size_t s = (file_ofs >= pZip->m_archive_size) ? 0 : (size_t)MZ_MIN(pZip->m_archive_size - file_ofs, n);
-        memcpy(pBuf, (const mz_uint8 *)pZip->m_pState->m_pMem + file_ofs, s);
+        /* LOCAL PATCH (not upstream miniz): form the source pointer only when
+         * there is something to copy. The guard above sets s to 0 for an
+         * out-of-range file_ofs, but the addition still happened, and computing
+         * a pointer beyond one-past-the-end is undefined however many bytes are
+         * then copied. The nightly fuzzer reported it as "addition of unsigned
+         * offset ... overflowed". Re-apply if miniz is ever updated. */
+        if (s) {
+            memcpy(pBuf, (const mz_uint8 *)pZip->m_pState->m_pMem + file_ofs, s);
+        }
         return s;
     }
 
