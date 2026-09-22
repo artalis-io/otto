@@ -7,6 +7,7 @@
 #include <string.h>
 #include "lp.h"
 #include "lp_refactor_policy.h"
+#include "lp_telemetry.h"
 
 static int solver_telemetry_enabled(const SimplexSolver *solver) {
     return solver && solver->telemetry_enabled;

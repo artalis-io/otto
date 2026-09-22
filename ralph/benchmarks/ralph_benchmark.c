@@ -42,6 +42,7 @@
 #include "ralph_test_mod_api.h"
 #include "lp.h"
 #include "lp_refactor_policy.h"
+#include "lp_telemetry.h"
 
 /* Internal helpers exposed by ralph.c for benchmark diagnostics */
 extern LPModel* ralph_get_lp_model(const RalphModel *model);

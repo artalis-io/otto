@@ -7,6 +7,7 @@
 #include <string.h>
 #include "lp.h"
 #include "lp_bfcp_policy.h"
+#include "lp_telemetry.h"
 
 static int lu_telemetry_enabled(const LUFactorization *lu) {
     return lu && lu->telemetry_enabled;

@@ -14,6 +14,7 @@
 #include "lp.h"
 #include "lp_bfcp_policy.h"
 #include "lp_policy_glpk_compat.h"
+#include "lp_telemetry.h"
 
 #define TOLERANCE 1e-8
 
