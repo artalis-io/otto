@@ -15,6 +15,7 @@
 #include "surge.h"
 #include "sh_json.h"   /* before sg_api.h: gates the sg_api_write_solution decl */
 #include "sg_api.h"
+#include "sg_parallel.h"   /* sg_solve_population: HGS-style population search */
 #include "sh_arena.h"
 #include <stdio.h>
 #include <stdlib.h>
@@ -50,6 +51,16 @@ int main(int argc, char **argv) {
     }
     free(buf);
 
+    /* Optional HGS-style population search, opt-in via the request config
+     * (config.population=true). Read before the arena holding `root` is freed.
+     * On single-thread/WASM builds without threads this still works (one worker). */
+    ShJsonValue *cfg_v = sh_json_get(root, "config");
+    int use_population = cfg_v && sh_json_as_bool(sh_json_get(cfg_v, "population"), false);
+    uint32_t pop_generations =
+        (uint32_t)(cfg_v ? sh_json_as_int(sh_json_get(cfg_v, "population_generations"), 3) : 3);
+    uint32_t pop_threads =
+        (uint32_t)(cfg_v ? sh_json_as_int(sh_json_get(cfg_v, "population_threads"), 0) : 0);
+
     SGContext *ctx = sg_create();
     if (!ctx) { fprintf(stderr, "surge_solve: sg_create failed\n"); sh_arena_free(arena); return 1; }
     SGStatus st = sg_api_build_model(ctx, root);
@@ -59,7 +70,16 @@ int main(int argc, char **argv) {
         sg_free(ctx); return 1;
     }
 
-    SGStatus solve_status = sg_solve(ctx);
+    SGStatus solve_status;
+    if (use_population) {
+        SGPopulationConfig pop;
+        pop.num_threads = pop_threads;
+        pop.population_size = 0;          /* 0 = default pool size */
+        pop.num_generations = pop_generations;
+        solve_status = sg_solve_population(ctx, &pop);
+    } else {
+        solve_status = sg_solve(ctx);
+    }
 
     /* sg_solve commits its best solution to the context before returning, and
      * sg_api_write_solution now serializes a committed solution under any
