@@ -254,9 +254,9 @@ def assemble_request(orows, oidx, dflat, uflat, N, vrows, a):
                    "hard_max_duration": a.hard_max_duration,
                    "hard_capacity": a.hard_capacity,
                    "hard_time_windows": a.hard_time_windows,
-                   "population": a.population,
-                   "population_generations": a.population_generations,
-                   "population_threads": a.population_threads},
+                   "population": getattr(a, "population", False),
+                   "population_generations": getattr(a, "population_generations", 3),
+                   "population_threads": getattr(a, "population_threads", 0)},
         "dimension_count": dim,
         "demand_sign_convention": a.demand_sign,   # 1 = delivery demand positive
         "locations": locations,
