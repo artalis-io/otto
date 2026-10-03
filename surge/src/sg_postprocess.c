@@ -1,8 +1,22 @@
 #include "sg_internal.h"
 
-/* Check that a candidate request array has no commodity conflicts or exclusion violations. */
-static int sg_route_candidate_compat_ok(const SGContext *ctx,
+/* Check that a candidate request array is valid on vehicle_id: no commodity
+ * conflicts or exclusion violations, and every request is allowed on and
+ * qualifies for the vehicle.  The eligibility check is what stops inter-route
+ * moves (2-opt*, OR-opt, cross-exchange) from relocating a request onto a
+ * vehicle its allowed_vehicles whitelist / qualification mask forbids -- those
+ * operators validate only capacity and time, so without this they leak. */
+static int sg_route_candidate_compat_ok(const SGContext *ctx, uint32_t vehicle_id,
                                          const uint32_t *requests, uint32_t len) {
+    {
+        uint32_t i;
+        for (i = 0; i < len; i++) {
+            uint32_t rid = requests[i];
+            if (rid >= ctx->num_requests) continue;
+            if (!sg_vehicle_allowed_for_request(ctx, vehicle_id, rid)) return 0;
+            if (!sg_vehicle_qualifies(ctx, vehicle_id, rid)) return 0;
+        }
+    }
     if (ctx->num_commodities > 0) {
         uint64_t bits = 0;
         uint32_t i;
@@ -597,8 +611,8 @@ static int sg_route_try_2opt_star_once(const SGContext *ctx, SGRouteSolution *so
                     memcpy(&candidate_b[cut_b], &route_a[cut_a],
                            (size_t)(len_a - cut_a) * sizeof(uint32_t));
 
-                    if (!sg_route_candidate_compat_ok(ctx, candidate_a, new_len_a) ||
-                        !sg_route_candidate_compat_ok(ctx, candidate_b, new_len_b)) {
+                    if (!sg_route_candidate_compat_ok(ctx, va, candidate_a, new_len_a) ||
+                        !sg_route_candidate_compat_ok(ctx, vb, candidate_b, new_len_b)) {
                         continue;
                     }
                     if (!sg_route_sequence_feasible_distance(ctx, va, candidate_a, new_len_a,
@@ -826,7 +840,7 @@ static int sg_route_try_or_opt_once(const SGContext *ctx, SGRouteSolution *sol) 
                         }
 
                         if (va != vb &&
-                            !sg_route_candidate_compat_ok(ctx, candidate_dst, dst_len)) {
+                            !sg_route_candidate_compat_ok(ctx, vb, candidate_dst, dst_len)) {
                             continue;
                         }
                         if (!sg_route_sequence_feasible_distance(
@@ -1102,8 +1116,8 @@ static int sg_route_try_cross_exchange_once(const SGContext *ctx, SGRouteSolutio
                                        (size_t)(len_b - ib - (uint32_t)sb) * sizeof(uint32_t));
                             }
 
-                            if (!sg_route_candidate_compat_ok(ctx, candidate_a, new_len_a) ||
-                                !sg_route_candidate_compat_ok(ctx, candidate_b, new_len_b)) {
+                            if (!sg_route_candidate_compat_ok(ctx, va, candidate_a, new_len_a) ||
+                                !sg_route_candidate_compat_ok(ctx, vb, candidate_b, new_len_b)) {
                                 continue;
                             }
                             if (!sg_route_sequence_feasible_distance(

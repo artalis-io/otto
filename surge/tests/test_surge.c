@@ -3690,6 +3690,69 @@ static void test_qualification_pd_request(void) {
     sg_free(ctx);
 }
 
+/* Regression: inter-route local-search moves (2-opt*, OR-opt, cross-exchange)
+   must honor allowed_vehicles.  Geometry forces the distance optimum to want a
+   restricted request on the forbidden vehicle, so a leaking cross-exchange would
+   relocate it there.  Before the sg_postprocess.c guards this happened; the
+   request must now stay on its only allowed vehicle. */
+static void test_allowed_vehicles_no_leak_inter_route(void) {
+    SGContext *ctx = make_config(5000, 42);
+    uint32_t depot, v0, v1;
+    uint32_t rc, i;
+    int found_r = 0;
+
+    add_depot_with_location(ctx, &depot, 0.0, 0.0);
+
+    /* v0 (cap 30 -> 3 items) is the ONLY vehicle allowed for request R, which
+       sits in the -x cluster.  v1 (cap 40 -> 4 items) can hold the whole -x
+       cluster.  The clean geographic split (all -x on v1, all +x on v0) puts R
+       on v1 -> illegal; the solver is thus tempted to leak R onto v1. */
+    v0 = sg_add_vehicle(ctx);
+    assert(sg_vehicle_set_depots(ctx, v0, depot, depot) == SG_STATUS_OK);
+    assert(sg_vehicle_set_shift_time_window(ctx, v0, 0, 86400) == SG_STATUS_OK);
+    assert(sg_vehicle_set_capacity(ctx, v0, (double[]){30.0}, 1) == SG_STATUS_OK);
+
+    v1 = sg_add_vehicle(ctx);
+    assert(sg_vehicle_set_depots(ctx, v1, depot, depot) == SG_STATUS_OK);
+    assert(sg_vehicle_set_shift_time_window(ctx, v1, 0, 86400) == SG_STATUS_OK);
+    assert(sg_vehicle_set_capacity(ctx, v1, (double[]){40.0}, 1) == SG_STATUS_OK);
+
+    /* R (request 0): -x cluster, restricted to v0 only. */
+    add_delivery_request(ctx, -10.0, 0.0, 0, 86400, 60, -10.0);
+    assert(sg_request_add_allowed_vehicle(ctx, 0, v0) == SG_STATUS_OK);
+    /* B1..B3 (requests 1..3): rest of the -x cluster, unrestricted. */
+    add_delivery_request(ctx, -10.0, 1.0, 0, 86400, 60, -10.0);
+    add_delivery_request(ctx, -11.0, 0.0, 0, 86400, 60, -10.0);
+    add_delivery_request(ctx, -12.0, 0.0, 0, 86400, 60, -10.0);
+    /* A1..A3 (requests 4..6): +x cluster, unrestricted. */
+    add_delivery_request(ctx,  10.0, 0.0, 0, 86400, 60, -10.0);
+    add_delivery_request(ctx,  11.0, 0.0, 0, 86400, 60, -10.0);
+    add_delivery_request(ctx,  12.0, 0.0, 0, 86400, 60, -10.0);
+
+    assert(sg_validate_model(ctx) == SG_STATUS_OK);
+    assert(sg_solve(ctx) == SG_STATUS_OK);
+    assert(sg_get_unassigned(ctx) == 0);
+
+    /* R must be served by v0 (its only allowed vehicle). */
+    rc = sg_solution_get_route_count(ctx);
+    for (i = 0; i < rc; i++) {
+        uint32_t vid = sg_solution_get_route_vehicle_id(ctx, i);
+        uint32_t sc = sg_solution_get_route_stop_count(ctx, i);
+        uint32_t s;
+        for (s = 0; s < sc; s++) {
+            SGSolutionStop stop;
+            assert(sg_solution_get_route_stop(ctx, i, s, &stop) == SG_STATUS_OK);
+            if (stop.request_id == 0) {
+                found_r = 1;
+                assert(vid == v0);  /* never leaked onto v1 */
+            }
+        }
+    }
+    assert(found_r);
+
+    sg_free(ctx);
+}
+
 /* ---------- solution export tests ---------- */
 
 static void test_solution_export_delivery(void) {
@@ -18058,6 +18121,7 @@ int main(void) {
     RUN_TEST(test_qualification_filters_solve);
     RUN_TEST(test_qualification_unassigned_when_none_qualify);
     RUN_TEST(test_qualification_pd_request);
+    RUN_TEST(test_allowed_vehicles_no_leak_inter_route);
     RUN_TEST(test_solution_export_delivery);
     RUN_TEST(test_solution_export_pd);
     RUN_TEST(test_solution_export_unassigned);
@@ -18571,9 +18635,9 @@ int main(void) {
     printf("================\n");
     printf("%d/%d tests passed\n", tests_passed, tests_run);
 #ifdef SG_HAS_THREADS
-    assert(tests_run == 477);
+    assert(tests_run == 478);
 #else
-    assert(tests_run == 453);
+    assert(tests_run == 454);
 #endif
     return tests_passed == tests_run ? 0 : 1;
 }
