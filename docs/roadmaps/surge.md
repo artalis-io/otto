@@ -1924,11 +1924,31 @@ day2 residual was budget, not a wall.** Population + capacity size guarantee, 30
 per day: **day1 12 veh / 0 unassigned / 0 restricted-on-big (PyVRP 11); day2 23 /
 0 / 0 (PyVRP 24).** So parity (day1 +1, day2 -1, a wash), all orders served, the
 size guarantee enforced -- the HGS gap is effectively closed on the real instance
-with population + adequate budget. Remaining: **C** allowed_vehicles hardening
-(neighbor moves + warm-start + make sg_solve reject validator-infeasible commits),
-**D** the single-thread vehicle-min degeneracy (26/8-unassigned -> 2/100 at 300 s).
-Both are correctness hygiene, not blockers (the use case runs on population +
-capacity dim).
+with population + adequate budget.
+
+**C done (PR #225).** The leak was the inter-route local search: the segment-swap
+operators (2-opt*, OR-opt, cross-exchange) validated only capacity and time, so on
+the real instance they relocated restricted orders onto big trucks (day1 1, day2 2)
+even though construction, repair, and warm-start all gate. Two complementary guards:
+(1) `sg_route_candidate_compat_ok()` now takes the destination vehicle and rejects
+any candidate route carrying a request that vehicle may not serve -- this covers the
+segment-swap operators, which commit by rebuilding route arrays directly and never
+call `apply_insertion`; (2) `sg_route_apply_insertion`/`sg_route_apply_pd_insertion`
+reject ineligible placements at the single chokepoint every assignment flows through,
+backstopping all apply-based operators (vehicle elimination, ejection, polish,
+pd-relocate). For unrestricted instances both short-circuit, so quality is unchanged
+(Solomon 10k/seed42: mean distGap +10.39% and 32/56 vehicle-equal, identical to
+baseline). Verified: **restricted-on-big 0/0** on the per-day instance using
+`allowed_vehicles` alone (no capacity dim), all orders served; 478/478 tests incl. a
+new inter-route regression (`test_allowed_vehicles_no_leak_inter_route`).
+
+**D does not reproduce.** The "26/8-unassigned -> 2/100 at 300 s" single-thread
+collapse is gone on the post-C build. Day2 single-thread is stable across budgets:
+20 veh / 13 un @ 10-120 s (distance improving 7.0M -> 6.7M), 19 / 15 @ 300 s; day1
+12 / 2 @ 300 s. No worse-with-budget degeneracy -- single-thread is simply weaker
+than population (expected), not pathological. Most plausibly C's chokepoint removed
+the illegal intermediate states that were driving the collapse. Left as resolved;
+re-open if a future run shows the unassigned count growing with budget.
 
 ---
 
