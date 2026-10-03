@@ -1883,6 +1883,41 @@ to months). Mature VRP solvers on the same instance typically differ by only a
 few percent, so the target is reachable, but it needs the algorithmic work, not
 tuning alone.
 
+### Measured reality (2026-10, corrects the stale numbers above)
+
+Re-measured on the current build. The frozen "25 veh / +7%" above is stale and the
+single-thread Solomon numbers quoted earlier were actually the *population* mode's.
+
+- **The gap is single-thread vs population, not a missing algorithm.** The
+  HGS-quality solver already exists and is public (`sg_solve_population`,
+  sg_parallel.h), but the production path (surge_solve CLI, sg_api/REST, WASM, and
+  all the real-instance runs) called single-thread `sg_solve`. Solomon 56, 10k iter,
+  seed 42: **single-thread +10.4% dist / +0.73 veh / 32-56 equal** vs
+  **population +0.4% / +0.21 / 44-56**.
+- **Fixed (lever 1): `surge_solve` now selects population via `config.population`**
+  (+`population_generations`, `population_threads`); default off, WASM-safe.
+- **Per-day real instance (was only ever run merged before).** day1: single-thread
+  11 veh / 0 unassigned already == PyVRP (11). day2 (hard, 146 orders, tight TW,
+  369 t): single-thread **26 veh / 8 unassigned**, degenerating to **2 veh / 100
+  unassigned at 300 s** (a single-thread vehicle-min degeneracy bug, lever/bug D);
+  **population: 16 / 0** (no size rule) and **21 / 2 unassigned** with the size
+  guarantee, vs PyVRP 24. So population closes most of the gap; the residual is
+  day2 (2 unassigned + a couple vehicles) -> population tuning (budget/generations/
+  SREX), lever B.
+- **Size guarantee (restricted address -> small vehicle): use the capacity
+  dimension** (restricted demand, big-truck cap 0, hard_capacity) -- enforced on
+  every path, 0 restricted-on-big verified. `allowed_vehicles`/qualifications is
+  NOT a safe substitute: it leaks (construction + insertion-feasibility check it,
+  but the ALNS neighbor moves, the concat delta evaluators, and warm-start
+  construction did not, and sg_solve commits a solution the validator flags).
+  Partial fix landed (guard on the 3 cross-vehicle concat evaluators); full
+  hardening (sg_neighbor + warm-start + commit-respects-validator) is lever C.
+
+**Revised plan: A** productize population + capacity size-guarantee into the
+request pipeline; **B** tune population for the day2 residual; **C** finish the
+allowed_vehicles/qualification hardening; **D** fix the single-thread vehicle-min
+degeneracy. Populate (not re-measure) the stale numbers above from this section.
+
 ---
 
 ## Solver Profiles
