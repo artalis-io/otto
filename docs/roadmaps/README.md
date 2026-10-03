@@ -31,6 +31,7 @@ This directory contains development roadmaps and specifications for OTTO compone
 | [pulse.md](pulse.md) | Execution tracker and PTA engine | Planned |
 | [quota.md](quota.md) | Rate quoting engine | Planned |
 | [atlas.md](atlas.md) | Network design engine | Planned |
+| [cockpit.md](cockpit.md) | Decision Cockpit (Sage) - LLM modeller + solver-as-simulator | Concept |
 
 ### Infrastructure
 
