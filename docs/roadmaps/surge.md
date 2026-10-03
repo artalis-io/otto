@@ -1918,6 +1918,18 @@ request pipeline; **B** tune population for the day2 residual; **C** finish the
 allowed_vehicles/qualification hardening; **D** fix the single-thread vehicle-min
 degeneracy. Populate (not re-measure) the stale numbers above from this section.
 
+**A done** -- `build_surge_request.py --population`; dataset builds per-day
+size-guaranteed (capacity dim) population requests (reproducible). **B done -- the
+day2 residual was budget, not a wall.** Population + capacity size guarantee, 300 s
+per day: **day1 12 veh / 0 unassigned / 0 restricted-on-big (PyVRP 11); day2 23 /
+0 / 0 (PyVRP 24).** So parity (day1 +1, day2 -1, a wash), all orders served, the
+size guarantee enforced -- the HGS gap is effectively closed on the real instance
+with population + adequate budget. Remaining: **C** allowed_vehicles hardening
+(neighbor moves + warm-start + make sg_solve reject validator-infeasible commits),
+**D** the single-thread vehicle-min degeneracy (26/8-unassigned -> 2/100 at 300 s).
+Both are correctness hygiene, not blockers (the use case runs on population +
+capacity dim).
+
 ---
 
 ## Solver Profiles
