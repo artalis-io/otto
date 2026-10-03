@@ -114,6 +114,11 @@ def main():
                     help="0=pickup+/delivery- (Surge default), 1=pickup-/delivery+ (matches positive delivery demand)")
     ap.add_argument("--max-time-seconds", type=int, default=30)
     ap.add_argument("--seed", type=int, default=42)
+    ap.add_argument("--population", action=argparse.BooleanOptionalAction, default=False,
+                    help="solve with the HGS-style population search (sg_solve_population) "
+                         "instead of single-thread ALNS; far better quality on hard instances")
+    ap.add_argument("--population-generations", type=int, default=3)
+    ap.add_argument("--population-threads", type=int, default=0, help="0 = auto")
     ap.add_argument("--unassigned-penalty", type=float, default=1e6)
     ap.add_argument("--out", required=True)
     a = ap.parse_args()
@@ -248,7 +253,10 @@ def assemble_request(orows, oidx, dflat, uflat, N, vrows, a):
                    "seed": a.seed, "lexicographic_objective": a.objective == "vehicles-then-distance",
                    "hard_max_duration": a.hard_max_duration,
                    "hard_capacity": a.hard_capacity,
-                   "hard_time_windows": a.hard_time_windows},
+                   "hard_time_windows": a.hard_time_windows,
+                   "population": getattr(a, "population", False),
+                   "population_generations": getattr(a, "population_generations", 3),
+                   "population_threads": getattr(a, "population_threads", 0)},
         "dimension_count": dim,
         "demand_sign_convention": a.demand_sign,   # 1 = delivery demand positive
         "locations": locations,

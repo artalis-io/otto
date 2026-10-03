@@ -15,6 +15,7 @@
 #include "surge.h"
 #include "sh_json.h"   /* before sg_api.h: gates the sg_api_write_solution decl */
 #include "sg_api.h"
+#include "sg_parallel.h"   /* sg_solve_population: HGS-style population search */
 #include "sh_arena.h"
 #include <stdio.h>
 #include <stdlib.h>
@@ -50,6 +51,19 @@ int main(int argc, char **argv) {
     }
     free(buf);
 
+    /* Optional HGS-style population search, opt-in via the request config
+     * (config.population=true). Read before the arena holding `root` is freed.
+     * On single-thread/WASM builds without threads this still works (one worker). */
+    ShJsonValue *cfg_v = sh_json_get(root, "config");
+    int use_population = cfg_v && sh_json_as_bool(sh_json_get(cfg_v, "population"), false);
+    /* Clamp to sane ranges: a negative JSON value would otherwise wrap to a huge
+     * uint32_t (num_threads flows into thread/work-queue creation with no cap for
+     * explicit values). 0 means "let sg_solve_population pick the default". */
+    long gens_raw    = cfg_v ? sh_json_as_int(sh_json_get(cfg_v, "population_generations"), 3) : 3;
+    long threads_raw = cfg_v ? sh_json_as_int(sh_json_get(cfg_v, "population_threads"), 0) : 0;
+    uint32_t pop_generations = (gens_raw    < 0) ? 3 : (gens_raw    > 1000 ? 1000 : (uint32_t)gens_raw);
+    uint32_t pop_threads     = (threads_raw < 0) ? 0 : (threads_raw >  256 ?  256 : (uint32_t)threads_raw);
+
     SGContext *ctx = sg_create();
     if (!ctx) { fprintf(stderr, "surge_solve: sg_create failed\n"); sh_arena_free(arena); return 1; }
     SGStatus st = sg_api_build_model(ctx, root);
@@ -59,7 +73,16 @@ int main(int argc, char **argv) {
         sg_free(ctx); return 1;
     }
 
-    SGStatus solve_status = sg_solve(ctx);
+    SGStatus solve_status;
+    if (use_population) {
+        SGPopulationConfig pop = {0};     /* zero-init: crossover_fraction=0 -> default 0.5 */
+        pop.num_threads = pop_threads;
+        pop.population_size = 0;          /* 0 = default pool size */
+        pop.num_generations = pop_generations;
+        solve_status = sg_solve_population(ctx, &pop);
+    } else {
+        solve_status = sg_solve(ctx);
+    }
 
     /* sg_solve commits its best solution to the context before returning, and
      * sg_api_write_solution now serializes a committed solution under any

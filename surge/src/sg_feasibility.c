@@ -3009,6 +3009,15 @@ ARStatus sg_route_apply_insertion(const SGContext *ctx, SGRouteSolution *sol,
     if (sol->base.assigned_flags[request_id]) {
         return AR_STATUS_INVALID_ARG;
     }
+    /* Eligibility chokepoint: refuse to place a request on a vehicle its
+     * allowed_vehicles whitelist or qualification mask forbids.  Every
+     * assignment flows through here, so this backstops any local-search
+     * operator that validated only capacity/time (see sg_postprocess.c). */
+    if (request_id < ctx->num_requests &&
+        (!sg_vehicle_allowed_for_request(ctx, vehicle_id, request_id) ||
+         !sg_vehicle_qualifies(ctx, vehicle_id, request_id))) {
+        return AR_STATUS_INVALID_ARG;
+    }
 
     route = sg_route_vehicle_ptr(sol, vehicle_id);
     old_len = sol->route_lengths[vehicle_id];
@@ -3137,6 +3146,12 @@ ARStatus sg_route_apply_pd_insertion(const SGContext *ctx, SGRouteSolution *sol,
         return AR_STATUS_INVALID_ARG;
     }
     if (ctx->requests[request_id].kind != SG_REQUEST_KIND_PICKUP_DELIVERY) {
+        return AR_STATUS_INVALID_ARG;
+    }
+    /* Eligibility chokepoint (see sg_route_apply_insertion). */
+    if (request_id < ctx->num_requests &&
+        (!sg_vehicle_allowed_for_request(ctx, vehicle_id, request_id) ||
+         !sg_vehicle_qualifies(ctx, vehicle_id, request_id))) {
         return AR_STATUS_INVALID_ARG;
     }
 

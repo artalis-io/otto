@@ -1883,6 +1883,73 @@ to months). Mature VRP solvers on the same instance typically differ by only a
 few percent, so the target is reachable, but it needs the algorithmic work, not
 tuning alone.
 
+### Measured reality (2026-10, corrects the stale numbers above)
+
+Re-measured on the current build. The frozen "25 veh / +7%" above is stale and the
+single-thread Solomon numbers quoted earlier were actually the *population* mode's.
+
+- **The gap is single-thread vs population, not a missing algorithm.** The
+  HGS-quality solver already exists and is public (`sg_solve_population`,
+  sg_parallel.h), but the production path (surge_solve CLI, sg_api/REST, WASM, and
+  all the real-instance runs) called single-thread `sg_solve`. Solomon 56, 10k iter,
+  seed 42: **single-thread +10.4% dist / +0.73 veh / 32-56 equal** vs
+  **population +0.4% / +0.21 / 44-56**.
+- **Fixed (lever 1): `surge_solve` now selects population via `config.population`**
+  (+`population_generations`, `population_threads`); default off, WASM-safe.
+- **Per-day real instance (was only ever run merged before).** day1: single-thread
+  11 veh / 0 unassigned already == PyVRP (11). day2 (hard, 146 orders, tight TW,
+  369 t): single-thread **26 veh / 8 unassigned**, degenerating to **2 veh / 100
+  unassigned at 300 s** (a single-thread vehicle-min degeneracy bug, lever/bug D);
+  **population: 16 / 0** (no size rule) and **21 / 2 unassigned** with the size
+  guarantee, vs PyVRP 24. So population closes most of the gap; the residual is
+  day2 (2 unassigned + a couple vehicles) -> population tuning (budget/generations/
+  SREX), lever B.
+- **Size guarantee (restricted address -> small vehicle): use the capacity
+  dimension** (restricted demand, big-truck cap 0, hard_capacity) -- enforced on
+  every path, 0 restricted-on-big verified. `allowed_vehicles`/qualifications is
+  NOT a safe substitute: it leaks (construction + insertion-feasibility check it,
+  but the ALNS neighbor moves, the concat delta evaluators, and warm-start
+  construction did not, and sg_solve commits a solution the validator flags).
+  Partial fix landed (guard on the 3 cross-vehicle concat evaluators); full
+  hardening (sg_neighbor + warm-start + commit-respects-validator) is lever C.
+
+**Revised plan: A** productize population + capacity size-guarantee into the
+request pipeline; **B** tune population for the day2 residual; **C** finish the
+allowed_vehicles/qualification hardening; **D** fix the single-thread vehicle-min
+degeneracy. Populate (not re-measure) the stale numbers above from this section.
+
+**A done** -- `build_surge_request.py --population`; dataset builds per-day
+size-guaranteed (capacity dim) population requests (reproducible). **B done -- the
+day2 residual was budget, not a wall.** Population + capacity size guarantee, 300 s
+per day: **day1 12 veh / 0 unassigned / 0 restricted-on-big (PyVRP 11); day2 23 /
+0 / 0 (PyVRP 24).** So parity (day1 +1, day2 -1, a wash), all orders served, the
+size guarantee enforced -- the HGS gap is effectively closed on the real instance
+with population + adequate budget.
+
+**C done (PR #225).** The leak was the inter-route local search: the segment-swap
+operators (2-opt*, OR-opt, cross-exchange) validated only capacity and time, so on
+the real instance they relocated restricted orders onto big trucks (day1 1, day2 2)
+even though construction, repair, and warm-start all gate. Two complementary guards:
+(1) `sg_route_candidate_compat_ok()` now takes the destination vehicle and rejects
+any candidate route carrying a request that vehicle may not serve -- this covers the
+segment-swap operators, which commit by rebuilding route arrays directly and never
+call `apply_insertion`; (2) `sg_route_apply_insertion`/`sg_route_apply_pd_insertion`
+reject ineligible placements at the single chokepoint every assignment flows through,
+backstopping all apply-based operators (vehicle elimination, ejection, polish,
+pd-relocate). For unrestricted instances both short-circuit, so quality is unchanged
+(Solomon 10k/seed42: mean distGap +10.39% and 32/56 vehicle-equal, identical to
+baseline). Verified: **restricted-on-big 0/0** on the per-day instance using
+`allowed_vehicles` alone (no capacity dim), all orders served; 478/478 tests incl. a
+new inter-route regression (`test_allowed_vehicles_no_leak_inter_route`).
+
+**D does not reproduce.** The "26/8-unassigned -> 2/100 at 300 s" single-thread
+collapse is gone on the post-C build. Day2 single-thread is stable across budgets:
+20 veh / 13 un @ 10-120 s (distance improving 7.0M -> 6.7M), 19 / 15 @ 300 s; day1
+12 / 2 @ 300 s. No worse-with-budget degeneracy -- single-thread is simply weaker
+than population (expected), not pathological. Most plausibly C's chokepoint removed
+the illegal intermediate states that were driving the collapse. Left as resolved;
+re-open if a future run shows the unassigned count growing with budget.
+
 ---
 
 ## Solver Profiles
