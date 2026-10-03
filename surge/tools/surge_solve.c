@@ -56,10 +56,13 @@ int main(int argc, char **argv) {
      * On single-thread/WASM builds without threads this still works (one worker). */
     ShJsonValue *cfg_v = sh_json_get(root, "config");
     int use_population = cfg_v && sh_json_as_bool(sh_json_get(cfg_v, "population"), false);
-    uint32_t pop_generations =
-        (uint32_t)(cfg_v ? sh_json_as_int(sh_json_get(cfg_v, "population_generations"), 3) : 3);
-    uint32_t pop_threads =
-        (uint32_t)(cfg_v ? sh_json_as_int(sh_json_get(cfg_v, "population_threads"), 0) : 0);
+    /* Clamp to sane ranges: a negative JSON value would otherwise wrap to a huge
+     * uint32_t (num_threads flows into thread/work-queue creation with no cap for
+     * explicit values). 0 means "let sg_solve_population pick the default". */
+    long gens_raw    = cfg_v ? sh_json_as_int(sh_json_get(cfg_v, "population_generations"), 3) : 3;
+    long threads_raw = cfg_v ? sh_json_as_int(sh_json_get(cfg_v, "population_threads"), 0) : 0;
+    uint32_t pop_generations = (gens_raw    < 0) ? 3 : (gens_raw    > 1000 ? 1000 : (uint32_t)gens_raw);
+    uint32_t pop_threads     = (threads_raw < 0) ? 0 : (threads_raw >  256 ?  256 : (uint32_t)threads_raw);
 
     SGContext *ctx = sg_create();
     if (!ctx) { fprintf(stderr, "surge_solve: sg_create failed\n"); sh_arena_free(arena); return 1; }
@@ -72,7 +75,7 @@ int main(int argc, char **argv) {
 
     SGStatus solve_status;
     if (use_population) {
-        SGPopulationConfig pop;
+        SGPopulationConfig pop = {0};     /* zero-init: crossover_fraction=0 -> default 0.5 */
         pop.num_threads = pop_threads;
         pop.population_size = 0;          /* 0 = default pool size */
         pop.num_generations = pop_generations;
