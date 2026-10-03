@@ -2059,7 +2059,6 @@ ARStatus sg_route_postprocess_eject_over_duration(const SGContext *ctx, SGRouteS
 
 ARStatus sg_route_postprocess_eject_over_capacity(const SGContext *ctx, SGRouteSolution *sol) {
     uint32_t v, d, dim;
-    double *tload;
 
     if (!ctx || !sol) {
         return AR_STATUS_INVALID_ARG;
@@ -2068,10 +2067,6 @@ ARStatus sg_route_postprocess_eject_over_capacity(const SGContext *ctx, SGRouteS
         return AR_STATUS_OK;
     }
     dim = ctx->dimension_count;
-    tload = (double *)malloc((size_t)dim * sizeof(double));
-    if (!tload) {
-        return AR_STATUS_OUT_OF_MEMORY;
-    }
 
     /* For each vehicle, walk its trips (delimited by trip_start); if a trip's
      * per-dimension load exceeds capacity, eject the request in that trip with
@@ -2096,24 +2091,42 @@ ARStatus sg_route_postprocess_eject_over_capacity(const SGContext *ctx, SGRouteS
                     uint32_t k;
                     int over_d = -1;
                     double over_amt = 0.0;
-                    for (d = 0; d < dim; d++) tload[d] = 0.0;
-                    for (k = ts; k < s; k++) {
-                        const SGTaskRecord *t = &ctx->tasks[stops[k].task_id];
-                        if (t->has_demand && t->demand)
-                            for (d = 0; d < dim; d++) tload[d] += t->demand[d];
-                    }
+                    int first_trip = (ts == 0);
+                    /* Capacity is the signed-load SPAN (max running prefix - min
+                     * running prefix) over the trip, not the net demand sum:
+                     * pickups raise the load and deliveries lower it, so a mixed
+                     * PD + delivery-only trip can exceed capacity while its net
+                     * sum stays small or negative. Mirror the authoritative check
+                     * in sg_route_stop_sequence_feasible so this safety net
+                     * actually detects what the validator rejects. */
                     for (d = 0; d < dim; d++) {
                         double cap = veh->capacity[d];
-                        if (tload[d] > cap + SG_DEMAND_TOLERANCE && (tload[d] - cap) > over_amt) {
-                            over_amt = tload[d] - cap; over_d = (int)d;
+                        double pref = 0.0, mn = 0.0, mx = 0.0, excess = 0.0;
+                        for (k = ts; k < s; k++) {
+                            const SGTaskRecord *t = &ctx->tasks[stops[k].task_id];
+                            double dm = (t->has_demand && t->demand) ? t->demand[d] : 0.0;
+                            pref += dm;
+                            if (pref < mn) mn = pref;
+                            if (pref > mx) mx = pref;
                         }
+                        if (first_trip && veh->has_initial_load && veh->initial_load) {
+                            double il = veh->initial_load[d];
+                            if (il + mn < -SG_DEMAND_TOLERANCE) excess += -(il + mn);
+                            if (il + mx > cap + SG_DEMAND_TOLERANCE) excess += (il + mx) - cap;
+                        } else if ((mx - mn) > cap + SG_DEMAND_TOLERANCE) {
+                            excess = (mx - mn) - cap;
+                        }
+                        if (excess > over_amt) { over_amt = excess; over_d = (int)d; }
                     }
                     if (over_d >= 0) {
+                        /* Eject the largest-magnitude contributor in the worst
+                         * dimension (abs: a pickup raises the span as much as a
+                         * delivery lowers it). */
                         double best = -1.0;
                         eject_req = stops[ts].request_id;
                         for (k = ts; k < s; k++) {
                             const SGTaskRecord *t = &ctx->tasks[stops[k].task_id];
-                            double dm = (t->has_demand && t->demand) ? t->demand[over_d] : 0.0;
+                            double dm = (t->has_demand && t->demand) ? fabs(t->demand[over_d]) : 0.0;
                             if (dm > best) { best = dm; eject_req = stops[k].request_id; }
                         }
                         progress = 1;
@@ -2132,7 +2145,6 @@ ARStatus sg_route_postprocess_eject_over_capacity(const SGContext *ctx, SGRouteS
             }
         }
     }
-    free(tload);
     return AR_STATUS_OK;
 }
 
