@@ -709,6 +709,26 @@ static void sg_build_cap_segment(const SGContext *ctx, const SGRouteStop *stops,
  * Returns 1 if evaluation was performed (check *new_total_out vs threshold).
  * Returns 0 if not applicable (caller should fall through to O(L) path).
  */
+/* Cross-vehicle LS moves must honor per-request vehicle eligibility
+ * (allowed_vehicles whitelist + qualifications). These fast delta evaluators
+ * otherwise only check capacity/time/duration, which let local search relocate
+ * a restricted request onto a disallowed vehicle -- construction and the
+ * insertion-feasibility paths check eligibility, but these concat evaluators did
+ * not, so the whitelist leaked into the final plan. Returns 1 iff every request
+ * in stops[start, start+k) may ride vehicle vb. */
+static int sg_seg_eligible_on_vehicle(const SGContext *ctx,
+                                      const SGRouteStop *stops,
+                                      uint32_t start, uint32_t k, uint32_t vb) {
+    uint32_t i;
+    for (i = 0; i < k; i++) {
+        uint32_t req = stops[start + i].request_id;
+        if (req >= ctx->num_requests) continue;   /* depot/reload pseudo-stops */
+        if (!sg_vehicle_allowed_for_request(ctx, vb, req)) return 0;
+        if (!sg_vehicle_qualifies(ctx, vb, req)) return 0;
+    }
+    return 1;
+}
+
 int sg_concat_eval_or_opt(const SGContext *ctx, const SGRouteSolution *sol,
                            uint32_t va, uint32_t start, uint32_t k,
                            uint32_t vb, uint32_t ins,
@@ -730,6 +750,9 @@ int sg_concat_eval_or_opt(const SGContext *ctx, const SGRouteSolution *sol,
     /* For delivery-only: request pos == stop pos, route_lengths == route_stop_lengths */
     stop_len_a = sol->route_stop_lengths[va];
     stops_a = sg_route_vehicle_stop_ptr_const(sol, va);
+
+    /* or-opt relocates stops_a[start, start+k) onto vb (cross-vehicle only). */
+    if (va != vb && !sg_seg_eligible_on_vehicle(ctx, stops_a, start, k, vb)) return 0;
 
     seg_stride = (size_t)sol->stop_stride + 1U;
     base_a = (size_t)va * seg_stride;
@@ -878,6 +901,15 @@ int sg_concat_eval_2opt_star(const SGContext *ctx, const SGRouteSolution *sol,
     if (veh_a->open_start || veh_a->open_end) return 0;
     if (veh_b->open_start || veh_b->open_end) return 0;
 
+    /* 2-opt* swaps tails: va's tail [cut_a, end) moves to vb and vice versa. */
+    {
+        uint32_t la = sol->route_stop_lengths[va], lb = sol->route_stop_lengths[vb];
+        const SGRouteStop *ta = sg_route_vehicle_stop_ptr_const(sol, va);
+        const SGRouteStop *tb = sg_route_vehicle_stop_ptr_const(sol, vb);
+        if (cut_a < la && !sg_seg_eligible_on_vehicle(ctx, ta, cut_a, la - cut_a, vb)) return 0;
+        if (cut_b < lb && !sg_seg_eligible_on_vehicle(ctx, tb, cut_b, lb - cut_b, va)) return 0;
+    }
+
     stop_len_a = sol->route_stop_lengths[va];
     stop_len_b = sol->route_stop_lengths[vb];
     stops_a = sg_route_vehicle_stop_ptr_const(sol, va);
@@ -1011,6 +1043,10 @@ int sg_concat_eval_cross_exchange(const SGContext *ctx, const SGRouteSolution *s
     sf_a = sol->route_seg_suffix + base_a;
     pf_b = sol->route_seg_prefix + base_b;
     sf_b = sol->route_seg_suffix + base_b;
+
+    /* cross-exchange: va's seg [ia, ia+sa) -> vb, vb's seg [ib, ib+sb) -> va. */
+    if (!sg_seg_eligible_on_vehicle(ctx, stops_a, ia, sa, vb)) return 0;
+    if (!sg_seg_eligible_on_vehicle(ctx, stops_b, ib, sb, va)) return 0;
 
     /* Rebuild moved segments for target vehicles */
     sg_build_segment_for_vehicle(ctx, &stops_b[ib], sb, va, &seg_b_for_va);
