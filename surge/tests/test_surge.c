@@ -8915,6 +8915,75 @@ static void test_validate_multitrip_distance_penalty(void) {
     sg_free(ctx);
 }
 
+static void test_multitrip_capacity_insertion_no_overload(void) {
+    /* Regression for #182 (residual): the O(1) incremental capacity check
+       sg_route_check_capacity_concat mis-combined its per-trip prefix/suffix
+       summaries across trip boundaries for multi-trip vehicles, so repair could
+       pack an OVER-CAPACITY trip (SG_CONCAT_VERIFY: concat_ok=1 vs scan_ok=0).
+       The full-sequence validator then correctly rejected the committed plan, so
+       sg_solve returned a spurious SG_STATUS_ERROR on a feasible instance. The
+       fix routes multi-trip capacity through the O(L) per-trip scan (single-trip,
+       the whole classic benchmark suite, keeps the O(1) fast path -- inert).
+       Pre-fix this instance triggered on every seed at >=8000 iterations
+       (worst trip 7 stops = load 35 > cap 20). */
+    SGContext *ctx = sg_create();
+    SGConfig cfg;
+    uint32_t depot;
+    int i, k;
+
+    sg_config_default(&cfg);
+    cfg.max_iterations = 8000;
+    cfg.seed = 1;
+    cfg.deterministic = true;
+    cfg.require_bound_requests_at_solve = true;
+    cfg.lexicographic_objective = true;
+    assert(sg_set_config(ctx, &cfg) == SG_STATUS_OK);
+    assert(sg_set_hard_capacity(ctx, true) == SG_STATUS_OK);
+
+    add_depot_with_location(ctx, &depot, 0, 0);
+    sg_depot_set_time_window(ctx, depot, 0, 86400);
+    for (k = 0; k < 3; k++) {
+        add_vehicle_with_depot(ctx, depot, 0, 86400, 20.0);   /* cap 20 -> 4 stops/trip */
+        sg_vehicle_set_max_trips(ctx, (uint32_t)k, 0);        /* 0 = unlimited trips */
+        sg_vehicle_set_trip_reload_seconds(ctx, (uint32_t)k, 600);
+    }
+    for (i = 0; i < 50; i++) {
+        double a = 2.0 * M_PI * i / 50.0;
+        double r = 5.0 + (i % 9);
+        add_delivery_request(ctx, r * cos(a), r * sin(a), 0, 86400, 60, -5.0);
+    }
+
+    /* Feasible multi-trip plan: must not spuriously error, must serve everyone. */
+    {
+        SGStatus st = sg_solve(ctx);
+        assert(st == SG_STATUS_OK || st == SG_STATUS_LIMIT);  /* pre-fix: SG_STATUS_ERROR */
+    }
+    assert(sg_get_unassigned(ctx) == 0);
+
+    /* Committed solution must validate (pre-fix: over-capacity trip -> validate==0). */
+    assert(ctx->final_solution != NULL);
+    assert(sg_route_solution_validate(ctx->final_solution, ctx) == 1);
+
+    /* Explicit invariant: no trip exceeds vehicle capacity (load resets at trip_start). */
+    {
+        SGRouteSolution *sol = ctx->final_solution;
+        uint32_t rc = sg_solution_get_route_count(ctx), ri;
+        for (ri = 0; ri < rc; ri++) {
+            uint32_t vid = sg_solution_get_route_vehicle_id(ctx, ri);
+            uint32_t sc = sg_solution_get_route_stop_count(ctx, ri), s;
+            double cap = ctx->vehicles[vid].capacity[0];
+            double trip_load = 0.0;
+            const SGRouteStop *stops = sg_route_vehicle_stop_ptr_const(sol, vid);
+            for (s = 0; s < sc; s++) {
+                if (s > 0 && stops[s].trip_start) trip_load = 0.0;
+                trip_load += fabs(ctx->tasks[stops[s].task_id].demand[0]);
+                assert(trip_load <= cap + 1e-6);
+            }
+        }
+    }
+    sg_free(ctx);
+}
+
 static void test_hard_max_duration_existing_trip(void) {
     /* With sg_set_hard_max_duration, a route must never exceed max_duration even
        when packing stops into a single trip -- excess stays unassigned rather
@@ -18314,6 +18383,7 @@ int main(void) {
     RUN_TEST(test_multi_trip_capacity_reset);
     RUN_TEST(test_multi_trip_max_duration_new_trip);
     RUN_TEST(test_validate_multitrip_distance_penalty);
+    RUN_TEST(test_multitrip_capacity_insertion_no_overload);
     RUN_TEST(test_hard_max_duration_existing_trip);
     RUN_TEST(test_hard_max_duration_eject_pass);
     RUN_TEST(test_hard_capacity_eject_pass);
@@ -18635,9 +18705,9 @@ int main(void) {
     printf("================\n");
     printf("%d/%d tests passed\n", tests_passed, tests_run);
 #ifdef SG_HAS_THREADS
-    assert(tests_run == 478);
+    assert(tests_run == 479);
 #else
-    assert(tests_run == 454);
+    assert(tests_run == 455);
 #endif
     return tests_passed == tests_run ? 0 : 1;
 }
