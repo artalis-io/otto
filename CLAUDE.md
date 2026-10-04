@@ -498,6 +498,7 @@ Deep-dive documentation in `docs/internals/`:
 | `lu-factorization.md` | LU decomposition, eta updates |
 | `simplex.md` | Revised simplex implementation |
 | `clayshards-design.md` | UI widget state, focus model |
+| `surge-feasibility-authority.md` | Surge: centralizing the feasibility invariant (design) |
 
 ## Vendor Libraries
 

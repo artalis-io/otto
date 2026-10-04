@@ -100,12 +100,30 @@ test-asan: CFLAGS = $(DEBUG_CFLAGS)
 test-asan: LDFLAGS += $(DEBUG_LDFLAGS)
 test-asan: clean test
 
+# Run the full suite with the O(1) capacity fast-path cross-checked against the
+# O(L) reference on every insertion eval (SG_CONCAT_VERIFY aborts on any
+# disagreement). This is the CI gate that would have caught #226 and #227 the
+# day they were introduced instead of months later via an empirical sweep.
+test-concat-verify: CFLAGS += -DSG_CONCAT_VERIFY
+test-concat-verify: clean test
+
+# Compile every Surge source with -Werror to hold the warning-clean line (audit
+# L2). Scoped to surge's OWN src + tools only -- the prebuilt arbor/shared libs
+# and vendor code are not recompiled here, so a vendor or compiler-version
+# warning can never block this. Kept out of the normal build for the same reason.
+lint-werror:
+	@set -e; for f in src/*.c tools/*.c; do \
+	  echo "  werror $$f"; \
+	  $(CC) -c -std=c11 -D_GNU_SOURCE -DSG_HAS_THREADS $(INCLUDES) \
+	    -Wall -Wextra -Werror -Wshadow -Wunused-but-set-variable $$f -o /dev/null; \
+	done; echo "lint-werror: surge src+tools warning-clean"
+
 .PHONY: all clean test test-transport scripts-test tools lib debug bench bench-li-lim bench-cordeau \
         bench-quick bench-li-lim-quick bench-cordeau-quick bench-all-quick \
         bench-gh-200 bench-gh-all bench-ll-200 bench-ll-all bench-full \
         bench-tune tune-quick tune-all \
         bench-download bench-validate \
-        shared-lib python-test node-test cppcheck fuzz tsan fuzz-smoke cppcheck-all help fuzz-api fuzz-api-smoke test-asan
+        shared-lib python-test node-test cppcheck fuzz tsan fuzz-smoke cppcheck-all help fuzz-api fuzz-api-smoke test-asan test-concat-verify lint-werror
 
 all: lib $(TEST_BIN)
 

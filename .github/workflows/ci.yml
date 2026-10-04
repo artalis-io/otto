@@ -1251,6 +1251,60 @@ jobs:
         run: make -C ${{ matrix.suite.dir }} ${{ matrix.suite.target }}
 
   # ==========================================================================
+  # Surge capacity fast-path cross-check (SG_CONCAT_VERIFY)
+  #
+  # Surge keeps an O(1) concatenation-based capacity check as a fast path to the
+  # O(L) per-trip reference. When the two drifted apart the solver shipped
+  # infeasible plans (#226 multi-trip, #227 PD+delivery mixed) that were only
+  # found later by an empirical fuzz sweep. This job builds the suite with
+  # SG_CONCAT_VERIFY, which runs BOTH paths on every insertion eval and aborts on
+  # any disagreement -- so fast-path drift fails the build the day it lands.
+  # ==========================================================================
+  verify-surge-concat:
+    name: Verify Surge concat fast-path
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential libomp-dev
+
+      - name: Surge concat capacity cross-check
+        run: make -C surge test-concat-verify
+
+  # ==========================================================================
+  # Surge -Werror lint (audit L2)
+  #
+  # The module builds -Wall -Wextra but never -Werror, so a new warning could
+  # accumulate unnoticed. This compiles surge's own src + tools with -Werror
+  # (vendor and the prebuilt arbor/shared libs are not recompiled, so their
+  # warnings can't block it) to hold the warning-clean line.
+  # ==========================================================================
+  lint-surge-werror:
+    name: Surge -Werror lint
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential
+
+      - name: Surge src+tools warning-clean (-Werror)
+        run: make -C surge lint-werror
+
+  # ==========================================================================
   # ThreadSanitizer
   #
   # Separate from the matrix above because TSan and ASan cannot be combined

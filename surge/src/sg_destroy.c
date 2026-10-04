@@ -597,7 +597,6 @@ ARStatus sg_route_destroy_vehicle_empty(void *op_ctx, void *solution, int count,
     uint32_t i;
     uint32_t num_nonempty = 0;
     uint32_t candidates[3];
-    uint32_t cand_lens[3];
     uint32_t k_cands;
 
     if (!ctx || !ctx->op_rng || !sol || !removed_count || count < 0) {
@@ -649,7 +648,6 @@ ARStatus sg_route_destroy_vehicle_empty(void *op_ctx, void *solution, int count,
         k_cands = num_nonempty < 3 ? num_nonempty : 3;
         for (i = 0; i < k_cands; i++) {
             candidates[i] = sorted[i];
-            cand_lens[i] = sorted_len[i];
         }
     }
 
