@@ -8984,6 +8984,100 @@ static void test_multitrip_capacity_insertion_no_overload(void) {
     sg_free(ctx);
 }
 
+/* Regression: a route that MIXES pickup-delivery (PD) with delivery-only
+   requests must never be committed over capacity. PD pickups raise the running
+   load and deliveries lower it, so the capacity measure is the signed-load SPAN
+   (max prefix - min prefix), not the net demand sum. The post-solve safety net
+   sg_route_postprocess_eject_over_capacity used the net sum, so a mixed trip
+   whose span exceeded capacity but whose net sum stayed negative slipped through
+   -> the validator rejected the committed plan -> spurious SG_STATUS_ERROR.
+   Found by the correctness sweep (feature combo PD+max_duration, seed 3); this
+   embeds that exact instance (LCG-reproduced). Pre-fix: committed_valid=0. */
+static uint64_t pdsw_lcg;
+static uint32_t pdsw_rnd(void){ pdsw_lcg=pdsw_lcg*6364136223846793005ULL+1442695040888963407ULL; return (uint32_t)(pdsw_lcg>>33); }
+static uint32_t pdsw_rr(uint32_t lo,uint32_t hi){ return lo+(hi>lo?pdsw_rnd()%(hi-lo+1):0); }
+static double pdsw_rc(void){ return (double)((int)(pdsw_rnd()%2000)-1000)/10.0; }
+
+static void test_pd_mixed_capacity_no_overload(void) {
+    SGContext *ctx = sg_create();
+    SGConfig cfg;
+    uint32_t depot;
+    int i, k;
+    const int N = 15, M = 3;
+
+    /* Match the sweep's f=0x44 (PD + max_duration, 1 dim), seed 3. */
+    pdsw_lcg = (uint64_t)3*2654435761ULL + (uint64_t)0x44*40503ULL + 12345ULL;
+    sg_config_default(&cfg);
+    cfg.max_iterations = 2500; cfg.seed = 3; cfg.deterministic = true;
+    cfg.require_bound_requests_at_solve = true; cfg.lexicographic_objective = true;
+    cfg.hard_max_duration = true;
+    assert(sg_set_config(ctx, &cfg) == SG_STATUS_OK);
+    assert(sg_set_hard_capacity(ctx, true) == SG_STATUS_OK);
+
+    add_depot_with_location(ctx, &depot, 0, 0);
+    sg_depot_set_time_window(ctx, depot, 0, 100000);
+    for (k = 0; k < M; k++) {
+        add_vehicle_with_depot(ctx, depot, 0, 100000, 80.0);   /* cap 80 */
+        sg_vehicle_set_max_duration(ctx, (uint32_t)k, (int32_t)pdsw_rr(20000, 60000));
+    }
+    for (i = 0; i < N; i++) {
+        uint32_t req = sg_add_request(ctx);
+        double dmag = (double)pdsw_rr(5, 20);
+        int is_pd = (pdsw_rnd() % 3 == 0);
+        if (is_pd) {
+            uint32_t pt = sg_add_task(ctx, SG_TASK_PICKUP);
+            uint32_t dt = sg_add_task(ctx, SG_TASK_DELIVERY);
+            double px = pdsw_rc(), py = pdsw_rc(), dx = pdsw_rc(), dy = pdsw_rc();
+            double dp = dmag, dd = -dmag;
+            sg_task_set_location(ctx, pt, px, py);
+            sg_task_set_location(ctx, dt, dx, dy);
+            sg_task_set_demand(ctx, pt, &dp, 1);
+            sg_task_set_demand(ctx, dt, &dd, 1);
+            sg_task_set_time_window(ctx, pt, 0, 100000);
+            sg_task_set_time_window(ctx, dt, 0, 100000);
+            sg_task_set_service_seconds(ctx, pt, (int32_t)pdsw_rr(0, 600));
+            sg_task_set_service_seconds(ctx, dt, (int32_t)pdsw_rr(0, 600));
+            sg_request_bind_pickup_delivery_tasks(ctx, req, pt, dt);
+        } else {
+            uint32_t t = sg_add_task(ctx, SG_TASK_DELIVERY);
+            double px = pdsw_rc(), py = pdsw_rc(), dd = -dmag;
+            sg_task_set_location(ctx, t, px, py);
+            sg_task_set_demand(ctx, t, &dd, 1);
+            sg_task_set_time_window(ctx, t, 0, 100000);
+            sg_task_set_service_seconds(ctx, t, (int32_t)pdsw_rr(0, 600));
+            sg_request_bind_delivery_task(ctx, req, t);
+        }
+    }
+
+    {
+        SGStatus st = sg_solve(ctx);
+        assert(st == SG_STATUS_OK || st == SG_STATUS_LIMIT);  /* pre-fix: SG_STATUS_ERROR */
+    }
+    assert(ctx->final_solution != NULL);
+    assert(sg_route_solution_validate(ctx->final_solution, ctx) == 1);  /* pre-fix: 0 */
+
+    /* Explicit invariant: no trip's signed-load span exceeds capacity. */
+    {
+        SGRouteSolution *sol = ctx->final_solution;
+        uint32_t rc = sg_solution_get_route_count(ctx), ri;
+        for (ri = 0; ri < rc; ri++) {
+            uint32_t vid = sg_solution_get_route_vehicle_id(ctx, ri);
+            uint32_t sc = sg_solution_get_route_stop_count(ctx, ri), s;
+            double cap = ctx->vehicles[vid].capacity[0];
+            double pref = 0.0, mn = 0.0, mx = 0.0;
+            const SGRouteStop *stops = sg_route_vehicle_stop_ptr_const(sol, vid);
+            for (s = 0; s < sc; s++) {
+                if (s > 0 && stops[s].trip_start) { pref = 0.0; mn = 0.0; mx = 0.0; }
+                pref += ctx->tasks[stops[s].task_id].demand[0];
+                if (pref < mn) mn = pref;
+                if (pref > mx) mx = pref;
+                assert((mx - mn) <= cap + 1e-6);
+            }
+        }
+    }
+    sg_free(ctx);
+}
+
 static void test_hard_max_duration_existing_trip(void) {
     /* With sg_set_hard_max_duration, a route must never exceed max_duration even
        when packing stops into a single trip -- excess stays unassigned rather
@@ -18384,6 +18478,7 @@ int main(void) {
     RUN_TEST(test_multi_trip_max_duration_new_trip);
     RUN_TEST(test_validate_multitrip_distance_penalty);
     RUN_TEST(test_multitrip_capacity_insertion_no_overload);
+    RUN_TEST(test_pd_mixed_capacity_no_overload);
     RUN_TEST(test_hard_max_duration_existing_trip);
     RUN_TEST(test_hard_max_duration_eject_pass);
     RUN_TEST(test_hard_capacity_eject_pass);
@@ -18705,9 +18800,9 @@ int main(void) {
     printf("================\n");
     printf("%d/%d tests passed\n", tests_passed, tests_run);
 #ifdef SG_HAS_THREADS
-    assert(tests_run == 479);
+    assert(tests_run == 480);
 #else
-    assert(tests_run == 455);
+    assert(tests_run == 456);
 #endif
     return tests_passed == tests_run ? 0 : 1;
 }
