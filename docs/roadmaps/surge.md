@@ -1949,6 +1949,17 @@ collapse is gone on the post-C build. Day2 single-thread is stable across budget
 than population (expected), not pathological. Most plausibly C's chokepoint removed
 the illegal intermediate states that were driving the collapse. Left as resolved;
 re-open if a future run shows the unassigned count growing with budget.
+### 2L-VRP marketing honesty flag (2026-10)
+
+The Gyermelyi proposal markets "2L-VRP" as a differentiator, but neither Surge nor
+PyVRP does *true* 2D/3D load packing today (the roadmap item "Load stacking / 3D
+loading constraints" is not started; the current approach encodes footprint into
+the scalar pallet dimension, which is also the root of the pallet-capacity overrun
+the client flagged). Either soften the claim to "loading-aware (footprint
+dimension)" or build the loading-feasibility module (Tier-2, NP-hard packing)
+before claiming true 2L. (Feature-parity audit that prompted this note is now
+confirmed by the measured-reality section above: the PyVRP-vs-Surge gap is
+quality-only, and #225-#228 have largely closed it.)
 
 ---
 
