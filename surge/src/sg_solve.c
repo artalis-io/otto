@@ -1,5 +1,36 @@
 #include "sg_internal.h"
 
+/* Run a postprocess improvement op on `best`, rolling back if it turns a
+ * hard-feasible solution hard-infeasible.  The postprocess phase runs with the
+ * penalty manager disabled (ctx->penalty.enabled = 0 before this phase), so
+ * sg_route_solution_validate enforces exactly the model's hard constraints
+ * (capacity, plus any hard time windows / max_duration; soft constraints keep a
+ * wide hard bound and are not flagged).  This guards against a postprocess move
+ * operator (e.g. intensify / polish_distance reordering a mixed pickup-delivery
+ * + delivery-only route) committing an infeasible `best` that the eject nets
+ * then only partially repair -- which previously forced a fall back to the
+ * un-postprocessed initial solution.  If `best` is already infeasible
+ * (penalty-space carryover from Phase 1), the op runs unguarded and the
+ * eject/fallback path handles recovery. */
+static void sg_postprocess_guarded(SGContext *ctx, SGRouteSolution *best,
+                                   ARStatus (*op)(const SGContext *, SGRouteSolution *)) {
+    SGRouteSolution *snap;
+    if (!op || !best) return;
+    if (!sg_route_solution_validate(best, (void *)ctx)) {
+        (void)op(ctx, best);          /* already infeasible: no feasible state to protect */
+        return;
+    }
+    snap = (SGRouteSolution *)sg_route_solution_copy(best, (void *)ctx);
+    (void)op(ctx, best);
+    if (snap) {
+        if (!sg_route_solution_validate(best, (void *)ctx)) {
+            sg_route_restore_from_backup(best, snap);   /* undo; frees snap */
+        } else {
+            sg_route_solution_free(snap, NULL);
+        }
+    }
+}
+
 /* Apply tune parameter overrides to ALNS params (rewards, reaction, segment_size) */
 static void sg_apply_tune_to_alns(const SGContext *ctx, ARALNSParams *params) {
     if (!ctx->tune_params) return;
@@ -1348,14 +1379,17 @@ skip_phase2:
                            pp_sol->vehicles_used, pp_sol->base.num_unassigned);
         }
         if (best) {
+            /* Guarded: a postprocess move that breaks hard feasibility is rolled
+               back (see sg_postprocess_guarded), so postprocess can only improve
+               a feasible best, never degrade it into the eject/fallback path. */
             if (!sg_time_budget_expired(&ctx->time_budget, sg_monotonic_seconds()))
-                (void)sg_route_postprocess_reduce_vehicles(ctx, best);
+                sg_postprocess_guarded(ctx, best, sg_route_postprocess_reduce_vehicles);
             if (!sg_time_budget_expired(&ctx->time_budget, sg_monotonic_seconds()))
-                (void)sg_route_postprocess_ejection_reduce(ctx, best);
+                sg_postprocess_guarded(ctx, best, sg_route_postprocess_ejection_reduce);
             if (!sg_time_budget_expired(&ctx->time_budget, sg_monotonic_seconds()))
-                (void)sg_route_postprocess_intensify(ctx, best);
+                sg_postprocess_guarded(ctx, best, sg_route_postprocess_intensify);
             if (!sg_time_budget_expired(&ctx->time_budget, sg_monotonic_seconds()))
-                (void)sg_route_postprocess_polish_distance(ctx, best);
+                sg_postprocess_guarded(ctx, best, sg_route_postprocess_polish_distance);
             (void)sg_route_postprocess_eject_over_duration(ctx, best);
             (void)sg_route_postprocess_eject_over_capacity(ctx, best);
             (void)sg_route_postprocess_eject_over_tw(ctx, best);
