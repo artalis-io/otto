@@ -26,10 +26,10 @@ The two core invariants of a committed Surge route —
 | Sequence feasibility (moves) | `sg_feasibility.c:1237 sg_route_sequence_feasible_distance` | delegates to 535 ✅ | — |
 | O(1) concat capacity | `sg_concat.c:167 sg_route_check_capacity_concat` | own O(1) summary | — |
 | Concat delta evaluators | `sg_concat.c` or-opt/2opt*/cross | via above | own copy (`sg_seg_eligible_on_vehicle`) |
-| Postprocess eject | `sg_postprocess.c:2060 eject_over_capacity` | own copy | — |
+| Postprocess eject | `sg_postprocess.c:2060 sg_route_postprocess_eject_over_capacity` | own copy | — |
 | Postprocess candidate check | `sg_postprocess.c:9 sg_route_candidate_compat_ok` | — | own copy |
 | Solution validator | `sg_solution.c:1222 sg_route_solution_validate` | own copy | ✅ |
-| Apply chokepoint | `sg_feasibility.c:3000/3131 apply_insertion / apply_pd_insertion` | — | ✅ (backstop, #225) |
+| Apply chokepoint | `sg_feasibility.c:3000/3131 sg_route_apply_insertion / sg_route_apply_pd_insertion` | — | ✅ (backstop, #225) |
 
 The audit found the capacity invariant referenced across **9 files** (89 in
 `sg_feasibility.c` alone). Each copy is a place to drift, and each drift was a
@@ -93,7 +93,7 @@ Two invariants are promoted from "every operator is careful" to "the system
 cannot violate them":
 
 - **Assignment eligibility** — already done in #225: `apply_insertion` /
-  `apply_pd_insertion` reject an ineligible placement. *Every* assignment flows
+  `sg_route_apply_pd_insertion` reject an ineligible placement. *Every* assignment flows
   through these, so no operator (present or future) can place a request on a
   vehicle it may not serve.
 - **Committed-solution feasibility** — formalize the rule "sg_solve never commits
@@ -108,7 +108,7 @@ cannot violate them":
    the fast path. *(This PR.)*
 2. Extract `sg_cap_trip_excess` from `sg_route_stop_sequence_feasible`; re-point
    `sg_route_stop_sequence_feasible` at it (pure refactor, benchmark-identical).
-3. Re-point the eject pass (`eject_over_capacity`) and the validator
+3. Re-point the eject pass (`sg_route_postprocess_eject_over_capacity`) and the validator
    (`sg_route_solution_validate`) at `sg_cap_trip_excess`; delete their copies.
    Verify Solomon/Li&Lim byte-identical + sweep clean.
 4. Re-point the delivery and PD insertion evals' O(L) fallback at it; keep the

@@ -115,7 +115,7 @@ lint-werror:
 	@set -e; for f in src/*.c tools/*.c; do \
 	  echo "  werror $$f"; \
 	  $(CC) -c -std=c11 -D_GNU_SOURCE -DSG_HAS_THREADS $(INCLUDES) \
-	    -Wall -Wextra -Werror -Wshadow $$f -o /dev/null; \
+	    -Wall -Wextra -Werror -Wshadow -Wunused-but-set-variable $$f -o /dev/null; \
 	done; echo "lint-werror: surge src+tools warning-clean"
 
 .PHONY: all clean test test-transport scripts-test tools lib debug bench bench-li-lim bench-cordeau \
