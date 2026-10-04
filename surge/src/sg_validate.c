@@ -647,26 +647,26 @@ SGStatus sg_validate_plan_impl(SGContext *ctx, uint32_t num_routes,
                     }
                     if (expected_vehicle != SG_NO_VEHICLE &&
                         sol->request_vehicle[ri] != expected_vehicle) {
-                        SGViolation viol;
-                        memset(&viol, 0, sizeof(viol));
-                        viol.type = SG_VIOLATION_FROZEN_ASSIGNMENT;
-                        viol.vehicle_id = sol->request_vehicle[ri];
-                        viol.request_id = ri;
-                        viol.actual = (double)sol->request_vehicle[ri];
-                        viol.limit = (double)expected_vehicle;
-                        push_violation(ctx, &viol);
+                        SGViolation fviol;
+                        memset(&fviol, 0, sizeof(fviol));
+                        fviol.type = SG_VIOLATION_FROZEN_ASSIGNMENT;
+                        fviol.vehicle_id = sol->request_vehicle[ri];
+                        fviol.request_id = ri;
+                        fviol.actual = (double)sol->request_vehicle[ri];
+                        fviol.limit = (double)expected_vehicle;
+                        push_violation(ctx, &fviol);
                     }
                 }
             }
             if (lock >= SG_LOCK_COMMITTED) {
                 /* Check committed/frozen request is assigned */
                 if (!sol->base.assigned_flags[ri]) {
-                    SGViolation viol;
-                    memset(&viol, 0, sizeof(viol));
-                    viol.type = SG_VIOLATION_COMMITTED_UNASSIGNED;
-                    viol.vehicle_id = UINT32_MAX;
-                    viol.request_id = ri;
-                    push_violation(ctx, &viol);
+                    SGViolation cviol;
+                    memset(&cviol, 0, sizeof(cviol));
+                    cviol.type = SG_VIOLATION_COMMITTED_UNASSIGNED;
+                    cviol.vehicle_id = UINT32_MAX;
+                    cviol.request_id = ri;
+                    push_violation(ctx, &cviol);
                 }
             }
         }

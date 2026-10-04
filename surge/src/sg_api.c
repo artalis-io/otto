@@ -1274,6 +1274,16 @@ static int build_initial_routes(SGContext *ctx, const ShJsonValue *ir_arr) {
 
 /* ============================================================================
  * sg_api_build_model — build model from parsed JSON DOM
+ *
+ * SECURITY (Role P boundary, audit L3): this is Surge's request-ingestion /
+ * parsing surface. It consumes an already-parsed JSON DOM and is defensively
+ * written -- JSON-driven counts are overflow-guarded before allocation
+ * (`n > SIZE_MAX / sizeof(double)`), ids are range-checked, and nothing here
+ * runs shell/exec. That is sufficient for the library and the surge_solve CLI
+ * (trusted local input). When this path is driven by UNTRUSTED network input
+ * (the Keel HTTP API server), parsing must run in the isolated parser process
+ * per docs/internals/security-model.md (Role P), so a malformed request can only
+ * crash a sandbox, never the compute core (Role C).
  * ============================================================================ */
 
 SGStatus sg_api_build_model(SGContext *ctx, const ShJsonValue *root) {

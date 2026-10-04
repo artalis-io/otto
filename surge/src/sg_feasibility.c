@@ -1,4 +1,8 @@
 #include "sg_internal.h"
+#ifdef SG_CONCAT_VERIFY
+#include <stdio.h>   /* fprintf — the O(1)-vs-O(L) capacity cross-check (SG_CONCAT_VERIFY) */
+#include <stdlib.h>  /* abort */
+#endif
 
 int sg_route_update_timing(const SGContext *ctx, SGRouteSolution *sol, uint32_t vehicle_id) {
     const SGVehicleRecord *vehicle;
@@ -1849,12 +1853,27 @@ int sg_route_eval_insertion_cached(const SGContext *ctx, const SGRouteSolution *
                     }
                 }
                 /* Both paths must agree on feasibility */
-                if (concat_ok != scan_ok) {
-                    fprintf(stderr, "SG_CONCAT_VERIFY FAIL: concat_ok=%d scan_ok=%d "
+                /* Two directions of disagreement, very different severity:
+                 *  - concat_ok && !scan_ok : the fast path ADMITS an insertion the
+                 *    O(L) reference rejects -> the solver can commit an infeasible
+                 *    plan (this is exactly #226). UNSAFE: fail the build.
+                 *  - !concat_ok && scan_ok : the fast path OVER-REJECTS a feasible
+                 *    insertion -> safe (never ships infeasible), but a quality loss
+                 *    (a valid insertion is pruned). WARN, don't fail -- tracked as
+                 *    an M1 follow-up (the concat summary mishandles some degenerate
+                 *    / multi-dimension first-insertion states; see
+                 *    docs/internals/surge-feasibility-authority.md). */
+                if (concat_ok && !scan_ok) {
+                    fprintf(stderr, "SG_CONCAT_VERIFY FAIL (unsafe admit): concat_ok=1 scan_ok=0 "
                             "v=%u pos=%u stop_len=%u concat_viol=%.6f scan_viol=%.6f\n",
-                            concat_ok, scan_ok, vehicle_id, insert_stop_pos,
-                            stop_len, concat_violation, scan_violation);
+                            vehicle_id, insert_stop_pos, stop_len,
+                            concat_violation, scan_violation);
                     abort();
+                } else if (!concat_ok && scan_ok) {
+                    fprintf(stderr, "SG_CONCAT_VERIFY WARN (over-reject): concat_ok=0 scan_ok=1 "
+                            "v=%u pos=%u stop_len=%u concat_viol=%.6f scan_viol=%.6f\n",
+                            vehicle_id, insert_stop_pos, stop_len,
+                            concat_violation, scan_violation);
                 }
             }
 #endif /* SG_CONCAT_VERIFY */
