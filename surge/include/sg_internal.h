@@ -1074,6 +1074,22 @@ void sg_compute_solution_route_metrics(const SGContext *ctx, const SGBootstrapSo
 /* sg_feasibility.c */
 int sg_route_update_timing(const SGContext *ctx, SGRouteSolution *sol, uint32_t vehicle_id);
 int sg_route_update_load(const SGContext *ctx, SGRouteSolution *sol, uint32_t vehicle_id);
+
+/* Canonical per-trip signed-load span capacity check (M1 feasibility authority;
+   see docs/internals/surge-feasibility-authority.md). Given a load profile
+   (prefix sums of demand that reset to 0 at each trip_start, so
+   load_profile[lo]==0) scans the single trip occupying prefix indices [lo, hi]
+   inclusive and returns the total capacity excess across dimensions
+   (0.0 == feasible). Encodes the hard gate's rules exactly: per-trip
+   signed-load span (max_prefix - min_prefix) <= cap, with the first-trip
+   initial_load branch checking fixed-start lower/upper bounds; infinite caps
+   are NOT span-skipped (an initial_load lower-bound breach is still reported).
+   The single source of truth; sg_route_stop_sequence_feasible, the eject pass,
+   the validator and the insertion evals' O(L) path all call this instead of
+   re-deriving span math. */
+double sg_cap_trip_excess(const SGContext *ctx, uint32_t vehicle_id,
+                          const double *load_profile,
+                          uint32_t lo, uint32_t hi, int is_first_trip);
 int sg_route_eval_insertion_cached(const SGContext *ctx, const SGRouteSolution *sol,
                                    uint32_t request_id, uint32_t vehicle_id,
                                    uint32_t pos, double *score_out,
