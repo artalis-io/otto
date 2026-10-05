@@ -486,32 +486,25 @@ int sg_route_update_load(const SGContext *ctx, SGRouteSolution *sol, uint32_t ve
                 if (trip_end && s > trip_start) {
                     /* Evaluate trip [trip_start, s) */
                     uint32_t scan_start = (trip_start > 0) ? trip_start + 1 : 1;
+                    int fixed = (trip_start == 0 &&
+                                 vehicle->has_initial_load && vehicle->initial_load);
                     for (d = 0; d < (uint32_t)dim_count; d++) {
                         double cap = (vehicle->has_capacity && vehicle->capacity)
                                      ? vehicle->capacity[d] : INFINITY;
+                        double il = fixed ? vehicle->initial_load[d] : 0.0;
                         double pmin = 0.0, pmax = 0.0;
                         uint32_t ps;
+                        /* The penalty calc deliberately skips infinite-cap
+                           dimensions entirely (unlike the hard gate); the
+                           verdict for finite caps goes through the one canonical
+                           formula (M1 feasibility authority). */
                         if (!isfinite(cap)) continue;
                         for (ps = scan_start; ps <= s; ps++) {
                             double val = load[(size_t)ps * dim_count + d];
                             if (val < pmin) pmin = val;
                             if (val > pmax) pmax = val;
                         }
-                        /* For first trip with initial_load, check fixed-start bounds */
-                        if (trip_start == 0 &&
-                            vehicle->has_initial_load && vehicle->initial_load) {
-                            double il = vehicle->initial_load[d];
-                            double lo = il + pmin;
-                            double hi = il + pmax;
-                            if (lo < -SG_DEMAND_TOLERANCE) {
-                                cap_excess += -lo;
-                            }
-                            if (hi > cap + SG_DEMAND_TOLERANCE) {
-                                cap_excess += hi - cap;
-                            }
-                        } else if ((pmax - pmin) > cap + SG_DEMAND_TOLERANCE) {
-                            cap_excess += (pmax - pmin) - cap;
-                        }
+                        cap_excess += sg_cap_dim_excess(pmin, pmax, cap, fixed, il);
                     }
                 }
                 if (s < stop_len && stops[s].trip_start && s > 0) {
@@ -536,6 +529,41 @@ int sg_route_update_load(const SGContext *ctx, SGRouteSolution *sol, uint32_t ve
     return 1;
 }
 
+/* Canonical per-trip signed-load span capacity check. See the declaration in
+   sg_internal.h for the contract. This is the one place the span math lives;
+   callers build a load_profile (prefix sums resetting at trip boundaries) and
+   ask this for the excess of a single trip's prefix range [lo, hi]. */
+double sg_cap_trip_excess(const SGContext *ctx, uint32_t vehicle_id,
+                          const double *load_profile,
+                          uint32_t lo, uint32_t hi, int is_first_trip) {
+    const SGVehicleRecord *vehicle;
+    uint32_t dim, d, ps;
+    double excess = 0.0;
+    uint8_t fixed_start;
+
+    if (!ctx || vehicle_id >= ctx->num_vehicles || !load_profile) {
+        return 0.0;
+    }
+    dim = ctx->dimension_count;
+    vehicle = &ctx->vehicles[vehicle_id];
+    fixed_start = (is_first_trip && vehicle->has_initial_load &&
+                   vehicle->initial_load);
+
+    for (d = 0; d < dim; d++) {
+        double cap = (vehicle->has_capacity && vehicle->capacity)
+                     ? vehicle->capacity[d] : INFINITY;
+        double il = fixed_start ? vehicle->initial_load[d] : 0.0;
+        double pmin = 0.0, pmax = 0.0;
+        for (ps = lo; ps <= hi; ps++) {
+            double val = load_profile[(size_t)ps * dim + d];
+            if (val < pmin) pmin = val;
+            if (val > pmax) pmax = val;
+        }
+        excess += sg_cap_dim_excess(pmin, pmax, cap, fixed_start, il);
+    }
+    return excess;
+}
+
 int sg_route_stop_sequence_feasible(const SGContext *ctx, uint32_t vehicle_id,
                                     const SGRouteStop *stops, uint32_t stop_count,
                                     double *distance_out) {
@@ -549,8 +577,6 @@ int sg_route_stop_sequence_feasible(const SGContext *ctx, uint32_t vehicle_id,
     double *load_profile = NULL;
     double *pickup_depart = NULL;
     uint8_t *pickup_seen = NULL;
-    double *min_prefix = NULL;
-    double *max_prefix = NULL;
     double *seq_arrival = NULL;
     uint32_t *pd_stack = NULL;
     uint8_t *prec_completed = NULL;
@@ -599,8 +625,6 @@ int sg_route_stop_sequence_feasible(const SGContext *ctx, uint32_t vehicle_id,
         seq_arrival = forward_slack + scap;
         if (ctx->dimension_count > 0) {
             load_profile = ctx->scratch.load_profile;
-            min_prefix = ctx->scratch.dim_scratch;
-            max_prefix = min_prefix + ctx->dimension_count;
         }
         if (ctx->num_requests > 0) {
             pickup_depart = ctx->scratch.pickup_depart;
@@ -628,20 +652,20 @@ int sg_route_stop_sequence_feasible(const SGContext *ctx, uint32_t vehicle_id,
             }
             load_count = ((size_t)stop_count + 1U) * (size_t)ctx->dimension_count;
             load_profile = (double *)malloc(load_count * sizeof(double));
-            min_prefix = (double *)malloc((size_t)ctx->dimension_count * sizeof(double));
-            max_prefix = (double *)malloc((size_t)ctx->dimension_count * sizeof(double));
-            if (!load_profile || !min_prefix || !max_prefix) {
+            if (!load_profile) {
                 goto done;
             }
         }
 
-        /* Check capacity per trip segment (capacity resets at trip boundaries) */
+        /* Check capacity per trip segment (capacity resets at trip boundaries).
+           The span math lives in sg_cap_trip_excess (the M1 feasibility
+           authority); here we only build the prefix-sum load_profile, resetting
+           to 0 at each trip_start, and ask the canonical check for each trip's
+           excess over its prefix range [trip_start_idx, end]. */
         {
             uint32_t trip_start_idx = 0;
             for (d = 0; d < ctx->dimension_count; d++) {
                 load_profile[d] = 0.0;
-                min_prefix[d] = 0.0;
-                max_prefix[d] = 0.0;
             }
 
             for (i = 0; i < stop_count; i++) {
@@ -655,67 +679,31 @@ int sg_route_stop_sequence_feasible(const SGContext *ctx, uint32_t vehicle_id,
                     goto done;
                 }
 
-                /* At trip boundary, check previous trip and reset */
+                /* At trip boundary, check the trip just completed, then reset */
                 if (stop->trip_start && i > 0) {
-                    uint8_t fixed_start = (trip_start_idx == 0 &&
-                                           vehicle->has_initial_load && vehicle->initial_load);
-                    for (d = 0; d < ctx->dimension_count; d++) {
-                        double cap = (vehicle->has_capacity && vehicle->capacity)
-                                     ? vehicle->capacity[d] : INFINITY;
-                        if (fixed_start) {
-                            double il = vehicle->initial_load[d];
-                            if (il + min_prefix[d] < -SG_DEMAND_TOLERANCE ||
-                                il + max_prefix[d] > cap + SG_DEMAND_TOLERANCE) {
-                                goto done;
-                            }
-                        } else {
-                            if ((max_prefix[d] - min_prefix[d]) > cap + SG_DEMAND_TOLERANCE) {
-                                goto done;
-                            }
-                        }
+                    if (sg_cap_trip_excess(ctx, vehicle_id, load_profile,
+                                           trip_start_idx, i,
+                                           trip_start_idx == 0) > 0.0) {
+                        goto done;
                     }
-                    /* Reset for new trip */
                     trip_start_idx = i;
                     for (d = 0; d < ctx->dimension_count; d++) {
                         load_profile[(size_t)i * (size_t)ctx->dimension_count + d] = 0.0;
-                        min_prefix[d] = 0.0;
-                        max_prefix[d] = 0.0;
                     }
                 }
 
                 for (d = 0; d < ctx->dimension_count; d++) {
-                    double prefix = load_profile[(size_t)i * (size_t)ctx->dimension_count + d] +
-                                    task->demand[d];
-                    load_profile[((size_t)i + 1U) * (size_t)ctx->dimension_count + d] = prefix;
-                    if (prefix < min_prefix[d]) {
-                        min_prefix[d] = prefix;
-                    }
-                    if (prefix > max_prefix[d]) {
-                        max_prefix[d] = prefix;
-                    }
+                    load_profile[((size_t)i + 1U) * (size_t)ctx->dimension_count + d] =
+                        load_profile[(size_t)i * (size_t)ctx->dimension_count + d] +
+                        task->demand[d];
                 }
             }
 
-            /* Check final trip segment */
-            {
-                uint8_t fixed_start = (trip_start_idx == 0 &&
-                                       vehicle->has_initial_load && vehicle->initial_load);
-                for (d = 0; d < ctx->dimension_count; d++) {
-                    double cap = (vehicle->has_capacity && vehicle->capacity)
-                                 ? vehicle->capacity[d]
-                                 : INFINITY;
-                    if (fixed_start) {
-                        double il = vehicle->initial_load[d];
-                        if (il + min_prefix[d] < -SG_DEMAND_TOLERANCE ||
-                            il + max_prefix[d] > cap + SG_DEMAND_TOLERANCE) {
-                            goto done;
-                        }
-                    } else {
-                        if ((max_prefix[d] - min_prefix[d]) > cap + SG_DEMAND_TOLERANCE) {
-                            goto done;
-                        }
-                    }
-                }
+            /* Check the final trip segment */
+            if (sg_cap_trip_excess(ctx, vehicle_id, load_profile,
+                                   trip_start_idx, stop_count,
+                                   trip_start_idx == 0) > 0.0) {
+                goto done;
             }
         }
     }
@@ -1231,8 +1219,6 @@ done:
         free(load_profile);
         free(pickup_depart);
         free(pickup_seen);
-        free(min_prefix);
-        free(max_prefix);
         free(seq_arrival);
     }
     return feasible;
@@ -1840,16 +1826,12 @@ int sg_route_eval_insertion_cached(const SGContext *ctx, const SGRouteSolution *
                         if (val < hyp_min) hyp_min = val;
                         if (val > hyp_max) hyp_max = val;
                     }
-                    if (cap_trip_first == 0 &&
-                        vehicle->has_initial_load && vehicle->initial_load) {
-                        double il = vehicle->initial_load[d];
-                        double excess = 0.0;
-                        if (il + hyp_min < -SG_DEMAND_TOLERANCE) excess += -(il + hyp_min);
-                        if (il + hyp_max > cap + SG_DEMAND_TOLERANCE) excess += (il + hyp_max) - cap;
+                    {
+                        int fixed = (cap_trip_first == 0 &&
+                                     vehicle->has_initial_load && vehicle->initial_load);
+                        double il = fixed ? vehicle->initial_load[d] : 0.0;
+                        double excess = sg_cap_dim_excess(hyp_min, hyp_max, cap, fixed, il);
                         if (excess > 0.0) { scan_ok = 0; scan_violation += excess; }
-                    } else if ((hyp_max - hyp_min) > cap + SG_DEMAND_TOLERANCE) {
-                        scan_ok = 0;
-                        scan_violation += (hyp_max - hyp_min) - cap;
                     }
                 }
                 /* Both paths must agree on feasibility */
@@ -1948,23 +1930,15 @@ int sg_route_eval_insertion_cached(const SGContext *ctx, const SGRouteSolution *
                     if (val < hyp_min) hyp_min = val;
                     if (val > hyp_max) hyp_max = val;
                 }
-                if (cap_trip_first == 0 &&
-                    vehicle->has_initial_load && vehicle->initial_load) {
-                    double il = vehicle->initial_load[d];
-                    double excess = 0.0;
-                    if (il + hyp_min < -SG_DEMAND_TOLERANCE) {
-                        excess += -(il + hyp_min);
-                    }
-                    if (il + hyp_max > cap + SG_DEMAND_TOLERANCE) {
-                        excess += (il + hyp_max) - cap;
-                    }
+                {
+                    int fixed = (cap_trip_first == 0 &&
+                                 vehicle->has_initial_load && vehicle->initial_load);
+                    double il = fixed ? vehicle->initial_load[d] : 0.0;
+                    double excess = sg_cap_dim_excess(hyp_min, hyp_max, cap, fixed, il);
                     if (excess > 0.0) {
                         if (!pen_enabled || ctx->config.hard_capacity) return 0;
                         ins_violations[SG_PENALTY_CAPACITY] += excess;
                     }
-                } else if ((hyp_max - hyp_min) > cap + SG_DEMAND_TOLERANCE) {
-                    if (!pen_enabled || ctx->config.hard_capacity) return 0;
-                    ins_violations[SG_PENALTY_CAPACITY] += (hyp_max - hyp_min) - cap;
                 }
             }
         }
@@ -2715,10 +2689,15 @@ int sg_route_eval_pd_best_insertion_cached(
                             if (val > hyp_max) hyp_max = val;
                         }
 
-                        if ((hyp_max - hyp_min) > cap + SG_DEMAND_TOLERANCE) {
-                            cap_ok = 0;
-                            if (pen_enabled)
-                                pd_viol[SG_PENALTY_CAPACITY] += (hyp_max - hyp_min) - cap;
+                        {
+                            /* PD scan has no initial_load branch (latent gap,
+                               preserved here); funnel through the one formula. */
+                            double excess = sg_cap_dim_excess(hyp_min, hyp_max, cap, 0, 0.0);
+                            if (excess > 0.0) {
+                                cap_ok = 0;
+                                if (pen_enabled)
+                                    pd_viol[SG_PENALTY_CAPACITY] += excess;
+                            }
                         }
                     }
                     if (!cap_ok) {

@@ -2096,12 +2096,17 @@ ARStatus sg_route_postprocess_eject_over_capacity(const SGContext *ctx, SGRouteS
                      * running prefix) over the trip, not the net demand sum:
                      * pickups raise the load and deliveries lower it, so a mixed
                      * PD + delivery-only trip can exceed capacity while its net
-                     * sum stays small or negative. Mirror the authoritative check
-                     * in sg_route_stop_sequence_feasible so this safety net
-                     * actually detects what the validator rejects. */
+                     * sum stays small or negative. We build each dimension's
+                     * prefix extremes over the trip and funnel the verdict through
+                     * sg_cap_dim_excess -- the one canonical capacity formula the
+                     * hard gate uses -- so this safety net detects exactly what
+                     * the validator rejects (M1 feasibility authority). */
                     for (d = 0; d < dim; d++) {
                         double cap = veh->capacity[d];
-                        double pref = 0.0, mn = 0.0, mx = 0.0, excess = 0.0;
+                        double pref = 0.0, mn = 0.0, mx = 0.0, excess;
+                        int fixed = (first_trip && veh->has_initial_load &&
+                                     veh->initial_load);
+                        double il = fixed ? veh->initial_load[d] : 0.0;
                         for (k = ts; k < s; k++) {
                             const SGTaskRecord *t = &ctx->tasks[stops[k].task_id];
                             double dm = (t->has_demand && t->demand) ? t->demand[d] : 0.0;
@@ -2109,13 +2114,7 @@ ARStatus sg_route_postprocess_eject_over_capacity(const SGContext *ctx, SGRouteS
                             if (pref < mn) mn = pref;
                             if (pref > mx) mx = pref;
                         }
-                        if (first_trip && veh->has_initial_load && veh->initial_load) {
-                            double il = veh->initial_load[d];
-                            if (il + mn < -SG_DEMAND_TOLERANCE) excess += -(il + mn);
-                            if (il + mx > cap + SG_DEMAND_TOLERANCE) excess += (il + mx) - cap;
-                        } else if ((mx - mn) > cap + SG_DEMAND_TOLERANCE) {
-                            excess = (mx - mn) - cap;
-                        }
+                        excess = sg_cap_dim_excess(mn, mx, cap, fixed, il);
                         if (excess > over_amt) { over_amt = excess; over_d = (int)d; }
                     }
                     if (over_d >= 0) {

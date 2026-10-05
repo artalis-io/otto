@@ -122,22 +122,38 @@ suite). The end state: **one capacity function, one eligibility function, the
 fast path verified against them in CI, and two enforced chokepoints** — so this
 class of bug cannot recur by drift.
 
-## Known fast-path defect (found by the M2 gate)
+## Known fast-path defects (found by the M2 gate)
 
-Enabling the `SG_CONCAT_VERIFY` gate (M2) immediately surfaced a *third* concat
-discrepancy, distinct from #226/#227: on a **2-D capacity, first insertion into an
-empty route**, `sg_route_check_capacity_concat` reports a spurious violation
-(`concat_ok=0` while the O(L) reference correctly says feasible) — e.g.
+Enabling the `SG_CONCAT_VERIFY` gate (M2) surfaced two concat discrepancies,
+both distinct from #226/#227. Fix both in step 4 (concat derived from, and
+verified equal to, the one canonical check):
+
+**(a) Over-reject on an empty multi-dimension route (safe direction).** On a
+**2-D capacity, first insertion into an empty route**,
+`sg_route_check_capacity_concat` reports a spurious violation (`concat_ok=0`
+while the O(L) reference correctly says feasible) — e.g.
 `test_multi_dimension_capacity` (cap `[100,5]`, demand `[-50,-3]`: clearly fits,
-yet concat reports viol 1.0 at `stop_len=0`). This is the **safe** direction
-(it over-rejects a feasible insertion rather than admitting an infeasible one), so
-the gate warns rather than failing — but it is a real quality bug: the fast path
-prunes valid first-insertions on multi-dimension vehicles, which is latent on the
-2-D/3-D Gyermelyi model. It is a textbook instance of the duplication problem: the
-empty-route / first-insertion case is handled one way in the O(L) reference and
-another (wrongly) in the concat summary. Centralizing per M1 (concat derived from,
-and verified equal to, the one canonical check) removes it; fix it as part of step
-4 of the migration.
+yet concat reports viol 1.0 at `stop_len=0`). This is the **safe** direction (it
+over-rejects a feasible insertion rather than admitting an infeasible one), so the
+gate warns rather than failing — but it is a real quality loss: the fast path
+prunes valid first-insertions on multi-dimension vehicles, latent on the 2-D/3-D
+Gyermelyi model.
+
+**(b) Unsafe admit on a PD route (dangerous direction).** The correctness sweep
+(256 feature combos x seeds, built `-DSG_CONCAT_VERIFY`) aborts on a **pickup-
+delivery** instance — feature bit `F_PD` alone, 1-D capacity — where concat
+*admits* an insertion the O(L) reference rejects: `concat_ok=1 scan_ok=0 v=1
+pos=5 stop_len=25 scan_viol=4.0` (sweep `f=0x40 seed=2`). This is the
+**dangerous** direction and the gate *fails* (aborts) on it. Confirmed
+**pre-existing** on the merged main (0a5a2aef) with the Step-2 refactor byte-
+identical to base — i.e. a latent concat bug the M2 sweep exposes, not a refactor
+regression. The downstream safety nets (guarded postprocess, eject, validator-
+gated commit) prevent it from reaching a committed solution (the non-verify sweep
+reports committed-invalid BUGS=0), so it is latent rather than shipped — but it is
+the strongest argument yet for M1: an O(1) summary that silently admits infeasible
+PD insertions is exactly the drift one source of truth removes. Step 4 must make
+the concat PD capacity path derive from `sg_cap_trip_excess` and the sweep run to
+completion with zero unsafe admits.
 
 ## Why not just "be careful"
 
