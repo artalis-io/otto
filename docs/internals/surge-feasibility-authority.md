@@ -63,16 +63,22 @@ double sg_cap_trip_excess(const SGContext *ctx, uint32_t vehicle_id,
                           const double *load_profile, uint32_t lo, uint32_t hi,
                           int is_first_trip);
 
-/* THE eligibility check for a candidate request list on a vehicle (wraps the
- * existing inline sg_vehicle_allowed_for_request + sg_vehicle_qualifies). */
-int sg_seg_eligible(const SGContext *ctx, uint32_t vehicle_id,
-                    const uint32_t *request_ids, uint32_t n);
+/* THE "can this vehicle serve this request" predicate (wraps the existing inline
+ * sg_vehicle_qualifies + sg_vehicle_allowed_for_request). */
+static inline int sg_vehicle_can_serve(const SGContext *ctx,
+                                       uint32_t vehicle_id, uint32_t request_id);
 ```
 
-Eligibility already has a single inline source (`sg_vehicle_allowed_for_request`
-/ `sg_vehicle_qualifies`); the problem there was call-site *coverage*, not
-divergence. `sg_seg_eligible` gives the operators one helper to call, and the
-apply chokepoint (below) is the hard backstop.
+Eligibility already had a single inline source for each half
+(`sg_vehicle_qualifies`, `sg_vehicle_allowed_for_request`), but the *pairing* of
+the two was copy-pasted at ~10 sites (and once combined as `allowed || qualifies`
+at the apply chokepoints). `sg_vehicle_can_serve` is the one predicate every
+assignment-gating site now calls; the segment wrapper `sg_seg_eligible_on_vehicle`
+(the move operators' helper) loops it over a run of stops, and the apply
+chokepoint (below) is the hard backstop. The validator deliberately keeps the two
+halves separate so it can report `SG_VIOLATION_FORBIDDEN_VEHICLE` vs
+`SG_VIOLATION_QUALIFICATION` distinctly -- that is diagnostic granularity, not
+duplicated decision logic.
 
 ### 2. Fast paths are *derived*, never parallel implementations
 
@@ -116,8 +122,16 @@ cannot violate them":
    `-DSG_CONCAT_VERIFY` sweep run fully clean — see "Fast-path defects" below for
    the root cause (two derived caches, `route_stop_load` vs the capacity segment
    summaries, drifting after stop-reordering moves) and the fix.
-5. Replace the operators' ad-hoc eligibility checks with `sg_seg_eligible`.
-6. Make the final-commit feasibility guarantee explicit (repair-or-reject).
+5. Replace the ~10 copy-pasted `qualifies && allowed` eligibility pairs with the
+   one `sg_vehicle_can_serve` predicate (the move operators' `sg_seg_eligible_on_vehicle`
+   loops it over a run of stops). Byte-identical consolidation.
+6. Make the final-commit feasibility guarantee explicit (repair-or-reject): the
+   eject passes repair an infeasible `best`, `initial` is the fallback, and if
+   neither validates the commit is skipped (`ctx->final_solution` is cleared) so
+   an infeasible plan is never presented as the answer. The guarantee: `sg_solve`
+   returns `SG_STATUS_OK` only when the committed solution passes the validator;
+   otherwise `SG_STATUS_ERROR` and nothing is committed. (`sg_solve.c`, final
+   block.)
 
 Each step is a pure consolidation with an existing safety net (the sweep, the
 `SG_CONCAT_VERIFY` gate, the Solomon/Li&Lim byte-identity check, the 481-test

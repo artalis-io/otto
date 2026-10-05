@@ -13,8 +13,7 @@ static int sg_route_candidate_compat_ok(const SGContext *ctx, uint32_t vehicle_i
         for (i = 0; i < len; i++) {
             uint32_t rid = requests[i];
             if (rid >= ctx->num_requests) continue;
-            if (!sg_vehicle_allowed_for_request(ctx, vehicle_id, rid)) return 0;
-            if (!sg_vehicle_qualifies(ctx, vehicle_id, rid)) return 0;
+            if (!sg_vehicle_can_serve(ctx, vehicle_id, rid)) return 0;
         }
     }
     if (ctx->num_commodities > 0) {

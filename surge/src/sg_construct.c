@@ -13,10 +13,7 @@ static int sg_construct_eval_vehicle_request(const SGContext *ctx, const SGConst
     if (!state->remaining_capacity || !state->remaining_time_seconds) {
         return 0;
     }
-    if (request_id < ctx->num_requests && !sg_vehicle_qualifies(ctx, vehicle_id, request_id)) {
-        return 0;
-    }
-    if (request_id < ctx->num_requests && !sg_vehicle_allowed_for_request(ctx, vehicle_id, request_id)) {
+    if (request_id < ctx->num_requests && !sg_vehicle_can_serve(ctx, vehicle_id, request_id)) {
         return 0;
     }
     if (request_id < ctx->num_requests && !sg_construct_commodity_compatible(ctx, state, vehicle_id, request_id)) {

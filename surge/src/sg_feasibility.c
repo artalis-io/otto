@@ -1388,10 +1388,7 @@ int sg_route_eval_insertion_cached(const SGContext *ctx, const SGRouteSolution *
         return 0;
     }
 
-    if (!sg_vehicle_qualifies(ctx, vehicle_id, request_id)) {
-        return 0;
-    }
-    if (!sg_vehicle_allowed_for_request(ctx, vehicle_id, request_id)) {
+    if (!sg_vehicle_can_serve(ctx, vehicle_id, request_id)) {
         return 0;
     }
     if (!sg_commodity_compatible(ctx, sol, vehicle_id, request_id)) {
@@ -2176,10 +2173,7 @@ int sg_route_eval_pd_best_insertion_cached(
         return 0;
     }
 
-    if (!sg_vehicle_qualifies(ctx, vehicle_id, request_id)) {
-        return 0;
-    }
-    if (!sg_vehicle_allowed_for_request(ctx, vehicle_id, request_id)) {
+    if (!sg_vehicle_can_serve(ctx, vehicle_id, request_id)) {
         return 0;
     }
     if (!sg_commodity_compatible(ctx, sol, vehicle_id, request_id)) {
@@ -3031,8 +3025,7 @@ ARStatus sg_route_apply_insertion(const SGContext *ctx, SGRouteSolution *sol,
      * assignment flows through here, so this backstops any local-search
      * operator that validated only capacity/time (see sg_postprocess.c). */
     if (request_id < ctx->num_requests &&
-        (!sg_vehicle_allowed_for_request(ctx, vehicle_id, request_id) ||
-         !sg_vehicle_qualifies(ctx, vehicle_id, request_id))) {
+        !sg_vehicle_can_serve(ctx, vehicle_id, request_id)) {
         return AR_STATUS_INVALID_ARG;
     }
 
@@ -3167,8 +3160,7 @@ ARStatus sg_route_apply_pd_insertion(const SGContext *ctx, SGRouteSolution *sol,
     }
     /* Eligibility chokepoint (see sg_route_apply_insertion). */
     if (request_id < ctx->num_requests &&
-        (!sg_vehicle_allowed_for_request(ctx, vehicle_id, request_id) ||
-         !sg_vehicle_qualifies(ctx, vehicle_id, request_id))) {
+        !sg_vehicle_can_serve(ctx, vehicle_id, request_id)) {
         return AR_STATUS_INVALID_ARG;
     }
 

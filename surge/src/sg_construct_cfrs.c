@@ -170,8 +170,7 @@ uint32_t sg_estimate_min_vehicles(const SGContext *ctx) {
 /* Check all constraints for assigning a request to a vehicle */
 static int sg_cfrs_vehicle_ok(const SGContext *ctx, const SGRouteSolution *sol,
                                uint32_t vehicle_id, uint32_t request_id) {
-    if (!sg_vehicle_qualifies(ctx, vehicle_id, request_id)) return 0;
-    if (!sg_vehicle_allowed_for_request(ctx, vehicle_id, request_id)) return 0;
+    if (!sg_vehicle_can_serve(ctx, vehicle_id, request_id)) return 0;
     if (!sg_commodity_compatible(ctx, sol, vehicle_id, request_id)) return 0;
     if (!sg_compartment_compatible(ctx, vehicle_id, request_id)) return 0;
     if (!sg_exclusion_compatible(ctx, sol, vehicle_id, request_id)) return 0;

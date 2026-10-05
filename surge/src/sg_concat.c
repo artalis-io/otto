@@ -721,8 +721,7 @@ static int sg_seg_eligible_on_vehicle(const SGContext *ctx,
     for (i = 0; i < k; i++) {
         uint32_t req = stops[start + i].request_id;
         if (req >= ctx->num_requests) continue;   /* depot/reload pseudo-stops */
-        if (!sg_vehicle_allowed_for_request(ctx, vb, req)) return 0;
-        if (!sg_vehicle_qualifies(ctx, vb, req)) return 0;
+        if (!sg_vehicle_can_serve(ctx, vb, req)) return 0;
     }
     return 1;
 }
