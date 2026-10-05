@@ -1075,6 +1075,32 @@ void sg_compute_solution_route_metrics(const SGContext *ctx, const SGBootstrapSo
 int sg_route_update_timing(const SGContext *ctx, SGRouteSolution *sol, uint32_t vehicle_id);
 int sg_route_update_load(const SGContext *ctx, SGRouteSolution *sol, uint32_t vehicle_id);
 
+/* Canonical per-DIMENSION capacity excess from a single trip's prefix-sum
+   extremes (M1 feasibility authority). This is the atomic, drift-prone decision
+   formula shared by every capacity check: the signed-load span rule
+   (max_prefix - min_prefix) <= cap, with the first-trip initial_load branch
+   checking the fixed-start lower (load must not drop below 0) and upper bounds.
+   Returns the excess for one dimension (0.0 == within capacity). Callers compute
+   pmin/pmax however suits them (scan a load_profile, or build a prefix inline)
+   and funnel the verdict through here so the rule lives in exactly one place.
+   Note: an infinite cap does NOT short-circuit the fixed-start lower bound; a
+   caller that wants to skip infinite-cap dimensions entirely (e.g. the penalty
+   calc) must guard with isfinite(cap) at its own call site. */
+static inline double sg_cap_dim_excess(double pmin, double pmax, double cap,
+                                       int fixed_start, double il) {
+    if (fixed_start) {
+        double excess = 0.0;
+        if (il + pmin < -SG_DEMAND_TOLERANCE) {
+            excess += -(il + pmin);
+        }
+        if (il + pmax > cap + SG_DEMAND_TOLERANCE) {
+            excess += (il + pmax) - cap;
+        }
+        return excess;
+    }
+    return ((pmax - pmin) > cap + SG_DEMAND_TOLERANCE) ? (pmax - pmin) - cap : 0.0;
+}
+
 /* Canonical per-trip signed-load span capacity check (M1 feasibility authority;
    see docs/internals/surge-feasibility-authority.md). Given a load profile
    (prefix sums of demand that reset to 0 at each trip_start, so

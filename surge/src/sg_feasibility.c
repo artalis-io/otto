@@ -486,32 +486,25 @@ int sg_route_update_load(const SGContext *ctx, SGRouteSolution *sol, uint32_t ve
                 if (trip_end && s > trip_start) {
                     /* Evaluate trip [trip_start, s) */
                     uint32_t scan_start = (trip_start > 0) ? trip_start + 1 : 1;
+                    int fixed = (trip_start == 0 &&
+                                 vehicle->has_initial_load && vehicle->initial_load);
                     for (d = 0; d < (uint32_t)dim_count; d++) {
                         double cap = (vehicle->has_capacity && vehicle->capacity)
                                      ? vehicle->capacity[d] : INFINITY;
+                        double il = fixed ? vehicle->initial_load[d] : 0.0;
                         double pmin = 0.0, pmax = 0.0;
                         uint32_t ps;
+                        /* The penalty calc deliberately skips infinite-cap
+                           dimensions entirely (unlike the hard gate); the
+                           verdict for finite caps goes through the one canonical
+                           formula (M1 feasibility authority). */
                         if (!isfinite(cap)) continue;
                         for (ps = scan_start; ps <= s; ps++) {
                             double val = load[(size_t)ps * dim_count + d];
                             if (val < pmin) pmin = val;
                             if (val > pmax) pmax = val;
                         }
-                        /* For first trip with initial_load, check fixed-start bounds */
-                        if (trip_start == 0 &&
-                            vehicle->has_initial_load && vehicle->initial_load) {
-                            double il = vehicle->initial_load[d];
-                            double lo = il + pmin;
-                            double hi = il + pmax;
-                            if (lo < -SG_DEMAND_TOLERANCE) {
-                                cap_excess += -lo;
-                            }
-                            if (hi > cap + SG_DEMAND_TOLERANCE) {
-                                cap_excess += hi - cap;
-                            }
-                        } else if ((pmax - pmin) > cap + SG_DEMAND_TOLERANCE) {
-                            cap_excess += (pmax - pmin) - cap;
-                        }
+                        cap_excess += sg_cap_dim_excess(pmin, pmax, cap, fixed, il);
                     }
                 }
                 if (s < stop_len && stops[s].trip_start && s > 0) {
@@ -559,23 +552,14 @@ double sg_cap_trip_excess(const SGContext *ctx, uint32_t vehicle_id,
     for (d = 0; d < dim; d++) {
         double cap = (vehicle->has_capacity && vehicle->capacity)
                      ? vehicle->capacity[d] : INFINITY;
+        double il = fixed_start ? vehicle->initial_load[d] : 0.0;
         double pmin = 0.0, pmax = 0.0;
         for (ps = lo; ps <= hi; ps++) {
             double val = load_profile[(size_t)ps * dim + d];
             if (val < pmin) pmin = val;
             if (val > pmax) pmax = val;
         }
-        if (fixed_start) {
-            double il = vehicle->initial_load[d];
-            if (il + pmin < -SG_DEMAND_TOLERANCE) {
-                excess += -(il + pmin);
-            }
-            if (il + pmax > cap + SG_DEMAND_TOLERANCE) {
-                excess += (il + pmax) - cap;
-            }
-        } else if ((pmax - pmin) > cap + SG_DEMAND_TOLERANCE) {
-            excess += (pmax - pmin) - cap;
-        }
+        excess += sg_cap_dim_excess(pmin, pmax, cap, fixed_start, il);
     }
     return excess;
 }
@@ -1842,16 +1826,12 @@ int sg_route_eval_insertion_cached(const SGContext *ctx, const SGRouteSolution *
                         if (val < hyp_min) hyp_min = val;
                         if (val > hyp_max) hyp_max = val;
                     }
-                    if (cap_trip_first == 0 &&
-                        vehicle->has_initial_load && vehicle->initial_load) {
-                        double il = vehicle->initial_load[d];
-                        double excess = 0.0;
-                        if (il + hyp_min < -SG_DEMAND_TOLERANCE) excess += -(il + hyp_min);
-                        if (il + hyp_max > cap + SG_DEMAND_TOLERANCE) excess += (il + hyp_max) - cap;
+                    {
+                        int fixed = (cap_trip_first == 0 &&
+                                     vehicle->has_initial_load && vehicle->initial_load);
+                        double il = fixed ? vehicle->initial_load[d] : 0.0;
+                        double excess = sg_cap_dim_excess(hyp_min, hyp_max, cap, fixed, il);
                         if (excess > 0.0) { scan_ok = 0; scan_violation += excess; }
-                    } else if ((hyp_max - hyp_min) > cap + SG_DEMAND_TOLERANCE) {
-                        scan_ok = 0;
-                        scan_violation += (hyp_max - hyp_min) - cap;
                     }
                 }
                 /* Both paths must agree on feasibility */
@@ -1950,23 +1930,15 @@ int sg_route_eval_insertion_cached(const SGContext *ctx, const SGRouteSolution *
                     if (val < hyp_min) hyp_min = val;
                     if (val > hyp_max) hyp_max = val;
                 }
-                if (cap_trip_first == 0 &&
-                    vehicle->has_initial_load && vehicle->initial_load) {
-                    double il = vehicle->initial_load[d];
-                    double excess = 0.0;
-                    if (il + hyp_min < -SG_DEMAND_TOLERANCE) {
-                        excess += -(il + hyp_min);
-                    }
-                    if (il + hyp_max > cap + SG_DEMAND_TOLERANCE) {
-                        excess += (il + hyp_max) - cap;
-                    }
+                {
+                    int fixed = (cap_trip_first == 0 &&
+                                 vehicle->has_initial_load && vehicle->initial_load);
+                    double il = fixed ? vehicle->initial_load[d] : 0.0;
+                    double excess = sg_cap_dim_excess(hyp_min, hyp_max, cap, fixed, il);
                     if (excess > 0.0) {
                         if (!pen_enabled || ctx->config.hard_capacity) return 0;
                         ins_violations[SG_PENALTY_CAPACITY] += excess;
                     }
-                } else if ((hyp_max - hyp_min) > cap + SG_DEMAND_TOLERANCE) {
-                    if (!pen_enabled || ctx->config.hard_capacity) return 0;
-                    ins_violations[SG_PENALTY_CAPACITY] += (hyp_max - hyp_min) - cap;
                 }
             }
         }
@@ -2717,10 +2689,15 @@ int sg_route_eval_pd_best_insertion_cached(
                             if (val > hyp_max) hyp_max = val;
                         }
 
-                        if ((hyp_max - hyp_min) > cap + SG_DEMAND_TOLERANCE) {
-                            cap_ok = 0;
-                            if (pen_enabled)
-                                pd_viol[SG_PENALTY_CAPACITY] += (hyp_max - hyp_min) - cap;
+                        {
+                            /* PD scan has no initial_load branch (latent gap,
+                               preserved here); funnel through the one formula. */
+                            double excess = sg_cap_dim_excess(hyp_min, hyp_max, cap, 0, 0.0);
+                            if (excess > 0.0) {
+                                cap_ok = 0;
+                                if (pen_enabled)
+                                    pd_viol[SG_PENALTY_CAPACITY] += excess;
+                            }
                         }
                     }
                     if (!cap_ok) {

@@ -261,18 +261,14 @@ int sg_route_check_capacity_concat(const SGContext *ctx, const SGRouteSolution *
                 }
             }
 
-            /* Check feasibility */
-            if (is_first_trip &&
-                vehicle->has_initial_load && vehicle->initial_load) {
-                double il = vehicle->initial_load[d];
-                if (il + comb_min < -SG_DEMAND_TOLERANCE) {
-                    excess += -(il + comb_min);
-                }
-                if (il + comb_max > cap + SG_DEMAND_TOLERANCE) {
-                    excess += (il + comb_max) - cap;
-                }
-            } else if ((comb_max - comb_min) > cap + SG_DEMAND_TOLERANCE) {
-                excess += (comb_max - comb_min) - cap;
+            /* Check feasibility via the one canonical formula (M1). The concat
+               ALGEBRA (comb_min/comb_max from prefix/suffix segments) is the fast
+               path; the verdict rule is shared with the O(L) scan. */
+            {
+                int fixed = (is_first_trip && vehicle->has_initial_load &&
+                             vehicle->initial_load);
+                double il = fixed ? vehicle->initial_load[d] : 0.0;
+                excess = sg_cap_dim_excess(comb_min, comb_max, cap, fixed, il);
             }
 
             if (excess > 0.0) {
@@ -659,7 +655,9 @@ static int sg_concat_capacity_ok(const SGContext *ctx, const SGRouteSolution *so
                                sd[suf_off], smn[suf_off], sx[suf_off],
                                &comb_d, &comb_min, &comb_max);
 
-        if ((comb_max - comb_min) > cap + SG_DEMAND_TOLERANCE) {
+        /* Move operators don't model an initial_load fixed start (latent gap,
+           preserved); the span verdict goes through the one canonical formula. */
+        if (sg_cap_dim_excess(comb_min, comb_max, cap, 0, 0.0) > 0.0) {
             return 0;
         }
     }
