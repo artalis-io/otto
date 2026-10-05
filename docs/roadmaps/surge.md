@@ -2496,6 +2496,61 @@ For very long routes (400+ customers), even prefix/suffix rebuild after every in
 is O(L). A segment tree gives O(log L) updates and O(log L) range queries. Only needed
 if profiling shows segment rebuild as a bottleneck after Phase S17.1-3.
 
+### Multi-trip O(1) re-enablement (post-M1, post-#225)
+
+**Status:** scoped + approved 2026-10; Phase 0 + A in progress.
+
+Multi-trip is functionally complete and correct (the #182 spurious-ERROR class is
+fully resolved by #226/#192/#193, and M1 hardened the capacity invariant it
+touched). What remains is **performance**: #226 defensively routed every
+`has_multi_trip` vehicle onto the O(L) paths and it never came back.
+
+Current O(L)-forced paths for `has_multi_trip` vehicles:
+
+| Path | Single-trip | Multi-trip | Site |
+|------|-------------|-----------|------|
+| Delivery insertion capacity | O(1) concat | O(L) (gated) | `sg_feasibility.c` `!vehicle->has_multi_trip` gate |
+| Move operators (or-opt / 2-opt\* / cross / 2-opt-intra) | O(1) concat | O(L) (timing segs zeroed) | `sg_concat.c` build-timing early-return + `sg_vehicle_has_timing_segments` → `sg_concat_filter_applicable` |
+| PD insertion capacity | O(L) | O(L) | `sg_feasibility.c` PD eval (no concat path at all) |
+
+Two facts shape the plan: (1) the *capacity* segments are already built
+trip-aware (prefix/suffix reset at each `trip_start` in `sg_route_build_cap_segments`);
+#226 only disabled the *combine* at the insertion position. (2) The *timing*
+segments are not built at all for multi-trip, which is what forces every move
+operator onto O(L).
+
+**Why now:** M1 made the capacity verdict one verified function
+(`sg_cap_dim_excess`) and the M2 `SG_CONCAT_VERIFY` CI gate aborts on any
+concat-vs-O(L) divergence — exactly the #226 failure mode. Re-enabling concat for
+multi-trip now runs under a safety net that did not exist when #226 switched it off.
+
+**Phases** (each independently shippable; gated by the M1/M2 harness + the
+committed-valid correctness sweep):
+
+- **Phase 0 — multi-trip benchmark + baseline.** There are no multi-trip benchmark
+  instances today (only unit tests), so no perf win is measurable. Add a
+  deterministic synthetic (Solomon with halved capacity + `max_trips=0`) as an
+  in-repo multi-trip bench; capture the current O(L) baseline.
+- **Phase A — trip-aware capacity concat.** Fix `sg_route_check_capacity_concat`
+  to combine prefix/new/suffix only within the trip containing the insertion, then
+  drop the `!has_multi_trip` capacity gate. Low-risk (segments already trip-aware;
+  M2 gate catches the #226 class). Caveat: the insertion eval still recomputes
+  timing O(L), so A's standalone speedup is partial, but it re-establishes the
+  concat machinery for multi-trip under the gate.
+- **Phase B — trip-aware timing segments (the real win).** Build per-trip timing
+  segments + a trip-aware concat so the move operators run O(1) on multi-trip.
+  Hard part: the depot-return + `trip_reload_seconds` + TW/break-state reset at
+  each boundary breaks the Vidal-2012 continuous-route concat assumption; needs
+  per-trip decomposition. Unlocks O(1) local search on multi-trip — the dominant
+  cost. Higher risk; decide after Phase A's numbers.
+- **Phase C — PD insertion concat (orthogonal).** The "PD + multi-trip O(L²)"
+  cliff; PD is O(L) even single-trip. Separate track, benefits all PDPTW.
+
+**Verification gate for every phase:** `SG_CONCAT_VERIFY` sweep clean (0 unsafe
+admits, 0 over-rejects), `test-surge` 480/480, committed-valid sweep BUGS=0,
+Solomon/Li&Lim byte-identical (single-trip must stay inert), and the multi-trip
+benchmark speedup measured (A/B) with no quality regression.
+
 ---
 
 ## Infrastructure: Arena Allocator

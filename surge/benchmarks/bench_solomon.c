@@ -33,6 +33,9 @@ static void sg_print_usage(const char *argv0) {
     printf("  --stretch <factor>    SA cooling stretch for generations > 0 (default: 1.0 = off)\n");
     printf("  --output-csv <path>   Write results to CSV file\n");
     printf("  --features            Dump instance features CSV (spatial_cv, tw_tightness) and exit\n");
+    printf("  --multi-trip          Force multi-trip: scale each vehicle's capacity down and allow unlimited trips\n");
+    printf("  --mt-cap-div <n>      Multi-trip capacity divisor (default: 2)\n");
+    printf("  --mt-reload <sec>     Multi-trip depot reload seconds (default: 600)\n");
     printf("  --help                Show this help\n");
     printf("\n");
     printf("Examples:\n");
@@ -40,6 +43,28 @@ static void sg_print_usage(const char *argv0) {
     printf("  %s C101 R101 RC101\n", argv0);
     printf("  %s --dir benchmarks/gehring_homberger --bks benchmarks/bks/gehring_homberger.csv --size 200\n", argv0);
     printf("  %s --iterations 1500 --time-limit 3 R101\n", argv0);
+}
+
+/* Turn a freshly-loaded single-trip instance into a multi-trip one: divide every
+   vehicle's capacity by cap_div (so the same demand needs depot reloads) and allow
+   unlimited trips with a fixed reload time. Deterministic; reuses the Solomon
+   instances as multi-trip benchmarks. Returns 0 on success. */
+static int sg_bench_force_multitrip(SGContext *ctx, int cap_div, int reload_seconds) {
+    uint32_t nv = sg_get_vehicle_count(ctx);
+    uint32_t v;
+    if (cap_div < 1) cap_div = 1;
+    /* Capacity is genuinely hard once we've halved it to force reload trips
+       (matches real multi-trip usage, e.g. the Gyermelyi fleet). */
+    if (sg_set_hard_capacity(ctx, true) != SG_STATUS_OK) return 1;
+    for (v = 0; v < nv; v++) {
+        double cap[1];
+        if (sg_get_vehicle_capacity(ctx, v, 0, &cap[0]) != SG_STATUS_OK) return 1;
+        cap[0] = cap[0] / (double)cap_div;
+        if (sg_vehicle_set_capacity(ctx, v, cap, 1) != SG_STATUS_OK) return 1;
+        if (sg_vehicle_set_max_trips(ctx, v, 0) != SG_STATUS_OK) return 1;
+        if (sg_vehicle_set_trip_reload_seconds(ctx, v, reload_seconds) != SG_STATUS_OK) return 1;
+    }
+    return 0;
 }
 
 int main(int argc, char **argv) {
@@ -58,6 +83,9 @@ int main(int argc, char **argv) {
     double gen_reheat_ratio = -1.0;   /* -1 = not set (use tune default) */
     double gen_cooling_stretch = -1.0;
     int size_filter = 0;
+    int multi_trip = 0;
+    int mt_cap_div = 2;
+    int mt_reload = 600;
     int filter_start = argc;
 
     SGBKSEntry bks_entries[MAX_BKS_ENTRIES];
@@ -119,6 +147,15 @@ int main(int argc, char **argv) {
         }
         if (strcmp(argv[i], "--features") == 0) {
             show_features = 1; continue;
+        }
+        if (strcmp(argv[i], "--multi-trip") == 0) {
+            multi_trip = 1; continue;
+        }
+        if (strcmp(argv[i], "--mt-cap-div") == 0 && i + 1 < argc) {
+            mt_cap_div = sh_parse_int(argv[++i], 2, 1, 1000); continue;
+        }
+        if (strcmp(argv[i], "--mt-reload") == 0 && i + 1 < argc) {
+            mt_reload = sh_parse_int(argv[++i], 600, 0, 86400); continue;
         }
         if (strcmp(argv[i], "--reheat") == 0 && i + 1 < argc) {
             gen_reheat_ratio = strtod(argv[++i], NULL); continue;
@@ -274,6 +311,13 @@ int main(int argc, char **argv) {
         status = sg_load_solomon_vrptw(ctx, cases[i].path);
         if (status != SG_STATUS_OK) {
             printf("%-16s %-9s\n", cases[i].name, sg_bench_status_name(status));
+            sg_free(ctx);
+            failed_count++;
+            continue;
+        }
+
+        if (multi_trip && sg_bench_force_multitrip(ctx, mt_cap_div, mt_reload) != 0) {
+            printf("%-16s %-9s\n", cases[i].name, "MT_SETUP_FAIL");
             sg_free(ctx);
             failed_count++;
             continue;
