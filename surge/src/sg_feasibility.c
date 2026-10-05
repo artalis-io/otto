@@ -428,6 +428,19 @@ int sg_route_update_timing(const SGContext *ctx, SGRouteSolution *sol, uint32_t 
        enable O(1) timing/distance evaluation for local search (Phase 3). */
     sg_route_build_segments(ctx, sol, vehicle_id);
 
+    /* Refresh the signed-load profile + per-route capacity violations from the
+       same stop sequence. update_timing is THE "this route's stops changed,
+       recompute derived state" entry point, so load must be refreshed here too:
+       otherwise a move that reorders stops and calls only update_timing (e.g.
+       the 2-opt intra reversal) leaves route_stop_load stale while the capacity
+       segments are fresh -- the two derived caches drift, and the O(L) capacity
+       paths (PD insertion eval, non-concat fallback, the SG_CONCAT_VERIFY
+       reference) then read a load profile from an older stop order. Coupling the
+       two rebuilds here makes "stops recomputed" imply "load AND segments fresh"
+       (M1 feasibility authority). Callers therefore need not call update_load
+       after update_timing. */
+    sg_route_update_load(ctx, sol, vehicle_id);
+
     return 1;
 }
 

@@ -1159,6 +1159,21 @@ void *sg_route_solution_copy(const void *solution, void *user_ctx) {
                 size_t load_size = (size_t)src->num_vehicles * ((size_t)src->stop_stride + 1U) *
                                    (size_t)ctx->dimension_count;
                 memcpy(dst->route_stop_load, src->route_stop_load, load_size * sizeof(double));
+                /* The O(1) capacity segment summaries are derived from the stop
+                   sequence in lockstep with route_stop_load; copy them alongside
+                   it so a clone is fully consistent. Omitting them left a clone
+                   with fresh load but leftover/uninitialized prefix/suffix
+                   summaries -- a latent coherence hole the concat fast path could
+                   read before the next update_timing rebuilt them (M1). Keep this
+                   in lockstep with the load copy above. */
+                if (src->route_seg_cap_prefix_delta && dst->route_seg_cap_prefix_delta) {
+                    memcpy(dst->route_seg_cap_prefix_delta, src->route_seg_cap_prefix_delta, load_size * sizeof(double));
+                    memcpy(dst->route_seg_cap_prefix_min,   src->route_seg_cap_prefix_min,   load_size * sizeof(double));
+                    memcpy(dst->route_seg_cap_prefix_max,   src->route_seg_cap_prefix_max,   load_size * sizeof(double));
+                    memcpy(dst->route_seg_cap_suffix_delta, src->route_seg_cap_suffix_delta, load_size * sizeof(double));
+                    memcpy(dst->route_seg_cap_suffix_min,   src->route_seg_cap_suffix_min,   load_size * sizeof(double));
+                    memcpy(dst->route_seg_cap_suffix_max,   src->route_seg_cap_suffix_max,   load_size * sizeof(double));
+                }
             }
             if (src->route_commodities && dst->route_commodities) {
                 memcpy(dst->route_commodities, src->route_commodities,

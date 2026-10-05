@@ -111,8 +111,11 @@ cannot violate them":
 3. Re-point the eject pass (`sg_route_postprocess_eject_over_capacity`) and the validator
    (`sg_route_solution_validate`) at `sg_cap_trip_excess`; delete their copies.
    Verify Solomon/Li&Lim byte-identical + sweep clean.
-4. Re-point the delivery and PD insertion evals' O(L) fallback at it; keep the
-   O(1) concat as the verified fast path.
+4. (a) Re-point the delivery and PD insertion evals' O(L) fallback at the one
+   formula; keep the O(1) concat as the verified fast path. (b) Make the
+   `-DSG_CONCAT_VERIFY` sweep run fully clean — see "Fast-path defects" below for
+   the root cause (two derived caches, `route_stop_load` vs the capacity segment
+   summaries, drifting after stop-reordering moves) and the fix.
 5. Replace the operators' ad-hoc eligibility checks with `sg_seg_eligible`.
 6. Make the final-commit feasibility guarantee explicit (repair-or-reject).
 
@@ -122,38 +125,44 @@ suite). The end state: **one capacity function, one eligibility function, the
 fast path verified against them in CI, and two enforced chokepoints** — so this
 class of bug cannot recur by drift.
 
-## Known fast-path defects (found by the M2 gate)
+## Fast-path defects the M2 gate found — root cause and fix (step 4b, done)
 
-Enabling the `SG_CONCAT_VERIFY` gate (M2) surfaced two concat discrepancies,
-both distinct from #226/#227. Fix both in step 4 (concat derived from, and
-verified equal to, the one canonical check):
+Enabling the `SG_CONCAT_VERIFY` gate (M2) surfaced two concat discrepancies on
+PD routes — one "unsafe admit" (`concat_ok=1 scan_ok=0`, dangerous direction, the
+sweep *aborts*, e.g. `f=0x40 seed=2`: `v=1 pos=5 stop_len=25 scan_viol=4.0`) and a
+cluster of "over-rejects" (`concat_ok=0 scan_ok=1`, safe direction, the gate
+*warns*, e.g. `f=0x40 seed=1`, 13 of them). Both were confirmed pre-existing on
+merged main (byte-identical to the step 2-4a refactor), and both turned out to be
+the **same bug** — and, importantly, **not** a flaw in the concat algebra at all.
 
-**(a) Over-reject on an empty multi-dimension route (safe direction).** On a
-**2-D capacity, first insertion into an empty route**,
-`sg_route_check_capacity_concat` reports a spurious violation (`concat_ok=0`
-while the O(L) reference correctly says feasible) — e.g.
-`test_multi_dimension_capacity` (cap `[100,5]`, demand `[-50,-3]`: clearly fits,
-yet concat reports viol 1.0 at `stop_len=0`). This is the **safe** direction (it
-over-rejects a feasible insertion rather than admitting an infeasible one), so the
-gate warns rather than failing — but it is a real quality loss: the fast path
-prunes valid first-insertions on multi-dimension vehicles, latent on the 2-D/3-D
-Gyermelyi model.
+**Root cause: two derived caches drifting.** A committed route carries two
+O(L)-derived caches of the same prefix-sum data: `route_stop_load` (the load
+profile the O(L) capacity paths read) and the `route_seg_cap_*` prefix/suffix
+segment summaries (the O(1) concat fast path). `sg_route_update_timing` rebuilt
+the segments (via `sg_route_build_segments`) but **not** the load profile, while
+`sg_route_update_load` rebuilt the load profile but not the segments. Every
+mutation path that reordered stops and called *only* `update_timing` — the 2-opt
+intra-route reversal (`sg_postprocess.c`) is the clearest — left `route_stop_load`
+stale (reflecting an older stop order) while the segments were fresh. The
+`SG_CONCAT_VERIFY` reference scan reads `route_stop_load`, so it computed a span
+from the stale order and disagreed with the (correct) concat summary — in *both*
+directions depending on whether the stale order over- or under-stated the span.
+The concat fast path was right the whole time; the O(L) reference was reading
+stale data. The same stale `route_stop_load` is read in production by the PD
+insertion eval and the non-concat O(L) fallback, so this was a real latent
+capacity-evaluation bug, not only a harness artifact.
 
-**(b) Unsafe admit on a PD route (dangerous direction).** The correctness sweep
-(256 feature combos x seeds, built `-DSG_CONCAT_VERIFY`) aborts on a **pickup-
-delivery** instance — feature bit `F_PD` alone, 1-D capacity — where concat
-*admits* an insertion the O(L) reference rejects: `concat_ok=1 scan_ok=0 v=1
-pos=5 stop_len=25 scan_viol=4.0` (sweep `f=0x40 seed=2`). This is the
-**dangerous** direction and the gate *fails* (aborts) on it. Confirmed
-**pre-existing** on the merged main (0a5a2aef) with the Step-2 refactor byte-
-identical to base — i.e. a latent concat bug the M2 sweep exposes, not a refactor
-regression. The downstream safety nets (guarded postprocess, eject, validator-
-gated commit) prevent it from reaching a committed solution (the non-verify sweep
-reports committed-invalid BUGS=0), so it is latent rather than shipped — but it is
-the strongest argument yet for M1: an O(1) summary that silently admits infeasible
-PD insertions is exactly the drift one source of truth removes. Step 4 must make
-the concat PD capacity path derive from `sg_cap_trip_excess` and the sweep run to
-completion with zero unsafe admits.
+**Fix:** couple the two rebuilds. `sg_route_update_timing` now also calls
+`sg_route_update_load`, so "this route's stops changed, recompute derived state"
+refreshes load *and* segments together and they can no longer drift; and
+`sg_route_solution_copy` copies the capacity segment arrays alongside
+`route_stop_load` so a clone is fully consistent. With these, the
+`-DSG_CONCAT_VERIFY` correctness sweep (256 feature combos x 6 seeds, 1536
+solves) runs to completion with **0 unsafe admits and 0 over-rejects**,
+committed-invalid BUGS=0; Solomon(100) and Li & Lim(100) remain byte-identical to
+pre-fix (the classic single-trip benchmarks' concat path never depended on the
+stale load), and the 480-test suite passes. The concat summary stays the verified
+fast path; the M2 gate now holds as a true invariant rather than a warning.
 
 ## Why not just "be careful"
 
