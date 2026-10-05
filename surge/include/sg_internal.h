@@ -741,6 +741,17 @@ static inline int sg_vehicle_allowed_for_request(const SGContext *ctx,
     return 1;
 }
 
+/* THE canonical "can this vehicle serve this request" eligibility predicate
+   (M1 feasibility authority): the request's qualifications are met AND the
+   vehicle is on the request's allow-list / off its forbid-list. Every site that
+   gated an assignment on both checks now calls this one helper so the rule lives
+   in one place; the apply chokepoints (#225) are the hard backstop. */
+static inline int sg_vehicle_can_serve(const SGContext *ctx,
+                                       uint32_t vehicle_id, uint32_t request_id) {
+    return sg_vehicle_qualifies(ctx, vehicle_id, request_id)
+        && sg_vehicle_allowed_for_request(ctx, vehicle_id, request_id);
+}
+
 /* Returns 1 if request's commodity doesn't conflict with any commodity on the vehicle's route. */
 static inline int sg_commodity_compatible(const SGContext *ctx, const SGRouteSolution *sol,
                                            uint32_t vehicle_id, uint32_t request_id) {

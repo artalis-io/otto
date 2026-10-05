@@ -166,8 +166,6 @@ ALLOWLIST = {
     # Proposed, deliberately unwritten.
     'dual_simplex_solve_v2_lightweight()':
         'proposed in the review\'s recommendations; the doc says "Add"',
-    'sg_seg_eligible()':
-        'proposed canonical eligibility helper in surge-feasibility-authority.md (M1); not yet written',
     # Not ours.
     'AF_INET6': 'POSIX, from <sys/socket.h>',
 }

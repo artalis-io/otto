@@ -1404,11 +1404,19 @@ skip_phase2:
                 (void)sg_route_postprocess_polish_distance(ctx, &initial);
         }
 
+        /* Final-commit guarantee: repair-or-reject (M1 feasibility authority).
+           Phase 1 infeasible-space exploration can leave `best` infeasible; the
+           eject passes above (eject_over_capacity / _tw / _duration) are the
+           repair step. If a repaired `best` still fails the validator, fall back
+           to `initial`; if that is also infeasible, REJECT -- set solution_valid
+           to 0 so we never present an infeasible plan as the answer (the commit
+           below is guarded on solution_valid). The guarantee is explicit and
+           total: when sg_solve returns SG_STATUS_OK, ctx->final_solution passes
+           sg_route_solution_validate; otherwise it returns SG_STATUS_ERROR and
+           commits no solution. */
         final_sol = best ? best : &initial;
 
         if (!sg_route_solution_validate(final_sol, (void *)ctx)) {
-            /* Phase 1 infeasible-space exploration may have produced an
-               infeasible best.  Fall back to the initial solution if valid. */
             if (final_sol != &initial &&
                 sg_route_solution_validate(&initial, (void *)ctx)) {
                 final_sol = &initial;
@@ -1490,11 +1498,19 @@ skip_phase2:
             ctx->stats.insertion_cache_misses = ic->total_misses + ic->misses;
         }
 
-        /* Retain final solution for route/stop export */
+        /* Retain final solution for route/stop export -- but only when it is
+           feasible. On the reject path (solution_valid == 0, i.e. neither best
+           nor initial validated) we must not present an infeasible plan as the
+           committed answer, so we clear final_solution and let sg_solve return
+           SG_STATUS_ERROR with nothing to export. This makes the repair-or-reject
+           guarantee total: a committed final_solution always validates. */
         if (ctx->final_solution) {
             sg_route_solution_free(ctx->final_solution, NULL);
+            ctx->final_solution = NULL;
         }
-        ctx->final_solution = (SGRouteSolution *)sg_route_solution_copy(final_sol, (void *)ctx);
+        if (solution_valid) {
+            ctx->final_solution = (SGRouteSolution *)sg_route_solution_copy(final_sol, (void *)ctx);
+        }
     }
 
     /* Capture penalty weights before freeing */
