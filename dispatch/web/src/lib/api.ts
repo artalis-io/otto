@@ -31,6 +31,8 @@ export const api = {
     jsend<{ jobId: string; scenarioId: string; scenarioRevision: number; budgetSec: number }>(
       `/api/scenarios/${scenarioId}/solve`, 'POST', budgetSec ? { budgetSec } : {}),
 
+  plans: (day?: string) => jget<PlanSummary[]>(`/api/plans${day ? `?day=${day}` : ''}`),
+
   job: (id: string) => jget<Job>(`/api/jobs/${id}`),
   cancelJob: (id: string) => jsend<{ cancelled: boolean; status: string }>(`/api/jobs/${id}`, 'DELETE'),
 
@@ -47,6 +49,11 @@ export interface ImportSummary {
   pipeline: { stage: string; detail: string }[];
   rules: string[];
   scope: { rawOrderLines: number; inScopeHungarian: number; day1: number; day2: number };
+}
+export interface PlanSummary {
+  id: string; scenarioId: string; day: string | null; label: string;
+  source: 'saved' | 'live' | 'sample'; createdAt: string; termination: string;
+  servedOrders: number; totalOrders: number; vehiclesUsed: number; totalDistanceKm: number;
 }
 export interface RawSample { label: string; headers: string[]; rows: string[][]; totalRows: number }
 export interface CanonicalSample { fields: string[]; rows: Record<string, unknown>[]; count: number; sha256: string | null }

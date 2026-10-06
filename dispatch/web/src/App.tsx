@@ -10,6 +10,7 @@ import { Timeline } from '@/components/Timeline';
 import { MapView } from '@/map/MapView';
 import { CompareDialog } from '@/components/CompareDialog';
 import { ImportDialog } from '@/components/ImportDialog';
+import { HistoryDialog } from '@/components/HistoryDialog';
 import { api, pollJob } from '@/lib/api';
 import type { DaySummary, Job, Plan, Scenario, Selection } from '@/types';
 
@@ -32,6 +33,7 @@ export default function App() {
   const [error, setError] = useState<string | null>(null);
   const [compareOpen, setCompareOpen] = useState(false);
   const [importOpen, setImportOpen] = useState(false);
+  const [historyOpen, setHistoryOpen] = useState(false);
   const [leftOpen, setLeftOpen] = useState(true);
   const [rightOpen, setRightOpen] = useState(true);
 
@@ -110,6 +112,21 @@ export default function App() {
     if (d) void loadDay(d);
   }, [days, dayId, loadDay]);
 
+  // Reopen a saved plan faithfully, restoring its scenario context.
+  const reopenPlan = useCallback(async (planId: string) => {
+    pollAbort.current?.abort();
+    activeJobId.current = null;
+    setJob(null); setSelection(null); setError(null);
+    try {
+      const p = await api.plan(planId);
+      const sc = await api.scenario(p.scenarioId);
+      const d = days.find((x) => x.id === sc.day);
+      if (d && baseline?.day !== d.isoDate) { setBaseline(await api.plan(d.baselinePlanId)); setDayId(d.id); }
+      setScenario(sc);
+      setPlan(p);
+    } catch (e) { setError(e instanceof Error ? e.message : String(e)); }
+  }, [days, baseline]);
+
   if (error && !plan) return <div className="flex h-full items-center justify-center text-sm text-destructive">Failed to load: {error}</div>;
   if (!plan || !baseline || !scenario) return <div className="flex h-full items-center justify-center text-sm text-muted-foreground">Loading planning day…</div>;
 
@@ -127,6 +144,7 @@ export default function App() {
           showCompare={isReplan && plan.source === 'live'}
           onCompare={() => setCompareOpen(true)}
           onOpenImport={() => setImportOpen(true)}
+          onOpenHistory={() => setHistoryOpen(true)}
         />
         <KpiStrip plan={plan} baseline={baseline} compare={isReplan} job={job} />
 
@@ -172,6 +190,7 @@ export default function App() {
         />
       )}
       <ImportDialog open={importOpen} onOpenChange={setImportOpen} />
+      <HistoryDialog open={historyOpen} onOpenChange={setHistoryOpen} dayId={dayId} currentPlanId={plan.id} onReopen={(id) => void reopenPlan(id)} />
     </TooltipProvider>
   );
 }

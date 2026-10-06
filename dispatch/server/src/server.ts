@@ -133,6 +133,24 @@ app.delete<{ Params: { id: string } }>('/api/jobs/:id', async (req, reply) => {
 });
 
 /* ---- Plans ---- */
+// List saved plans (baseline + persisted live plans), optionally by day, for reopen.
+app.get<{ Querystring: { day?: string } }>('/api/plans', async (req) => {
+  const out = [];
+  for (const p of store.plans.values()) {
+    const sc = store.getScenario(p.scenarioId);
+    if (req.query.day && sc?.day !== req.query.day) continue;
+    out.push({
+      id: p.id, scenarioId: p.scenarioId, day: sc?.day ?? null,
+      label: sc?.label ?? p.scenarioId, source: p.source, createdAt: p.createdAt,
+      termination: p.provenance.termination,
+      servedOrders: p.stats.servedOrders, totalOrders: p.stats.totalOrders,
+      vehiclesUsed: p.stats.vehiclesUsed, totalDistanceKm: p.stats.totalDistanceKm,
+    });
+  }
+  out.sort((a, b) => (a.source === 'saved' ? 0 : 1) - (b.source === 'saved' ? 0 : 1) || a.createdAt.localeCompare(b.createdAt));
+  return out;
+});
+
 app.get<{ Params: { id: string } }>('/api/plans/:id', async (req, reply) => {
   const plan = store.getPlan(req.params.id);
   if (!plan) return reply.code(404).send({ error: 'plan not found' });

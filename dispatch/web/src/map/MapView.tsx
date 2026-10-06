@@ -59,6 +59,9 @@ function selTripIndex(sel: Selection): number | null {
 
 export function MapView({ plan, selection, onSelect }: { plan: Plan; selection: Selection; onSelect: (s: Selection) => void }) {
   const mapRef = useRef<MapRef | null>(null);
+  // Respect reduced-motion: snap the camera instead of animating.
+  const reduced = useRef(typeof window !== 'undefined' && window.matchMedia('(prefers-reduced-motion: reduce)').matches);
+  const dur = (ms: number) => (reduced.current ? 0 : ms);
   const style = useMemo(() => cartaStyle(), []);
   const routes = useMemo(() => routesFC(plan), [plan]);
   const stops = useMemo(() => stopsFC(plan), [plan]);
@@ -128,7 +131,7 @@ export function MapView({ plan, selection, onSelect }: { plan: Plan; selection: 
     const map = mapRef.current; if (!map || coords.length === 0) return;
     const b = new maplibregl.LngLatBounds();
     for (const c of coords) b.extend(c);
-    map.fitBounds(b, { padding, duration: 500, maxZoom: 15 });
+    map.fitBounds(b, { padding, duration: dur(500), maxZoom: 15 });
   }, []);
 
   const allCoords = useCallback((): [number, number][] => {
@@ -155,7 +158,7 @@ export function MapView({ plan, selection, onSelect }: { plan: Plan; selection: 
     } else {
       const t = v.trips.find((x) => x.index === selection.tripIndex);
       const s = t?.stops.find((x) => x.seq === selection.seq);
-      if (s) map.easeTo({ center: [s.lon, s.lat], zoom: Math.max(map.getZoom(), 13), duration: 500 });
+      if (s) map.easeTo({ center: [s.lon, s.lat], zoom: Math.max(map.getZoom(), 13), duration: dur(500) });
     }
   }, [selectionKey(selection), plan.id]);
 
@@ -170,7 +173,7 @@ export function MapView({ plan, selection, onSelect }: { plan: Plan; selection: 
     }
   }, [onSelect]);
 
-  const zoomBy = (d: number) => { const m = mapRef.current; if (m) m.easeTo({ zoom: m.getZoom() + d, duration: 200 }); };
+  const zoomBy = (d: number) => { const m = mapRef.current; if (m) m.easeTo({ zoom: m.getZoom() + d, duration: dur(200) }); };
 
   return (
     <div className="relative h-full w-full">
