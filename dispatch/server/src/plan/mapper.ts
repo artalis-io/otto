@@ -141,6 +141,7 @@ export function mapSolutionToPlan(inp: MapInputs): Plan {
   const unassigned: PlanUnassigned[] = solution.unassigned.map((rid) => {
     const taskId = reqById.get(rid);
     const task = taskId != null ? taskById.get(taskId) : undefined;
+    const loc = task ? request.locations[task.location_id] : undefined;
     const orderNo = task?.ref ?? String(rid);
     const info = inp.enrichment.get(orderNo) ?? null;
     return {
@@ -148,6 +149,8 @@ export function mapSolutionToPlan(inp: MapInputs): Plan {
       orderNo,
       customer: info?.customer ?? null,
       city: info?.city ?? null,
+      lon: loc?.x ?? info?.lon ?? null,
+      lat: loc?.y ?? info?.lat ?? null,
       reason: null, // Surge does not emit per-order reasons; left explicit
     };
   });

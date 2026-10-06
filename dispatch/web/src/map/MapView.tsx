@@ -1,45 +1,39 @@
-import { useCallback, useMemo, useRef } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import Map, {
-  Layer,
-  Source,
-  type MapRef,
-  type LayerProps,
+  Layer, Source, type MapRef, type LayerProps, type MapLayerMouseEvent,
 } from 'react-map-gl/maplibre';
 import maplibregl from 'maplibre-gl';
 import type { FeatureCollection, LineString } from 'geojson';
-import 'maplibre-gl/dist/maplibre-gl.css';
 import { Minus, Plus, Maximize2 } from 'lucide-react';
+import 'maplibre-gl/dist/maplibre-gl.css';
 import { cartaStyle } from './cartaStyle';
-import type { Plan } from '@/types';
+import type { Plan, Selection } from '@/types';
 
 /*
- * MapLibre map for the dispatch workspace, via react-map-gl's maplibre
- * entrypoint. The basemap is the reused "Carta Quiet" style; route lines, stop
- * dots, and the depot marker are overlaid from the plan as declarative
- * Source/Layer children. Selection dimming and fit-to-route are left for the
- * lead to wire against real interaction state (see note in README).
+ * The dispatch map. Basemap is the reused "Carta Quiet" style; routes, stops and
+ * the depot are declarative overlays. Selection drives styling (highlight the
+ * selected vehicle/trip, fade the rest) and the camera (fit on deliberate
+ * selection; preserved across background plan updates like geometry fills).
  *
- * The transformRequest below is load-bearing and copied from the Carta viewer:
- * the style uses root-relative tile/glyph URLs ("/tiles.vector.json",
- * "/fonts/..."), which are correct for a same-origin host but fail to parse
- * inside MapLibre's Web Worker (no document base). We resolve them against the
- * page origin on the way out.
+ * transformRequest is load-bearing (copied from the Carta viewer): the style's
+ * root-relative tile/glyph URLs fail to parse inside MapLibre's Web Worker, so
+ * we resolve them against the page origin.
  */
+
+const transformRequest = (url: string) => ({ url: url.startsWith('/') ? window.location.origin + url : url });
 
 function routesFC(plan: Plan): FeatureCollection {
   return {
     type: 'FeatureCollection',
     features: plan.vehicles.flatMap((v) =>
-      v.trips.map((t) => ({
+      v.trips.filter((t) => t.geometry).map((t) => ({
         type: 'Feature' as const,
         id: v.id * 100 + t.index,
         properties: { vehicleId: v.id, color: v.color, tripIndex: t.index },
         geometry: t.geometry as LineString,
-      }))
-    ),
+      }))),
   };
 }
-
 function stopsFC(plan: Plan): FeatureCollection {
   return {
     type: 'FeatureCollection',
@@ -47,100 +41,150 @@ function stopsFC(plan: Plan): FeatureCollection {
       v.trips.flatMap((t) =>
         t.stops.map((s) => ({
           type: 'Feature' as const,
-          properties: { vehicleId: v.id, color: v.color, seq: s.seq, customer: s.customer },
+          properties: { vehicleId: v.id, color: v.color, tripIndex: t.index, seq: s.seq },
           geometry: { type: 'Point' as const, coordinates: [s.lon, s.lat] },
-        }))
-      )
-    ),
+        })))),
   };
 }
+function pointFC(lon: number, lat: number, props: Record<string, unknown> = {}): FeatureCollection {
+  return { type: 'FeatureCollection', features: [{ type: 'Feature', properties: props, geometry: { type: 'Point', coordinates: [lon, lat] } }] };
+}
 
-const routeCasing: LayerProps = {
-  id: 'route-casing',
-  type: 'line',
-  layout: { 'line-cap': 'round', 'line-join': 'round' },
-  paint: { 'line-color': '#1f3d2f', 'line-width': 6.5, 'line-opacity': 0.9 },
-};
-const routeLine: LayerProps = {
-  id: 'route-line',
-  type: 'line',
-  layout: { 'line-cap': 'round', 'line-join': 'round' },
-  paint: { 'line-color': ['get', 'color'], 'line-width': 4, 'line-opacity': 0.95 },
-};
-const stopLayer: LayerProps = {
-  id: 'stops',
-  type: 'circle',
-  paint: {
-    'circle-radius': 5,
-    'circle-color': ['get', 'color'],
-    'circle-stroke-color': '#ffffff',
-    'circle-stroke-width': 1.5,
-  },
-};
-const depotLayer: LayerProps = {
-  id: 'depot',
-  type: 'circle',
-  paint: {
-    'circle-radius': 8,
-    'circle-color': '#1f3d2f',
-    'circle-stroke-color': '#ffffff',
-    'circle-stroke-width': 2.5,
-  },
-};
+function selVehicle(sel: Selection): number | null {
+  return sel && sel.kind !== 'unassigned' ? sel.vehicleId : null;
+}
+function selTripIndex(sel: Selection): number | null {
+  return sel && (sel.kind === 'trip' || sel.kind === 'stop') ? sel.tripIndex : null;
+}
 
-const transformRequest = (url: string) => ({
-  url: url.startsWith('/') ? window.location.origin + url : url,
-});
-
-export function MapView({ plan }: { plan: Plan }) {
+export function MapView({ plan, selection, onSelect }: { plan: Plan; selection: Selection; onSelect: (s: Selection) => void }) {
   const mapRef = useRef<MapRef | null>(null);
+  const style = useMemo(() => cartaStyle(), []);
   const routes = useMemo(() => routesFC(plan), [plan]);
   const stops = useMemo(() => stopsFC(plan), [plan]);
-  const depot = useMemo<FeatureCollection>(
-    () => ({
-      type: 'FeatureCollection',
-      features: [
-        {
-          type: 'Feature',
-          properties: {},
-          geometry: { type: 'Point', coordinates: [plan.depot.lon, plan.depot.lat] },
-        },
-      ],
-    }),
-    [plan]
-  );
+  const depot = useMemo(() => pointFC(plan.depot.lon, plan.depot.lat), [plan.depot.lon, plan.depot.lat]);
+  const [hovering, setHovering] = useState(false);
 
-  const style = useMemo(() => cartaStyle(), []);
+  const vId = selVehicle(selection);
+  const tIdx = selTripIndex(selection);
 
-  const fitAll = useCallback(() => {
-    const map = mapRef.current;
-    if (!map) return;
+  // Match expression for the selected subset (vehicle, or vehicle+trip).
+  const match = useMemo(() => {
+    if (vId == null) return null;
+    return tIdx == null
+      ? (['==', ['get', 'vehicleId'], vId] as unknown)
+      : (['all', ['==', ['get', 'vehicleId'], vId], ['==', ['get', 'tripIndex'], tIdx]] as unknown);
+  }, [vId, tIdx]);
+
+  const routeCasing: LayerProps = useMemo(() => ({
+    id: 'route-casing', type: 'line', layout: { 'line-cap': 'round', 'line-join': 'round' },
+    paint: {
+      'line-color': '#223a2e',
+      'line-width': match ? (['case', match, 8, 4] as never) : 6,
+      'line-opacity': match ? (['case', match, 0.9, 0.05] as never) : 0.85,
+    },
+  }), [match]);
+  const routeLine: LayerProps = useMemo(() => ({
+    id: 'route-line', type: 'line', layout: { 'line-cap': 'round', 'line-join': 'round' },
+    paint: {
+      'line-color': ['get', 'color'],
+      'line-width': match ? (['case', match, 5, 2.5] as never) : 4,
+      'line-opacity': match ? (['case', match, 0.98, 0.1] as never) : 0.92,
+    },
+  }), [match]);
+  const stopLayer: LayerProps = useMemo(() => ({
+    id: 'stops', type: 'circle',
+    paint: {
+      'circle-radius': 4.5,
+      'circle-color': ['get', 'color'],
+      'circle-stroke-color': '#fbfaf5',
+      'circle-stroke-width': 1.2,
+      'circle-opacity': match ? (['case', match, 1, 0.1] as never) : 0.95,
+      'circle-stroke-opacity': match ? (['case', match, 1, 0.1] as never) : 0.9,
+    },
+  }), [match]);
+
+  const depotLayer: LayerProps = { id: 'depot', type: 'circle', paint: { 'circle-radius': 7, 'circle-color': '#223a2e', 'circle-stroke-color': '#fbfaf5', 'circle-stroke-width': 2.5 } };
+
+  // Selected stop highlight ring.
+  const selectedStop = useMemo(() => {
+    if (!selection || selection.kind !== 'stop') return null;
+    const v = plan.vehicles.find((x) => x.id === selection.vehicleId);
+    const t = v?.trips.find((x) => x.index === selection.tripIndex);
+    const s = t?.stops.find((x) => x.seq === selection.seq);
+    return s ? pointFC(s.lon, s.lat, { color: v!.color }) : null;
+  }, [selection, plan]);
+
+  // Unassigned orders (if coords available) as muted hollow markers.
+  const unassignedFC = useMemo<FeatureCollection>(() => ({
+    type: 'FeatureCollection',
+    features: plan.unassigned
+      .filter((u) => typeof (u as { lon?: number }).lon === 'number')
+      .map((u) => ({ type: 'Feature', properties: { orderNo: u.orderNo },
+        geometry: { type: 'Point', coordinates: [(u as { lon: number }).lon, (u as { lat: number }).lat] } })),
+  }), [plan.unassigned]);
+
+  const fitTo = useCallback((coords: [number, number][], padding = 70) => {
+    const map = mapRef.current; if (!map || coords.length === 0) return;
     const b = new maplibregl.LngLatBounds();
-    b.extend([plan.depot.lon, plan.depot.lat]);
-    for (const v of plan.vehicles)
-      for (const t of v.trips)
-        for (const c of t.geometry.coordinates) b.extend(c as [number, number]);
-    map.fitBounds(b, { padding: 60, duration: 400 });
+    for (const c of coords) b.extend(c);
+    map.fitBounds(b, { padding, duration: 500, maxZoom: 15 });
+  }, []);
+
+  const allCoords = useCallback((): [number, number][] => {
+    const cs: [number, number][] = [[plan.depot.lon, plan.depot.lat]];
+    for (const v of plan.vehicles) for (const t of v.trips) if (t.geometry) for (const c of t.geometry.coordinates) cs.push(c as [number, number]);
+    return cs;
   }, [plan]);
 
-  const zoomBy = useCallback((delta: number) => {
-    const map = mapRef.current;
-    if (!map) return;
-    map.easeTo({ zoom: map.getZoom() + delta, duration: 200 });
-  }, []);
+  const fitAll = useCallback(() => fitTo(allCoords(), 60), [fitTo, allCoords]);
+
+  // Camera: fit to the selection on deliberate selection change; fit all when a
+  // new plan is loaded. Not re-run on background geometry fills (dep on plan.id).
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  useEffect(() => {
+    const map = mapRef.current; if (!map) return;
+    if (!selection || selection.kind === 'unassigned') { fitAll(); return; }
+    const v = plan.vehicles.find((x) => x.id === selection.vehicleId);
+    if (!v) return;
+    if (selection.kind === 'vehicle') {
+      fitTo(v.trips.flatMap((t) => (t.geometry?.coordinates ?? []) as [number, number][]));
+    } else if (selection.kind === 'trip') {
+      const t = v.trips.find((x) => x.index === selection.tripIndex);
+      fitTo((t?.geometry?.coordinates ?? []) as [number, number][]);
+    } else {
+      const t = v.trips.find((x) => x.index === selection.tripIndex);
+      const s = t?.stops.find((x) => x.seq === selection.seq);
+      if (s) map.easeTo({ center: [s.lon, s.lat], zoom: Math.max(map.getZoom(), 13), duration: 500 });
+    }
+  }, [selectionKey(selection), plan.id]);
+
+  const onClick = useCallback((e: MapLayerMouseEvent) => {
+    const f = e.features?.[0];
+    if (!f) { onSelect(null); return; }
+    const p = f.properties as { vehicleId?: number; tripIndex?: number; seq?: number } | null;
+    if (f.layer.id === 'stops' && p?.vehicleId != null) {
+      onSelect({ kind: 'stop', vehicleId: p.vehicleId, tripIndex: p.tripIndex ?? 0, seq: p.seq ?? 1 });
+    } else if (f.layer.id === 'route-line' && p?.vehicleId != null) {
+      onSelect({ kind: 'trip', vehicleId: p.vehicleId, tripIndex: p.tripIndex ?? 0 });
+    }
+  }, [onSelect]);
+
+  const zoomBy = (d: number) => { const m = mapRef.current; if (m) m.easeTo({ zoom: m.getZoom() + d, duration: 200 }); };
 
   return (
     <div className="relative h-full w-full">
       <Map
         ref={mapRef}
-        initialViewState={{
-          longitude: plan.depot.lon,
-          latitude: plan.depot.lat,
-          zoom: 9,
-        }}
+        initialViewState={{ longitude: plan.depot.lon, latitude: plan.depot.lat, zoom: 9 }}
         mapStyle={style}
         transformRequest={transformRequest}
         attributionControl={false}
+        interactiveLayerIds={['route-line', 'stops']}
+        cursor={hovering ? 'pointer' : 'default'}
+        onMouseEnter={() => setHovering(true)}
+        onMouseLeave={() => setHovering(false)}
+        onClick={onClick}
         onLoad={fitAll}
         style={{ position: 'absolute', inset: 0 }}
       >
@@ -148,41 +192,37 @@ export function MapView({ plan }: { plan: Plan }) {
           <Layer {...routeCasing} />
           <Layer {...routeLine} />
         </Source>
+        {unassignedFC.features.length > 0 && (
+          <Source id="unassigned" type="geojson" data={unassignedFC}>
+            <Layer id="unassigned" type="circle" paint={{ 'circle-radius': 5, 'circle-color': '#b4572a', 'circle-opacity': 0.25, 'circle-stroke-color': '#b4572a', 'circle-stroke-width': 1.5, 'circle-stroke-opacity': 0.8 }} />
+          </Source>
+        )}
         <Source id="stops" type="geojson" data={stops}>
           <Layer {...stopLayer} />
         </Source>
+        {selectedStop && (
+          <Source id="selstop" type="geojson" data={selectedStop}>
+            <Layer id="selstop-ring" type="circle" paint={{ 'circle-radius': 9, 'circle-color': 'rgba(0,0,0,0)', 'circle-stroke-color': ['get', 'color'], 'circle-stroke-width': 2.5 }} />
+          </Source>
+        )}
         <Source id="depot" type="geojson" data={depot}>
           <Layer {...depotLayer} />
         </Source>
       </Map>
 
-      {/* Translucent floating map controls (graphite, blurred via index.css). */}
       <div className="maplibregl-ctrl-group absolute right-3 top-3 flex flex-col overflow-hidden text-graphite-foreground">
-        <button
-          type="button"
-          aria-label="Zoom in"
-          onClick={() => zoomBy(1)}
-          className="flex h-8 w-8 items-center justify-center hover:bg-white/10"
-        >
-          <Plus className="h-4 w-4" />
-        </button>
-        <button
-          type="button"
-          aria-label="Zoom out"
-          onClick={() => zoomBy(-1)}
-          className="flex h-8 w-8 items-center justify-center border-t border-white/10 hover:bg-white/10"
-        >
-          <Minus className="h-4 w-4" />
-        </button>
-        <button
-          type="button"
-          aria-label="Fit plan"
-          onClick={fitAll}
-          className="flex h-8 w-8 items-center justify-center border-t border-white/10 hover:bg-white/10"
-        >
-          <Maximize2 className="h-4 w-4" />
-        </button>
+        <button type="button" aria-label="Zoom in" onClick={() => zoomBy(1)} className="flex h-8 w-8 items-center justify-center hover:bg-white/10"><Plus className="h-4 w-4" /></button>
+        <button type="button" aria-label="Zoom out" onClick={() => zoomBy(-1)} className="flex h-8 w-8 items-center justify-center border-t border-white/10 hover:bg-white/10"><Minus className="h-4 w-4" /></button>
+        <button type="button" aria-label="Fit plan" onClick={() => { onSelect(null); fitAll(); }} className="flex h-8 w-8 items-center justify-center border-t border-white/10 hover:bg-white/10"><Maximize2 className="h-4 w-4" /></button>
       </div>
     </div>
   );
+}
+
+function selectionKey(s: Selection): string {
+  if (!s) return 'none';
+  if (s.kind === 'unassigned') return `u:${s.orderNo}`;
+  if (s.kind === 'vehicle') return `v:${s.vehicleId}`;
+  if (s.kind === 'trip') return `t:${s.vehicleId}:${s.tripIndex}`;
+  return `s:${s.vehicleId}:${s.tripIndex}:${s.seq}`;
 }

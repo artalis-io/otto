@@ -140,6 +140,8 @@ export interface PlanUnassigned {
   orderNo: string;
   customer: string | null;
   city: string | null;
+  lon: number | null;
+  lat: number | null;
   reason: string | null;
 }
 

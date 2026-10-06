@@ -1,34 +1,26 @@
 /*
  * TypeScript mirror of the backend -> frontend Plan contract.
- * Source of truth: dispatch/docs/data-api-mapping.md ("Plan (backend -> frontend
- * contract)"). Keep these in sync with that document. All times are
- * seconds-from-midnight; distances are kilometers; coordinates are [lon, lat].
+ * Source of truth: dispatch/docs/data-api-mapping.md and dispatch/server/src/types.ts.
+ * All times are seconds-from-midnight; distances are kilometers; coords [lon, lat].
  */
 
 export type PlanSource = 'saved' | 'live' | 'sample';
 
-export interface SolverConfig {
-  seed: number;
-  maxIterations: number;
-  maxTimeSeconds: number;
-  lexicographic: boolean;
-  hardCapacity: boolean;
-  hardTimeWindows: boolean;
-  hardMaxDuration: boolean;
+export interface PlanProvenance {
+  inputSha256: string;
+  solverConfig: Record<string, unknown>; // raw Surge config (seed, max_time_seconds, hard_*, ...)
+  termination: string;                    // OK | LIMIT | ...
+  validation: { valid: boolean; violations: ValidationViolation[] };
 }
 
 export interface ValidationViolation {
-  code: string;
-  message: string;
-  vehicleId?: number;
-  orderId?: string;
-}
-
-export interface PlanProvenance {
-  inputSha256: string;
-  solverConfig: SolverConfig;
-  termination: 'OK' | 'LIMIT';
-  validation: { valid: boolean; violations: ValidationViolation[] };
+  type: string;            // HARD_TW | CAPACITY | ...
+  dimension?: string;
+  vehicle_id?: number;
+  request_id?: number;
+  trip?: number;
+  actual?: number;
+  limit?: number;
 }
 
 export interface PlanStats {
@@ -38,22 +30,18 @@ export interface PlanStats {
   trips: number;
   vehiclesUsed: number;
   totalDistanceKm: number;
-  solveElapsedSeconds: number;
+  solveElapsedSeconds: number | null;
 }
 
-export interface Depot {
-  name: string;
-  lon: number;
-  lat: number;
-}
+export interface Depot { name: string; lon: number; lat: number }
 
-export type StopType = 'delivery' | 'pickup' | 'depot';
+export type StopType = 'delivery' | 'pickup' | 'service' | 'depot';
 
 export interface Stop {
-  orderId: string;
+  orderId: string | null;
   orderNo: string;
-  customer: string;
-  city: string;
+  customer: string | null;
+  city: string | null;
   lon: number;
   lat: number;
   seq: number;
@@ -66,6 +54,8 @@ export interface Stop {
   pallets: number;
   weightKg: number;
   serviceMin: number;
+  waitSec: number;
+  travelToSec: number;
   lateBySec: number;
 }
 
@@ -75,15 +65,17 @@ export interface Trip {
   endSec: number;
   distanceKm: number;
   reloadSecAfter: number;
+  loadKg: number;
+  loadPallets: number;
   stops: Stop[];
   /** Road-following path from Velo, cached with the plan. [lon, lat] pairs. */
-  geometry: GeoJSON.LineString;
+  geometry: GeoJSON.LineString | null;
 }
 
 export interface Vehicle {
   id: number;
   ref: string;
-  class: string;
+  vehicleClass: string | null;
   /** Assigned by the backend from a fixed distinct palette; stable within a plan. */
   color: string;
   capacityKg: number;
@@ -97,10 +89,13 @@ export interface Vehicle {
 }
 
 export interface UnassignedOrder {
-  orderId: string;
+  orderId: string | null;
   orderNo: string;
-  customer: string;
-  reason: string;
+  customer: string | null;
+  city: string | null;
+  lon: number | null;
+  lat: number | null;
+  reason: string | null;
 }
 
 export interface Plan {
@@ -117,9 +112,44 @@ export interface Plan {
   unassigned: UnassignedOrder[];
 }
 
-/** A flattened reference to a selected item, for the right inspector. */
+/* ---- API shapes ---- */
+export interface DaySummary {
+  id: string;
+  isoDate: string;
+  label: string;
+  orders: number | null;
+  vehicles: number | null;
+  baseScenarioId: string;
+  baselinePlanId: string;
+}
+
+export interface Scenario {
+  id: string;
+  day: string;
+  kind: 'base' | 'copy';
+  parentId: string | null;
+  revision: number;
+  label: string;
+  removedVehicleIds: number[];
+  createdAt: string;
+}
+
+export type JobStatus = 'pending' | 'running' | 'completed' | 'failed' | 'cancelled';
+export interface Job {
+  id: string;
+  scenarioId: string;
+  scenarioRevision: number;
+  status: JobStatus;
+  elapsedSec: number;
+  planId: string | null;
+  termination: string | null;
+  error: string | null;
+}
+
+/** A flattened reference to a selected item, driving map/timeline/inspector. */
 export type Selection =
   | { kind: 'vehicle'; vehicleId: number }
   | { kind: 'trip'; vehicleId: number; tripIndex: number }
   | { kind: 'stop'; vehicleId: number; tripIndex: number; seq: number }
+  | { kind: 'unassigned'; orderNo: string }
   | null;
