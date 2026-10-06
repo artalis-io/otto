@@ -1,0 +1,12 @@
+node_modules/
+dist/
+*.log
+tsconfig.tsbuildinfo
+
+# Generated glyphs and the demo plan ARE committed (local assets, needed to run
+# and to reproduce the screenshots). They live under public/ and are not ignored.
+
+# carta/.gitignore ignores *.png (Carta emits PNG tiles). The viewer's rendered
+# screenshots are deliverables, so re-include them here.
+!screenshots/
+!screenshots/*.png
