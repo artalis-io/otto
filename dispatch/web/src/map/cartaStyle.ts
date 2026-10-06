@@ -62,12 +62,30 @@ export function cartaStyle(): StyleSpecification {
         paint: { 'fill-color': C.residential, 'fill-opacity': 0.6 } },
 
       // --- Water ---
-      { id: 'water-fill', type: 'fill', source: 'carta', 'source-layer': 'water',
-        paint: { 'fill-color': C.water, 'fill-outline-color': C.waterLine } },
+      // Waterway centerlines are drawn FIRST, UNDER the fills. Wide rivers (the
+      // Danube) have both a riverbank polygon and a waterway centerline; drawing
+      // the line under the fill lets the polygon cover the centerline (no stray
+      // line down the middle of a filled river), while narrow streams/rivers
+      // with no polygon still read as lines. Geometry-type guards keep fills on
+      // polygons and lines on linestrings.
+      // Rivers/canals usually ALSO have a riverbank polygon; the centerline is
+      // drawn in the fill colour so wherever it is not covered by the (narrow,
+      // at low zoom) polygon it blends seamlessly instead of showing a darker
+      // line down the river. Streams rarely have a polygon, so they keep a
+      // slightly darker, readable blue.
       { id: 'water-line', type: 'line', source: 'carta', 'source-layer': 'water',
-        filter: ['in', ['get', 'class'], ['literal', ['river', 'canal', 'stream']]],
+        filter: ['all', ['==', ['geometry-type'], 'LineString'],
+          ['in', ['get', 'class'], ['literal', ['river', 'canal']]]],
+        paint: { 'line-color': C.water,
+          'line-width': ['interpolate', ['linear'], ['zoom'], 9, 1.2, 14, 3.2] } },
+      { id: 'water-stream', type: 'line', source: 'carta', 'source-layer': 'water',
+        minzoom: 12,
+        filter: ['all', ['==', ['geometry-type'], 'LineString'], ['==', ['get', 'class'], 'stream']],
         paint: { 'line-color': C.waterLine,
-          'line-width': ['interpolate', ['linear'], ['zoom'], 9, 0.8, 14, 2.4] } },
+          'line-width': ['interpolate', ['linear'], ['zoom'], 12, 0.5, 16, 1.6] } },
+      { id: 'water-fill', type: 'fill', source: 'carta', 'source-layer': 'water',
+        filter: ['==', ['geometry-type'], 'Polygon'],
+        paint: { 'fill-color': C.water, 'fill-outline-color': C.waterLine } },
 
       // --- Buildings ---
       { id: 'buildings', type: 'fill', source: 'carta', 'source-layer': 'buildings',
@@ -130,6 +148,21 @@ export function cartaStyle(): StyleSpecification {
           'line-width': ['interpolate', ['linear'], ['zoom'], 4, 0.6, 10, 1.4] } },
 
       // --- Road name labels ---
+      // Major road names appear from regional zoom (z11); the full set from z13.
+      // (The handoff is clean: the major tier stops at z13 where the all-roads
+      // tier begins.) Without this, a dispatcher at regional zoom saw no road
+      // names at all.
+      { id: 'road-labels-major', type: 'symbol', source: 'carta', 'source-layer': 'roads',
+        minzoom: 11, maxzoom: 13,
+        filter: ['all', ['has', 'name'],
+          ['in', ['get', 'class'], ['literal', ['motorway', 'trunk', 'primary', 'secondary']]]],
+        layout: {
+          'symbol-placement': 'line',
+          'text-field': ['get', 'name'],
+          'text-font': ['IBM Plex Sans Regular'],
+          'text-size': ['interpolate', ['linear'], ['zoom'], 11, 9.5, 13, 11.5],
+        },
+        paint: { 'text-color': C.label, 'text-halo-color': C.labelHalo, 'text-halo-width': 1.3 } },
       { id: 'road-labels', type: 'symbol', source: 'carta', 'source-layer': 'roads',
         minzoom: 13,
         filter: ['has', 'name'],
