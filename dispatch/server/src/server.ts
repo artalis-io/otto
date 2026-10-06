@@ -8,6 +8,7 @@ import { mapSolutionToPlan } from './plan/mapper.js';
 import { fillPlanGeometry, veloReachable } from './geometry/velo.js';
 import { store } from './store.js';
 import { startSolve, cancelJob } from './solve.js';
+import { comparePlans } from './plan/compare.js';
 import type { Plan } from './types.js';
 
 const app = Fastify({ logger: { level: 'info' }, bodyLimit: 4 * 1024 * 1024 });
@@ -136,6 +137,13 @@ app.get<{ Params: { id: string } }>('/api/plans/:id', async (req, reply) => {
   if (!plan) return reply.code(404).send({ error: 'plan not found' });
   try { await fillPlanGeometry(plan); } catch (e) { app.log.warn(`geometry fill: ${(e as Error).message}`); }
   return plan;
+});
+
+app.get<{ Querystring: { base?: string; revised?: string } }>('/api/compare', async (req, reply) => {
+  const base = req.query.base ? store.getPlan(req.query.base) : undefined;
+  const revised = req.query.revised ? store.getPlan(req.query.revised) : undefined;
+  if (!base || !revised) return reply.code(404).send({ error: 'base and revised plan ids required' });
+  return comparePlans(base, revised);
 });
 
 /* ---- Carta tile proxy (same-origin so the reused style's relative URLs work) ---- */

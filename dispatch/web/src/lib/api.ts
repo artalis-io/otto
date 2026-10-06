@@ -1,4 +1,4 @@
-import type { DaySummary, Job, Plan, Scenario } from '@/types';
+import type { Comparison, DaySummary, Job, Plan, Scenario } from '@/types';
 
 /* Same-origin API client. In dev, Vite proxies /api and /tiles to the backend
  * (VITE_API_ORIGIN); in production the backend serves the SPA and these paths. */
@@ -33,6 +33,8 @@ export const api = {
 
   job: (id: string) => jget<Job>(`/api/jobs/${id}`),
   cancelJob: (id: string) => jsend<{ cancelled: boolean; status: string }>(`/api/jobs/${id}`, 'DELETE'),
+
+  compare: (base: string, revised: string) => jget<Comparison>(`/api/compare?base=${base}&revised=${revised}`),
 };
 
 /** Poll a job to a terminal state, reporting each tick. Honors an AbortSignal. */

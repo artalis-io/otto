@@ -45,6 +45,10 @@ export const config = {
   // Demo solve budget (seconds). The saved baseline used ~240s to reach 117/0;
   // live solves are honest about status/elapsed whatever the budget.
   solveTimeSeconds: Number(env('DISPATCH_SOLVE_SECONDS', '240')),
+
+  // Pseudonymize customer names (cities/coords kept). For shippable screenshots
+  // of real plans without exposing client PII. Off by default (real demo).
+  anonymize: env('DISPATCH_ANONYMIZE', '0') === '1',
 } as const;
 
 export type Config = typeof config;

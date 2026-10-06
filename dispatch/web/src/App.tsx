@@ -8,13 +8,15 @@ import { FleetPanel } from '@/components/FleetPanel';
 import { Inspector } from '@/components/Inspector';
 import { Timeline } from '@/components/Timeline';
 import { MapView } from '@/map/MapView';
+import { CompareDialog } from '@/components/CompareDialog';
 import { api, pollJob } from '@/lib/api';
 import type { DaySummary, Job, Plan, Scenario, Selection } from '@/types';
 
 /* The live solve budget for UI-triggered solves. The saved baseline used ~240s
  * to reach day-1 117/0; 60s gives a believable, genuinely-elapsed optimize/replan
- * for the demo (status is reported honestly whatever the budget). */
-const SOLVE_BUDGET_SEC = 60;
+ * for the demo (status is reported honestly whatever the budget). Override with
+ * VITE_SOLVE_SECONDS. */
+const SOLVE_BUDGET_SEC = Number(import.meta.env.VITE_SOLVE_SECONDS ?? 60);
 
 export interface JobView { id: string; status: Job['status']; elapsedSec: number; scenarioId: string; error: string | null }
 
@@ -27,6 +29,7 @@ export default function App() {
   const [selection, setSelection] = useState<Selection>(null);
   const [job, setJob] = useState<JobView | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [compareOpen, setCompareOpen] = useState(false);
   const [leftOpen, setLeftOpen] = useState(true);
   const [rightOpen, setRightOpen] = useState(true);
 
@@ -57,8 +60,8 @@ export default function App() {
     setScenario({ id: d.baseScenarioId, day: d.id, kind: 'base', parentId: null, revision: 0, label: d.label, removedVehicleIds: [], createdAt: '' });
   }, []);
 
-  // Run a live solve of a scenario; apply the result only if still current.
-  const runSolve = useCallback(async (scenarioId: string) => {
+  // Run a live solve of a scenario; apply + return the plan only if still current.
+  const runSolve = useCallback(async (scenarioId: string): Promise<Plan | null> => {
     pollAbort.current?.abort();
     const ctrl = new AbortController();
     pollAbort.current = ctrl;
@@ -72,16 +75,19 @@ export default function App() {
         setJob({ id: j.id, status: j.status, elapsedSec: j.elapsedSec, scenarioId, error: j.error });
       }, { signal: ctrl.signal });
       // Stale-job guard: ignore if a newer job/day superseded this one.
-      if (activeJobId.current !== jobId) return;
+      if (activeJobId.current !== jobId) return null;
       if (final.status === 'completed' && final.planId) {
         const revised = await api.plan(final.planId);
         setPlan(revised);
         setSelection(null);
+        return revised;
       }
+      return null;
     } catch (e) {
-      if ((e as Error).name === 'AbortError') return;
+      if ((e as Error).name === 'AbortError') return null;
       setError(e instanceof Error ? e.message : String(e));
       setJob((j) => (j ? { ...j, status: 'failed', error: String(e) } : j));
+      return null;
     }
   }, []);
 
@@ -93,7 +99,8 @@ export default function App() {
     const copy = await api.createCopy(parentId, vehicleId, `${ref} unavailable`);
     setScenario(copy);
     setSelection(null);
-    await runSolve(copy.id);
+    const revised = await runSolve(copy.id);
+    if (revised) setCompareOpen(true);
   }, [scenario, plan, runSolve]);
 
   const resetToBaseline = useCallback(() => {
@@ -115,6 +122,8 @@ export default function App() {
           scenario={scenario} plan={plan} job={job} solving={!!solving}
           onOptimize={() => void runSolve(scenario.id)}
           onReset={resetToBaseline}
+          showCompare={isReplan && plan.source === 'live'}
+          onCompare={() => setCompareOpen(true)}
         />
         <KpiStrip plan={plan} baseline={baseline} compare={isReplan} job={job} />
 
@@ -149,6 +158,16 @@ export default function App() {
           )}
         </div>
       </div>
+
+      {isReplan && plan.source === 'live' && (
+        <CompareDialog
+          open={compareOpen}
+          onOpenChange={setCompareOpen}
+          basePlanId={baseline.id}
+          revisedPlanId={plan.id}
+          scenarioLabel={scenario.label}
+        />
+      )}
     </TooltipProvider>
   );
 }

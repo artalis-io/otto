@@ -1,4 +1,4 @@
-import { Play, RotateCcw, Download, Loader2, Repeat } from 'lucide-react';
+import { Play, RotateCcw, Download, Loader2, Repeat, GitCompareArrows } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
@@ -8,11 +8,11 @@ import type { JobView } from '@/App';
 /* Graphite top bar: wordmark, planning-day selector, plan-status chip, and the
  * primary Optimize/Replan action (with genuine elapsed while solving). */
 export function TopBar({
-  days, dayId, onDayChange, scenario, plan, job, solving, onOptimize, onReset,
+  days, dayId, onDayChange, scenario, plan, job, solving, onOptimize, onReset, showCompare, onCompare,
 }: {
   days: DaySummary[]; dayId: string; onDayChange: (id: string) => void;
   scenario: Scenario; plan: Plan; job: JobView | null; solving: boolean;
-  onOptimize: () => void; onReset: () => void;
+  onOptimize: () => void; onReset: () => void; showCompare: boolean; onCompare: () => void;
 }) {
   const isReplan = scenario.kind === 'copy';
   const termOk = plan.provenance.termination === 'OK';
@@ -58,6 +58,11 @@ export function TopBar({
       )}
 
       <div className="ml-auto flex items-center gap-2">
+        {showCompare && (
+          <Button variant="graphite" size="sm" className="border border-white/15" onClick={onCompare} disabled={solving}>
+            <GitCompareArrows className="h-4 w-4" /> Compare
+          </Button>
+        )}
         {isReplan && (
           <Button variant="graphite" size="sm" className="border border-white/15" onClick={onReset} disabled={solving}>
             <RotateCcw className="h-4 w-4" /> Baseline

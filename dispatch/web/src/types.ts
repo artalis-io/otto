@@ -146,6 +146,17 @@ export interface Job {
   error: string | null;
 }
 
+export interface Comparison {
+  base: { planId: string; stats: PlanStats };
+  revised: { planId: string; stats: PlanStats };
+  deltas: { servedOrders: number; vehiclesUsed: number; trips: number; totalDistanceKm: number; unassigned: number };
+  newlyUnassigned: { orderNo: string; customer: string | null; city: string | null; fromVehicleRef: string }[];
+  nowServed: { orderNo: string; customer: string | null; city: string | null; toVehicleRef: string }[];
+  movedOrders: { orderNo: string; customer: string | null; fromVehicleRef: string; toVehicleRef: string }[];
+  removedVehicles: string[];
+  addedVehicles: string[];
+}
+
 /** A flattened reference to a selected item, driving map/timeline/inspector. */
 export type Selection =
   | { kind: 'vehicle'; vehicleId: number }
