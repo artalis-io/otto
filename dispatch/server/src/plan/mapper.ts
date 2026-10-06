@@ -34,6 +34,7 @@ export function mapSolutionToPlan(inp: MapInputs): Plan {
   const legDist = (a: number, b: number): number => dist[a * N + b] ?? 0;
 
   const taskById = new Map<number, SurgeTask>(request.tasks.map((t) => [t.id, t]));
+  const vehById = new Map(request.vehicles.map((v) => [v.id, v]));
   const reqById = new Map<number, number>(); // request_id -> delivery_task_id
   for (const r of request.requests) reqById.set(r.id, r.delivery_task_id);
 
@@ -42,7 +43,7 @@ export function mapSolutionToPlan(inp: MapInputs): Plan {
   const servedOrderNos = new Set<string>();
 
   const vehicles: PlanVehicle[] = solution.routes.map((route, ri) => {
-    const rv = request.vehicles[route.vehicle_id];
+    const rv = vehById.get(route.vehicle_id);
     const capKg = rv?.capacity[0] ?? 0;
     const capPal = rv?.capacity[1] ?? 0;
     const ref = rv?.ref ?? `veh-${route.vehicle_id}`;
