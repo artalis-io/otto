@@ -8984,6 +8984,168 @@ static void test_multitrip_capacity_insertion_no_overload(void) {
     sg_free(ctx);
 }
 
+/* Direct regression for the two multi-trip concat capacity bugs fixed while
+   investigating re-enabling the O(1) fast path for multi-trip (kept gated in
+   production for lack of a measured speedup, but sg_route_check_capacity_concat
+   is now correct for multi-trip and must stay that way). Both assert the O(1)
+   concat verdict matches the authoritative O(L) sg_route_stop_sequence_feasible
+   at a trip-boundary insertion position. Capacity is the only binding constraint
+   (wide time windows), so the sequence feasibility == the capacity verdict.
+
+   Case 1: inserting at a position that IS a trip_start. The splice keeps the old
+   trip_start flag and shifts it right, so the new stop joins the END of the
+   PREVIOUS trip. Pre-fix the concat used the reset (empty) prefix[pos] and
+   evaluated the new stop as the start of the NEXT trip -> under-counted -> admitted
+   an over-capacity insertion (concat_ok=1 vs scan_ok=0). */
+static void test_multitrip_concat_capacity_boundary_insert(void) {
+    SGContext *ctx = sg_create();
+    SGConfig cfg;
+    uint32_t depot, i;
+    SGRouteSolution sol;
+    /* trip 1 demands sum to a span of exactly 100 (= cap); trip 2 is one stop. */
+    const double dem[5] = { -30.0, -40.0, -20.0, -10.0, -20.0 };
+
+    sg_config_default(&cfg);
+    cfg.deterministic = true;
+    cfg.require_bound_requests_at_solve = true;
+    assert(sg_set_config(ctx, &cfg) == SG_STATUS_OK);
+    assert(sg_set_hard_capacity(ctx, true) == SG_STATUS_OK);
+
+    add_depot_with_location(ctx, &depot, 0, 0);
+    sg_depot_set_time_window(ctx, depot, 0, 1000000);
+    add_vehicle_with_depot(ctx, depot, 0, 1000000, 100.0);
+    sg_vehicle_set_max_trips(ctx, 0, 0);
+    sg_vehicle_set_trip_reload_seconds(ctx, 0, 0);
+    for (i = 0; i < 5; i++)
+        add_delivery_request(ctx, 1.0 + i, 0.0, 0, 1000000, 0, dem[i]);
+    /* extra request supplying the trial "new" stop (demand -10) */
+    add_delivery_request(ctx, 0.5, 0.0, 0, 1000000, 0, -10.0);
+
+    assert(sg_route_solution_init(ctx, &sol) == AR_STATUS_OK);
+    for (i = 0; i < 5; i++)
+        assert(sg_route_apply_insertion(ctx, &sol, i, 0, i, 0.0) == AR_STATUS_OK);
+
+    /* Mark request 4 (its delivery stop, index 4) as a new trip boundary. */
+    {
+        uint32_t req_pos = sol.request_pos[4];
+        uint32_t stop_pos = sol.request_delivery_stop_pos[4];
+        SGRouteStop *stops = sg_route_vehicle_stop_ptr(&sol, 0);
+        sol.route_request_trip_start[(size_t)0 * sol.route_stride + req_pos] = 1;
+        stops[stop_pos].trip_start = 1;
+        sg_route_update_timing(ctx, &sol, 0);
+        sg_route_update_load(ctx, &sol, 0);
+    }
+
+    /* Trial: insert request 5 (delivery -10) at stop position 4 (== the trip_start).
+       It appends to trip 1 -> span 110 > cap 100 -> INFEASIBLE. */
+    {
+        SGRouteStop newstops[2];
+        uint32_t nnew = 0;
+        double viol = 0.0;
+        int concat_ok, scan_ok;
+        const SGRouteStop *cur = sg_route_vehicle_stop_ptr_const(&sol, 0);
+        uint32_t stop_len = sol.route_stop_lengths[0];
+        SGRouteStop hypo[8];
+        double hypo_dist = 0.0;
+        uint32_t h = 0, s;
+
+        assert(sg_request_emit_stops(ctx, 5, newstops, &nnew) == 1);
+        assert(nnew == 1);
+
+        concat_ok = sg_route_check_capacity_concat(ctx, &sol, 0, 4, newstops, 1, 0, &viol);
+
+        /* O(L) reference: build the hypothetical sequence (new stop spliced at 4). */
+        for (s = 0; s < stop_len; s++) {
+            if (s == 4) hypo[h++] = newstops[0];
+            hypo[h++] = cur[s];
+        }
+        scan_ok = sg_route_stop_sequence_feasible(ctx, 0, hypo, h, &hypo_dist);
+
+        assert(concat_ok == 0);          /* fixed: concat rejects (pre-fix: 1) */
+        assert(scan_ok == 0);            /* O(L) agrees: infeasible */
+        assert(concat_ok == scan_ok);    /* the invariant */
+    }
+    sg_route_solution_reset(&sol);
+    sg_free(ctx);
+}
+
+/* Case 2: inserting at pos==0 where stop 0 is a trip_start. The new stop forms
+   its OWN (first) trip; it must not be merged with the suffix. Pre-fix the concat
+   merged new + suffix[0] -> span exceeded cap -> spuriously OVER-REJECTED a
+   feasible insertion (concat_ok=0 vs scan_ok=1). This was the systematic
+   over-reject (millions in the sweep). */
+static void test_multitrip_concat_capacity_pos0_own_trip(void) {
+    SGContext *ctx = sg_create();
+    SGConfig cfg;
+    uint32_t depot, i;
+    SGRouteSolution sol;
+    /* 7 deliveries whose span is 78 (just under cap 80). */
+    const double dem[7] = { -8.0, -7.0, -12.0, -14.0, -8.0, -15.0, -14.0 };
+
+    sg_config_default(&cfg);
+    cfg.deterministic = true;
+    cfg.require_bound_requests_at_solve = true;
+    assert(sg_set_config(ctx, &cfg) == SG_STATUS_OK);
+    assert(sg_set_hard_capacity(ctx, true) == SG_STATUS_OK);
+
+    add_depot_with_location(ctx, &depot, 0, 0);
+    sg_depot_set_time_window(ctx, depot, 0, 1000000);
+    add_vehicle_with_depot(ctx, depot, 0, 1000000, 80.0);
+    sg_vehicle_set_max_trips(ctx, 0, 0);
+    sg_vehicle_set_trip_reload_seconds(ctx, 0, 0);
+    for (i = 0; i < 7; i++)
+        add_delivery_request(ctx, 1.0 + i, 0.0, 0, 1000000, 0, dem[i]);
+    add_delivery_request(ctx, 0.5, 0.0, 0, 1000000, 0, -12.0);  /* trial new stop */
+
+    assert(sg_route_solution_init(ctx, &sol) == AR_STATUS_OK);
+    for (i = 0; i < 7; i++)
+        assert(sg_route_apply_insertion(ctx, &sol, i, 0, i, 0.0) == AR_STATUS_OK);
+
+    /* Mark request 0 (stop index 0) as a trip_start (the solver produces such
+       states; it is what makes a pos==0 insertion form its own trip). */
+    {
+        uint32_t req_pos = sol.request_pos[0];
+        uint32_t stop_pos = sol.request_delivery_stop_pos[0];
+        SGRouteStop *stops = sg_route_vehicle_stop_ptr(&sol, 0);
+        sol.route_request_trip_start[(size_t)0 * sol.route_stride + req_pos] = 1;
+        stops[stop_pos].trip_start = 1;
+        sg_route_update_timing(ctx, &sol, 0);
+        sg_route_update_load(ctx, &sol, 0);
+    }
+
+    /* Trial: insert request 7 (delivery -12) at pos 0. It forms its own trip
+       (span 12 <= 80); the original trip (span 78 <= 80) is unchanged -> FEASIBLE.
+       Pre-fix concat merged -12 with the span-78 suffix -> 90 > 80 -> rejected. */
+    {
+        SGRouteStop newstops[2];
+        uint32_t nnew = 0;
+        double viol = 0.0;
+        int concat_ok, scan_ok;
+        const SGRouteStop *cur = sg_route_vehicle_stop_ptr_const(&sol, 0);
+        uint32_t stop_len = sol.route_stop_lengths[0];
+        SGRouteStop hypo[9];
+        double hypo_dist = 0.0;
+        uint32_t h = 0, s;
+
+        assert(sg_request_emit_stops(ctx, 7, newstops, &nnew) == 1);
+        assert(nnew == 1);
+
+        concat_ok = sg_route_check_capacity_concat(ctx, &sol, 0, 0, newstops, 1, 0, &viol);
+
+        for (s = 0; s < stop_len; s++) {
+            if (s == 0) hypo[h++] = newstops[0];
+            hypo[h++] = cur[s];
+        }
+        scan_ok = sg_route_stop_sequence_feasible(ctx, 0, hypo, h, &hypo_dist);
+
+        assert(concat_ok == 1);          /* fixed: concat accepts (pre-fix: 0) */
+        assert(scan_ok == 1);            /* O(L) agrees: feasible */
+        assert(concat_ok == scan_ok);    /* the invariant */
+    }
+    sg_route_solution_reset(&sol);
+    sg_free(ctx);
+}
+
 /* Regression: a route that MIXES pickup-delivery (PD) with delivery-only
    requests must never be committed over capacity. PD pickups raise the running
    load and deliveries lower it, so the capacity measure is the signed-load SPAN
@@ -18478,6 +18640,8 @@ int main(void) {
     RUN_TEST(test_multi_trip_max_duration_new_trip);
     RUN_TEST(test_validate_multitrip_distance_penalty);
     RUN_TEST(test_multitrip_capacity_insertion_no_overload);
+    RUN_TEST(test_multitrip_concat_capacity_boundary_insert);
+    RUN_TEST(test_multitrip_concat_capacity_pos0_own_trip);
     RUN_TEST(test_pd_mixed_capacity_no_overload);
     RUN_TEST(test_hard_max_duration_existing_trip);
     RUN_TEST(test_hard_max_duration_eject_pass);
@@ -18800,9 +18964,9 @@ int main(void) {
     printf("================\n");
     printf("%d/%d tests passed\n", tests_passed, tests_run);
 #ifdef SG_HAS_THREADS
-    assert(tests_run == 480);
+    assert(tests_run == 482);
 #else
-    assert(tests_run == 456);
+    assert(tests_run == 458);
 #endif
     return tests_passed == tests_run ? 0 : 1;
 }

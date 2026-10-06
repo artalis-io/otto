@@ -1755,12 +1755,17 @@ int sg_route_eval_insertion_cached(const SGContext *ctx, const SGRouteSolution *
             insert_stop_pos = stop_len;
         }
 
-        /* The O(1) concat capacity summary mis-combines prefix+new+suffix across
-         * trip boundaries for multi-trip vehicles (SG_CONCAT_VERIFY caught
-         * concat_ok=1 vs scan_ok=0), which let the repair build an over-capacity
-         * trip whose committed plan the validator then rejected -> spurious ERROR
-         * (#182). Multi-trip takes the exact O(L) per-trip scan in the else branch;
-         * single-trip (the whole classic benchmark suite) keeps the O(1) fast path. */
+        /* Multi-trip stays on the O(L) per-trip scan (else branch). The O(1)
+         * concat capacity path is now *correct* for multi-trip too -- the
+         * trip-boundary and pos==0 cases are fixed in
+         * sg_route_check_capacity_concat and locked by direct regression tests
+         * (test_multitrip_concat_capacity_*), verified == O(L) under
+         * SG_CONCAT_VERIFY -- but profiling showed capacity is NOT the multi-trip
+         * bottleneck (the repair/insertion loop dominates; move operators and the
+         * concat path are cold), so enabling it gave no measurable speedup. The
+         * gate is therefore retained; to re-enable, drop `&& !vehicle->has_multi_trip`
+         * (an unexplained benign-looking result shift on R111 is still open --
+         * see the surge-multitrip notes before un-gating). */
         if (sol->route_seg_cap_prefix_delta && !vehicle->has_multi_trip) {
             /* O(1) capacity check via concatenation-based segment summaries */
             double concat_violation = 0.0;

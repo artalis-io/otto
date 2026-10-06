@@ -205,10 +205,21 @@ int sg_route_check_capacity_concat(const SGContext *ctx, const SGRouteSolution *
         const SGRouteStop *stops = sg_route_vehicle_stop_ptr_const(sol, vehicle_id);
         uint32_t stop_len = sol->route_stop_lengths[vehicle_id];
         uint8_t is_first_trip = 1;
+        /* If insert_stop_pos is itself a trip_start, the splice keeps that old
+           stop's trip_start flag and shifts it right, so the boundary ends up to
+           the RIGHT of the new stop: the new stop joins the segment on its LEFT
+           (the previous trip), never the suffix. For pos>0 that is the previous
+           trip [prev_start..pos-1]; for pos==0 there is no previous trip, so the
+           new stop forms its own (first) trip. Either way the suffix (the next
+           trip, whose reset prefix[pos] starts at 0) is unaffected. */
+        uint8_t at_trip_boundary = (vehicle->has_multi_trip &&
+                                    insert_stop_pos < stop_len &&
+                                    stops[insert_stop_pos].trip_start);
+        uint32_t fts_hi = at_trip_boundary ? insert_stop_pos : (insert_stop_pos + 1);
 
         if (vehicle->has_multi_trip && stop_len > 0) {
             uint32_t s;
-            for (s = 1; s <= insert_stop_pos && s < stop_len; s++) {
+            for (s = 1; s < fts_hi && s < stop_len; s++) {
                 if (stops[s].trip_start) {
                     is_first_trip = 0;
                     break;
@@ -245,8 +256,33 @@ int sg_route_check_capacity_concat(const SGContext *ctx, const SGRouteSolution *
                     new_max = tmp_max;
                 }
 
-                /* Combine: prefix[insert_pos] + new_stops + suffix[insert_pos] */
-                {
+                if (at_trip_boundary && insert_stop_pos == 0) {
+                    /* New stop forms its own first trip (the boundary sits to its
+                       right); no previous-trip prefix, no suffix. */
+                    comb_delta = new_delta;
+                    comb_min = new_min;
+                    comb_max = new_max;
+                } else if (at_trip_boundary) {
+                    /* New stop appends to the previous trip: rebuild that trip's
+                       full prefix (prefix[pos-1] + stop[pos-1]) and combine with
+                       the new stop. The next trip (suffix) is unaffected. */
+                    size_t prev_off = (size_t)(insert_stop_pos - 1) * dim_count + d;
+                    const SGTaskRecord *ptask = &ctx->tasks[stops[insert_stop_pos - 1].task_id];
+                    double pdm = (ptask->has_demand && ptask->demand) ? ptask->demand[d] : 0.0;
+                    double pmn = pdm < 0.0 ? pdm : 0.0;
+                    double pmx = pdm > 0.0 ? pdm : 0.0;
+                    double pp_d, pp_min, pp_max;
+                    sg_seg_concat_capacity(
+                        pd[prev_off], pm[prev_off], px[prev_off],
+                        pdm, pmn, pmx,
+                        &pp_d, &pp_min, &pp_max);
+                    sg_seg_concat_capacity(
+                        pp_d, pp_min, pp_max,
+                        new_delta, new_min, new_max,
+                        &comb_delta, &comb_min, &comb_max);
+                } else {
+                    /* Interior insertion: prefix[pos] + new + suffix[pos], all
+                       within the trip containing pos. */
                     double left_plus_new_d, left_plus_new_min, left_plus_new_max;
 
                     sg_seg_concat_capacity(
