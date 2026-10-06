@@ -9,6 +9,7 @@ import { Inspector } from '@/components/Inspector';
 import { Timeline } from '@/components/Timeline';
 import { MapView } from '@/map/MapView';
 import { CompareDialog } from '@/components/CompareDialog';
+import { ImportDialog } from '@/components/ImportDialog';
 import { api, pollJob } from '@/lib/api';
 import type { DaySummary, Job, Plan, Scenario, Selection } from '@/types';
 
@@ -30,6 +31,7 @@ export default function App() {
   const [job, setJob] = useState<JobView | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [compareOpen, setCompareOpen] = useState(false);
+  const [importOpen, setImportOpen] = useState(false);
   const [leftOpen, setLeftOpen] = useState(true);
   const [rightOpen, setRightOpen] = useState(true);
 
@@ -124,6 +126,7 @@ export default function App() {
           onReset={resetToBaseline}
           showCompare={isReplan && plan.source === 'live'}
           onCompare={() => setCompareOpen(true)}
+          onOpenImport={() => setImportOpen(true)}
         />
         <KpiStrip plan={plan} baseline={baseline} compare={isReplan} job={job} />
 
@@ -168,6 +171,7 @@ export default function App() {
           scenarioLabel={scenario.label}
         />
       )}
+      <ImportDialog open={importOpen} onOpenChange={setImportOpen} />
     </TooltipProvider>
   );
 }

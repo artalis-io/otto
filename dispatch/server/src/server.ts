@@ -9,6 +9,7 @@ import { fillPlanGeometry, veloReachable } from './geometry/velo.js';
 import { store } from './store.js';
 import { startSolve, cancelJob } from './solve.js';
 import { comparePlans } from './plan/compare.js';
+import { importSummary, rawSample, canonicalSample } from './data/import.js';
 import type { Plan } from './types.js';
 
 const app = Fastify({ logger: { level: 'info' }, bodyLimit: 4 * 1024 * 1024 });
@@ -144,6 +145,19 @@ app.get<{ Querystring: { base?: string; revised?: string } }>('/api/compare', as
   const revised = req.query.revised ? store.getPlan(req.query.revised) : undefined;
   if (!base || !revised) return reply.code(404).send({ error: 'base and revised plan ids required' });
   return comparePlans(base, revised);
+});
+
+/* ---- Import / provenance (dedicated import view) ---- */
+app.get('/api/import/summary', async () => importSummary());
+app.get<{ Querystring: { file?: string; limit?: string } }>('/api/import/raw', async (req, reply) => {
+  const s = rawSample(req.query.file ?? 'orders', req.query.limit ? Number(req.query.limit) : 8);
+  if (!s) return reply.code(404).send({ error: 'raw file not available' });
+  return s;
+});
+app.get<{ Querystring: { limit?: string } }>('/api/import/canonical', async (req, reply) => {
+  const s = canonicalSample(req.query.limit ? Number(req.query.limit) : 8);
+  if (!s) return reply.code(404).send({ error: 'canonical not available' });
+  return s;
 });
 
 /* ---- Carta tile proxy (same-origin so the reused style's relative URLs work) ---- */

@@ -35,7 +35,21 @@ export const api = {
   cancelJob: (id: string) => jsend<{ cancelled: boolean; status: string }>(`/api/jobs/${id}`, 'DELETE'),
 
   compare: (base: string, revised: string) => jget<Comparison>(`/api/compare?base=${base}&revised=${revised}`),
+
+  importSummary: () => jget<ImportSummary>('/api/import/summary'),
+  importRaw: (file: string) => jget<RawSample>(`/api/import/raw?file=${file}&limit=8`),
+  importCanonical: () => jget<CanonicalSample>('/api/import/canonical?limit=8'),
 };
+
+export interface ImportSummary {
+  sources: { kind: string; label: string; file: string; present: boolean; sha256: string | null; rawRows: number }[];
+  canonical: { orders: { count: number | null; sourceSha256: string | null; audit: { rows_processed?: number; rows_accepted?: number; rows_rejected?: number; validation?: { errors?: number; warnings?: number } } | null } };
+  pipeline: { stage: string; detail: string }[];
+  rules: string[];
+  scope: { rawOrderLines: number; inScopeHungarian: number; day1: number; day2: number };
+}
+export interface RawSample { label: string; headers: string[]; rows: string[][]; totalRows: number }
+export interface CanonicalSample { fields: string[]; rows: Record<string, unknown>[]; count: number; sha256: string | null }
 
 /** Poll a job to a terminal state, reporting each tick. Honors an AbortSignal. */
 export async function pollJob(
