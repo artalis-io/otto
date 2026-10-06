@@ -1,0 +1,8 @@
+node_modules/
+dist/
+*.log
+tsconfig.tsbuildinfo
+
+# Hull's runtime store (scenarios/plans/jobs) and any cached geometry are local
+# state, not source. Never commit client-derived plan data.
+data/
