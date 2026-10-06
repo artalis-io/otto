@@ -754,6 +754,29 @@ static void handle_tilejson(KlHttpRequest *req, KlHttpResponse *res, void *ud) {
     free(response);
 }
 
+/* GET /tiles.vector.json - vector TileJSON for MapLibre.
+ * Origin/prefix come from operator config (env), never from request headers:
+ *   CARTA_PUBLIC_ORIGIN   e.g. "https://maps.example.com" (absolute origin)
+ *   CARTA_PATH_PREFIX     e.g. "/carta" (behind a reverse proxy)
+ * Unset -> relative same-origin tile templates. */
+static void handle_vector_tilejson(KlHttpRequest *req, KlHttpResponse *res, void *ud) {
+    (void)ud;
+    if (!s_api_ctx) {
+        send_error_cors(res, req, 503, "API not initialized");
+        return;
+    }
+    const char *origin = getenv("CARTA_PUBLIC_ORIGIN");
+    const char *prefix = getenv("CARTA_PATH_PREFIX");
+    size_t len;
+    char *response = ct_api_generate_vector_tilejson(s_api_ctx, origin, prefix, &len);
+    if (!response) {
+        send_error_cors(res, req, 500, "Vector TileJSON generation failed");
+        return;
+    }
+    send_json_cors(res, req, 200, response);
+    free(response);
+}
+
 /* Submit render work via work queue and send response */
 /*
  * Dispatch a render. Takes ownership of ctx in every path.
@@ -1458,7 +1481,8 @@ int main(int argc, char *argv[]) {
 
     printf("\nEndpoints:\n");
     printf("  GET  /                       - Static files / tile viewer\n");
-    printf("  GET  /tiles.json             - TileJSON metadata\n");
+    printf("  GET  /tiles.json             - TileJSON metadata (raster)\n");
+    printf("  GET  /tiles.vector.json      - TileJSON metadata (vector/MVT, MapLibre)\n");
     printf("  GET  /tiles/{z}/{x}/{y}.png  - Raster tile\n");
     printf("  GET  /tiles/{z}/{x}/{y}.mvt  - Vector tile\n");
     printf("  GET  /tiles/{z}/{x}/{y}.txt  - ASCII art tile\n");
@@ -1523,6 +1547,7 @@ int main(int argc, char *argv[]) {
     kl_http_server_route(&server, "GET", "/api/v1/stats",  handle_stats,    NULL, NULL);
     kl_http_server_route(&server, "GET", "/metrics",       handle_metrics,  NULL, NULL);
     kl_http_server_route(&server, "GET", "/tiles.json",    handle_tilejson, NULL, NULL);
+    kl_http_server_route(&server, "GET", "/tiles.vector.json", handle_vector_tilejson, NULL, NULL);
     /*
      * Tiles must be a real route, not middleware: kl_async_suspend() is only
      * honoured after a route handler (conn_process checks for SUSPENDED). A

@@ -296,6 +296,25 @@ char *ct_api_generate_tilejson(CTAPIContext *ctx,
                                size_t *out_len);
 
 /*
+ * Generate vector TileJSON (TileJSON 3.0.0) for MapLibre vector sources.
+ * The standard "tiles" field references the MVT endpoint and "vector_layers"
+ * advertises the Carta schema (carta/docs/vector-schema.md).
+ *
+ * public_origin: operator-configured absolute origin ("https://host[:port]"),
+ *   used verbatim when non-empty and safe; NULL/empty -> relative same-origin
+ *   templates (resolved against the document origin). Never built from request
+ *   headers and never hardcodes a scheme.
+ * path_prefix:   operator-configured proxy prefix (e.g. "/carta"); NULL/empty
+ *   for none.
+ *
+ * Returns allocated JSON string (caller frees), or NULL on failure.
+ */
+char *ct_api_generate_vector_tilejson(CTAPIContext *ctx,
+                                      const char *public_origin,
+                                      const char *path_prefix,
+                                      size_t *out_len);
+
+/*
  * Generate health check response.
  *
  * Returns allocated JSON string.
