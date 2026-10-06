@@ -9,6 +9,7 @@
 #include "ct_polylabel.h"
 #include "ct_render.h"
 #include "sh_font.h"
+#include "sh_protobuf.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -1033,6 +1034,321 @@ TEST(mvt_encode_with_feature)
     ASSERT(size > 0);
     ASSERT(size < sizeof(buffer));
 
+    ct_tile_free(&tile);
+    return 1;
+}
+
+/* ============================================================================
+ * MVT Vector Schema Tests (decode emitted MVT and assert properties)
+ *
+ * A compact MVT reader so tests assert the actual decoded schema (layers, keys,
+ * typed values, feature tags, geometry) rather than merely nonzero size.
+ * ============================================================================ */
+
+typedef struct { const uint8_t *p; size_t len, off; } PBR;
+
+static int pbr_tag(PBR *r, uint32_t *field, uint32_t *wire) {
+    if (r->off >= r->len) return 0;
+    int n = sh_pb_read_tag(r->p + r->off, r->len - r->off, field, wire);
+    if (n <= 0) return 0;
+    r->off += (size_t)n;
+    return 1;
+}
+static uint64_t pbr_varint(PBR *r) {
+    uint64_t v = 0;
+    int n = sh_pb_read_varint(r->p + r->off, r->len - r->off, &v);
+    if (n <= 0) { r->off = r->len; return 0; }
+    r->off += (size_t)n;
+    return v;
+}
+static const uint8_t *pbr_bytes(PBR *r, size_t *out_len) {
+    uint64_t L = pbr_varint(r);
+    if (r->off + L > r->len) { *out_len = 0; return NULL; }
+    const uint8_t *s = r->p + r->off;
+    r->off += (size_t)L;
+    *out_len = (size_t)L;
+    return s;
+}
+static void pbr_skip(PBR *r, uint32_t wire) {
+    if (wire == 0) pbr_varint(r);
+    else if (wire == 2) { size_t L; pbr_bytes(r, &L); }
+    else if (wire == 5) r->off += 4;
+    else if (wire == 1) r->off += 8;
+    else r->off = r->len;
+}
+
+/* Does `layer_name` in the tile contain any feature with property key == `key`
+ * whose stringified value equals `want`? (string -> raw bytes; int -> "%lld";
+ * bool -> "true"/"false"). Also usable to assert absence (returns 0). */
+static int mvt_find_prop(const uint8_t *buf, size_t size,
+                         const char *layer_name, const char *key, const char *want)
+{
+    PBR tile = { buf, size, 0 };
+    uint32_t f, w;
+    while (pbr_tag(&tile, &f, &w)) {
+        if (f != 3 /* layers */ || w != 2) { pbr_skip(&tile, w); continue; }
+        size_t llen; const uint8_t *lp = pbr_bytes(&tile, &llen);
+        if (!lp) break;
+
+        /* Parse one layer: name, keys[], values[] (stringified), features' tags. */
+        char keys[64][64]; int nkeys = 0;
+        char vals[512][96]; int nvals = 0;
+        /* feature tag arrays, per feature */
+        static uint32_t tagbuf[8192]; int tagpos[1024]; int taglen[1024]; int nfeat = 0;
+        char lname[64]; lname[0] = '\0';
+        int tag_fill = 0;
+
+        PBR lr = { lp, llen, 0 };
+        uint32_t lf, lw;
+        while (pbr_tag(&lr, &lf, &lw)) {
+            if (lf == 1 && lw == 2) {                 /* name */
+                size_t n; const uint8_t *s = pbr_bytes(&lr, &n);
+                size_t c = n < sizeof(lname) - 1 ? n : sizeof(lname) - 1;
+                memcpy(lname, s, c); lname[c] = '\0';
+            } else if (lf == 3 && lw == 2) {          /* key */
+                size_t n; const uint8_t *s = pbr_bytes(&lr, &n);
+                if (nkeys < 64) { size_t c = n < 63 ? n : 63; memcpy(keys[nkeys], s, c); keys[nkeys][c] = '\0'; nkeys++; }
+            } else if (lf == 4 && lw == 2) {          /* value message */
+                size_t n; const uint8_t *s = pbr_bytes(&lr, &n);
+                PBR vr = { s, n, 0 }; uint32_t vf, vw;
+                char out[96]; out[0] = '\0';
+                while (pbr_tag(&vr, &vf, &vw)) {
+                    if (vf == 1 && vw == 2) { size_t sn; const uint8_t *ss = pbr_bytes(&vr, &sn); size_t c = sn < 95 ? sn : 95; memcpy(out, ss, c); out[c] = '\0'; }
+                    else if (vf == 4 && vw == 0) { long long iv = (long long)pbr_varint(&vr); snprintf(out, sizeof(out), "%lld", iv); }
+                    else if (vf == 7 && vw == 0) { snprintf(out, sizeof(out), "%s", pbr_varint(&vr) ? "true" : "false"); }
+                    else pbr_skip(&vr, vw);
+                }
+                if (nvals < 512) { snprintf(vals[nvals], sizeof(vals[nvals]), "%s", out); nvals++; }
+            } else if (lf == 2 && lw == 2) {          /* feature */
+                size_t n; const uint8_t *s = pbr_bytes(&lr, &n);
+                PBR fr = { s, n, 0 }; uint32_t ff, fw;
+                int start = tag_fill, cnt = 0;
+                while (pbr_tag(&fr, &ff, &fw)) {
+                    if (ff == 2 && fw == 2) {         /* packed tags */
+                        size_t tn; const uint8_t *ts = pbr_bytes(&fr, &tn);
+                        PBR tr = { ts, tn, 0 };
+                        while (tr.off < tr.len && tag_fill < (int)(sizeof(tagbuf)/sizeof(tagbuf[0]))) {
+                            tagbuf[tag_fill++] = (uint32_t)pbr_varint(&tr); cnt++;
+                        }
+                    } else pbr_skip(&fr, fw);
+                }
+                if (nfeat < 1024) { tagpos[nfeat] = start; taglen[nfeat] = cnt; nfeat++; }
+            } else {
+                pbr_skip(&lr, lw);
+            }
+        }
+        (void)tag_fill;
+
+        if (strcmp(lname, layer_name) != 0) continue;
+
+        /* find key index */
+        int ki = -1;
+        for (int k = 0; k < nkeys; k++) if (strcmp(keys[k], key) == 0) ki = k;
+        if (ki < 0) return 0;  /* key absent in this layer */
+
+        for (int fe = 0; fe < nfeat; fe++) {
+            for (int t = 0; t + 1 < taglen[fe]; t += 2) {
+                uint32_t kk = tagbuf[tagpos[fe] + t];
+                uint32_t vv = tagbuf[tagpos[fe] + t + 1];
+                if ((int)kk == ki && (int)vv < nvals && strcmp(vals[vv], want) == 0) return 1;
+            }
+        }
+        return 0;  /* layer matched, property/value not found */
+    }
+    return 0;
+}
+
+static int mvt_has_layer(const uint8_t *buf, size_t size, const char *layer_name)
+{
+    PBR tile = { buf, size, 0 };
+    uint32_t f, w;
+    while (pbr_tag(&tile, &f, &w)) {
+        if (f != 3 || w != 2) { pbr_skip(&tile, w); continue; }
+        size_t llen; const uint8_t *lp = pbr_bytes(&tile, &llen);
+        if (!lp) break;
+        PBR lr = { lp, llen, 0 }; uint32_t lf, lw;
+        while (pbr_tag(&lr, &lf, &lw)) {
+            if (lf == 1 && lw == 2) {
+                size_t n; const uint8_t *s = pbr_bytes(&lr, &n);
+                if (n == strlen(layer_name) && memcmp(s, layer_name, n) == 0) return 1;
+            } else pbr_skip(&lr, lw);
+        }
+    }
+    return 0;
+}
+
+/* Decode the geometry command stream of the first feature in the named layer
+ * and verify it is well formed per the MVT 2.1 spec: each CommandInteger holds
+ * the command id in its low three bits (MoveTo=1, LineTo=2, ClosePath=7) and the
+ * repeat count in the rest; the declared coordinate pairs are actually present;
+ * and the stream consumes its geometry buffer exactly. Returns 1 if valid, 0 if
+ * no such feature exists or the stream is malformed.
+ *
+ * This is the check the tag-only schema tests lacked: a CommandInteger built as
+ * (id << 3) | count instead of (count << 3) | id still decodes as some command,
+ * so layers kept their names and classes while every polygon's geometry was
+ * corrupt (ClosePath 57 reading as MoveTo count 7, running off the end). A real
+ * MVT client rejected those tiles; this test now would too. */
+static int mvt_geometry_well_formed(const uint8_t *buf, size_t size, const char *layer_name)
+{
+    PBR tile = { buf, size, 0 };
+    uint32_t f, w;
+    while (pbr_tag(&tile, &f, &w)) {
+        if (f != 3 || w != 2) { pbr_skip(&tile, w); continue; }
+        size_t llen; const uint8_t *lp = pbr_bytes(&tile, &llen);
+        if (!lp) break;
+        /* Is this the layer we want, and where is its first feature? */
+        PBR scan = { lp, llen, 0 }; uint32_t sf, sw;
+        int match = 0;
+        const uint8_t *geom = NULL; size_t geom_len = 0;
+        while (pbr_tag(&scan, &sf, &sw)) {
+            if (sf == 1 && sw == 2) {
+                size_t n; const uint8_t *s = pbr_bytes(&scan, &n);
+                match = (n == strlen(layer_name) && memcmp(s, layer_name, n) == 0);
+            } else if (sf == 2 && sw == 2 && !geom) {
+                /* First feature: find its geometry (field 4, wire 2). */
+                size_t flen; const uint8_t *fp = pbr_bytes(&scan, &flen);
+                PBR fr = { fp, flen, 0 }; uint32_t ff, fw;
+                while (pbr_tag(&fr, &ff, &fw)) {
+                    if (ff == 4 && fw == 2) { geom = pbr_bytes(&fr, &geom_len); break; }
+                    else pbr_skip(&fr, fw);
+                }
+            } else pbr_skip(&scan, sw);
+        }
+        if (!match) continue;
+        if (!geom) return 0;
+
+        PBR g = { geom, geom_len, 0 };
+        int saw = 0;
+        while (g.off < g.len) {
+            uint64_t ci = pbr_varint(&g);
+            uint32_t cmd = (uint32_t)(ci & 0x7u), count = (uint32_t)(ci >> 3);
+            if (cmd == 7 /* ClosePath */) {
+                if (count != 1) return 0;
+            } else if (cmd == 1 /* MoveTo */ || cmd == 2 /* LineTo */) {
+                if (count == 0) return 0;
+                for (uint32_t i = 0; i < count * 2u; i++) {
+                    if (g.off >= g.len) return 0;   /* count overran the buffer */
+                    (void)pbr_varint(&g);
+                }
+            } else {
+                return 0;                           /* not a valid command id */
+            }
+            saw = 1;
+        }
+        return saw && g.off == g.len;
+    }
+    return 0;
+}
+
+/* Build a small tile: a named bridge primary road, an unnamed service road,
+ * and a water body polygon. UTF-8 name exercises Hungarian ő and ű. */
+static void mvt_build_sample_tile(CTTile *tile)
+{
+    ct_tile_init(tile, (CTTileCoord){14, 0, 0});
+
+    CTTilePoint rl[] = {{10, 10}, {2000, 2000}, {4000, 100}};
+    CTFeature road = {0};
+    road.type = CT_GEOM_LINESTRING;
+    road.points = malloc(sizeof(rl)); memcpy(road.points, rl, sizeof(rl));
+    road.num_points = 3; road.layer = CT_LAYER_ROADS;
+    road.feature_type = CT_ROAD_PRIMARY; road.flags = CT_FLAG_BRIDGE;
+    road.name = "Bőgőműhely út";   /* contains ő and ű */
+    ct_tile_add_feature(tile, &road);
+
+    CTTilePoint sl[] = {{0, 0}, {500, 500}};
+    CTFeature svc = {0};
+    svc.type = CT_GEOM_LINESTRING;
+    svc.points = malloc(sizeof(sl)); memcpy(svc.points, sl, sizeof(sl));
+    svc.num_points = 2; svc.layer = CT_LAYER_ROADS;
+    svc.feature_type = CT_ROAD_SERVICE; svc.name = NULL;  /* missing name */
+    ct_tile_add_feature(tile, &svc);
+
+    CTTilePoint wp[] = {{100, 100}, {100, 900}, {900, 900}, {900, 100}, {100, 100}};
+    CTFeature water = {0};
+    water.type = CT_GEOM_POLYGON;
+    water.points = malloc(sizeof(wp)); memcpy(water.points, wp, sizeof(wp));
+    water.num_points = 5; water.layer = CT_LAYER_WATER;
+    water.feature_type = CT_WATER_BODY;
+    ct_tile_add_feature(tile, &water);
+}
+
+TEST(mvt_schema_road_class_and_name)
+{
+    CTTile tile; mvt_build_sample_tile(&tile);
+    uint8_t buf[8192];
+    size_t size = ct_encode_mvt(&tile, NULL, buf, sizeof(buf));
+    ASSERT(size > 0);
+    ASSERT(mvt_has_layer(buf, size, "roads"));
+    ASSERT(mvt_find_prop(buf, size, "roads", "class", "primary"));
+    ASSERT(mvt_find_prop(buf, size, "roads", "class", "service"));
+    ASSERT(mvt_find_prop(buf, size, "roads", "bridge", "true"));
+    ct_tile_free(&tile);
+    return 1;
+}
+
+TEST(mvt_schema_utf8_name_preserved)
+{
+    CTTile tile; mvt_build_sample_tile(&tile);
+    uint8_t buf[8192];
+    size_t size = ct_encode_mvt(&tile, NULL, buf, sizeof(buf));
+    ASSERT(size > 0);
+    /* Hungarian ő and ű round-trip byte-for-byte */
+    ASSERT(mvt_find_prop(buf, size, "roads", "name", "Bőgőműhely út"));
+    ct_tile_free(&tile);
+    return 1;
+}
+
+TEST(mvt_schema_missing_name_absent)
+{
+    CTTile tile; mvt_build_sample_tile(&tile);
+    uint8_t buf[8192];
+    size_t size = ct_encode_mvt(&tile, NULL, buf, sizeof(buf));
+    ASSERT(size > 0);
+    /* The unnamed service road must not carry a name=... tag. There is exactly
+     * one named road ("Bőgő..."), so no OTHER name value should decode. The
+     * service road is asserted present (class=service) above; here assert the
+     * decoder finds no name value other than the one named road. */
+    ASSERT(!mvt_find_prop(buf, size, "roads", "name", ""));
+    ASSERT(!mvt_find_prop(buf, size, "roads", "name", "service"));
+    ct_tile_free(&tile);
+    return 1;
+}
+
+TEST(mvt_schema_water_class)
+{
+    CTTile tile; mvt_build_sample_tile(&tile);
+    uint8_t buf[8192];
+    size_t size = ct_encode_mvt(&tile, NULL, buf, sizeof(buf));
+    ASSERT(size > 0);
+    ASSERT(mvt_has_layer(buf, size, "water"));
+    ASSERT(mvt_find_prop(buf, size, "water", "class", "water"));
+    ct_tile_free(&tile);
+    return 1;
+}
+
+TEST(mvt_schema_empty_tile_no_layers)
+{
+    CTTile tile;
+    ct_tile_init(&tile, (CTTileCoord){14, 0, 0});
+    uint8_t buf[256];
+    size_t size = ct_encode_mvt(&tile, NULL, buf, sizeof(buf));
+    ASSERT(!mvt_has_layer(buf, size, "roads"));
+    ct_tile_free(&tile);
+    return 1;
+}
+
+TEST(mvt_geometry_commands_decodable)
+{
+    CTTile tile; mvt_build_sample_tile(&tile);
+    uint8_t buf[8192];
+    size_t size = ct_encode_mvt(&tile, NULL, buf, sizeof(buf));
+    ASSERT(size > 0);
+    /* Lines were mostly tolerated by lenient readers; the polygon is the case a
+     * real MVT client rejected when the CommandInteger operands were transposed.
+     * Validate both the line (roads) and the closed ring (water polygon). */
+    ASSERT(mvt_geometry_well_formed(buf, size, "roads"));
+    ASSERT(mvt_geometry_well_formed(buf, size, "water"));
     ct_tile_free(&tile);
     return 1;
 }
@@ -3081,6 +3397,12 @@ int main(void)
     run_test_mvt_layer_name();
     run_test_mvt_encode_empty_tile();
     run_test_mvt_encode_with_feature();
+    run_test_mvt_schema_road_class_and_name();
+    run_test_mvt_schema_utf8_name_preserved();
+    run_test_mvt_schema_missing_name_absent();
+    run_test_mvt_schema_water_class();
+    run_test_mvt_schema_empty_tile_no_layers();
+    run_test_mvt_geometry_commands_decodable();
 
     printf("\nPNG Encoding:\n");
     run_test_png_default_options();

@@ -2084,6 +2084,8 @@ static CTStatus add_way_as_feature(const CTOSMWay *way, CTFeature **features,
     f->flags = way->flags;
     f->area_sqm = way->area_sqm;
     f->length_m = way->length_m;
+    /* Borrow the way's name (owned by ctx, NULL if unnamed). See CTFeature. */
+    f->name = way->name;
 
     /* Allocate and copy coordinates */
     f->points = malloc(way->num_coords * sizeof(CTTilePoint));
@@ -2164,6 +2166,7 @@ static CTStatus add_multipolygon_as_feature(const CTAssembledMultipolygon *mp,
             f->feature_type = mp->feature_type;
             f->area_sqm = estimate_ring_area_sqm(ring->coords, ring->num_coords);
             f->length_m = 0;
+            f->name = mp->name;  /* Borrowed (ctx-owned, NULL if unnamed) */
 
             f->points = malloc(ring->num_coords * sizeof(CTTilePoint));
             if (!f->points) continue;  /* Skip this ring but continue */
@@ -2211,6 +2214,7 @@ static CTStatus add_multipolygon_as_feature(const CTAssembledMultipolygon *mp,
     f->feature_type = mp->feature_type;
     f->area_sqm = mp->area_sqm;
     f->length_m = 0;  /* Multipolygons don't have length */
+    f->name = mp->name;  /* Borrowed (ctx-owned, NULL if unnamed) */
 
     /* Allocate points and ring_ends */
     f->points = malloc(total_points * sizeof(CTTilePoint));

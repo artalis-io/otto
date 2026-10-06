@@ -75,6 +75,13 @@ check "Stats returns work_queue info" "$RESP" '"work_queue"'
 RESP=$(curl -s -m 5 "http://127.0.0.1:$PORT/tiles.json")
 check "TileJSON returns tiles array" "$RESP" '"tiles"'
 
+RESP=$(curl -s -m 5 "http://127.0.0.1:$PORT/tiles.vector.json")
+check "Vector TileJSON: tiles -> MVT" "$RESP" '/tiles/{z}/{x}/{y}.mvt'
+check "Vector TileJSON: relative same-origin by default" "$RESP" '"/tiles/{z}/{x}/{y}.mvt"'
+check "Vector TileJSON: advertises vector_layers" "$RESP" '"vector_layers"'
+check "Vector TileJSON: roads layer fields" "$RESP" '"id": "roads"'
+check "Vector TileJSON: labels layer fields" "$RESP" '"place_type"'
+
 echo ""
 echo "=== Tiles ==="
 CODE=$(curl -s -o /tmp/carta_tile.mvt -w '%{http_code}' -m 30 \

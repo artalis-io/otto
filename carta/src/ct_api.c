@@ -285,6 +285,104 @@ char *ct_api_generate_tilejson(CTAPIContext *ctx,
     return buffer;
 }
 
+/* Reject origin/prefix strings that could break out of the JSON string or the
+ * URL template. Operator-supplied (env/config), but we still validate. Allows
+ * scheme/host/path characters; forbids quotes, backslashes, whitespace and
+ * control chars. Empty is valid (means "unset"). */
+static int url_part_is_safe(const char *s) {
+    if (!s) return 1;
+    for (const unsigned char *p = (const unsigned char *)s; *p; p++) {
+        if (*p < 0x20 || *p == 0x7f) return 0;          /* control */
+        if (*p == '"' || *p == '\\' || *p == ' ' ||     /* JSON / template break */
+            *p == '{' || *p == '}' || *p == '<' || *p == '>') return 0;
+    }
+    return 1;
+}
+
+/*
+ * Vector TileJSON (TileJSON 3.0.0) for MapLibre vector sources. Distinct from
+ * ct_api_generate_tilejson() (raster), which is preserved for existing consumers.
+ *
+ * The standard "tiles" field references the MVT endpoint. URL composition is
+ * safe by construction:
+ *   - public_origin (operator-configured, e.g. "https://maps.example.com"):
+ *     used verbatim when non-empty and safe. We never synthesize a scheme and
+ *     never build a URL from an incoming Host/X-Forwarded header.
+ *   - path_prefix (operator-configured, e.g. "/carta" behind a proxy).
+ *   - When public_origin is empty/unsafe, we emit RELATIVE same-origin templates
+ *     ("<prefix>/tiles/{z}/{x}/{y}.mvt"), which MapLibre resolves against the
+ *     document origin. This is the safe default for the initial viewer.
+ *
+ * "vector_layers" advertises the Carta schema (see carta/docs/vector-schema.md).
+ */
+char *ct_api_generate_vector_tilejson(CTAPIContext *ctx,
+                                      const char *public_origin,
+                                      const char *path_prefix,
+                                      size_t *out_len) {
+    if (!ctx || !ctx->pbf || !out_len) return NULL;
+    *out_len = 0;
+
+    if (!url_part_is_safe(public_origin)) public_origin = NULL;
+    if (!url_part_is_safe(path_prefix)) path_prefix = NULL;
+    const char *origin = (public_origin && public_origin[0]) ? public_origin : "";
+    const char *prefix = (path_prefix && path_prefix[0]) ? path_prefix : "";
+
+    size_t nodes, ways, features;
+    CTBBox bbox;
+    ct_pbf_stats(ctx->pbf, &nodes, &ways, &features, &bbox);
+    double center_lat = (bbox.min_lat + bbox.max_lat) / 2.0;
+    double center_lon = (bbox.min_lon + bbox.max_lon) / 2.0;
+
+    size_t cap = 4096;
+    char *buffer = malloc(cap);
+    if (!buffer) return NULL;
+
+    int len = snprintf(buffer, cap,
+        "{\n"
+        "  \"tilejson\": \"3.0.0\",\n"
+        "  \"name\": \"%s\",\n"
+        "  \"description\": \"Carta vector tiles\",\n"
+        "  \"version\": \"1.0.0\",\n"
+        "  \"attribution\": \"\\u00a9 OpenStreetMap contributors\",\n"
+        "  \"scheme\": \"xyz\",\n"
+        "  \"tiles\": [\n"
+        "    \"%s%s/tiles/{z}/{x}/{y}.mvt\"\n"
+        "  ],\n"
+        "  \"minzoom\": %d,\n"
+        "  \"maxzoom\": %d,\n"
+        "  \"bounds\": [%.6f, %.6f, %.6f, %.6f],\n"
+        "  \"center\": [%.6f, %.6f, 10],\n"
+        "  \"vector_layers\": [\n"
+        "    { \"id\": \"roads\", \"description\": \"Roads\", \"fields\": "
+        "{ \"class\": \"String\", \"name\": \"String\", \"bridge\": \"Boolean\", \"tunnel\": \"Boolean\" } },\n"
+        "    { \"id\": \"water\", \"description\": \"Water\", \"fields\": "
+        "{ \"class\": \"String\", \"name\": \"String\" } },\n"
+        "    { \"id\": \"landuse\", \"description\": \"Landuse\", \"fields\": "
+        "{ \"class\": \"String\", \"name\": \"String\" } },\n"
+        "    { \"id\": \"railways\", \"description\": \"Railways\", \"fields\": "
+        "{ \"class\": \"String\", \"name\": \"String\" } },\n"
+        "    { \"id\": \"buildings\", \"description\": \"Buildings\", \"fields\": "
+        "{ \"name\": \"String\" } },\n"
+        "    { \"id\": \"boundaries\", \"description\": \"Admin boundaries\", \"fields\": "
+        "{ \"name\": \"String\" } },\n"
+        "    { \"id\": \"labels\", \"description\": \"Place labels\", \"fields\": "
+        "{ \"name\": \"String\", \"place_type\": \"String\", \"rank\": \"Number\", "
+        "\"population\": \"Number\", \"min_zoom\": \"Number\" } }\n"
+        "  ]\n"
+        "}\n",
+        ctx->name, origin, prefix,
+        ctx->min_zoom, ctx->max_zoom,
+        bbox.min_lon, bbox.min_lat, bbox.max_lon, bbox.max_lat,
+        center_lon, center_lat);
+
+    if (len < 0 || (size_t)len >= cap) {
+        free(buffer);
+        return NULL;
+    }
+    *out_len = (size_t)len;
+    return buffer;
+}
+
 char *ct_api_generate_health(CTAPIContext *ctx, size_t *out_len) {
     if (!out_len) return NULL;
     *out_len = 0;
@@ -511,10 +609,23 @@ int ct_api_handle(void *ctx_void,
         return 0;
     }
 
-    /* Route: /tiles.json */
+    /* Route: /tiles.json (raster TileJSON, preserved for existing consumers) */
     if (strcmp(req->path, "/tiles.json") == 0) {
         const char *host = req->host ? req->host : "localhost";
         resp->body = (uint8_t *)ct_api_generate_tilejson(ctx, host, &resp->body_len);
+        if (resp->body) {
+            resp->status_code = 200;
+            resp->content_type = "application/json";
+        }
+        return 0;
+    }
+
+    /* Route: /tiles.vector.json (vector TileJSON for MapLibre). Relative
+     * same-origin templates by default; the HTTP server may serve its own
+     * variant with an operator-configured absolute origin + proxy prefix. */
+    if (strcmp(req->path, "/tiles.vector.json") == 0) {
+        resp->body = (uint8_t *)ct_api_generate_vector_tilejson(ctx, NULL, NULL,
+                                                                &resp->body_len);
         if (resp->body) {
             resp->status_code = 200;
             resp->content_type = "application/json";
