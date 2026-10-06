@@ -1805,7 +1805,7 @@ These are real-world features that require larger architectural changes:
 | **Driver breaks / HoSE** | ✅ Complete. Abstract break model — generic `(max_work, break_duration, max_total_work)` maps to both EU EC 561 and US FMCSA rules. |
 | **Multiple trips** | ✅ Complete. Multi-route-per-vehicle state with depot reload modeling. `sg_vehicle_set_max_trips()`. |
 | **Time-dependent travel** | ✅ Complete. Speed profiles (step-function multipliers), per-vehicle travel profiles, and time-indexed travel brackets (multiple complete matrices by departure time). `sg_set_travel_time_bracket()` + `sg_travel_profile_add_time_bracket()`. |
-| **Load stacking / 3D loading constraints** | 🔲 Not started. Per-order stack compatibility, max stack height, weight-on-top limits, non-stackable/orientation flags, and LIFO unload order (2L/3L-CVRP). Needs a loading-feasibility check in the insertion evaluator. See below. |
+| **Load stacking / 3D loading constraints** | 🔲 Design approved (3L checker, 2026-10); not started. Per-order stack compatibility, max stack height, weight-on-top limits, non-stackable/orientation flags, and LIFO unload order (2L/3L-CVRP). Bounded Tier-2 loading-feasibility check in the insertion evaluator. See "3L loading checker (design)" below. |
 
 #### Load stacking / 3D loading constraints
 
@@ -1839,6 +1839,86 @@ Two tiers, increasing in effort:
 Inputs required from the data: a stack-compatibility class per order or product,
 max stack height, max weight on top, non-stackable/orientation flags, and whether
 unload order matters. Without these it cannot be modeled.
+
+#### 3L loading checker (design, 2026-10)
+
+**Status:** design approved; not started. A bounded Tier-2 loading-feasibility
+module, scoped to one real distribution fleet, prioritized over further
+speculative multi-trip perf work (direct operational value). Grounded in that
+deployment's data: "pallets" are a FRACTIONAL footprint quantity (partial/half-height
+pallets that stack), floor slots are 17 (rigid) / 33 (semi) / 34 (drawbar), and
+the loading unit is a ROUND (truckload), not the whole multi-round trip.
+
+**Operational decisions (from the design session):**
+- **Access is per-vehicle** (the fleet is mixed): each vehicle carries an
+  `access_model ∈ {REAR_LIFO, SIDE_FREE}`. Rear-load vehicles couple loading to
+  route order (LIFO from the door); side-accessible vehicles are order-free.
+- **Per-product stack classes** are available in the data, so the stacking rule
+  is explicit allowed `bottom_class -> {top_classes}`, max layers, max stack
+  weight (not a uniform approximation).
+- **Footprints + heights** are available, so real height/clearance is checked.
+- Open parameter: the reshuffle policy for rear-load vehicles (may the driver
+  temporarily move other customers' pallets). Modeled as a per-vehicle attribute
+  defaulting to "none" (strict LIFO); bounded-cost reshuffle is deferred to P3.
+
+**Checker contract (separate, pure, deterministic):**
+```
+load3l_check(vehicle_geom, ordered_stops, pallets_per_stop)
+      -> FEASIBLE  + a concrete slot/stack assignment
+       | INFEASIBLE + a reason (which stop/stack/limit)
+       | UNKNOWN    (outside the narrow rules / search budget exceeded)
+```
+`UNKNOWN` lets the solver fall back to today's scalar pallet capacity, so a solve
+never blocks on a checker gap.
+
+**Inputs:** vehicle geometry (ordered floor slots indexed by depth from the rear
+door for LIFO columns, clearance height, `access_model`, reshuffle policy, max
+stack weight per slot); pallet units per order line (footprint: standard EUR = 1
+slot, half-height = stacks 2; height; weight; `stack_class`) via a decomposition
+step from the fractional pallet quantity; the stack-class table; the ordered trip
+with pallets grouped per stop.
+
+**Two modes (one checker serves the mixed fleet, selected by `access_model`):**
+- `SIDE_FREE`: order-free packing. Assign units to slots/stacks satisfying class
+  compatibility, max layers, stack weight, height <= clearance, within slot count.
+  Narrow first-fit-decreasing + bounded backtracking; FEASIBLE / INFEASIBLE /
+  UNKNOWN (budget exceeded). Route order irrelevant.
+- `REAR_LIFO`: order-aware. Columns are LIFO from the door, so unload order is
+  geometry-fixed and must match the route's reverse delivery order. No reshuffle =
+  hard LIFO; bounded reshuffle = a capped cost (P3). Here an insertion's POSITION
+  in the trip is part of loading feasibility, not just its presence.
+
+**Performance (critical; the insertion eval is the hot path):** two-tier, like the
+capacity fast path. Hot path per insertion = a cheap NECESSARY-CONDITION prefilter
+(footprint <= slots, per-class layer/weight bounds, quick height bound, and for
+REAR_LIFO a local order check at the insertion point) that can only reject early
+or say "maybe". The exact (NP-ish) checker runs sparingly: at commit time and on a
+bounded cadence, results cached per trip keyed on the pallet-set + order (reuse the
+generation counter). An exact packer in the inner loop would dwarf the solve.
+
+**Surge integration:** insertion eval runs the prefilter after capacity/time;
+final validation runs the exact checker per committed trip and folds a rejection
+into M1's repair-or-reject discipline (never commit a load the checker rejects;
+UNKNOWN falls back to scalar capacity). Gated like `hard_capacity`.
+
+**v1 boundaries (narrow):** standard EUR footprint + half-height stacking,
+per-vehicle access model, per-product stack classes (max layers / max stack
+weight), clearance per vehicle. No rotation/orientation, no arbitrary footprints
+beyond half-height, no general 3D bin packer.
+
+**Phasing:**
+1. **P1 (standalone + validate):** data spec + order->pallet-unit decomposition;
+   build the checker (both modes); validate against REAL historical rounds
+   (accepts what they loaded; ideally rejects what they could not). No solver
+   coupling yet. Confirm the rules match reality before trusting them.
+2. **P2 (integrate):** necessary-condition prefilter in the insertion eval + exact
+   check at commit with caching + UNKNOWN fallback.
+3. **P3 (reshuffle):** bounded-cost reshuffle for the rear-load vehicles that allow
+   it (hard LIFO -> soft cost).
+
+Distinct from the existing LIFO/FIFO PD policy (that governs *visit order*; this
+governs *physical placement*). Related: the fractional-pallet capacity dimension
+is the current Tier-1 proxy this would refine.
 
 ---
 
@@ -1951,7 +2031,7 @@ the illegal intermediate states that were driving the collapse. Left as resolved
 re-open if a future run shows the unassigned count growing with budget.
 ### 2L-VRP marketing honesty flag (2026-10)
 
-The Gyermelyi proposal markets "2L-VRP" as a differentiator, but neither Surge nor
+A customer proposal markets "2L-VRP" as a differentiator, but neither Surge nor
 PyVRP does *true* 2D/3D load packing today (the roadmap item "Load stacking / 3D
 loading constraints" is not started; the current approach encodes footprint into
 the scalar pallet dimension, which is also the root of the pallet-capacity overrun
