@@ -14,6 +14,7 @@ const C = {
   ivory: '#f4f1e8',
   water: '#cfe2ef',
   waterLine: '#9fc4dd',
+  waterSoft: '#b9d6e8',   // soft river line; visible on ivory, gentle against the fill
   forest: '#d6e0bf',
   park: '#dde7cc',
   grass: '#e0e9d0',
@@ -76,16 +77,22 @@ export function cartaStyle(): StyleSpecification {
       { id: 'water-line', type: 'line', source: 'carta', 'source-layer': 'water',
         filter: ['all', ['==', ['geometry-type'], 'LineString'],
           ['in', ['get', 'class'], ['literal', ['river', 'canal']]]],
-        paint: { 'line-color': C.water,
+        layout: { 'line-cap': 'round', 'line-join': 'round' },
+        paint: { 'line-color': C.waterSoft,
           'line-width': ['interpolate', ['linear'], ['zoom'], 9, 1.2, 14, 3.2] } },
       { id: 'water-stream', type: 'line', source: 'carta', 'source-layer': 'water',
         minzoom: 12,
         filter: ['all', ['==', ['geometry-type'], 'LineString'], ['==', ['get', 'class'], 'stream']],
-        paint: { 'line-color': C.waterLine,
+        layout: { 'line-cap': 'round', 'line-join': 'round' },
+        paint: { 'line-color': C.waterSoft,
           'line-width': ['interpolate', ['linear'], ['zoom'], 12, 0.5, 16, 1.6] } },
+      // No fill-outline-color: on a clipped MVT polygon it draws a hard line
+      // along the tile edge, and on a sub-pixel-wide river the two bank outlines
+      // merge into a dark line down the water. The pale fill against ivory
+      // defines the water edge on its own.
       { id: 'water-fill', type: 'fill', source: 'carta', 'source-layer': 'water',
         filter: ['==', ['geometry-type'], 'Polygon'],
-        paint: { 'fill-color': C.water, 'fill-outline-color': C.waterLine } },
+        paint: { 'fill-color': C.water } },
 
       // --- Buildings ---
       { id: 'buildings', type: 'fill', source: 'carta', 'source-layer': 'buildings',
