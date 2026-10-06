@@ -12,6 +12,7 @@ import { CompareDialog } from '@/components/CompareDialog';
 import { ImportDialog } from '@/components/ImportDialog';
 import { HistoryDialog } from '@/components/HistoryDialog';
 import { api, pollJob } from '@/lib/api';
+import { useT } from '@/i18n';
 import type { DaySummary, Job, Plan, Scenario, Selection } from '@/types';
 
 /* The live solve budget for UI-triggered solves. The saved baseline used ~240s
@@ -23,6 +24,7 @@ const SOLVE_BUDGET_SEC = Number(import.meta.env.VITE_SOLVE_SECONDS ?? 60);
 export interface JobView { id: string; status: Job['status']; elapsedSec: number; scenarioId: string; error: string | null }
 
 export default function App() {
+  const t = useT();
   const [days, setDays] = useState<DaySummary[]>([]);
   const [dayId, setDayId] = useState<string>('day1');
   const [scenario, setScenario] = useState<Scenario | null>(null);
@@ -100,12 +102,12 @@ export default function App() {
     if (!scenario) return;
     const parentId = scenario.kind === 'base' ? scenario.id : (scenario.parentId ?? scenario.id);
     const ref = plan?.vehicles.find((v) => v.id === vehicleId)?.ref ?? `#${vehicleId}`;
-    const copy = await api.createCopy(parentId, vehicleId, `${ref} unavailable`);
+    const copy = await api.createCopy(parentId, vehicleId, t('scn.unavailable', { ref }));
     setScenario(copy);
     setSelection(null);
     const revised = await runSolve(copy.id);
     if (revised) setCompareOpen(true);
-  }, [scenario, plan, runSolve]);
+  }, [scenario, plan, runSolve, t]);
 
   const resetToBaseline = useCallback(() => {
     const d = days.find((x) => x.id === dayId);
@@ -127,8 +129,8 @@ export default function App() {
     } catch (e) { setError(e instanceof Error ? e.message : String(e)); }
   }, [days, baseline]);
 
-  if (error && !plan) return <div className="flex h-full items-center justify-center text-sm text-destructive">Failed to load: {error}</div>;
-  if (!plan || !baseline || !scenario) return <div className="flex h-full items-center justify-center text-sm text-muted-foreground">Loading planning day…</div>;
+  if (error && !plan) return <div className="flex h-full items-center justify-center text-sm text-destructive">{t('app.failed', { e: error })}</div>;
+  if (!plan || !baseline || !scenario) return <div className="flex h-full items-center justify-center text-sm text-muted-foreground">{t('app.loading')}</div>;
 
   const isReplan = scenario.kind === 'copy';
   const solving = job?.status === 'running' || job?.status === 'pending';

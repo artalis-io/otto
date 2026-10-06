@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { hhmm } from '@/lib/format';
+import { useT } from '@/i18n';
 import type { Plan, Selection, Vehicle } from '@/types';
 
 /* Vehicle timeline. With a vehicle selected: that vehicle's full working day -
@@ -29,9 +30,10 @@ function hourTicks(lo: number, hi: number): number[] {
 }
 
 function Header({ title, hint }: { title: string; hint: string }) {
+  const t = useT();
   return (
     <div className="flex shrink-0 items-center gap-2 px-3 py-1.5">
-      <h2 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Timeline</h2>
+      <h2 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">{t('timeline.title')}</h2>
       <span className="text-[11px] text-foreground/70">{title}</span>
       <span className="ml-auto text-[11px] text-muted-foreground">{hint}</span>
     </div>
@@ -39,6 +41,7 @@ function Header({ title, hint }: { title: string; hint: string }) {
 }
 
 function VehicleTimeline({ vehicle, selection, onSelect }: { vehicle: Vehicle; selection: Selection; onSelect: (s: Selection) => void }) {
+  const t = useT();
   const [ref, width] = useWidth<HTMLDivElement>();
   const padL = 12, padR = 16, laneY = 46, laneH = 22;
   const { lo, hi } = useMemo(() => {
@@ -103,10 +106,10 @@ function VehicleTimeline({ vehicle, selection, onSelect }: { vehicle: Vehicle; s
         </defs>
       </svg>
       <div className="flex items-center gap-3 px-1 text-[10px] text-muted-foreground">
-        <Legend color={vehicle.color} label="service" />
-        <Legend color="#d97706" label="wait" />
-        <span className="inline-flex items-center gap-1"><span className="inline-block h-2 w-3" style={{ background: 'repeating-linear-gradient(45deg,#e8e3d6,#e8e3d6 2px,#aaa 3px)' }} /> reload</span>
-        <span className="inline-flex items-center gap-1"><span className="inline-block h-2 w-[3px] bg-[#223a2e]" /> depot</span>
+        <Legend color={vehicle.color} label={t('timeline.service')} />
+        <Legend color="#d97706" label={t('timeline.wait')} />
+        <span className="inline-flex items-center gap-1"><span className="inline-block h-2 w-3" style={{ background: 'repeating-linear-gradient(45deg,#e8e3d6,#e8e3d6 2px,#aaa 3px)' }} /> {t('timeline.reload')}</span>
+        <span className="inline-flex items-center gap-1"><span className="inline-block h-2 w-[3px] bg-[#223a2e]" /> {t('timeline.depot')}</span>
       </div>
     </div>
   );
@@ -156,13 +159,14 @@ function FleetOverview({ plan, onSelect }: { plan: Plan; onSelect: (s: Selection
 }
 
 export function Timeline({ plan, selection, onSelect }: { plan: Plan; selection: Selection; onSelect: (s: Selection) => void }) {
+  const t = useT();
   const vehId = selection && selection.kind !== 'unassigned' ? selection.vehicleId : null;
   const vehicle = vehId != null ? plan.vehicles.find((v) => v.id === vehId) : null;
   return (
     <div className="flex h-full flex-col bg-card">
       <Header
-        title={vehicle ? `${vehicle.ref} · working day` : 'Fleet overview'}
-        hint={vehicle ? `${vehicle.tripCount} trips · finish ${hhmm(vehicle.finishTimeSec)}` : 'select a vehicle for its day'}
+        title={vehicle ? t('timeline.workingDay', { ref: vehicle.ref }) : t('timeline.fleetOverview')}
+        hint={vehicle ? t('timeline.vehHint', { n: vehicle.tripCount, t: hhmm(vehicle.finishTimeSec) }) : t('timeline.selectHint')}
       />
       <div className="min-h-0 flex-1 overflow-hidden pb-1">
         {vehicle ? <VehicleTimeline vehicle={vehicle} selection={selection} onSelect={onSelect} /> : <FleetOverview plan={plan} onSelect={onSelect} />}

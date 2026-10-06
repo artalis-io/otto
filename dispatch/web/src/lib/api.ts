@@ -38,6 +38,11 @@ export const api = {
 
   compare: (base: string, revised: string) => jget<Comparison>(`/api/compare?base=${base}&revised=${revised}`),
 
+  sageStatus: () => jget<{ reachable: boolean; model: string }>('/api/sage/status'),
+  narratePlan: (id: string, lang: string) => jsend<{ text: string }>(`/api/plans/${id}/narrate`, 'POST', { lang }),
+  narrateCompare: (base: string, revised: string, lang: string) =>
+    jsend<{ text: string }>(`/api/compare/narrate?base=${base}&revised=${revised}`, 'POST', { lang }),
+
   importSummary: () => jget<ImportSummary>('/api/import/summary'),
   importRaw: (file: string) => jget<RawSample>(`/api/import/raw?file=${file}&limit=8`),
   importCanonical: () => jget<CanonicalSample>('/api/import/canonical?limit=8'),

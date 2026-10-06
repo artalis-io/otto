@@ -4,8 +4,10 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/u
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { Badge } from '@/components/ui/badge';
 import { api, type ImportSummary, type RawSample, type CanonicalSample } from '@/lib/api';
+import { useT } from '@/i18n';
 
 export function ImportDialog({ open, onOpenChange }: { open: boolean; onOpenChange: (o: boolean) => void }) {
+  const t = useT();
   const [summary, setSummary] = useState<ImportSummary | null>(null);
   const [rawFile, setRawFile] = useState('orders');
   const [raw, setRaw] = useState<RawSample | null>(null);
@@ -30,9 +32,9 @@ export function ImportDialog({ open, onOpenChange }: { open: boolean; onOpenChan
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="max-w-4xl">
-        <DialogHeader><DialogTitle className="flex items-center gap-2"><FileSpreadsheet className="h-4 w-4" /> Data provenance &amp; import</DialogTitle></DialogHeader>
+        <DialogHeader><DialogTitle className="flex items-center gap-2"><FileSpreadsheet className="h-4 w-4" /> {t('import.title')}</DialogTitle></DialogHeader>
         {err && <p className="text-sm text-destructive">{err}</p>}
-        {!summary ? <p className="py-8 text-center text-sm text-muted-foreground">Loading…</p> : (
+        {!summary ? <p className="py-8 text-center text-sm text-muted-foreground">{t('import.loading')}</p> : (
           <ScrollArea className="max-h-[72vh]">
             <div className="space-y-4 pr-3">
               {/* Provenance summary */}
@@ -46,14 +48,14 @@ export function ImportDialog({ open, onOpenChange }: { open: boolean; onOpenChan
               </div>
               <div className="flex flex-wrap items-center gap-2 text-xs">
                 {audit && (
-                  <Badge variant="outline" className="gap-1"><CheckCircle2 className="h-3 w-3 text-primary" /> Nexus: {audit.rows_accepted}/{audit.rows_processed} accepted · {audit.validation?.errors ?? 0} errors · {audit.validation?.warnings ?? 0} warnings</Badge>
+                  <Badge variant="outline" className="gap-1"><CheckCircle2 className="h-3 w-3 text-primary" /> {t('import.nexusAudit', { a: audit.rows_accepted ?? 0, b: audit.rows_processed ?? 0, e: audit.validation?.errors ?? 0, w: audit.validation?.warnings ?? 0 })}</Badge>
                 )}
-                {shaMatch && <Badge variant="outline" className="gap-1"><ShieldCheck className="h-3 w-3 text-primary" /> Canonical built from this exact source (sha match)</Badge>}
-                <Badge variant="outline">{summary.scope.inScopeHungarian} in scope · day 1 {summary.scope.day1} · day 2 {summary.scope.day2}</Badge>
+                {shaMatch && <Badge variant="outline" className="gap-1"><ShieldCheck className="h-3 w-3 text-primary" /> {t('import.shaMatch')}</Badge>}
+                <Badge variant="outline">{t('import.scope', { n: summary.scope.inScopeHungarian, a: summary.scope.day1, b: summary.scope.day2 })}</Badge>
               </div>
 
               {/* Pipeline */}
-              <Section title="Nexus pipeline">
+              <Section title={t('import.pipeline')}>
                 <div className="flex flex-wrap items-stretch gap-1.5">
                   {summary.pipeline.map((p, i) => (
                     <div key={p.stage} className="flex items-center gap-1.5">
@@ -68,26 +70,26 @@ export function ImportDialog({ open, onOpenChange }: { open: boolean; onOpenChan
               </Section>
 
               {/* Rules */}
-              <Section title="Business rules enforced">
+              <Section title={t('import.rules')}>
                 <ul className="list-disc space-y-0.5 pl-5 text-xs text-foreground/80">
                   {summary.rules.map((r) => <li key={r}>{r}</li>)}
                 </ul>
               </Section>
 
               {/* Raw -> canonical sample */}
-              <Section title="Raw → canonical (sample)">
+              <Section title={t('import.rawCanonical')}>
                 <div className="mb-1.5 flex gap-1">
                   {['orders', 'vehicles', 'routes'].map((f) => (
                     <button key={f} type="button" onClick={() => setRawFile(f)}
-                      className={`rounded px-2 py-0.5 text-[11px] capitalize ${rawFile === f ? 'bg-primary text-primary-foreground' : 'bg-muted text-muted-foreground hover:bg-accent'}`}>{f}</button>
+                      className={`rounded px-2 py-0.5 text-[11px] ${rawFile === f ? 'bg-primary text-primary-foreground' : 'bg-muted text-muted-foreground hover:bg-accent'}`}>{t(`import.tab.${f}`)}</button>
                   ))}
-                  <span className="ml-auto self-center text-[11px] text-muted-foreground">Excel export (Hungarian headers)</span>
+                  <span className="ml-auto self-center text-[11px] text-muted-foreground">{t('import.excelHdr')}</span>
                 </div>
                 {raw && <MiniTable headers={raw.headers} rows={raw.rows} maxCols={8} />}
 
                 {rawFile === 'orders' && canon && (
                   <>
-                    <div className="mt-3 mb-1.5 flex items-center gap-1.5 text-[11px] text-muted-foreground"><ArrowRight className="h-3 w-3" /> Canonical records (typed, validated{canon.sha256 ? ', provenance-hashed' : ''})</div>
+                    <div className="mt-3 mb-1.5 flex items-center gap-1.5 text-[11px] text-muted-foreground"><ArrowRight className="h-3 w-3" /> {t('import.canonicalRecords', { sha: canon.sha256 ? t('import.provHashed') : '' })}</div>
                     <MiniTable headers={canon.fields} rows={canon.rows.map((r) => canon.fields.map((f) => String(r[f] ?? '')))} maxCols={9} />
                   </>
                 )}

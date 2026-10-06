@@ -4,6 +4,8 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/u
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { api } from '@/lib/api';
 import { km } from '@/lib/format';
+import { NarrationPanel } from '@/components/NarrationPanel';
+import { useT } from '@/i18n';
 import type { Comparison } from '@/types';
 
 function DeltaCell({ value, goodWhenNegative, unit = '' }: { value: number; goodWhenNegative?: boolean; unit?: string }) {
@@ -26,6 +28,7 @@ function Row({ label, base, revised, delta }: { label: string; base: string; rev
 export function CompareDialog({ open, onOpenChange, basePlanId, revisedPlanId, scenarioLabel }: {
   open: boolean; onOpenChange: (o: boolean) => void; basePlanId: string; revisedPlanId: string; scenarioLabel: string;
 }) {
+  const t = useT();
   const [cmp, setCmp] = useState<Comparison | null>(null);
   const [err, setErr] = useState<string | null>(null);
 
@@ -42,49 +45,50 @@ export function CompareDialog({ open, onOpenChange, basePlanId, revisedPlanId, s
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="max-w-2xl">
         <DialogHeader>
-          <DialogTitle>Plan comparison — {scenarioLabel}</DialogTitle>
+          <DialogTitle>{t('compare.title', { label: scenarioLabel })}</DialogTitle>
         </DialogHeader>
         {err && <p className="text-sm text-destructive">{err}</p>}
-        {!cmp ? <p className="py-8 text-center text-sm text-muted-foreground">Comparing…</p> : (
+        {!cmp ? <p className="py-8 text-center text-sm text-muted-foreground">{t('compare.comparing')}</p> : (
           <div className="space-y-4">
             {servedDrop && (
               <div className="flex items-start gap-2 rounded-md border border-warning/40 bg-warning/10 p-2.5 text-sm text-warning">
                 <TriangleAlert className="mt-0.5 h-4 w-4 shrink-0" />
                 <span>
-                  <span className="font-semibold">{Math.abs(cmp.deltas.servedOrders)} fewer order(s) served</span>{' '}
-                  with the reduced fleet{cmp.deltas.totalDistanceKm < 0 ? `, saving ${km(Math.abs(cmp.deltas.totalDistanceKm))}` : ''}.
-                  Distance savings here come at the cost of service, not efficiency.
+                  {t('compare.fewerServed', {
+                    n: Math.abs(cmp.deltas.servedOrders),
+                    save: cmp.deltas.totalDistanceKm < 0 ? t('compare.saveFragment', { km: km(Math.abs(cmp.deltas.totalDistanceKm)) }) : '',
+                  })}
                 </span>
               </div>
             )}
 
             <div>
               <div className="grid grid-cols-[1.4fr_1fr_1fr_1fr] gap-2 pb-1 text-[11px] uppercase tracking-wide text-muted-foreground">
-                <span>Metric</span><span className="text-right">Baseline</span><span className="text-right">Revised</span><span className="text-right">Δ</span>
+                <span>{t('compare.metric')}</span><span className="text-right">{t('compare.baseline')}</span><span className="text-right">{t('compare.revised')}</span><span className="text-right">{t('compare.delta')}</span>
               </div>
-              <Row label="Served orders" base={`${b!.servedOrders}/${b!.totalOrders}`} revised={`${r!.servedOrders}/${r!.totalOrders}`} delta={<DeltaCell value={cmp.deltas.servedOrders} />} />
-              <Row label="Unassigned" base={`${b!.totalOrders - b!.servedOrders}`} revised={`${r!.totalOrders - r!.servedOrders}`} delta={<DeltaCell value={cmp.deltas.unassigned} goodWhenNegative />} />
-              <Row label="Vehicles used" base={`${b!.vehiclesUsed}`} revised={`${r!.vehiclesUsed}`} delta={<DeltaCell value={cmp.deltas.vehiclesUsed} goodWhenNegative />} />
-              <Row label="Trips" base={`${b!.trips}`} revised={`${r!.trips}`} delta={<DeltaCell value={cmp.deltas.trips} goodWhenNegative />} />
-              <Row label="Total distance" base={km(b!.totalDistanceKm)} revised={km(r!.totalDistanceKm)} delta={<DeltaCell value={cmp.deltas.totalDistanceKm} goodWhenNegative unit=" km" />} />
+              <Row label={t('compare.servedOrders')} base={`${b!.servedOrders}/${b!.totalOrders}`} revised={`${r!.servedOrders}/${r!.totalOrders}`} delta={<DeltaCell value={cmp.deltas.servedOrders} />} />
+              <Row label={t('compare.unassigned')} base={`${b!.totalOrders - b!.servedOrders}`} revised={`${r!.totalOrders - r!.servedOrders}`} delta={<DeltaCell value={cmp.deltas.unassigned} goodWhenNegative />} />
+              <Row label={t('compare.vehiclesUsed')} base={`${b!.vehiclesUsed}`} revised={`${r!.vehiclesUsed}`} delta={<DeltaCell value={cmp.deltas.vehiclesUsed} goodWhenNegative />} />
+              <Row label={t('compare.trips')} base={`${b!.trips}`} revised={`${r!.trips}`} delta={<DeltaCell value={cmp.deltas.trips} goodWhenNegative />} />
+              <Row label={t('compare.totalDistance')} base={km(b!.totalDistanceKm)} revised={km(r!.totalDistanceKm)} delta={<DeltaCell value={cmp.deltas.totalDistanceKm} goodWhenNegative unit=" km" />} />
             </div>
 
             <ScrollArea className="max-h-64">
               <div className="space-y-3 pr-3">
                 {cmp.newlyUnassigned.length > 0 && (
-                  <Section title={`Newly unassigned (${cmp.newlyUnassigned.length})`} tone="warn">
+                  <Section title={t('compare.newlyUnassigned', { n: cmp.newlyUnassigned.length })} tone="warn">
                     {cmp.newlyUnassigned.map((o) => (
-                      <li key={o.orderNo} className="tnum flex justify-between py-0.5"><span>{o.customer ?? o.orderNo}</span><span className="text-muted-foreground">was {o.fromVehicleRef}</span></li>
+                      <li key={o.orderNo} className="tnum flex justify-between py-0.5"><span>{o.customer ?? o.orderNo}</span><span className="text-muted-foreground">{t('compare.wasVeh', { ref: o.fromVehicleRef })}</span></li>
                     ))}
                   </Section>
                 )}
                 {cmp.nowServed.length > 0 && (
-                  <Section title={`Now served (${cmp.nowServed.length})`}>
+                  <Section title={t('compare.nowServed', { n: cmp.nowServed.length })}>
                     {cmp.nowServed.map((o) => <li key={o.orderNo} className="tnum flex justify-between py-0.5"><span>{o.customer ?? o.orderNo}</span><span className="text-muted-foreground">→ {o.toVehicleRef}</span></li>)}
                   </Section>
                 )}
                 {cmp.movedOrders.length > 0 && (
-                  <Section title={`Reassigned (${cmp.movedOrders.length})`}>
+                  <Section title={t('compare.reassigned', { n: cmp.movedOrders.length })}>
                     {cmp.movedOrders.map((o) => (
                       <li key={o.orderNo} className="flex items-center justify-between py-0.5">
                         <span>{o.customer ?? o.orderNo}</span>
@@ -94,10 +98,12 @@ export function CompareDialog({ open, onOpenChange, basePlanId, revisedPlanId, s
                   </Section>
                 )}
                 {cmp.removedVehicles.length > 0 && (
-                  <Section title={`Vehicles no longer used (${cmp.removedVehicles.length})`}>
+                  <Section title={t('compare.removedVehicles', { n: cmp.removedVehicles.length })}>
                     <li className="tnum text-muted-foreground">{cmp.removedVehicles.join(', ')}</li>
                   </Section>
                 )}
+
+                <NarrationPanel compare={{ base: basePlanId, revised: revisedPlanId }} />
               </div>
             </ScrollArea>
           </div>

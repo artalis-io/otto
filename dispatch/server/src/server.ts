@@ -10,6 +10,7 @@ import { store } from './store.js';
 import { startSolve, cancelJob } from './solve.js';
 import { comparePlans } from './plan/compare.js';
 import { importSummary, rawSample, canonicalSample } from './data/import.js';
+import { sageReachable, narratePlan, narrateComparison, type Lang } from './sage.js';
 import type { Plan } from './types.js';
 
 const app = Fastify({ logger: { level: 'info' }, bodyLimit: 4 * 1024 * 1024 });
@@ -163,6 +164,30 @@ app.get<{ Querystring: { base?: string; revised?: string } }>('/api/compare', as
   const revised = req.query.revised ? store.getPlan(req.query.revised) : undefined;
   if (!base || !revised) return reply.code(404).send({ error: 'base and revised plan ids required' });
   return comparePlans(base, revised);
+});
+
+/* ---- Sage narration (optional LLM; degrades gracefully) ---- */
+app.get('/api/sage/status', async () => ({ reachable: await sageReachable(), model: config.sageModel }));
+
+app.post<{ Params: { id: string }; Body: { lang?: Lang } }>('/api/plans/:id/narrate', async (req, reply) => {
+  const plan = store.getPlan(req.params.id);
+  if (!plan) return reply.code(404).send({ error: 'plan not found' });
+  try {
+    return { text: await narratePlan(plan, req.body?.lang === 'hu' ? 'hu' : 'en') };
+  } catch (e) {
+    return reply.code(503).send({ error: `sage unavailable: ${(e as Error).message}`, unavailable: true });
+  }
+});
+
+app.post<{ Querystring: { base?: string; revised?: string }; Body: { lang?: Lang } }>('/api/compare/narrate', async (req, reply) => {
+  const base = req.query.base ? store.getPlan(req.query.base) : undefined;
+  const revised = req.query.revised ? store.getPlan(req.query.revised) : undefined;
+  if (!base || !revised) return reply.code(404).send({ error: 'base and revised plan ids required' });
+  try {
+    return { text: await narrateComparison(comparePlans(base, revised), req.body?.lang === 'hu' ? 'hu' : 'en') };
+  } catch (e) {
+    return reply.code(503).send({ error: `sage unavailable: ${(e as Error).message}`, unavailable: true });
+  }
 });
 
 /* ---- Import / provenance (dedicated import view) ---- */
