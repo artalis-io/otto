@@ -3,6 +3,7 @@ dist/
 *.log
 tsconfig.tsbuildinfo
 
-# Hull's runtime store (scenarios/plans/jobs) and any cached geometry are local
-# state, not source. Never commit client-derived plan data.
-data/
+# The backend's runtime store (scenarios/plans/jobs) and cached geometry are
+# local state, not source - never commit client-derived plan data. Anchored to
+# the project root so it does NOT also match src/data/ (dataset loaders).
+/data/
