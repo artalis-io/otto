@@ -9,6 +9,11 @@ This is a complete dispatch-planning slice. It reuses OTTO's existing engines
 (optimization stays in C/Surge, geometry in C/Velo, tiles in C/Carta) behind a
 thin Node/TS backend (`dispatch/server`) and a React frontend (`dispatch/web`).
 
+The UI is bilingual (**English / Hungarian**, toggle in the top bar, persisted
+locally). An optional **Sage** narration (DGX Spark LLM, `SAGE_ORIGIN`) summarizes
+a plan or a comparison in the current language, built only from the plan's own
+figures; it is on-demand and degrades gracefully when the LLM endpoint is down.
+
 ## Layout
 
 | Path | What |
