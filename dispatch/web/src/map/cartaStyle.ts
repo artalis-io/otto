@@ -1,45 +1,45 @@
 import type { StyleSpecification } from 'maplibre-gl';
 
 /*
- * REUSED VERBATIM from carta/maplibre-viewer/src/style.ts (the "Carta Quiet"
- * basemap). Do not drift from the upstream file; if the basemap needs changes,
- * change it there and re-copy. A deliberately QUIET custom basemap for Carta
- * vector tiles: warm ivory background, subdued landuse, pale blue water, a
- * restrained road hierarchy with casing and zoom-dependent widths, and readable
- * place/road labels with subtle halos. Kept muted so overlaid delivery routes
- * dominate. Glyphs are served locally (no CDN).
+ * Dispatch basemap: a subdued "Carta Quiet" palette, TUNED for contrast at the
+ * country/regional zooms this tool uses over Hungary. (The carta/maplibre-viewer
+ * original was validated at Monaco street zoom, where its near-white minor roads
+ * read fine; over a whole country at z10-14 those white hairlines on ivory
+ * vanished and the map looked empty. This variant gives minor roads a readable
+ * casing and firms up buildings/landuse, while staying muted so the overlaid
+ * delivery routes still dominate.) Glyphs are served locally (no CDN).
  */
 
 const C = {
   ivory: '#f4f1e8',
   water: '#cfe2ef',
-  waterLine: '#a9cbe0',
-  forest: '#e2e8d6',
-  park: '#e5ecd9',
-  residential: '#efebe1',
-  commercial: '#efe8e0',
-  industrial: '#e9e6e0',
-  farmland: '#eef0e2',
-  grass: '#e8efdc',
-  building: '#e7e1d4',
-  buildingLine: '#d8d0bf',
-  rail: '#cfc8bd',
-  boundary: '#cdbfe0',
-  casing: '#dcd5c6',
-  motorway: '#f3c07a',
-  trunk: '#f6cf9c',
-  primary: '#f7d9ad',
-  secondary: '#fae6c4',
-  minor: '#ffffff',
-  label: '#4a4636',
+  waterLine: '#9fc4dd',
+  forest: '#d6e0bf',
+  park: '#dde7cc',
+  grass: '#e0e9d0',
+  residential: '#ece6da',
+  commercial: '#ece4d8',
+  industrial: '#e8e3d8',
+  farmland: '#e9edd8',
+  building: '#e6ddcd',
+  buildingLine: '#c6bba2',
+  rail: '#bbb2a3',
+  boundary: '#c3b2de',
+  casing: '#cdc3ae',      // readable taupe outline on ivory
+  motorway: '#eeb25f',
+  trunk: '#f2c585',
+  primary: '#f4d099',
+  secondary: '#f7dcac',
+  minor: '#ffffff',       // white fill, made readable by its casing
+  label: '#3f3b2f',
   labelHalo: '#f7f4ec',
-  waterLabel: '#4a6a82',
+  waterLabel: '#3f6178',
 };
 
 export function cartaStyle(): StyleSpecification {
   return {
     version: 8,
-    name: 'Carta Quiet',
+    name: 'Carta Dispatch',
     glyphs: '/fonts/{fontstack}/{range}.pbf',
     sources: {
       carta: { type: 'vector', url: '/tiles.vector.json' },
@@ -47,19 +47,19 @@ export function cartaStyle(): StyleSpecification {
     layers: [
       { id: 'bg', type: 'background', paint: { 'background-color': C.ivory } },
 
-      // --- Landuse (subdued fills) ---
+      // --- Landuse (subdued fills, but readable) ---
       { id: 'landuse-forest', type: 'fill', source: 'carta', 'source-layer': 'landuse',
         filter: ['==', ['get', 'class'], 'forest'],
-        paint: { 'fill-color': C.forest, 'fill-opacity': 0.7 } },
+        paint: { 'fill-color': C.forest, 'fill-opacity': 0.85 } },
       { id: 'landuse-park', type: 'fill', source: 'carta', 'source-layer': 'landuse',
         filter: ['in', ['get', 'class'], ['literal', ['park', 'grass']]],
-        paint: { 'fill-color': C.park, 'fill-opacity': 0.7 } },
+        paint: { 'fill-color': C.park, 'fill-opacity': 0.8 } },
       { id: 'landuse-farmland', type: 'fill', source: 'carta', 'source-layer': 'landuse',
         filter: ['==', ['get', 'class'], 'farmland'],
-        paint: { 'fill-color': C.farmland, 'fill-opacity': 0.6 } },
+        paint: { 'fill-color': C.farmland, 'fill-opacity': 0.7 } },
       { id: 'landuse-residential', type: 'fill', source: 'carta', 'source-layer': 'landuse',
         filter: ['in', ['get', 'class'], ['literal', ['residential', 'commercial', 'industrial']]],
-        paint: { 'fill-color': C.residential, 'fill-opacity': 0.5 } },
+        paint: { 'fill-color': C.residential, 'fill-opacity': 0.6 } },
 
       // --- Water ---
       { id: 'water-fill', type: 'fill', source: 'carta', 'source-layer': 'water',
@@ -67,54 +67,62 @@ export function cartaStyle(): StyleSpecification {
       { id: 'water-line', type: 'line', source: 'carta', 'source-layer': 'water',
         filter: ['in', ['get', 'class'], ['literal', ['river', 'canal', 'stream']]],
         paint: { 'line-color': C.waterLine,
-          'line-width': ['interpolate', ['linear'], ['zoom'], 9, 0.6, 14, 2.2] } },
+          'line-width': ['interpolate', ['linear'], ['zoom'], 9, 0.8, 14, 2.4] } },
 
-      // --- Buildings (very quiet, high zoom) ---
+      // --- Buildings ---
       { id: 'buildings', type: 'fill', source: 'carta', 'source-layer': 'buildings',
-        minzoom: 14,
-        paint: { 'fill-color': C.building, 'fill-outline-color': C.buildingLine, 'fill-opacity': 0.6 } },
+        minzoom: 13,
+        paint: { 'fill-color': C.building, 'fill-outline-color': C.buildingLine, 'fill-opacity': 0.85 } },
 
       // --- Railways ---
       { id: 'rail', type: 'line', source: 'carta', 'source-layer': 'railways',
-        minzoom: 10,
+        minzoom: 9,
         paint: { 'line-color': C.rail, 'line-dasharray': [3, 2],
-          'line-width': ['interpolate', ['linear'], ['zoom'], 10, 0.5, 16, 1.6] } },
+          'line-width': ['interpolate', ['linear'], ['zoom'], 9, 0.6, 16, 1.8] } },
 
-      // --- Road casing (under fill) ---
+      // --- Minor road casing (under the white fill, so minor roads read) ---
+      { id: 'road-minor-casing', type: 'line', source: 'carta', 'source-layer': 'roads',
+        minzoom: 11,
+        filter: ['in', ['get', 'class'], ['literal', ['residential', 'service', 'tertiary', 'other']]],
+        layout: { 'line-cap': 'round', 'line-join': 'round' },
+        paint: { 'line-color': C.casing,
+          'line-width': ['interpolate', ['exponential', 1.4], ['zoom'], 11, 1.2, 14, 3.0, 16, 5.6, 19, 13.0] } },
+
+      // --- Major road casing (under fills) ---
       { id: 'road-casing', type: 'line', source: 'carta', 'source-layer': 'roads',
-        filter: ['in', ['get', 'class'], ['literal', ['motorway', 'trunk', 'primary', 'secondary', 'tertiary']]],
+        filter: ['in', ['get', 'class'], ['literal', ['motorway', 'trunk', 'primary', 'secondary']]],
         layout: { 'line-cap': 'round', 'line-join': 'round' },
         paint: { 'line-color': C.casing,
           'line-width': ['interpolate', ['exponential', 1.4], ['zoom'],
-            6, 1.2, 10, 3.0, 14, 7.0, 18, 18.0] } },
+            6, 1.6, 10, 3.6, 14, 8.0, 18, 20.0] } },
 
       // --- Road fills by class ---
       { id: 'road-minor', type: 'line', source: 'carta', 'source-layer': 'roads',
-        minzoom: 12,
+        minzoom: 11,
         filter: ['in', ['get', 'class'], ['literal', ['residential', 'service', 'tertiary', 'other']]],
         layout: { 'line-cap': 'round', 'line-join': 'round' },
         paint: { 'line-color': C.minor,
-          'line-width': ['interpolate', ['exponential', 1.4], ['zoom'], 12, 0.8, 16, 3.5, 19, 10.0] } },
+          'line-width': ['interpolate', ['exponential', 1.4], ['zoom'], 11, 0.6, 14, 2.0, 16, 3.8, 19, 10.5] } },
       { id: 'road-secondary', type: 'line', source: 'carta', 'source-layer': 'roads',
         filter: ['==', ['get', 'class'], 'secondary'],
         layout: { 'line-cap': 'round', 'line-join': 'round' },
         paint: { 'line-color': C.secondary,
-          'line-width': ['interpolate', ['exponential', 1.4], ['zoom'], 8, 0.8, 12, 2.2, 16, 6.0] } },
+          'line-width': ['interpolate', ['exponential', 1.4], ['zoom'], 8, 1.0, 12, 2.6, 16, 6.4] } },
       { id: 'road-primary', type: 'line', source: 'carta', 'source-layer': 'roads',
         filter: ['==', ['get', 'class'], 'primary'],
         layout: { 'line-cap': 'round', 'line-join': 'round' },
         paint: { 'line-color': C.primary,
-          'line-width': ['interpolate', ['exponential', 1.4], ['zoom'], 7, 1.0, 12, 3.0, 16, 8.0] } },
+          'line-width': ['interpolate', ['exponential', 1.4], ['zoom'], 7, 1.2, 12, 3.4, 16, 8.4] } },
       { id: 'road-trunk', type: 'line', source: 'carta', 'source-layer': 'roads',
         filter: ['==', ['get', 'class'], 'trunk'],
         layout: { 'line-cap': 'round', 'line-join': 'round' },
         paint: { 'line-color': C.trunk,
-          'line-width': ['interpolate', ['exponential', 1.4], ['zoom'], 6, 1.0, 12, 3.4, 16, 9.0] } },
+          'line-width': ['interpolate', ['exponential', 1.4], ['zoom'], 6, 1.2, 12, 3.8, 16, 9.4] } },
       { id: 'road-motorway', type: 'line', source: 'carta', 'source-layer': 'roads',
         filter: ['==', ['get', 'class'], 'motorway'],
         layout: { 'line-cap': 'round', 'line-join': 'round' },
         paint: { 'line-color': C.motorway,
-          'line-width': ['interpolate', ['exponential', 1.4], ['zoom'], 5, 1.2, 12, 4.0, 16, 11.0] } },
+          'line-width': ['interpolate', ['exponential', 1.4], ['zoom'], 5, 1.4, 12, 4.4, 16, 11.5] } },
 
       // --- Boundaries ---
       { id: 'boundary', type: 'line', source: 'carta', 'source-layer': 'boundaries',
