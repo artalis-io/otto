@@ -284,6 +284,16 @@ typedef struct {
     float area_sqm;          /* Estimated area in m² (for polygons) */
     float length_m;          /* Estimated length in m (for lines) */
 
+    /* Optional display name, BORROWED (not owned by the feature).
+     * Points into the owning CTPBFContext's name storage (way/mp name), which
+     * outlives any tile generation. Contract: initialised to NULL in every
+     * feature-construction path; never freed by feature cleanup; preserved
+     * verbatim across clip / simplify / shallow-copy; the MVT encoder copies the
+     * bytes into the tile, so encoded output keeps no pointer into the context.
+     * Valid for PBF-parsed and mmap-index contexts alike (both heap-strdup the
+     * name with context lifetime). NULL means unnamed. */
+    const char *name;
+
     /* Properties (key-value pairs) */
     char **prop_keys;
     char **prop_values;
