@@ -43,6 +43,17 @@
 #define MVT_CMD_LINETO          2
 #define MVT_CMD_CLOSEPATH       7
 
+/*
+ * MVT CommandInteger: the command id lives in the low three bits and the repeat
+ * count in the remaining bits -- (count << 3) | (id & 0x7). The operand order
+ * matters: writing (id << 3) | count instead silently produces valid-looking
+ * integers only when id and count happen to coincide (e.g. MoveTo with count 1,
+ * which is why points and many lines decoded while every ClosePath -- 57 rather
+ * than 15 -- and any LineTo with count >= 4 did not). Use this macro so the
+ * ordering is stated once.
+ */
+#define MVT_CMD(id, count)      (((uint32_t)(count) << 3) | ((uint32_t)(id) & 0x7u))
+
 /* ============================================================================
  * Default Options
  * ============================================================================ */
@@ -339,7 +350,7 @@ static void encode_geometry(CTMVTEncoder *enc, const CTFeature *feature)
 
     if (feature->type == CT_GEOM_POINT) {
         /* MoveTo command */
-        enc_write_varint(enc, (MVT_CMD_MOVETO << 3) | 1);
+        enc_write_varint(enc, MVT_CMD(MVT_CMD_MOVETO, 1));
 
         int32_t dx = feature->points[0].x - cx;
         int32_t dy = feature->points[0].y - cy;
@@ -347,7 +358,7 @@ static void encode_geometry(CTMVTEncoder *enc, const CTFeature *feature)
         enc_write_svarint(enc, dy);
     } else if (feature->type == CT_GEOM_LINESTRING) {
         /* MoveTo first point */
-        enc_write_varint(enc, (MVT_CMD_MOVETO << 3) | 1);
+        enc_write_varint(enc, MVT_CMD(MVT_CMD_MOVETO, 1));
         int32_t dx = feature->points[0].x - cx;
         int32_t dy = feature->points[0].y - cy;
         enc_write_svarint(enc, dx);
@@ -357,7 +368,7 @@ static void encode_geometry(CTMVTEncoder *enc, const CTFeature *feature)
 
         /* LineTo remaining points */
         if (feature->num_points > 1) {
-            enc_write_varint(enc, (MVT_CMD_LINETO << 3) | (feature->num_points - 1));
+            enc_write_varint(enc, MVT_CMD(MVT_CMD_LINETO, feature->num_points - 1));
 
             for (int i = 1; i < feature->num_points; i++) {
                 dx = feature->points[i].x - cx;
@@ -385,7 +396,7 @@ static void encode_geometry(CTMVTEncoder *enc, const CTFeature *feature)
             }
 
             /* MoveTo first point of ring */
-            enc_write_varint(enc, (MVT_CMD_MOVETO << 3) | 1);
+            enc_write_varint(enc, MVT_CMD(MVT_CMD_MOVETO, 1));
             int32_t dx = feature->points[ring_start].x - cx;
             int32_t dy = feature->points[ring_start].y - cy;
             enc_write_svarint(enc, dx);
@@ -402,7 +413,7 @@ static void encode_geometry(CTMVTEncoder *enc, const CTFeature *feature)
 
             int lineto_count = last_idx - ring_start;
             if (lineto_count > 0) {
-                enc_write_varint(enc, (MVT_CMD_LINETO << 3) | lineto_count);
+                enc_write_varint(enc, MVT_CMD(MVT_CMD_LINETO, lineto_count));
 
                 for (int i = ring_start + 1; i <= last_idx; i++) {
                     dx = feature->points[i].x - cx;
@@ -415,7 +426,7 @@ static void encode_geometry(CTMVTEncoder *enc, const CTFeature *feature)
             }
 
             /* ClosePath */
-            enc_write_varint(enc, (MVT_CMD_CLOSEPATH << 3) | 1);
+            enc_write_varint(enc, MVT_CMD(MVT_CMD_CLOSEPATH, 1));
 
             ring_start = ring_end;
         }

@@ -1177,6 +1177,70 @@ static int mvt_has_layer(const uint8_t *buf, size_t size, const char *layer_name
     return 0;
 }
 
+/* Decode the geometry command stream of the first feature in the named layer
+ * and verify it is well formed per the MVT 2.1 spec: each CommandInteger holds
+ * the command id in its low three bits (MoveTo=1, LineTo=2, ClosePath=7) and the
+ * repeat count in the rest; the declared coordinate pairs are actually present;
+ * and the stream consumes its geometry buffer exactly. Returns 1 if valid, 0 if
+ * no such feature exists or the stream is malformed.
+ *
+ * This is the check the tag-only schema tests lacked: a CommandInteger built as
+ * (id << 3) | count instead of (count << 3) | id still decodes as some command,
+ * so layers kept their names and classes while every polygon's geometry was
+ * corrupt (ClosePath 57 reading as MoveTo count 7, running off the end). A real
+ * MVT client rejected those tiles; this test now would too. */
+static int mvt_geometry_well_formed(const uint8_t *buf, size_t size, const char *layer_name)
+{
+    PBR tile = { buf, size, 0 };
+    uint32_t f, w;
+    while (pbr_tag(&tile, &f, &w)) {
+        if (f != 3 || w != 2) { pbr_skip(&tile, w); continue; }
+        size_t llen; const uint8_t *lp = pbr_bytes(&tile, &llen);
+        if (!lp) break;
+        /* Is this the layer we want, and where is its first feature? */
+        PBR scan = { lp, llen, 0 }; uint32_t sf, sw;
+        int match = 0;
+        const uint8_t *geom = NULL; size_t geom_len = 0;
+        while (pbr_tag(&scan, &sf, &sw)) {
+            if (sf == 1 && sw == 2) {
+                size_t n; const uint8_t *s = pbr_bytes(&scan, &n);
+                match = (n == strlen(layer_name) && memcmp(s, layer_name, n) == 0);
+            } else if (sf == 2 && sw == 2 && !geom) {
+                /* First feature: find its geometry (field 4, wire 2). */
+                size_t flen; const uint8_t *fp = pbr_bytes(&scan, &flen);
+                PBR fr = { fp, flen, 0 }; uint32_t ff, fw;
+                while (pbr_tag(&fr, &ff, &fw)) {
+                    if (ff == 4 && fw == 2) { geom = pbr_bytes(&fr, &geom_len); break; }
+                    else pbr_skip(&fr, fw);
+                }
+            } else pbr_skip(&scan, sw);
+        }
+        if (!match) continue;
+        if (!geom) return 0;
+
+        PBR g = { geom, geom_len, 0 };
+        int saw = 0;
+        while (g.off < g.len) {
+            uint64_t ci = pbr_varint(&g);
+            uint32_t cmd = (uint32_t)(ci & 0x7u), count = (uint32_t)(ci >> 3);
+            if (cmd == 7 /* ClosePath */) {
+                if (count != 1) return 0;
+            } else if (cmd == 1 /* MoveTo */ || cmd == 2 /* LineTo */) {
+                if (count == 0) return 0;
+                for (uint32_t i = 0; i < count * 2u; i++) {
+                    if (g.off >= g.len) return 0;   /* count overran the buffer */
+                    (void)pbr_varint(&g);
+                }
+            } else {
+                return 0;                           /* not a valid command id */
+            }
+            saw = 1;
+        }
+        return saw && g.off == g.len;
+    }
+    return 0;
+}
+
 /* Build a small tile: a named bridge primary road, an unnamed service road,
  * and a water body polygon. UTF-8 name exercises Hungarian ő and ű. */
 static void mvt_build_sample_tile(CTTile *tile)
@@ -1270,6 +1334,21 @@ TEST(mvt_schema_empty_tile_no_layers)
     uint8_t buf[256];
     size_t size = ct_encode_mvt(&tile, NULL, buf, sizeof(buf));
     ASSERT(!mvt_has_layer(buf, size, "roads"));
+    ct_tile_free(&tile);
+    return 1;
+}
+
+TEST(mvt_geometry_commands_decodable)
+{
+    CTTile tile; mvt_build_sample_tile(&tile);
+    uint8_t buf[8192];
+    size_t size = ct_encode_mvt(&tile, NULL, buf, sizeof(buf));
+    ASSERT(size > 0);
+    /* Lines were mostly tolerated by lenient readers; the polygon is the case a
+     * real MVT client rejected when the CommandInteger operands were transposed.
+     * Validate both the line (roads) and the closed ring (water polygon). */
+    ASSERT(mvt_geometry_well_formed(buf, size, "roads"));
+    ASSERT(mvt_geometry_well_formed(buf, size, "water"));
     ct_tile_free(&tile);
     return 1;
 }
@@ -3323,6 +3402,7 @@ int main(void)
     run_test_mvt_schema_missing_name_absent();
     run_test_mvt_schema_water_class();
     run_test_mvt_schema_empty_tile_no_layers();
+    run_test_mvt_geometry_commands_decodable();
 
     printf("\nPNG Encoding:\n");
     run_test_png_default_options();
