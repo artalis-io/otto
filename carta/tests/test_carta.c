@@ -2206,6 +2206,53 @@ TEST(simplify_multipolygon_preserves_hole)
     return 1;
 }
 
+TEST(ring_self_intersects_detects)
+{
+    /* Bowtie / figure-8: the two diagonals of a square as a 4-point ring cross. */
+    CTTilePoint bowtie[] = { {0, 0}, {100, 100}, {100, 0}, {0, 100} };
+    ASSERT(ct_ring_self_intersects(bowtie, 4) == 1);
+
+    /* Simple square: no crossing. */
+    CTTilePoint square[] = { {0, 0}, {100, 0}, {100, 100}, {0, 100} };
+    ASSERT(ct_ring_self_intersects(square, 4) == 0);
+
+    /* Triangle (n < 4) cannot self-intersect. */
+    CTTilePoint tri[] = { {0, 0}, {100, 0}, {50, 100} };
+    ASSERT(ct_ring_self_intersects(tri, 3) == 0);
+    return 1;
+}
+
+TEST(simplify_poly_no_self_intersection)
+{
+    /* Douglas-Peucker is not topology-preserving, so a concave "comb" ring can
+     * become self-intersecting after simplification. The guard must guarantee a
+     * simple result (reverting to the original ring if needed) - a
+     * self-intersecting polygon renders as triangle-fan artifacts in a GPU
+     * tessellator such as MapLibre's. */
+    /* A star polygon: vertices in angular order with alternating large/small
+     * radius. This is always simple, but aggressive DP over its deep notches can
+     * collapse spikes unevenly and cross. */
+    const double PI = 3.14159265358979323846;
+    const double cx = 2048, cy = 2048;
+    const int spikes = 12;
+    CTTilePoint points[64];
+    int n = 0;
+    for (int k = 0; k < 2 * spikes; k++) {
+        double ang = PI * k / spikes;
+        double r = (k % 2) ? 1850.0 : 280.0;
+        points[n++] = (CTTilePoint){ (int)(cx + r * cos(ang)), (int)(cy + r * sin(ang)) };
+    }
+    int orig_n = n;
+
+    /* Sanity: the test ring itself is simple before simplification. */
+    ASSERT(!ct_ring_self_intersects(points, n));
+    ct_simplify_poly_inplace((CTTilePoint *)points, &n, 400.0f);
+    ASSERT(n >= 3);
+    ASSERT(n <= orig_n);
+    ASSERT(!ct_ring_self_intersects(points, n));
+    return 1;
+}
+
 /* ============================================================================
  * LOD Tests
  * ============================================================================ */
@@ -3456,6 +3503,8 @@ int main(void)
     run_test_simplify_line_preserves_sharp_turns();
     run_test_simplify_poly_triangle();
     run_test_simplify_multipolygon_preserves_hole();
+    run_test_ring_self_intersects_detects();
+    run_test_simplify_poly_no_self_intersection();
 
     printf("\nLOD:\n");
     run_test_lod_init_empty();

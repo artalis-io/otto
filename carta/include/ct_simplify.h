@@ -17,6 +17,21 @@
 extern "C" {
 #endif
 
+/*
+ * Does the closed ring points[0..n-1] self-intersect (proper crossings only)?
+ *
+ * Douglas-Peucker simplification is not topology-preserving and can turn a
+ * simple ring into a self-intersecting one; such rings are invalid MVT geometry
+ * and render as triangle-fan artifacts in a GPU tessellator (e.g. MapLibre).
+ * The in-place simplifiers use this to revert a ring that became invalid.
+ *
+ * @param points Closed ring (the edge from the last point back to the first is
+ *               implicit; do not duplicate the first point).
+ * @param n      Number of points. Returns 0 for n < 4.
+ * @return 1 if any two non-adjacent edges properly cross, else 0. O(n^2).
+ */
+int ct_ring_self_intersects(const CTTilePoint *points, int n);
+
 /* ============================================================================
  * In-Place Simplification Functions
  * ============================================================================ */
