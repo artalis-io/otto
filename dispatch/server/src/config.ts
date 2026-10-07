@@ -53,6 +53,11 @@ export const config = {
   // ---- Robustness limits ----
   // Max solver subprocesses at once; further solves queue (pending -> running).
   maxConcurrentSolves: Number(env('DISPATCH_MAX_CONCURRENT_SOLVES', '2')),
+  // Max solves waiting in the queue; beyond this the API returns 503 (backpressure).
+  maxSolveQueue: Number(env('DISPATCH_MAX_SOLVE_QUEUE', '32')),
+  // Max concurrent dataset admits (each holds a geocode + N^2 matrix build);
+  // further admits wait. 1 keeps the single process from OOMing on parallel uploads.
+  maxConcurrentImports: Number(env('DISPATCH_MAX_CONCURRENT_IMPORTS', '1')),
   // Hard-kill a solve this many seconds past its budget (SIGTERM, then SIGKILL).
   solveWatchdogGraceSec: Number(env('DISPATCH_SOLVE_GRACE_SEC', '20')),
   // Cap captured solver stdout; beyond this the job fails instead of OOMing.
@@ -63,6 +68,9 @@ export const config = {
   // Cap the on-disk/in-memory road-geometry leg cache (oldest evicted). Bounds
   // what was an unbounded, fully-rewritten-per-persist file.
   geocacheMaxLegs: Number(env('DISPATCH_GEOCACHE_MAX_LEGS', '200000')),
+  // Cap matrix_build stdout held in memory. For 1500 locations the all-pairs
+  // text is ~70 MB, so 256 MB is ample headroom without the old 512 MB ceiling.
+  matrixMaxBufferMB: Number(env('DISPATCH_MATRIX_MAX_BUFFER_MB', '256')),
   // Per-IP API rate limit (token bucket): sustained rps and burst.
   rateLimitRps: Number(env('DISPATCH_RATE_RPS', '40')),
   rateLimitBurst: Number(env('DISPATCH_RATE_BURST', '120')),

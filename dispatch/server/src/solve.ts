@@ -32,7 +32,12 @@ export type Objective = 'vehicles' | 'distance';
  * single cost objective (fixed + distance), i.e. the least-distance plan. */
 export function buildRequest(scenario: Scenario, budgetSec: number, objective: Objective = 'vehicles', fullBudget = false): BuiltRequest {
   const day = loadDay(scenario.day);
-  const request = structuredClone(day.request) as SurgeRequest;
+  // A12: deep-clone everything we mutate, but SHARE the N^2 travel matrix by
+  // reference (it is never mutated here). structuredClone of the whole request
+  // would deep-copy ~2.25M distance+duration entries on the event loop per solve.
+  const { travel, ...rest } = day.request;
+  const request = structuredClone(rest) as SurgeRequest;
+  request.travel = travel;
   request.requests = request.requests.filter((r) => day.scopeTaskIds.has(r.delivery_task_id));
 
   const available = new Set(request.vehicles.map((v) => v.id));
@@ -115,6 +120,12 @@ function dayLabel(dayId: string): string {
 export function enqueueSolve(job: Job, scenario: Scenario, budgetSec: number, objective: Objective = 'vehicles', fullBudget = false): void {
   if (running.size < Math.max(1, config.maxConcurrentSolves)) runSolveProcess(job, scenario, budgetSec, objective, fullBudget);
   else queue.push({ job, scenario, budgetSec, objective, fullBudget });
+}
+
+/* A3: backpressure. False when all solver slots are busy AND the queue is at
+ * its depth cap; the API returns 503 rather than growing an unbounded queue. */
+export function hasSolveCapacity(): boolean {
+  return running.size < Math.max(1, config.maxConcurrentSolves) || queue.length < Math.max(0, config.maxSolveQueue);
 }
 
 function pumpQueue(): void {

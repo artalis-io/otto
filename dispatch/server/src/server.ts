@@ -11,7 +11,13 @@ import { allDatasets, unregisterDataset } from './data/registry.js';
 import { mapSolutionToPlan } from './plan/mapper.js';
 import { fillPlanGeometry, veloReachable } from './geometry/velo.js';
 import { store, validateScenarioEdit, type ScenarioEdit } from './store.js';
-import { enqueueSolve, cancelJob, type Objective } from './solve.js';
+import { enqueueSolve, cancelJob, hasSolveCapacity, type Objective } from './solve.js';
+import { Semaphore } from './util/semaphore.js';
+
+/* A2: bound concurrent dataset admits (each holds a geocode + an N^2 matrix
+ * build). Admits await a slot, surfacing as the 'queued' stage, rather than
+ * running in parallel and OOMing the single process. */
+const importSem = new Semaphore(config.maxConcurrentImports);
 import { comparePlans } from './plan/compare.js';
 import { weekSummary } from './plan/week.js';
 import { importSummary, rawSample, canonicalSample } from './data/import.js';
@@ -169,6 +175,7 @@ app.get<{ Params: { id: string } }>('/api/scenarios/:id/plans', async (req, repl
 app.post<{ Params: { id: string }; Body: { budgetSec?: number; objective?: string; fullBudget?: boolean } }>('/api/scenarios/:id/solve', async (req, reply) => {
   const scenario = store.getScenario(req.params.id);
   if (!scenario) return reply.code(404).send({ error: 'scenario not found' });
+  if (!hasSolveCapacity()) return reply.code(503).send({ error: 'solver busy, retry shortly' });
   const budget = Math.max(5, Math.min(600, req.body?.budgetSec ?? config.solveTimeSeconds));
   const objective: Objective = req.body?.objective === 'distance' ? 'distance' : 'vehicles';
   const fullBudget = req.body?.fullBudget === true;
@@ -368,10 +375,11 @@ app.post<{ Body: { uploadId?: string; mapping?: Mapping; label?: string; vehicle
   const job = store.createImportJob();
   job.status = 'running';
   job.startedAt = new Date().toISOString();
-  job.stage = 'geocoding';
+  job.stage = 'queued';           // may wait for an import slot before geocoding
   store.saveJob(job);
   const t0 = Date.now();
   void (async () => {
+    const release = await importSem.acquire();   // bound concurrent heavy admits
     try {
       const result = await admitDataset(path, mapping, label ?? 'Uploaded dataset', (stage) => { job.stage = stage; store.saveJob(job); }, fleetSource);
       job.elapsedSec = (Date.now() - t0) / 1000;
@@ -384,6 +392,8 @@ app.post<{ Body: { uploadId?: string; mapping?: Mapping; label?: string; vehicle
     } catch (e) {
       job.status = 'failed'; job.error = (e as Error).message; job.finishedAt = new Date().toISOString();
       job.elapsedSec = (Date.now() - t0) / 1000; store.saveJob(job);
+    } finally {
+      release();
     }
   })();
   return reply.code(202).send({ jobId: job.id });
