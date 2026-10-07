@@ -36,6 +36,7 @@ export function buildRequest(scenario: Scenario, budgetSec: number, objective: O
   }
 
   applyOverrides(request, scenario, available);
+  applyVehicleOverrides(request, scenario);
 
   request.config = {
     ...request.config,
@@ -71,6 +72,25 @@ export function applyOverrides(request: SurgeRequest, scenario: Scenario, availa
     if (!r || !avail.has(f.vehicleId)) continue;
     if (r.allowed_vehicles) continue; // a pin on this order supersedes forbids
     r.forbidden_vehicles = [...(r.forbidden_vehicles ?? []), f.vehicleId];
+  }
+}
+
+/** Apply per-vehicle constraint overrides (capacity, shift, max trips/distance/
+ * duration) onto the request vehicles (mutates request). Unset fields are left
+ * at the vehicle's dataset defaults. Distance is km->m, duration is min->s. */
+export function applyVehicleOverrides(request: SurgeRequest, scenario: Scenario): void {
+  if (!scenario.vehicleOverrides.length) return;
+  const byId = new Map(request.vehicles.map((v) => [v.id, v]));
+  for (const o of scenario.vehicleOverrides) {
+    const v = byId.get(o.vehicleId);
+    if (!v) continue; // vehicle removed / not in scope
+    if (o.capacityKg != null) v.capacity[0] = o.capacityKg;
+    if (o.capacityPallets != null) v.capacity[1] = o.capacityPallets;
+    if (o.shiftEarlySec != null) v.shift_early = o.shiftEarlySec;
+    if (o.shiftLateSec != null) v.shift_late = o.shiftLateSec;
+    if (o.maxTrips != null) v.max_trips = o.maxTrips;
+    if (o.maxDistanceKm != null) v.max_distance = o.maxDistanceKm * 1000;
+    if (o.maxDurationMin != null) v.max_duration = o.maxDurationMin * 60;
   }
 }
 

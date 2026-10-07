@@ -1,4 +1,4 @@
-import { Ban, CheckCircle2, AlertTriangle, Pin, PinOff, X } from 'lucide-react';
+import { Ban, CheckCircle2, AlertTriangle, Pin, PinOff, X, RotateCcw, SlidersHorizontal, ChevronRight } from 'lucide-react';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { Badge } from '@/components/ui/badge';
@@ -6,7 +6,8 @@ import { Separator } from '@/components/ui/separator';
 import { hhmm, km, money, pct, ratio } from '@/lib/format';
 import { NarrationPanel } from '@/components/NarrationPanel';
 import { useT } from '@/i18n';
-import type { Plan, Scenario, Selection, Vehicle, Trip, Stop, ValidationViolation } from '@/types';
+import { useState } from 'react';
+import type { Plan, Scenario, Selection, Vehicle, Trip, Stop, ValidationViolation, VehicleConstraintPatch } from '@/types';
 
 function Field({ label, value, warn }: { label: string; value: string; warn?: boolean }) {
   return (
@@ -126,6 +127,62 @@ function AssignmentSection({ plan, scenario, orderNo, currentVehicleId, onPin, o
   );
 }
 
+/* Staged per-vehicle constraint editor: capacity, shift window, and max trips/
+ * distance/duration. Blank fields keep the dataset default; changes stage on the
+ * scenario and apply on the next Replan. */
+function ConstraintsEditor({ vehicle, override, onSet, onClear }: {
+  vehicle: Vehicle; override?: import('@/types').VehicleOverride;
+  onSet: (patch: VehicleConstraintPatch) => void; onClear: () => void;
+}) {
+  const t = useT();
+  const [open, setOpen] = useState(Boolean(override));
+  const timeToSec = (v: string): number | undefined => { if (!v) return undefined; const [h, m] = v.split(':').map(Number); return h * 3600 + m * 60; };
+  const secToTime = (s?: number): string => (s == null ? '' : hhmm(s));
+  const has = Boolean(override);
+
+  return (
+    <div className="rounded-md border border-divider">
+      <button type="button" onClick={() => setOpen((o) => !o)} className="flex w-full items-center gap-1.5 px-2 py-1.5 text-left text-[11px] font-semibold uppercase tracking-wide text-muted-foreground hover:bg-accent/40">
+        <ChevronRight className={`h-3.5 w-3.5 transition-transform ${open ? 'rotate-90' : ''}`} />
+        <SlidersHorizontal className="h-3.5 w-3.5" /> {t('inspector.constraints')}
+        {has && <span className="ml-auto rounded bg-warning/15 px-1 text-[9px] text-warning">●</span>}
+      </button>
+      {open && (
+        <div className="space-y-2 px-2 pb-2">
+          <div className="grid grid-cols-2 gap-2">
+            <Num label={t('inspector.capKg')} def={override?.capacityKg} ph={vehicle.capacityKg} onCommit={(v) => onSet({ capacityKg: v })} />
+            <Num label={t('inspector.capPlt')} def={override?.capacityPallets} ph={vehicle.capacityPallets} onCommit={(v) => onSet({ capacityPallets: v })} />
+            <Field2 label={t('inspector.shiftStart')}><input type="time" defaultValue={secToTime(override?.shiftEarlySec)} onChange={(e) => onSet({ shiftEarlySec: timeToSec(e.target.value) })} className="h-7 w-full rounded border border-divider bg-card px-1 text-xs" /></Field2>
+            <Field2 label={t('inspector.shiftEnd')}><input type="time" defaultValue={secToTime(override?.shiftLateSec)} onChange={(e) => onSet({ shiftLateSec: timeToSec(e.target.value) })} className="h-7 w-full rounded border border-divider bg-card px-1 text-xs" /></Field2>
+            <Num label={t('inspector.maxTrips')} def={override?.maxTrips} ph={vehicle.tripCount} onCommit={(v) => onSet({ maxTrips: v })} />
+            <Num label={t('inspector.maxDist')} def={override?.maxDistanceKm} ph={Math.round(vehicle.distanceKm)} onCommit={(v) => onSet({ maxDistanceKm: v })} />
+          </div>
+          <p className="text-[10px] text-muted-foreground">{t('inspector.constraintsHint')}</p>
+          {has && (
+            <button type="button" onClick={onClear} className="flex w-full items-center justify-center gap-1.5 rounded border border-divider px-2 py-1 text-[11px] text-muted-foreground hover:bg-accent">
+              <X className="h-3 w-3" /> {t('inspector.clearConstraints')}
+            </button>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function Field2({ label, children }: { label: string; children: React.ReactNode }) {
+  return <label className="block"><span className="mb-0.5 block text-[10px] text-muted-foreground">{label}</span>{children}</label>;
+}
+function Num({ label, def, ph, onCommit }: { label: string; def?: number; ph: number; onCommit: (v: number | undefined) => void }) {
+  return (
+    <Field2 label={label}>
+      <input type="number" defaultValue={def ?? ''} placeholder={String(ph)}
+        onBlur={(e) => { const n = Number(e.target.value); onCommit(e.target.value.trim() === '' || Number.isNaN(n) ? undefined : n); }}
+        onKeyDown={(e) => { if (e.key === 'Enter') (e.target as HTMLInputElement).blur(); }}
+        className="h-7 w-full rounded border border-divider bg-card px-1.5 text-xs" />
+    </Field2>
+  );
+}
+
 function VehicleSummary({ vehicle, plan, onSelectTrip }: { vehicle: Vehicle; plan: Plan; onSelectTrip: (i: number) => void }) {
   const t = useT();
   const vcost = plan.cost?.perVehicle.find((c) => c.vehicleId === vehicle.id);
@@ -195,8 +252,11 @@ function LoadTab({ vehicle }: { vehicle: Vehicle }) {
   );
 }
 
-export function Inspector({ plan, scenario, selection, onSelect, onMarkUnavailable, solving, onPin, onUnpin, onForbid, onClearOverrides }: {
+export function Inspector({ plan, scenario, selection, onSelect, onMarkUnavailable, onRestoreVehicle, onSetConstraint, onClearConstraint, solving, onPin, onUnpin, onForbid, onClearOverrides }: {
   plan: Plan; baseline: Plan; scenario: Scenario; selection: Selection; onSelect: (s: Selection) => void; onMarkUnavailable: (id: number) => void; solving: boolean;
+  onRestoreVehicle: (id: number) => void;
+  onSetConstraint: (vehicleId: number, patch: VehicleConstraintPatch) => void;
+  onClearConstraint: (vehicleId: number) => void;
   onPin: (orderNo: string, vehicleId: number) => void;
   onUnpin: (orderNo: string) => void;
   onForbid: (orderNo: string, vehicleId: number) => void;
@@ -208,6 +268,8 @@ export function Inspector({ plan, scenario, selection, onSelect, onMarkUnavailab
   // Unassigned order context.
   if (selection?.kind === 'unassigned') {
     const u = plan.unassigned.find((x) => x.orderNo === selection.orderNo);
+    const pin = u ? scenario.pins.find((p) => p.orderNo === u.orderNo) : undefined;
+    const refOf = (id: number): string => plan.vehicles.find((v) => v.id === id)?.ref ?? `#${id}`;
     return (
       <Panel>
         {u ? (
@@ -217,6 +279,23 @@ export function Inspector({ plan, scenario, selection, onSelect, onMarkUnavailab
             <Separator />
             <Badge variant="warning">{t('inspector.unassignedBadge')}</Badge>
             <p className="text-xs text-muted-foreground">{u.reason ?? t('inspector.unassignedReason')}</p>
+            {/* Assign by hand: pin this unassigned order to a chosen vehicle, applied on Replan. */}
+            <div className="space-y-2 rounded-md border border-divider bg-muted/30 p-2.5">
+              <div className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">{t('inspector.assignByHand')}</div>
+              {pin ? (
+                <div className="flex items-center justify-between gap-2">
+                  <Badge variant="outline" className="gap-1"><Pin className="h-3 w-3" /> {t('inspector.pinned', { ref: refOf(pin.vehicleId) })}</Badge>
+                  <button type="button" onClick={() => onUnpin(u.orderNo)} className="inline-flex items-center gap-1 rounded border border-divider px-1.5 py-0.5 text-[11px] hover:bg-accent"><PinOff className="h-3 w-3" /> {t('inspector.unpin')}</button>
+                </div>
+              ) : (
+                <select defaultValue="" onChange={(e) => { const id = Number(e.target.value); if (id) onPin(u.orderNo, id); }}
+                  className="h-7 w-full rounded border border-divider bg-card px-1.5 text-xs">
+                  <option value="" disabled>{t('inspector.assignTo')}</option>
+                  {plan.vehicles.map((v) => <option key={v.id} value={v.id}>{v.ref}{v.vehicleClass ? ` · ${v.vehicleClass.replace(/_/g, ' ')}` : ''}</option>)}
+                </select>
+              )}
+              <p className="text-[10px] text-muted-foreground">{t('inspector.overrideHint')}</p>
+            </div>
           </div>
         ) : <Empty planId={plan.id} />}
       </Panel>
@@ -263,16 +342,28 @@ export function Inspector({ plan, scenario, selection, onSelect, onMarkUnavailab
               )}
               <Separator />
               <ValidationRow plan={plan} vehicle={vehicle} />
+              {!stop && !trip && (
+                <ConstraintsEditor vehicle={vehicle}
+                  override={scenario.vehicleOverrides.find((o) => o.vehicleId === vehicle.id)}
+                  onSet={(patch) => onSetConstraint(vehicle.id, patch)} onClear={() => onClearConstraint(vehicle.id)} />
+              )}
               {overrideCount > 0 && (
                 <button type="button" onClick={onClearOverrides}
                   className="flex w-full items-center justify-center gap-1.5 rounded border border-divider px-2 py-1 text-[11px] text-muted-foreground hover:bg-accent">
                   <X className="h-3 w-3" /> {t('inspector.clearOverrides')} ({overrideCount})
                 </button>
               )}
-              <button type="button" disabled={solving} onClick={() => onMarkUnavailable(vehicle.id)}
-                className="flex w-full items-center justify-center gap-1.5 rounded border border-warning/40 px-2 py-1.5 text-xs font-medium text-warning hover:bg-warning/10 disabled:opacity-40">
-                <Ban className="h-3.5 w-3.5" /> {t('inspector.markUnavailable', { ref: vehicle.ref })}
-              </button>
+              {scenario.removedVehicleIds.includes(vehicle.id) ? (
+                <button type="button" disabled={solving} onClick={() => onRestoreVehicle(vehicle.id)}
+                  className="flex w-full items-center justify-center gap-1.5 rounded border border-divider px-2 py-1.5 text-xs font-medium text-muted-foreground hover:bg-accent disabled:opacity-40">
+                  <RotateCcw className="h-3.5 w-3.5" /> {t('fleet.restore')}
+                </button>
+              ) : (
+                <button type="button" disabled={solving} onClick={() => onMarkUnavailable(vehicle.id)}
+                  className="flex w-full items-center justify-center gap-1.5 rounded border border-warning/40 px-2 py-1.5 text-xs font-medium text-warning hover:bg-warning/10 disabled:opacity-40">
+                  <Ban className="h-3.5 w-3.5" /> {t('inspector.markUnavailable', { ref: vehicle.ref })}
+                </button>
+              )}
             </TabsContent>
             <TabsContent value="load" className="mt-0">
               <LoadTab vehicle={vehicle} />

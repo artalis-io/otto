@@ -20,6 +20,11 @@ export interface SurgeRequestVehicle {
   start_depot_id: number;
   end_depot_id: number;
   fixed_cost?: number;
+  shift_early?: number;   // sec from midnight
+  shift_late?: number;
+  max_trips?: number;
+  max_distance?: number;  // meters
+  max_duration?: number;  // seconds
 }
 
 export interface SurgeRequestDef {

@@ -32,7 +32,7 @@ const en: Dict = {
   'fleet.title': 'Fleet', 'fleet.search': 'Search customer, order, vehicle',
   'fleet.trips': '{n} trips', 'fleet.tripOne': '{n} trip', 'fleet.finish': 'finish {t}',
   'fleet.noMatch': 'No vehicles match.', 'fleet.tripLabel': 'Trip {n}', 'fleet.stopsN': '{n} stops',
-  'fleet.markUnavailable': 'Mark unavailable & replan',
+  'fleet.markUnavailable': 'Mark unavailable', 'fleet.staged': 'staged', 'fleet.restore': 'Restore',
   'fleet.unassigned': 'Unassigned orders', 'fleet.allAssigned': 'All orders assigned.',
 
   'timeline.title': 'Timeline', 'timeline.workingDay': '{ref} · working day',
@@ -51,7 +51,7 @@ const en: Dict = {
   'inspector.timeWindow': 'Time window', 'inspector.wait': 'Wait', 'inspector.lateBy': 'Late by',
   'inspector.weight': 'Weight', 'inspector.pallets': 'Pallets', 'inspector.serviceTime': 'Service time',
   'inspector.travelTo': 'Travel to stop', 'inspector.noViolations': 'No hard-constraint violations',
-  'inspector.markUnavailable': 'Mark {ref} unavailable & replan',
+  'inspector.markUnavailable': 'Mark {ref} unavailable',
   'inspector.stopN': 'stop {n}', 'inspector.tripN': 'trip {n}', 'inspector.minN': '{n} min',
   'inspector.loadNote': 'Aggregate scalar capacity (weight & pallet count). Physical 3L loading feasibility — pallet positions, stackability, unloading access — has not been checked; no loading checker is wired.',
 
@@ -92,8 +92,14 @@ const en: Dict = {
   // Export menu
   'export.json': 'Plan (JSON)', 'export.csv': 'Stops (CSV)', 'export.routesheet': 'Driver route sheets',
   // Overrides
-  'topbar.editsN': '{n} edits',
-  'edits.pending': '{n} manual override(s) pending — Replan to apply.',
+  'topbar.editsN': '{n} edits', 'topbar.changes': 'Changes',
+  'edits.pending': '{n} staged change(s) — review & Replan to apply.',
+  'changes.title': 'Staged changes', 'changes.none': 'No staged changes.',
+  'changes.removed': 'Removed vehicles', 'changes.pinned': 'Pinned orders',
+  'changes.forbidden': 'Forbidden', 'changes.constraints': 'Vehicle constraints',
+  'changes.discard': 'Discard all', 'changes.applied': 'Reflected in the current plan.',
+  'changes.capacity': 'cap {kg} kg / {plt} plt', 'changes.shift': 'shift {a}–{b}',
+  'changes.maxTrips': 'max {n} trips', 'changes.maxDistance': 'max {n} km', 'changes.maxDuration': 'max {n} min',
   'inspector.assignment': 'Assignment',
   'inspector.pinHere': 'Pin to {ref}', 'inspector.pinned': 'Pinned to {ref}', 'inspector.unpin': 'Unpin',
   'inspector.moveTo': 'Move to…', 'inspector.forbidHere': 'Forbid {ref}',
@@ -101,6 +107,11 @@ const en: Dict = {
   'inspector.overrideHint': 'Overrides apply on the next Replan.',
   'inspector.subcontractor': 'subcontractor',
   'inspector.driveWait': 'Drive · wait', 'inspector.backToVehicle': 'Back to vehicle',
+  'inspector.constraints': 'Edit constraints', 'inspector.capKg': 'Capacity kg', 'inspector.capPlt': 'Capacity plt',
+  'inspector.shiftStart': 'Shift start', 'inspector.shiftEnd': 'Shift end',
+  'inspector.maxTrips': 'Max trips', 'inspector.maxDist': 'Max km',
+  'inspector.constraintsHint': 'Blank = dataset default. Applies on Replan.', 'inspector.clearConstraints': 'Reset constraints',
+  'inspector.assignByHand': 'Assign by hand', 'inspector.assignTo': 'Assign to vehicle…',
   // Cost
   'kpi.cost': 'Est. cost', 'kpi.demoTariff': 'demo tariff', 'kpi.extTariff': 'tariff',
   'compare.cost': 'Est. cost', 'compare.saved': '{p}% saved',
@@ -131,7 +142,7 @@ const hu: Dict = {
   'fleet.title': 'Flotta', 'fleet.search': 'Keresés: ügyfél, megrendelés, jármű',
   'fleet.trips': '{n} forduló', 'fleet.tripOne': '{n} forduló', 'fleet.finish': 'vége {t}',
   'fleet.noMatch': 'Nincs találat.', 'fleet.tripLabel': '{n}. forduló', 'fleet.stopsN': '{n} megálló',
-  'fleet.markUnavailable': 'Kivonás és újratervezés',
+  'fleet.markUnavailable': 'Kivonás', 'fleet.staged': 'előkészítve', 'fleet.restore': 'Visszaállítás',
   'fleet.unassigned': 'Kiosztatlan megrendelések', 'fleet.allAssigned': 'Minden megrendelés kiosztva.',
 
   'timeline.title': 'Idővonal', 'timeline.workingDay': '{ref} · munkanapja',
@@ -150,7 +161,7 @@ const hu: Dict = {
   'inspector.timeWindow': 'Időablak', 'inspector.wait': 'Várakozás', 'inspector.lateBy': 'Késés',
   'inspector.weight': 'Súly', 'inspector.pallets': 'Raklap', 'inspector.serviceTime': 'Kiszolgálási idő',
   'inspector.travelTo': 'Utazás a megállóig', 'inspector.noViolations': 'Nincs kemény feltétel megsértve',
-  'inspector.markUnavailable': '{ref} kivonása és újratervezés',
+  'inspector.markUnavailable': '{ref} kivonása',
   'inspector.stopN': '{n}. megálló', 'inspector.tripN': '{n}. forduló', 'inspector.minN': '{n} perc',
   'inspector.loadNote': 'Csak összesített skaláris kapacitás (súly és raklapszám). A fizikai 3L rakodhatóság — raklappozíciók, torlaszolhatóság, lerakodási hozzáférés — nincs ellenőrizve; nincs rakodásellenőrző bekötve.',
 
@@ -191,8 +202,14 @@ const hu: Dict = {
   // Export menu
   'export.json': 'Terv (JSON)', 'export.csv': 'Megállók (CSV)', 'export.routesheet': 'Sofőr útvonallapok',
   // Overrides
-  'topbar.editsN': '{n} módosítás',
-  'edits.pending': '{n} kézi módosítás függőben — Újratervezés az érvényesítéshez.',
+  'topbar.editsN': '{n} módosítás', 'topbar.changes': 'Módosítások',
+  'edits.pending': '{n} előkészített módosítás — nézd át és Újratervezés az érvényesítéshez.',
+  'changes.title': 'Előkészített módosítások', 'changes.none': 'Nincs előkészített módosítás.',
+  'changes.removed': 'Kivont járművek', 'changes.pinned': 'Rögzített megrendelések',
+  'changes.forbidden': 'Tiltva', 'changes.constraints': 'Jármű-korlátok',
+  'changes.discard': 'Összes elvetése', 'changes.applied': 'A jelenlegi tervben érvényesítve.',
+  'changes.capacity': 'kap. {kg} kg / {plt} rlp', 'changes.shift': 'műszak {a}–{b}',
+  'changes.maxTrips': 'max {n} forduló', 'changes.maxDistance': 'max {n} km', 'changes.maxDuration': 'max {n} perc',
   'inspector.assignment': 'Hozzárendelés',
   'inspector.pinHere': 'Rögzítés: {ref}', 'inspector.pinned': 'Rögzítve: {ref}', 'inspector.unpin': 'Feloldás',
   'inspector.moveTo': 'Áthelyezés…', 'inspector.forbidHere': '{ref} tiltása',
@@ -200,6 +217,11 @@ const hu: Dict = {
   'inspector.overrideHint': 'A módosítások a következő újratervezéskor lépnek életbe.',
   'inspector.subcontractor': 'alvállalkozó',
   'inspector.driveWait': 'Vezetés · várakozás', 'inspector.backToVehicle': 'Vissza a járműhöz',
+  'inspector.constraints': 'Korlátok szerkesztése', 'inspector.capKg': 'Kapacitás kg', 'inspector.capPlt': 'Kapacitás rlp',
+  'inspector.shiftStart': 'Műszak kezdete', 'inspector.shiftEnd': 'Műszak vége',
+  'inspector.maxTrips': 'Max forduló', 'inspector.maxDist': 'Max km',
+  'inspector.constraintsHint': 'Üres = adathalmaz alapértelmezés. Újratervezéskor lép életbe.', 'inspector.clearConstraints': 'Korlátok visszaállítása',
+  'inspector.assignByHand': 'Kézi hozzárendelés', 'inspector.assignTo': 'Hozzárendelés járműhöz…',
   // Cost
   'kpi.cost': 'Becsült költség', 'kpi.demoTariff': 'teszt tarifa', 'kpi.extTariff': 'tarifa',
   'compare.cost': 'Becsült költség', 'compare.saved': '{p}% megtakarítás',

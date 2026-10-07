@@ -11,6 +11,7 @@ import { MapView } from '@/map/MapView';
 import { CompareDialog } from '@/components/CompareDialog';
 import { ImportDialog } from '@/components/ImportDialog';
 import { HistoryDialog } from '@/components/HistoryDialog';
+import { ChangesDialog } from '@/components/ChangesDialog';
 import { api, pollJob } from '@/lib/api';
 import { useT } from '@/i18n';
 import type { DaySummary, Job, Objective, Plan, Scenario, ScenarioEdit, Selection } from '@/types';
@@ -47,6 +48,7 @@ export default function App() {
   const [compareOpen, setCompareOpen] = useState(false);
   const [importOpen, setImportOpen] = useState(false);
   const [historyOpen, setHistoryOpen] = useState(false);
+  const [changesOpen, setChangesOpen] = useState(false);
   const [leftOpen, setLeftOpen] = useState(true);
   const [rightOpen, setRightOpen] = useState(true);
   const [objective, setObjective] = useState<Objective>('vehicles');
@@ -78,7 +80,7 @@ export default function App() {
     const base = await api.plan(d.baselinePlanId);
     setBaseline(base);
     setPlan(base);
-    setScenario({ id: d.baseScenarioId, day: d.id, kind: 'base', parentId: null, revision: 0, label: d.label, removedVehicleIds: [], pins: [], forbids: [], createdAt: '' });
+    setScenario({ id: d.baseScenarioId, day: d.id, kind: 'base', parentId: null, revision: 0, label: d.label, removedVehicleIds: [], pins: [], forbids: [], vehicleOverrides: [], createdAt: '' });
   }, []);
 
   // Follow a running job (already created) to its terminal state; apply + return
@@ -175,17 +177,14 @@ export default function App() {
     } catch (e) { setError(e instanceof Error ? e.message : String(e)); }
   }, [scenario, t]);
 
-  // Make a vehicle unavailable: create a scenario copy and solve it (replan).
-  const replanWithout = useCallback(async (vehicleId: number) => {
+  // Replan: solve the current (edited) scenario, then surface the comparison if
+  // it is an edited copy. Staged edits are applied together here.
+  const replan = useCallback(async () => {
     if (!scenario) return;
-    const parentId = scenario.kind === 'base' ? scenario.id : (scenario.parentId ?? scenario.id);
-    const ref = plan?.vehicles.find((v) => v.id === vehicleId)?.ref ?? `#${vehicleId}`;
-    const copy = await api.createCopy(parentId, vehicleId, t('scn.unavailable', { ref }));
-    setScenario(copy);
-    setSelection(null);
-    const revised = await runSolve(copy.id, copy.day);
-    if (revised) setCompareOpen(true);
-  }, [scenario, plan, runSolve, t]);
+    const wasCopy = scenario.kind === 'copy';
+    const revised = await runSolve(scenario.id, dayId);
+    if (revised && wasCopy) setCompareOpen(true);
+  }, [scenario, dayId, runSolve]);
 
   const resetToBaseline = useCallback(() => {
     const d = days.find((x) => x.id === dayId);
@@ -213,7 +212,7 @@ export default function App() {
 
   const isReplan = scenario.kind === 'copy';
   const solving = job?.status === 'running' || job?.status === 'pending';
-  const overrideCount = scenario.pins.length + scenario.forbids.length;
+  const changesCount = scenario.removedVehicleIds.length + scenario.pins.length + scenario.forbids.length + scenario.vehicleOverrides.length;
   // The plan no longer reflects the scenario once it has been edited since solve.
   const dirty = scenario.revision !== plan.scenarioRevision;
 
@@ -225,10 +224,11 @@ export default function App() {
           scenario={scenario} plan={plan} job={job} solving={!!solving}
           objective={objective} onObjectiveChange={setObjective}
           budgetSec={budgetSec} onBudgetChange={setBudgetSec}
-          overrideCount={overrideCount} dirty={dirty}
-          onOptimize={() => void runSolve(scenario.id, dayId)}
+          changesCount={changesCount} dirty={dirty}
+          onOptimize={() => void replan()}
           onCancel={() => void cancelSolve()}
           onReset={resetToBaseline}
+          onOpenChanges={() => setChangesOpen(true)}
           showCompare={isReplan && plan.source === 'live'}
           onCompare={() => setCompareOpen(true)}
           onOpenImport={() => setImportOpen(true)}
@@ -236,17 +236,19 @@ export default function App() {
         />
         <KpiStrip plan={plan} baseline={baseline} compare={isReplan} job={job} />
 
-        {dirty && overrideCount > 0 && !solving && (
-          <button type="button" onClick={() => void runSolve(scenario.id, dayId)}
+        {dirty && changesCount > 0 && !solving && (
+          <button type="button" onClick={() => setChangesOpen(true)}
             className="flex shrink-0 items-center justify-center gap-2 border-b border-warning/40 bg-warning/10 px-4 py-1.5 text-xs font-medium text-warning hover:bg-warning/15">
-            {t('edits.pending', { n: overrideCount })}
+            {t('edits.pending', { n: changesCount })}
           </button>
         )}
 
         <div className="flex min-h-0 flex-1">
           {leftOpen && (
             <aside className="w-[310px] shrink-0 border-r border-divider">
-              <FleetPanel plan={plan} selection={selection} onSelect={setSelection} onMarkUnavailable={(id) => void replanWithout(id)} solving={!!solving} />
+              <FleetPanel plan={plan} scenario={scenario} selection={selection} onSelect={setSelection}
+                onMarkUnavailable={(id) => void applyEdit({ op: 'removeVehicle', vehicleId: id })}
+                onRestoreVehicle={(id) => void applyEdit({ op: 'restoreVehicle', vehicleId: id })} solving={!!solving} />
             </aside>
           )}
 
@@ -269,8 +271,11 @@ export default function App() {
 
           {rightOpen && (
             <aside className="w-[340px] shrink-0 border-l border-divider">
-              <Inspector plan={plan} baseline={baseline} scenario={scenario} selection={selection} onSelect={setSelection}
-                onMarkUnavailable={(id) => void replanWithout(id)} solving={!!solving}
+              <Inspector plan={plan} baseline={baseline} scenario={scenario} selection={selection} onSelect={setSelection} solving={!!solving}
+                onMarkUnavailable={(id) => void applyEdit({ op: 'removeVehicle', vehicleId: id })}
+                onRestoreVehicle={(id) => void applyEdit({ op: 'restoreVehicle', vehicleId: id })}
+                onSetConstraint={(vehicleId, patch) => void applyEdit({ op: 'setVehicleConstraint', vehicleId, patch })}
+                onClearConstraint={(vehicleId) => void applyEdit({ op: 'clearVehicleConstraint', vehicleId })}
                 onPin={(orderNo, vehicleId) => void applyEdit({ op: 'pin', orderNo, vehicleId })}
                 onUnpin={(orderNo) => void applyEdit({ op: 'unpin', orderNo })}
                 onForbid={(orderNo, vehicleId) => void applyEdit({ op: 'forbid', orderNo, vehicleId })}
@@ -289,6 +294,13 @@ export default function App() {
           scenarioLabel={scenario.label}
         />
       )}
+      <ChangesDialog
+        open={changesOpen} onOpenChange={setChangesOpen}
+        plan={plan} scenario={scenario} dirty={dirty} solving={!!solving}
+        onUndo={(edit) => void applyEdit(edit)}
+        onDiscardAll={() => { setChangesOpen(false); resetToBaseline(); }}
+        onReplan={() => { setChangesOpen(false); void replan(); }}
+      />
       <ImportDialog open={importOpen} onOpenChange={setImportOpen} />
       <HistoryDialog open={historyOpen} onOpenChange={setHistoryOpen} dayId={dayId} currentPlanId={plan.id} onReopen={(id) => void reopenPlan(id)} />
     </TooltipProvider>

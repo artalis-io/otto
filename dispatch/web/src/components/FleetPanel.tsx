@@ -1,11 +1,12 @@
 import { useState } from 'react';
-import { ChevronRight, Search, Ban } from 'lucide-react';
+import { ChevronRight, Search, Ban, RotateCcw } from 'lucide-react';
 import { Input } from '@/components/ui/input';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { Separator } from '@/components/ui/separator';
+import { Badge } from '@/components/ui/badge';
 import { hhmm, km, ratio, pct } from '@/lib/format';
 import { useT } from '@/i18n';
-import type { Plan, Vehicle, Selection } from '@/types';
+import type { Plan, Scenario, Vehicle, Selection } from '@/types';
 
 function CapacityBar({ label, used, cap, color }: { label: string; used: number; cap: number; color: string }) {
   const r = ratio(used, cap);
@@ -21,22 +22,24 @@ function CapacityBar({ label, used, cap, color }: { label: string; used: number;
 }
 
 function VehicleCard({
-  vehicle, selection, onSelect, onMarkUnavailable, expanded, onToggle, solving,
+  vehicle, selection, onSelect, onMarkUnavailable, onRestore, removed, expanded, onToggle, solving,
 }: {
   vehicle: Vehicle; selection: Selection; onSelect: (s: Selection) => void;
-  onMarkUnavailable: (id: number) => void; expanded: boolean; onToggle: () => void; solving: boolean;
+  onMarkUnavailable: (id: number) => void; onRestore: (id: number) => void; removed: boolean;
+  expanded: boolean; onToggle: () => void; solving: boolean;
 }) {
   const t = useT();
   const selThisVeh = selection && selection.kind !== 'unassigned' && selection.vehicleId === vehicle.id;
   const selTrip = selection && (selection.kind === 'trip' || selection.kind === 'stop') ? selection.tripIndex : null;
   return (
-    <div className={`rounded-md border bg-card transition-colors ${selThisVeh ? 'border-ring ring-1 ring-ring' : 'border-divider hover:bg-accent/50'}`}>
+    <div className={`rounded-md border bg-card transition-colors ${removed ? 'border-warning/40 opacity-60' : selThisVeh ? 'border-ring ring-1 ring-ring' : 'border-divider hover:bg-accent/50'}`}>
       <div className="flex cursor-pointer items-center gap-2 p-2.5" onClick={() => onSelect({ kind: 'vehicle', vehicleId: vehicle.id })}>
         <button type="button" aria-label={expanded ? 'Collapse trips' : 'Expand trips'} onClick={(e) => { e.stopPropagation(); onToggle(); }} className="-ml-1 text-muted-foreground hover:text-foreground">
           <ChevronRight className={`h-3.5 w-3.5 transition-transform ${expanded ? 'rotate-90' : ''}`} />
         </button>
         <span className="h-3 w-3 shrink-0 rounded-sm" style={{ backgroundColor: vehicle.color }} />
-        <span className="font-semibold">{vehicle.ref}</span>
+        <span className={`font-semibold ${removed ? 'line-through' : ''}`}>{vehicle.ref}</span>
+        {removed && <Badge variant="warning" className="px-1 py-0 text-[9px]">{t('fleet.staged')}</Badge>}
         <span className="truncate text-[11px] text-muted-foreground">{(vehicle.vehicleClass ?? '').replace(/_/g, ' ')}</span>
         <span className="tnum ml-auto text-[11px] text-muted-foreground">{vehicle.tripCount === 1 ? t('fleet.tripOne', { n: vehicle.tripCount }) : t('fleet.trips', { n: vehicle.tripCount })}</span>
       </div>
@@ -62,11 +65,18 @@ function VehicleCard({
                 </button>
               );
             })}
-            <button type="button" disabled={solving}
-              onClick={() => onMarkUnavailable(vehicle.id)}
-              className="mt-1 flex w-full items-center justify-center gap-1.5 rounded border border-warning/40 px-2 py-1 text-[11px] font-medium text-warning hover:bg-warning/10 disabled:opacity-40">
-              <Ban className="h-3 w-3" /> {t('fleet.markUnavailable')}
-            </button>
+            {removed ? (
+              <button type="button" disabled={solving} onClick={() => onRestore(vehicle.id)}
+                className="mt-1 flex w-full items-center justify-center gap-1.5 rounded border border-divider px-2 py-1 text-[11px] font-medium text-muted-foreground hover:bg-accent disabled:opacity-40">
+                <RotateCcw className="h-3 w-3" /> {t('fleet.restore')}
+              </button>
+            ) : (
+              <button type="button" disabled={solving}
+                onClick={() => onMarkUnavailable(vehicle.id)}
+                className="mt-1 flex w-full items-center justify-center gap-1.5 rounded border border-warning/40 px-2 py-1 text-[11px] font-medium text-warning hover:bg-warning/10 disabled:opacity-40">
+                <Ban className="h-3 w-3" /> {t('fleet.markUnavailable')}
+              </button>
+            )}
           </div>
         )}
       </div>
@@ -77,10 +87,10 @@ function VehicleCard({
 /* Left fleet panel: search, vehicle cards (expandable to trips + mark-unavailable),
  * and a collapsible unassigned-orders section. Selection is lifted to App. */
 export function FleetPanel({
-  plan, selection, onSelect, onMarkUnavailable, solving,
+  plan, scenario, selection, onSelect, onMarkUnavailable, onRestoreVehicle, solving,
 }: {
-  plan: Plan; selection: Selection; onSelect: (s: Selection) => void;
-  onMarkUnavailable: (id: number) => void; solving: boolean;
+  plan: Plan; scenario: Scenario; selection: Selection; onSelect: (s: Selection) => void;
+  onMarkUnavailable: (id: number) => void; onRestoreVehicle: (id: number) => void; solving: boolean;
 }) {
   const t = useT();
   const [query, setQuery] = useState('');
@@ -112,7 +122,7 @@ export function FleetPanel({
         <div className="space-y-2 p-3">
           {vehicles.map((v) => (
             <VehicleCard key={v.id} vehicle={v} selection={selection} onSelect={onSelect}
-              onMarkUnavailable={onMarkUnavailable} solving={solving}
+              onMarkUnavailable={onMarkUnavailable} onRestore={onRestoreVehicle} removed={scenario.removedVehicleIds.includes(v.id)} solving={solving}
               expanded={expanded.has(v.id)}
               onToggle={() => setExpanded((prev) => { const n = new Set(prev); n.has(v.id) ? n.delete(v.id) : n.add(v.id); return n; })} />
           ))}

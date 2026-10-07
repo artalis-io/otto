@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { applyOverrides } from './solve.js';
+import { applyOverrides, applyVehicleOverrides } from './solve.js';
 import type { SurgeRequest } from './types.js';
 import type { Scenario } from './store.js';
 
@@ -31,7 +31,7 @@ function mkRequest(): SurgeRequest {
 function mkScenario(over: Partial<Scenario> = {}): Scenario {
   return {
     id: 'scn', day: 'day1', kind: 'copy', parentId: 'day1-base', revision: 1,
-    label: 'edited', removedVehicleIds: [], pins: [], forbids: [], createdAt: '',
+    label: 'edited', removedVehicleIds: [], pins: [], forbids: [], vehicleOverrides: [], createdAt: '',
     ...over,
   };
 }
@@ -69,4 +69,28 @@ test('applyOverrides: overrides naming an unavailable vehicle are skipped', () =
   }), avail);
   assert.equal(req.requests[0]!.allowed_vehicles, undefined);
   assert.equal(req.requests[1]!.forbidden_vehicles, undefined);
+});
+
+test('applyVehicleOverrides: applies capacity/shift/max with unit conversion', () => {
+  const req = mkRequest();
+  applyVehicleOverrides(req, mkScenario({ vehicleOverrides: [
+    { vehicleId: 1, capacityKg: 5000, capacityPallets: 20, shiftEarlySec: 21600, shiftLateSec: 64800, maxTrips: 2, maxDistanceKm: 300, maxDurationMin: 600 },
+  ] }));
+  const v = req.vehicles.find((x) => x.id === 1)!;
+  assert.deepEqual(v.capacity, [5000, 20]);
+  assert.equal(v.shift_early, 21600);
+  assert.equal(v.shift_late, 64800);
+  assert.equal(v.max_trips, 2);
+  assert.equal(v.max_distance, 300_000); // km -> m
+  assert.equal(v.max_duration, 36_000);  // min -> s
+  // unset vehicle untouched
+  assert.equal(req.vehicles.find((x) => x.id === 2)!.max_trips, undefined);
+});
+
+test('applyVehicleOverrides: partial patch leaves other fields at defaults', () => {
+  const req = mkRequest();
+  applyVehicleOverrides(req, mkScenario({ vehicleOverrides: [{ vehicleId: 2, capacityPallets: 10 }] }));
+  const v = req.vehicles.find((x) => x.id === 2)!;
+  assert.deepEqual(v.capacity, [1, 10]); // kg kept, pallets overridden
+  assert.equal(v.shift_early, undefined);
 });

@@ -149,6 +149,17 @@ export interface DaySummary {
 
 export interface Pin { orderNo: string; vehicleId: number }
 export interface Forbid { orderNo: string; vehicleId: number }
+export interface VehicleOverride {
+  vehicleId: number;
+  capacityKg?: number;
+  capacityPallets?: number;
+  shiftEarlySec?: number;
+  shiftLateSec?: number;
+  maxTrips?: number;
+  maxDistanceKm?: number;
+  maxDurationMin?: number;
+}
+export type VehicleConstraintPatch = Omit<VehicleOverride, 'vehicleId'>;
 
 export interface Scenario {
   id: string;
@@ -160,6 +171,7 @@ export interface Scenario {
   removedVehicleIds: number[];
   pins: Pin[];
   forbids: Forbid[];
+  vehicleOverrides: VehicleOverride[];
   createdAt: string;
 }
 
@@ -171,6 +183,8 @@ export type ScenarioEdit =
   | { op: 'unpin'; orderNo: string }
   | { op: 'forbid'; orderNo: string; vehicleId: number }
   | { op: 'unforbid'; orderNo: string; vehicleId: number }
+  | { op: 'setVehicleConstraint'; vehicleId: number; patch: VehicleConstraintPatch }
+  | { op: 'clearVehicleConstraint'; vehicleId: number }
   | { op: 'clearOverrides' };
 
 export type JobStatus = 'pending' | 'running' | 'completed' | 'failed' | 'cancelled';

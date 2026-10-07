@@ -16,6 +16,20 @@ import type { Plan } from './types.js';
 export interface Pin { orderNo: string; vehicleId: number }
 export interface Forbid { orderNo: string; vehicleId: number }
 
+/* A per-vehicle constraint override for the next replan. Unset fields keep the
+ * vehicle's dataset defaults. */
+export interface VehicleOverride {
+  vehicleId: number;
+  capacityKg?: number;
+  capacityPallets?: number;
+  shiftEarlySec?: number;
+  shiftLateSec?: number;
+  maxTrips?: number;
+  maxDistanceKm?: number;
+  maxDurationMin?: number;
+}
+export type VehicleConstraintPatch = Omit<VehicleOverride, 'vehicleId'>;
+
 export interface Scenario {
   id: string;
   day: string;            // 'day1' | 'day2'
@@ -26,10 +40,12 @@ export interface Scenario {
   removedVehicleIds: number[];
   pins: Pin[];
   forbids: Forbid[];
+  vehicleOverrides: VehicleOverride[];
   createdAt: string;
 }
 
-/* A single dispatcher edit applied to an editable (copy) scenario. */
+/* A single dispatcher edit applied to an editable (copy) scenario. All edits
+ * stack on the scenario and take effect together on the next Replan. */
 export type ScenarioEdit =
   | { op: 'removeVehicle'; vehicleId: number }
   | { op: 'restoreVehicle'; vehicleId: number }
@@ -37,6 +53,8 @@ export type ScenarioEdit =
   | { op: 'unpin'; orderNo: string }
   | { op: 'forbid'; orderNo: string; vehicleId: number }
   | { op: 'unforbid'; orderNo: string; vehicleId: number }
+  | { op: 'setVehicleConstraint'; vehicleId: number; patch: VehicleConstraintPatch }
+  | { op: 'clearVehicleConstraint'; vehicleId: number }
   | { op: 'clearOverrides' };
 
 export type JobStatus = 'pending' | 'running' | 'completed' | 'failed' | 'cancelled';
@@ -85,6 +103,7 @@ export class Store {
     for (const s of this.scenarios.values()) {
       if (!Array.isArray(s.pins)) s.pins = [];
       if (!Array.isArray(s.forbids)) s.forbids = [];
+      if (!Array.isArray(s.vehicleOverrides)) s.vehicleOverrides = [];
     }
   }
 
@@ -95,7 +114,7 @@ export class Store {
     const id = `${day}-base`;
     let s = this.scenarios.get(id);
     if (!s) {
-      s = { id, day, kind: 'base', parentId: null, revision: 0, label, removedVehicleIds: [], pins: [], forbids: [], createdAt: new Date().toISOString() };
+      s = { id, day, kind: 'base', parentId: null, revision: 0, label, removedVehicleIds: [], pins: [], forbids: [], vehicleOverrides: [], createdAt: new Date().toISOString() };
       this.scenarios.set(id, s);
       writeJson(join(dir('scenarios'), `${id}.json`), s);
     }
@@ -115,6 +134,7 @@ export class Store {
       removedVehicleIds: removed,
       pins: parent.pins.map((p) => ({ ...p })),
       forbids: parent.forbids.map((f) => ({ ...f })),
+      vehicleOverrides: parent.vehicleOverrides.map((o) => ({ ...o })),
       createdAt: new Date().toISOString(),
     };
     this.scenarios.set(s.id, s);
@@ -138,11 +158,27 @@ export class Store {
     switch (edit.op) {
       case 'removeVehicle':
         if (!s.removedVehicleIds.includes(edit.vehicleId)) s.removedVehicleIds.push(edit.vehicleId);
-        // an order cannot be pinned to a vehicle that is no longer available
+        // orders cannot be pinned to, nor constraints set on, a removed vehicle
         s.pins = s.pins.filter((p) => p.vehicleId !== edit.vehicleId);
+        s.vehicleOverrides = s.vehicleOverrides.filter((o) => o.vehicleId !== edit.vehicleId);
         break;
       case 'restoreVehicle':
         s.removedVehicleIds = s.removedVehicleIds.filter((v) => v !== edit.vehicleId);
+        break;
+      case 'setVehicleConstraint': {
+        const existing = s.vehicleOverrides.find((o) => o.vehicleId === edit.vehicleId);
+        const merged: VehicleOverride = { ...(existing ?? { vehicleId: edit.vehicleId }), ...edit.patch };
+        // drop keys explicitly set to undefined/null so they revert to default
+        for (const k of Object.keys(edit.patch) as (keyof VehicleConstraintPatch)[]) {
+          if (edit.patch[k] == null) delete merged[k];
+        }
+        const rest = s.vehicleOverrides.filter((o) => o.vehicleId !== edit.vehicleId);
+        // keep only if it still constrains something beyond the id
+        s.vehicleOverrides = Object.keys(merged).length > 1 ? [...rest, merged] : rest;
+        break;
+      }
+      case 'clearVehicleConstraint':
+        s.vehicleOverrides = s.vehicleOverrides.filter((o) => o.vehicleId !== edit.vehicleId);
         break;
       case 'pin':
         s.pins = s.pins.filter((p) => p.orderNo !== edit.orderNo);

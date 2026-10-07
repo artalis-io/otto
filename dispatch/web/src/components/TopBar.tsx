@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Play, RotateCcw, Download, Loader2, Repeat, GitCompareArrows, Database, History, Settings2, X, ChevronDown, FileText, FileSpreadsheet, FileJson } from 'lucide-react';
+import { Play, RotateCcw, Download, Loader2, Repeat, GitCompareArrows, Database, History, Settings2, X, ChevronDown, FileText, FileSpreadsheet, FileJson, SlidersHorizontal } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
@@ -32,14 +32,14 @@ function Popover({ open, onClose, align = 'right', children }: { open: boolean; 
 
 export function TopBar({
   days, dayId, onDayChange, scenario, plan, job, solving,
-  objective, onObjectiveChange, budgetSec, onBudgetChange, overrideCount, dirty,
-  onOptimize, onCancel, onReset, showCompare, onCompare, onOpenImport, onOpenHistory,
+  objective, onObjectiveChange, budgetSec, onBudgetChange, changesCount, dirty,
+  onOptimize, onCancel, onReset, onOpenChanges, showCompare, onCompare, onOpenImport, onOpenHistory,
 }: {
   days: DaySummary[]; dayId: string; onDayChange: (id: string) => void;
   scenario: Scenario; plan: Plan; job: JobView | null; solving: boolean;
   objective: Objective; onObjectiveChange: (o: Objective) => void;
-  budgetSec: number; onBudgetChange: (n: number) => void; overrideCount: number; dirty: boolean;
-  onOptimize: () => void; onCancel: () => void; onReset: () => void;
+  budgetSec: number; onBudgetChange: (n: number) => void; changesCount: number; dirty: boolean;
+  onOptimize: () => void; onCancel: () => void; onReset: () => void; onOpenChanges: () => void;
   showCompare: boolean; onCompare: () => void; onOpenImport: () => void; onOpenHistory: () => void;
 }) {
   const { lang, setLang } = useI18n();
@@ -98,7 +98,7 @@ export function TopBar({
 
       {isReplan ? (
         <Badge variant="warning" title="Editable scenario (baseline preserved)">
-          {scenario.label}{overrideCount > 0 ? ` · ${t('topbar.editsN', { n: overrideCount })}` : ''}
+          {scenario.label}{changesCount > 0 ? ` · ${t('topbar.editsN', { n: changesCount })}` : ''}
         </Badge>
       ) : (
         <Badge variant={plan.source === 'saved' ? 'outline' : 'default'} title="Plan source / Surge termination" className="border-white/20 text-graphite-foreground">
@@ -113,6 +113,11 @@ export function TopBar({
         <Button variant="graphite" size="sm" className="border border-white/15" onClick={onOpenImport} title={t('import.title')}>
           <Database className="h-4 w-4" /> {t('topbar.data')}
         </Button>
+        {changesCount > 0 && (
+          <Button variant="graphite" size="sm" className={`border ${dirty ? 'border-warning/60 text-warning' : 'border-white/15'}`} onClick={onOpenChanges}>
+            <SlidersHorizontal className="h-4 w-4" /> {t('topbar.changes')} <span className="tnum rounded bg-white/15 px-1 text-[10px]">{changesCount}</span>
+          </Button>
+        )}
         {showCompare && (
           <Button variant="graphite" size="sm" className="border border-white/15" onClick={onCompare} disabled={solving}>
             <GitCompareArrows className="h-4 w-4" /> {t('topbar.compare')}
