@@ -122,6 +122,10 @@ const en: Dict = {
   'constraint.advisories': 'Access advisories', 'constraint.sizeAdvisory': '{n} oversize assignment(s)',
   'constraint.tailAdvisory': '{n} tail-lift mismatch(es)',
   'fleet.filterTailLift': 'Tail lift', 'fleet.filterAdvisories': 'Has advisories',
+  // Week view
+  'topbar.week': 'Week', 'week.title': 'Week overview', 'week.loading': 'Loading…',
+  'week.orders': 'Orders', 'week.vehicles': 'Vehicles', 'week.trips': 'Trips', 'week.distance': 'Distance', 'week.cost': 'Est. cost',
+  'week.perVehicle': 'Per-vehicle utilization', 'week.vehicle': 'Vehicle', 'week.total': 'Total', 'week.bothDays': 'both days',
 };
 
 const hu: Dict = {
@@ -238,6 +242,10 @@ const hu: Dict = {
   'constraint.advisories': 'Behajtási figyelmeztetések', 'constraint.sizeAdvisory': '{n} túlméretes hozzárendelés',
   'constraint.tailAdvisory': '{n} emelőhátfal-eltérés',
   'fleet.filterTailLift': 'Emelőhátfal', 'fleet.filterAdvisories': 'Figyelmeztetéssel',
+  // Week view
+  'topbar.week': 'Hét', 'week.title': 'Heti áttekintés', 'week.loading': 'Betöltés…',
+  'week.orders': 'Megrendelés', 'week.vehicles': 'Járművek', 'week.trips': 'Fordulók', 'week.distance': 'Távolság', 'week.cost': 'Becsült költség',
+  'week.perVehicle': 'Járművenkénti kihasználtság', 'week.vehicle': 'Jármű', 'week.total': 'Összes', 'week.bothDays': 'mindkét nap',
 };
 
 const DICTS: Record<Lang, Dict> = { en, hu };

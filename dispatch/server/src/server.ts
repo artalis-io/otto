@@ -9,6 +9,7 @@ import { fillPlanGeometry, veloReachable } from './geometry/velo.js';
 import { store, type ScenarioEdit } from './store.js';
 import { startSolve, cancelJob, type Objective } from './solve.js';
 import { comparePlans } from './plan/compare.js';
+import { weekSummary } from './plan/week.js';
 import { importSummary, rawSample, canonicalSample } from './data/import.js';
 import { sageReachable, narratePlan, narrateComparison, type Lang } from './sage.js';
 import { loadTariff } from './cost.js';
@@ -209,6 +210,14 @@ app.get<{ Querystring: { base?: string; revised?: string } }>('/api/compare', as
   const revised = req.query.revised ? store.getPlan(req.query.revised) : undefined;
   if (!base || !revised) return reply.code(404).send({ error: 'base and revised plan ids required' });
   return comparePlans(base, revised);
+});
+
+/* ---- Week roll-up across both days' baselines (stats + cost, no geometry) ---- */
+app.get('/api/week', async () => {
+  const days = DAYS
+    .map((d) => ({ dayId: d.id, isoDate: d.isoDate, label: d.label, plan: store.getPlan(`${d.id}-baseline`) }))
+    .filter((d): d is { dayId: string; isoDate: string; label: string; plan: Plan } => Boolean(d.plan));
+  return weekSummary(days);
 });
 
 /* ---- Sage narration (optional LLM; degrades gracefully) ---- */

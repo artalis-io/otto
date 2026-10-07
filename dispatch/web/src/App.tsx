@@ -12,6 +12,7 @@ import { CompareDialog } from '@/components/CompareDialog';
 import { ImportDialog } from '@/components/ImportDialog';
 import { HistoryDialog } from '@/components/HistoryDialog';
 import { ChangesDialog } from '@/components/ChangesDialog';
+import { WeekDialog } from '@/components/WeekDialog';
 import { api, pollJob } from '@/lib/api';
 import { useT } from '@/i18n';
 import type { DaySummary, Job, Objective, Plan, Scenario, ScenarioEdit, Selection } from '@/types';
@@ -49,6 +50,7 @@ export default function App() {
   const [importOpen, setImportOpen] = useState(false);
   const [historyOpen, setHistoryOpen] = useState(false);
   const [changesOpen, setChangesOpen] = useState(false);
+  const [weekOpen, setWeekOpen] = useState(false);
   const [leftOpen, setLeftOpen] = useState(true);
   const [rightOpen, setRightOpen] = useState(true);
   const [objective, setObjective] = useState<Objective>('vehicles');
@@ -233,6 +235,7 @@ export default function App() {
           onCompare={() => setCompareOpen(true)}
           onOpenImport={() => setImportOpen(true)}
           onOpenHistory={() => setHistoryOpen(true)}
+          onOpenWeek={() => setWeekOpen(true)}
         />
         <KpiStrip plan={plan} baseline={baseline} compare={isReplan} job={job} />
 
@@ -301,6 +304,7 @@ export default function App() {
         onDiscardAll={() => { setChangesOpen(false); resetToBaseline(); }}
         onReplan={() => { setChangesOpen(false); void replan(); }}
       />
+      <WeekDialog open={weekOpen} onOpenChange={setWeekOpen} />
       <ImportDialog open={importOpen} onOpenChange={setImportOpen} />
       <HistoryDialog open={historyOpen} onOpenChange={setHistoryOpen} dayId={dayId} currentPlanId={plan.id} onReopen={(id) => void reopenPlan(id)} />
     </TooltipProvider>

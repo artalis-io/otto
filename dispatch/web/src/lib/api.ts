@@ -47,6 +47,8 @@ export const api = {
 
   compare: (base: string, revised: string) => jget<Comparison>(`/api/compare?base=${base}&revised=${revised}`),
 
+  week: () => jget<WeekSummary>('/api/week'),
+
   sageStatus: () => jget<{ reachable: boolean; model: string }>('/api/sage/status'),
   narratePlan: (id: string, lang: string) => jsend<{ text: string }>(`/api/plans/${id}/narrate`, 'POST', { lang }),
   narrateCompare: (base: string, revised: string, lang: string) =>
@@ -69,6 +71,19 @@ export interface PlanSummary {
   source: 'saved' | 'live' | 'sample'; createdAt: string; termination: string;
   servedOrders: number; totalOrders: number; vehiclesUsed: number; totalDistanceKm: number;
 }
+export interface WeekVehicleDay { trips: number; km: number; cost: number | null; finishSec: number }
+export interface WeekVehicleRow {
+  ref: string; vehicleClass: string | null; isSubcontractor: boolean;
+  perDay: Record<string, WeekVehicleDay | null>;
+  totalTrips: number; totalKm: number; totalCost: number | null; daysWorked: number;
+}
+export interface WeekSummary {
+  currency: string;
+  days: { dayId: string; isoDate: string; label: string; servedOrders: number; totalOrders: number; vehiclesUsed: number; trips: number; totalDistanceKm: number; costTotal: number | null }[];
+  totals: { servedOrders: number; totalOrders: number; vehiclesUsed: number; trips: number; totalDistanceKm: number; costTotal: number | null };
+  vehicles: WeekVehicleRow[];
+}
+
 export interface RawSample { label: string; headers: string[]; rows: string[][]; totalRows: number }
 export interface CanonicalSample { fields: string[]; rows: Record<string, unknown>[]; count: number; sha256: string | null }
 
