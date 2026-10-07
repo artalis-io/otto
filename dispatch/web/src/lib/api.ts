@@ -73,7 +73,15 @@ export const api = {
     jsend<GeocodeResult>('/api/import/geocode', 'POST', { uploadId, mapping }),
   onboardAdmit: (uploadId: string, mapping: Record<string, number>, label: string) =>
     jsend<AdmitResult>('/api/import/admit', 'POST', { uploadId, mapping, label }),
+  onboardDatasets: () => jget<DatasetSummary[]>('/api/import/datasets'),
+  onboardDeleteDataset: (id: string) => jsend<{ deleted: boolean; days: number }>(`/api/import/datasets/${id}`, 'DELETE'),
 };
+
+export interface DatasetSummary {
+  id: string; label: string; createdAt: string;
+  days: { dayId: string; isoDate: string; orders: number }[];
+  totalOrders: number;
+}
 
 export interface AdmitResult {
   ok: boolean; error?: string;

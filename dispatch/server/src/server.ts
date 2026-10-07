@@ -7,6 +7,7 @@ import { pipeline } from 'node:stream/promises';
 import { config } from './config.js';
 import { DAYS, allDayIds, loadDay, loadEnrichment, loadVehicleInfo } from './data/gyermelyi.js';
 import { admitDataset } from './data/admit.js';
+import { allDatasets, unregisterDataset } from './data/registry.js';
 import { mapSolutionToPlan } from './plan/mapper.js';
 import { fillPlanGeometry, veloReachable } from './geometry/velo.js';
 import { store, validateScenarioEdit, type ScenarioEdit } from './store.js';
@@ -356,6 +357,20 @@ app.post<{ Body: { uploadId?: string; mapping?: Mapping; label?: string } }>('/a
     try { buildBaseline(d.dayId, d.label); } catch (e) { app.log.warn(`baseline ${d.dayId}: ${(e as Error).message}`); }
   }
   return result;
+});
+
+// List / delete admitted datasets.
+app.get('/api/import/datasets', async () => allDatasets().map((d) => ({
+  id: d.id, label: d.label, createdAt: d.createdAt,
+  days: d.days.map((x) => ({ dayId: x.dayId, isoDate: x.isoDate, orders: x.orders })),
+  totalOrders: d.days.reduce((n, x) => n + x.orders, 0),
+})));
+app.delete<{ Params: { id: string } }>('/api/import/datasets/:id', async (req, reply) => {
+  if (!/^ds_[a-z0-9-]+$/.test(req.params.id)) return reply.code(400).send({ error: 'invalid dataset id' });
+  const ds = unregisterDataset(req.params.id);
+  if (!ds) return reply.code(404).send({ error: 'dataset not found' });
+  for (const d of ds.days) store.removeDay(d.dayId);
+  return { deleted: true, days: ds.days.length };
 });
 
 /* ---- Carta tile proxy (same-origin so the reused style's relative URLs work) ---- */

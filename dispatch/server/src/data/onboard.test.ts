@@ -39,6 +39,21 @@ test('buildSchema: non-orders entities get no address merge', () => {
   assert.equal(s.multi_transforms, undefined);
 });
 
+test('buildSchema: time_window_raw adds a regex split -> tw_start/tw_end after the merge', () => {
+  const s = buildSchema('orders', { order_no: 0, customer: 4, city: 6, zip: 5, street: 7, time_window_raw: 13 }, 18) as {
+    multi_transforms: { type: string; source?: number; target?: string; targets?: { field: string }[] }[];
+    columns: { source: number; target: string }[];
+  };
+  assert.equal(s.multi_transforms.length, 2); // merge + regex
+  const rx = s.multi_transforms.find((m) => m.type === 'regex')!;
+  assert.equal(rx.source, 13);
+  assert.deepEqual(rx.targets?.map((x) => x.field), ['tw_start', 'tw_end']);
+  const byT = new Map(s.columns.map((c) => [c.target, c.source]));
+  assert.equal(byT.get('address_geocode'), 18); // merge virtual
+  assert.equal(byT.get('tw_start'), 19);         // regex virtuals follow
+  assert.equal(byT.get('tw_end'), 20);
+});
+
 test('missingRequired: reports unmapped required fields', () => {
   assert.deepEqual(missingRequired('orders', { order_no: 0 }).sort(), ['city', 'customer']);
   assert.deepEqual(missingRequired('orders', { order_no: 0, customer: 1, city: 2 }), []);

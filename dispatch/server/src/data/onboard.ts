@@ -52,18 +52,26 @@ export function buildSchema(entity: Entity, mapping: Mapping, rawCols = 18): obj
     nx_schema: 2, version: `onboard-${entity}`, output_type: 'record',
     table_selector: { index: 0 }, skip_rows: 0, columns,
   };
-  const merge = entity === 'orders' ? addressMerge(mapping, rawCols) : null;
-  if (merge) {
-    schema.multi_transforms = [merge.transform];
-    columns.push({ source: merge.virtualIndex, target: 'address_geocode', type: 'string', default: '' });
+  // Derived fields for orders. Virtual columns are appended after the raw width,
+  // in multi_transforms order, one per emitted target.
+  if (entity === 'orders') {
+    const transforms: object[] = [];
+    let vcol = rawCols;
+    const merge = addressMerge(mapping);
+    if (merge) { transforms.push(merge); columns.push({ source: vcol++, target: 'address_geocode', type: 'string', default: '' }); }
+    if (mapping.time_window_raw != null) {
+      transforms.push({ type: 'regex', source: mapping.time_window_raw, pattern: '([0-9]{1,2}:[0-9]{2}) *- *([0-9]{1,2}:[0-9]{2})', targets: [{ field: 'tw_start', group: 1 }, { field: 'tw_end', group: 2 }] });
+      columns.push({ source: vcol++, target: 'tw_start', type: 'string', default: '' });
+      columns.push({ source: vcol++, target: 'tw_end', type: 'string', default: '' });
+    }
+    if (transforms.length) schema.multi_transforms = transforms;
   }
   return schema;
 }
 
 /** An address_geocode merge "street, zip city" from whichever of street/zip/city
- * are mapped (city is required). Virtual columns start at raw-column-count; with
- * one transform the merge target lands at index 18 (raw cols 0-17 in this format). */
-function addressMerge(mapping: Mapping, rawCols: number): { transform: object; virtualIndex: number } | null {
+ * are mapped (city is required). */
+function addressMerge(mapping: Mapping): object | null {
   if (mapping.city == null) return null;
   const sources: number[] = [];
   const pos: Record<string, number> = {};
@@ -74,8 +82,7 @@ function addressMerge(mapping: Mapping, rawCols: number): { transform: object; v
   if ('street' in pos) segs.push(`{${pos.street}},`);
   if ('zip' in pos) segs.push(`{${pos.zip}}`);
   segs.push(`{${pos.city}}`);
-  // Virtual columns are appended after the raw width (actual column count).
-  return { transform: { type: 'merge', sources, template: segs.join(' '), target: 'address_geocode' }, virtualIndex: rawCols };
+  return { type: 'merge', sources, template: segs.join(' '), target: 'address_geocode' };
 }
 function columnSpec(source: number, target: string, type: FieldType, required: boolean): object {
   const base: Record<string, unknown> = { source, target, type };

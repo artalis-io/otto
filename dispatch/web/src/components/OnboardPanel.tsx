@@ -1,5 +1,5 @@
-import { useEffect, useMemo, useState } from 'react';
-import { Upload, CheckCircle2, XCircle, AlertTriangle, Loader2, FileUp, MapPin } from 'lucide-react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
+import { Upload, CheckCircle2, XCircle, AlertTriangle, Loader2, FileUp, MapPin, Trash2, Database } from 'lucide-react';
 import Map, { Layer, Source } from 'react-map-gl/maplibre';
 import type { FeatureCollection } from 'geojson';
 import maplibregl from 'maplibre-gl';
@@ -8,7 +8,7 @@ import { Button } from '@/components/ui/button';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { cartaStyle } from '@/map/cartaStyle';
 import { Input } from '@/components/ui/input';
-import { api, type Entity, type CanonicalField, type UploadResult, type OnboardPreview, type GeocodeResult, type GeoTier, type AdmitResult } from '@/lib/api';
+import { api, type Entity, type CanonicalField, type UploadResult, type OnboardPreview, type GeocodeResult, type GeoTier, type AdmitResult, type DatasetSummary } from '@/lib/api';
 import { useT } from '@/i18n';
 
 const TIER_COLOR: Record<GeoTier, string> = { GREEN: '#16a34a', YELLOW: '#ca8a04', APPROX: '#ea580c', RED: '#dc2626' };
@@ -16,9 +16,12 @@ const TIER_COLOR: Record<GeoTier, string> = { GREEN: '#16a34a', YELLOW: '#ca8a04
 /* M1 onboarding: upload a raw CSV, map its columns to canonical fields, and run
  * the real Nexus ingest + reconcile gate as a reviewed dry-run. Admit (creating
  * a dataset) arrives in M3. */
-export function OnboardPanel({ onAdmitted }: { onAdmitted?: (firstDayId: string) => void }) {
+export function OnboardPanel({ onAdmitted, onDatasetsChanged }: { onAdmitted?: (firstDayId: string) => void; onDatasetsChanged?: () => void }) {
   const t = useT();
   const [catalog, setCatalog] = useState<Record<Entity, CanonicalField[]> | null>(null);
+  const [datasets, setDatasets] = useState<DatasetSummary[] | null>(null);
+  const refreshDatasets = useCallback(() => { void api.onboardDatasets().then(setDatasets).catch(() => setDatasets([])); }, []);
+  useEffect(() => { refreshDatasets(); }, [refreshDatasets]);
   const [entity, setEntity] = useState<Entity>('orders');
   const [upload, setUpload] = useState<UploadResult | null>(null);
   const [mapping, setMapping] = useState<Record<string, number>>({});
@@ -62,15 +65,39 @@ export function OnboardPanel({ onAdmitted }: { onAdmitted?: (firstDayId: string)
     try {
       const r = await api.onboardAdmit(upload.uploadId, mapping, label || (upload ? `Upload ${new Date().toLocaleDateString()}` : ''));
       setAdmit(r);
+      if (r.ok) { refreshDatasets(); onDatasetsChanged?.(); }
       if (r.ok && r.days?.length && onAdmitted) onAdmitted(r.days[0]!.dayId);
     } catch (e) { setErr(e instanceof Error ? e.message : String(e)); }
     finally { setBusy(null); }
+  }
+  async function deleteDataset(id: string) {
+    try { await api.onboardDeleteDataset(id); refreshDatasets(); onDatasetsChanged?.(); }
+    catch (e) { setErr(e instanceof Error ? e.message : String(e)); }
   }
 
   return (
     <ScrollArea className="max-h-[72vh]">
       <div className="space-y-4 pr-3">
         {err && <p className="rounded border border-destructive/40 bg-destructive/10 px-2 py-1 text-sm text-destructive">{err}</p>}
+
+        {/* Admitted datasets (manage/delete) */}
+        {datasets && datasets.length > 0 && (
+          <div className="rounded-md border border-divider bg-muted/20 p-2.5">
+            <div className="mb-1.5 flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground"><Database className="h-3.5 w-3.5" /> {t('onboard.datasets')}</div>
+            <div className="space-y-1">
+              {datasets.map((ds) => (
+                <div key={ds.id} className="flex items-center gap-2 rounded border border-divider bg-card px-2 py-1 text-[11px]">
+                  <span className="min-w-0 flex-1 truncate font-medium">{ds.label}</span>
+                  <span className="tnum shrink-0 text-muted-foreground">{t('onboard.dsSummary', { d: ds.days.length, n: ds.totalOrders })}</span>
+                  <button type="button" onClick={() => void deleteDataset(ds.id)} aria-label={t('onboard.delete')} title={t('onboard.delete')}
+                    className="shrink-0 rounded p-0.5 text-muted-foreground hover:bg-destructive/10 hover:text-destructive">
+                    <Trash2 className="h-3.5 w-3.5" />
+                  </button>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
 
         {/* 1. Entity + file */}
         <div className="flex flex-wrap items-center gap-2">

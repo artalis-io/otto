@@ -136,8 +136,13 @@ Canonical field catalog (for the mapping UI), from the existing canonical shapes
   transform (uploaded days get wide windows for now), hybrid matrix reuse of the
   known cache (full rebuild for now, ~1 min), solve-on-admit / background admit,
   and custom-fleet from an uploaded vehicles file (uses the known fleet for now).
-- **M4 — Polish.** Sub-stage progress UI, cancel/resume, re-map + re-run, dataset
-  management (list/delete), error recovery.
+- **M4 — Polish. (partial)** ✅ Time-window transform (uploaded orders get real
+  windows from an "HH:MM - HH:MM" column via a regex split; 235/263 real on the
+  real data). ✅ Dataset management (GET/DELETE `/api/import/datasets`; a list +
+  delete in the Upload tab; removing a dataset drops its days/baselines and the
+  app falls back if the current day vanishes). *Remaining:* background admit with
+  sub-stage progress (admit is synchronous ~66s today), re-map + re-run, custom
+  fleet from an uploaded vehicles file, hybrid matrix reuse, XLSX input.
 
 ## Risks / open items
 

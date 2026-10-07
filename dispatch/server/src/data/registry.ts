@@ -1,4 +1,4 @@
-import { mkdirSync, readdirSync, readFileSync, writeFileSync, existsSync } from 'node:fs';
+import { mkdirSync, readdirSync, readFileSync, writeFileSync, existsSync, rmSync } from 'node:fs';
 import { resolve, join } from 'node:path';
 import { config } from '../config.js';
 
@@ -46,6 +46,14 @@ export function registerDataset(ds: Dataset): void {
   registry.set(ds.id, ds);
 }
 export function allDatasets(): Dataset[] { return [...registry.values()]; }
+export function getDataset(id: string): Dataset | undefined { return registry.get(id); }
+export function unregisterDataset(id: string): Dataset | null {
+  const ds = registry.get(id);
+  if (!ds) return null;
+  registry.delete(id);
+  try { rmSync(datasetDir(id), { recursive: true, force: true }); } catch { /* best-effort */ }
+  return ds;
+}
 export function datasetForDay(dayId: string): { dataset: Dataset; day: RegDay } | null {
   for (const ds of registry.values()) {
     const day = ds.days.find((d) => d.dayId === dayId);

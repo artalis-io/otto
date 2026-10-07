@@ -147,6 +147,7 @@ const en: Dict = {
   'onboard.admitNote': 'Builds the travel matrix and registers selectable days (routable Hungarian orders).',
   'onboard.admitWorking': 'Building the travel matrix… (about a minute)',
   'onboard.admitDone': '{r} routable orders admitted ({x} excluded) as {d} day(s) — now in the day picker.',
+  'onboard.datasets': 'Admitted datasets', 'onboard.dsSummary': '{d} days · {n} orders', 'onboard.delete': 'Delete',
 };
 
 const hu: Dict = {
@@ -288,6 +289,7 @@ const hu: Dict = {
   'onboard.admitNote': 'Felépíti az utazási mátrixot és regisztrálja a választható napokat (útvonalazható magyar rendelések).',
   'onboard.admitWorking': 'Utazási mátrix építése… (kb. egy perc)',
   'onboard.admitDone': '{r} útvonalazható rendelés átvéve ({x} kizárva) {d} napként — már a napválasztóban.',
+  'onboard.datasets': 'Átvett adathalmazok', 'onboard.dsSummary': '{d} nap · {n} rendelés', 'onboard.delete': 'Törlés',
 };
 
 const DICTS: Record<Lang, Dict> = { en, hu };

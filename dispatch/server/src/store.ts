@@ -317,6 +317,14 @@ export class Store {
   }
   getJob(id: string): Job | undefined { return this.jobs.get(id); }
   saveJob(j: Job): void { writeJson(join(dir('jobs'), `${j.id}.json`), j); }
+
+  /** Drop a day's baseline plan + base scenario (used when deleting a dataset). */
+  removeDay(dayId: string): void {
+    this.plans.delete(`${dayId}-baseline`);
+    const sid = `${dayId}-base`;
+    this.scenarios.delete(sid);
+    try { rmSync(join(dir('scenarios'), `${sid}.json`), { force: true }); } catch { /* ignore */ }
+  }
 }
 
 export const store = new Store();

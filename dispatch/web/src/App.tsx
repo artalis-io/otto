@@ -231,6 +231,15 @@ export default function App() {
     } catch (e) { setError(e instanceof Error ? e.message : String(e)); }
   }, [loadDay]);
 
+  // A dataset was deleted (or admitted): refresh days; if the current day vanished, fall back.
+  const onDatasetsChanged = useCallback(async () => {
+    try {
+      const ds = await api.days();
+      setDays(ds);
+      if (!ds.some((x) => x.id === dayId)) { const d = ds.find((x) => x.id === 'day1') ?? ds[0]; if (d) await loadDay(d); }
+    } catch { /* ignore */ }
+  }, [dayId, loadDay]);
+
   const reopenPlan = useCallback(async (planId: string) => {
     pollAbort.current?.abort();
     activeJobId.current = null;
@@ -372,7 +381,7 @@ export default function App() {
         onReplan={() => { setChangesOpen(false); void replan(); }}
       />
       <WeekDialog open={weekOpen} onOpenChange={setWeekOpen} />
-      <ImportDialog open={importOpen} onOpenChange={setImportOpen} onAdmitted={(id) => void onAdmitted(id)} />
+      <ImportDialog open={importOpen} onOpenChange={setImportOpen} onAdmitted={(id) => void onAdmitted(id)} onDatasetsChanged={() => void onDatasetsChanged()} />
       <HistoryDialog open={historyOpen} onOpenChange={setHistoryOpen} dayId={dayId} currentPlanId={plan.id} onReopen={(id) => void reopenPlan(id)} />
     </TooltipProvider>
   );
