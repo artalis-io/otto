@@ -8,6 +8,15 @@ import { hhmm, km, ratio, pct } from '@/lib/format';
 import { useT } from '@/i18n';
 import type { Plan, Scenario, Vehicle, Selection } from '@/types';
 
+function FilterChip({ active, onClick, label, warn }: { active: boolean; onClick: () => void; label: string; warn?: boolean }) {
+  return (
+    <button type="button" onClick={onClick}
+      className={`rounded-full border px-2 py-0.5 text-[10px] font-medium transition-colors ${active ? (warn ? 'border-warning bg-warning/15 text-warning' : 'border-primary bg-primary/10 text-primary') : 'border-divider text-muted-foreground hover:bg-accent'}`}>
+      {label}
+    </button>
+  );
+}
+
 function CapacityBar({ label, used, cap, color }: { label: string; used: number; cap: number; color: string }) {
   const r = ratio(used, cap);
   return (
@@ -96,9 +105,16 @@ export function FleetPanel({
   const [query, setQuery] = useState('');
   const [expanded, setExpanded] = useState<Set<number>>(new Set());
   const [unassignedOpen, setUnassignedOpen] = useState(plan.unassigned.length > 0);
+  const [onlyTailLift, setOnlyTailLift] = useState(false);
+  const [onlyAdvisories, setOnlyAdvisories] = useState(false);
+
+  const advisoryIds = new Set<number>();
+  for (const v of plan.provenance.validation.violations as { soft?: boolean; vehicle_id?: number }[]) if (v.soft && v.vehicle_id != null) advisoryIds.add(v.vehicle_id);
 
   const q = query.trim().toLowerCase();
   const matches = (v: Vehicle): boolean => {
+    if (onlyTailLift && !v.hasTailLift) return false;
+    if (onlyAdvisories && !advisoryIds.has(v.id)) return false;
     if (!q) return true;
     if (v.ref.toLowerCase().includes(q) || (v.vehicleClass ?? '').toLowerCase().includes(q)) return true;
     return v.trips.some((t) => t.stops.some((s) =>
@@ -115,6 +131,10 @@ export function FleetPanel({
         <div className="relative">
           <Search className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
           <Input value={query} onChange={(e) => setQuery(e.target.value)} placeholder={t('fleet.search')} className="h-8 pl-8" />
+        </div>
+        <div className="mt-1.5 flex gap-1.5">
+          <FilterChip active={onlyTailLift} onClick={() => setOnlyTailLift((o) => !o)} label={t('fleet.filterTailLift')} />
+          {advisoryIds.size > 0 && <FilterChip active={onlyAdvisories} onClick={() => setOnlyAdvisories((o) => !o)} label={`${t('fleet.filterAdvisories')} · ${advisoryIds.size}`} warn />}
         </div>
       </div>
       <Separator />

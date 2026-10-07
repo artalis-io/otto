@@ -20,15 +20,29 @@ function Field({ label, value, warn }: { label: string; value: string; warn?: bo
 const kg = (n: number) => `${Math.round(n).toLocaleString('en-US')} kg`;
 const plt = (n: number) => `${(Math.round(n * 10) / 10).toLocaleString('en-US')} plt`;
 
-function StopDetail({ stop }: { stop: Stop }) {
+function StopDetail({ stop, vehicle }: { stop: Stop; vehicle: Vehicle }) {
   const t = useT();
   const late = stop.lateBySec > 0;
+  const tailLiftMiss = stop.requiresTailLift && !vehicle.hasTailLift;
+  const sizeMiss = stop.maxTonnage != null && vehicle.tonnage != null && vehicle.tonnage > stop.maxTonnage + 0.01;
   return (
     <div className="space-y-2">
       <div>
         <div className="text-sm font-semibold">{stop.customer ?? `Order ${stop.orderNo}`}</div>
         <div className="tnum text-xs text-muted-foreground">#{stop.orderNo}{stop.city ? ` · ${stop.city}` : ''}</div>
       </div>
+      {(stop.requiresTailLift || stop.maxTonnage != null) && (
+        <div className="flex flex-wrap gap-1">
+          {stop.requiresTailLift && <Badge variant={tailLiftMiss ? 'warning' : 'outline'} className="gap-1 text-[10px]">{tailLiftMiss && <AlertTriangle className="h-3 w-3" />}{t('constraint.tailLift')}</Badge>}
+          {stop.maxTonnage != null && <Badge variant={sizeMiss ? 'warning' : 'outline'} className="gap-1 text-[10px]">{sizeMiss && <AlertTriangle className="h-3 w-3" />}{t('constraint.maxT', { n: stop.maxTonnage })}</Badge>}
+        </div>
+      )}
+      {(tailLiftMiss || sizeMiss) && (
+        <div className="rounded border border-warning/40 bg-warning/10 px-2 py-1 text-[11px] text-warning">
+          {tailLiftMiss && <div>{t('constraint.tailLiftMiss', { ref: vehicle.ref })}</div>}
+          {sizeMiss && <div>{t('constraint.sizeMiss', { t: vehicle.tonnage ?? 0, max: stop.maxTonnage ?? 0 })}</div>}
+        </div>
+      )}
       <Separator />
       <Field label={t('inspector.arrival')} value={hhmm(stop.arrivalSec)} warn={late} />
       <Field label={t('inspector.service')} value={`${hhmm(stop.serviceStartSec)}–${hhmm(stop.departureSec)}`} />
@@ -209,14 +223,25 @@ function VehicleSummary({ vehicle, plan, onSelectTrip }: { vehicle: Vehicle; pla
 function ValidationRow({ plan, vehicle }: { plan: Plan; vehicle: Vehicle }) {
   const t = useT();
   const vios = (plan.provenance.validation.violations as ValidationViolation[]).filter((v) => v.vehicle_id === vehicle.id);
+  const hard = vios.filter((v) => !v.soft);
+  const soft = vios.filter((v) => v.soft);
+  const tailMiss = soft.filter((v) => v.type === 'TAIL_LIFT').length;
+  const sizeMiss = soft.filter((v) => v.type === 'VEHICLE_SIZE').length;
   if (vios.length === 0) return (
     <div className="flex items-center gap-1.5 text-xs text-primary"><CheckCircle2 className="h-3.5 w-3.5" /> {t('inspector.noViolations')}</div>
   );
   return (
-    <div className="space-y-0.5 text-xs text-warning">
-      {vios.map((v, i) => (
-        <div key={i} className="flex items-center gap-1.5"><AlertTriangle className="h-3.5 w-3.5" /> {v.type}{v.dimension ? ` (${v.dimension})` : ''}</div>
+    <div className="space-y-1">
+      {hard.map((v, i) => (
+        <div key={i} className="flex items-center gap-1.5 text-xs text-destructive"><AlertTriangle className="h-3.5 w-3.5" /> {v.type}{v.dimension ? ` (${v.dimension})` : ''}</div>
       ))}
+      {(tailMiss > 0 || sizeMiss > 0) && (
+        <div className="space-y-0.5 rounded border border-amber-500/30 bg-amber-500/10 px-2 py-1 text-[11px] text-amber-700">
+          <div className="font-medium">{t('constraint.advisories')}</div>
+          {sizeMiss > 0 && <div className="flex items-center gap-1.5"><AlertTriangle className="h-3 w-3" /> {t('constraint.sizeAdvisory', { n: sizeMiss })}</div>}
+          {tailMiss > 0 && <div className="flex items-center gap-1.5"><AlertTriangle className="h-3 w-3" /> {t('constraint.tailAdvisory', { n: tailMiss })}</div>}
+        </div>
+      )}
     </div>
   );
 }
@@ -319,6 +344,8 @@ export function Inspector({ plan, scenario, selection, onSelect, onMarkUnavailab
             <button type="button" onClick={() => onSelect({ kind: 'vehicle', vehicleId: vehicle.id })}
               className={`font-semibold ${trip ? 'hover:underline' : ''}`} title={trip ? t('inspector.backToVehicle') : undefined}>{vehicle.ref}</button>
             {vehicle.vehicleClass && <Badge variant="outline">{vehicle.vehicleClass.replace(/_/g, ' ')}</Badge>}
+            {vehicle.tonnage != null && <Badge variant="outline" className="text-[10px]">{t('constraint.tonnage', { n: vehicle.tonnage })}</Badge>}
+            {vehicle.hasTailLift && <Badge variant="outline" className="text-[10px]">{t('constraint.tailLift')}</Badge>}
             {vehicle.isSubcontractor && <Badge variant="warning">{t('inspector.subcontractor')}</Badge>}
             {stop && trip ? (
               <button type="button" onClick={() => onSelect({ kind: 'trip', vehicleId: vehicle.id, tripIndex: trip.index })}
@@ -333,7 +360,7 @@ export function Inspector({ plan, scenario, selection, onSelect, onMarkUnavailab
         <ScrollArea className="min-h-0 flex-1">
           <div className="space-y-3 p-3">
             <TabsContent value="details" className="mt-0 space-y-3">
-              {stop ? <StopDetail stop={stop} />
+              {stop ? <StopDetail stop={stop} vehicle={vehicle} />
                 : trip ? <TripDetail trip={trip} vehicle={vehicle} currency={currency} onSelectStop={(seq) => onSelect({ kind: 'stop', vehicleId: vehicle.id, tripIndex: trip.index, seq })} />
                   : <VehicleSummary vehicle={vehicle} plan={plan} onSelectTrip={(i) => onSelect({ kind: 'trip', vehicleId: vehicle.id, tripIndex: i })} />}
               {stop && (

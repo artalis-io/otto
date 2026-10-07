@@ -108,6 +108,8 @@ export interface PlanStop {
   waitSec: number;      // service_start - arrival
   travelToSec: number;  // travel from previous stop/depot
   lateBySec: number;    // max(0, arrival - tw_late)
+  requiresTailLift: boolean;
+  maxTonnage: number | null; // max vehicle GVW (t) that can access
 }
 
 export interface PlanTrip {
@@ -133,6 +135,8 @@ export interface PlanVehicle {
   ref: string;
   vehicleClass: string | null;
   isSubcontractor: boolean;
+  tonnage: number | null;
+  hasTailLift: boolean;
   color: string;
   capacityKg: number;
   capacityPallets: number;

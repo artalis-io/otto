@@ -10,7 +10,7 @@ function mkStop(orderNo: string, over: Partial<PlanStop> = {}): PlanStop {
     lon: 19.1, lat: 47.5, seq: 1, type: 'delivery',
     arrivalSec: 8 * 3600, serviceStartSec: 8 * 3600, departureSec: 8 * 3600 + 600,
     twStartSec: 7 * 3600, twEndSec: 12 * 3600, pallets: 2.5, weightKg: 1234,
-    serviceMin: 10, waitSec: 0, travelToSec: 600, lateBySec: 0, ...over,
+    serviceMin: 10, waitSec: 0, travelToSec: 600, lateBySec: 0, requiresTailLift: false, maxTonnage: null, ...over,
   };
 }
 function mkTrip(stops: PlanStop[]): PlanTrip {
@@ -18,7 +18,7 @@ function mkTrip(stops: PlanStop[]): PlanTrip {
 }
 function mkVehicle(): PlanVehicle {
   return {
-    id: 1, ref: 'TRK-1', vehicleClass: 'SEMI_TRAILER', isSubcontractor: true, color: '#123456',
+    id: 1, ref: 'TRK-1', vehicleClass: 'SEMI_TRAILER', isSubcontractor: true, tonnage: 40, hasTailLift: false, color: '#123456',
     capacityKg: 24000, capacityPallets: 33, tripCount: 1, finishTimeSec: 10 * 3600,
     peakKg: 2000, peakPallets: 5, distanceKm: 42.5, trips: [mkTrip([mkStop('O1'), mkStop('O2', { seq: 2, lateBySec: 900 })])],
   };

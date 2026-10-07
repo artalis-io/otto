@@ -27,6 +27,8 @@ function mkStop(orderNo: string, over: Partial<PlanStop> = {}): PlanStop {
     waitSec: 0,
     travelToSec: 0,
     lateBySec: 0,
+    requiresTailLift: false,
+    maxTonnage: null,
     ...over,
   };
 }
@@ -52,6 +54,8 @@ function mkVehicle(ref: string, stops: PlanStop[]): PlanVehicle {
     ref,
     vehicleClass: null,
     isSubcontractor: false,
+    tonnage: null,
+    hasTailLift: false,
     color: '#000000',
     capacityKg: 10_000,
     capacityPallets: 100,

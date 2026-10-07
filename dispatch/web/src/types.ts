@@ -14,10 +14,12 @@ export interface PlanProvenance {
 }
 
 export interface ValidationViolation {
-  type: string;            // HARD_TW | CAPACITY | ...
+  type: string;            // HARD_TW | CAPACITY | TAIL_LIFT | VEHICLE_SIZE | ...
+  soft?: boolean;          // advisory (access constraints) vs hard (TW/capacity)
   dimension?: string;
   vehicle_id?: number;
   request_id?: number;
+  orderNo?: string;
   trip?: number;
   actual?: number;
   limit?: number;
@@ -57,6 +59,8 @@ export interface Stop {
   waitSec: number;
   travelToSec: number;
   lateBySec: number;
+  requiresTailLift: boolean;
+  maxTonnage: number | null;
 }
 
 export interface Trip {
@@ -78,6 +82,8 @@ export interface Vehicle {
   ref: string;
   vehicleClass: string | null;
   isSubcontractor: boolean;
+  tonnage: number | null;
+  hasTailLift: boolean;
   /** Assigned by the backend from a fixed distinct palette; stable within a plan. */
   color: string;
   capacityKg: number;

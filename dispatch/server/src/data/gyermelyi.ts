@@ -40,12 +40,26 @@ export interface OrderInfo {
   twEnd: string | null;
   serviceMin: number | null;
   requiresTailLift: boolean;
+  maxTonnage: number | null; // max vehicle GVW (t) that can access the address
 }
 
 export interface VehicleInfo {
   vehicleClass: string | null;
   plate: string | null;
   isSubcontractor: boolean;
+  tonnage: number | null;    // vehicle gross weight (t)
+  hasTailLift: boolean;
+}
+
+/* Parse a Hungarian special_req free-text field: a tail-lift flag ("emelőhátfal")
+ * and/or a max access tonnage ("3,5t" / "7,5t" / "18t"). */
+function parseTonnage(specialReq: string | null | undefined): number | null {
+  if (!specialReq) return null;
+  const m = /(\d+(?:[.,]\d+)?)\s*t/i.exec(specialReq);
+  return m ? Number(m[1]!.replace(',', '.')) : null;
+}
+function hasTailLiftReq(specialReq: string | null | undefined): boolean {
+  return typeof specialReq === 'string' && /emel[őo]h[áa]tfal/i.test(specialReq);
 }
 
 function readJson<T>(rel: string): T {
@@ -97,7 +111,8 @@ export function loadEnrichment(): Map<string, OrderInfo> {
       twStart: r.tw_start ?? null,
       twEnd: r.tw_end ?? null,
       serviceMin: typeof r.service_min === 'number' ? r.service_min : null,
-      requiresTailLift: Boolean(r.requires_tail_lift),
+      requiresTailLift: Boolean(r.requires_tail_lift) || hasTailLiftReq(r.special_req),
+      maxTonnage: parseTonnage(r.special_req),
     });
   }
   return m;
@@ -114,6 +129,8 @@ export function loadVehicleInfo(): Map<string, VehicleInfo> {
       vehicleClass: r.vehicle_class ?? null,
       plate: r.plate ?? null,
       isSubcontractor: Boolean(r.is_subcontractor),
+      tonnage: typeof r.gross_weight_kg === 'number' && r.gross_weight_kg > 0 ? r.gross_weight_kg / 1000 : null,
+      hasTailLift: Boolean(r.requires_tail_lift) || hasTailLiftReq(r.special_req),
     };
     for (const k of [r.id, r.plate, r.ref].filter(Boolean)) m.set(normKey(String(k)), info);
   }

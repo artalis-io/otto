@@ -81,6 +81,10 @@ export function mapSolutionToPlan(inp: MapInputs): Plan {
         const twLate = task?.tw_late ?? 0;
         const lateBySec = Math.max(0, s.arrival - twLate);
         if (lateBySec > 1) violations.push({ type: 'HARD_TW', vehicle_id: route.vehicle_id, request_id: s.request_id, actual: s.arrival, limit: twLate });
+        // Soft advisories: physical access constraints the current solve does not model.
+        if (info?.requiresTailLift && !vinfo?.hasTailLift) violations.push({ type: 'TAIL_LIFT', soft: true, vehicle_id: route.vehicle_id, request_id: s.request_id, orderNo });
+        if (info?.maxTonnage != null && vinfo?.tonnage != null && vinfo.tonnage > info.maxTonnage + 0.01)
+          violations.push({ type: 'VEHICLE_SIZE', soft: true, vehicle_id: route.vehicle_id, request_id: s.request_id, orderNo, actual: vinfo.tonnage, limit: info.maxTonnage });
         return {
           orderId: info?.id ?? null,
           orderNo,
@@ -98,6 +102,8 @@ export function mapSolutionToPlan(inp: MapInputs): Plan {
           waitSec: Math.max(0, s.service_start - s.arrival),
           travelToSec,
           lateBySec,
+          requiresTailLift: Boolean(info?.requiresTailLift),
+          maxTonnage: info?.maxTonnage ?? null,
         };
       });
       // close the trip back to depot
@@ -133,6 +139,8 @@ export function mapSolutionToPlan(inp: MapInputs): Plan {
       ref,
       vehicleClass: vinfo?.vehicleClass ?? null,
       isSubcontractor: Boolean(vinfo?.isSubcontractor),
+      tonnage: vinfo?.tonnage ?? null,
+      hasTailLift: Boolean(vinfo?.hasTailLift),
       color: colorForIndex(ri),
       capacityKg: capKg,
       capacityPallets: capPal,
@@ -163,7 +171,10 @@ export function mapSolutionToPlan(inp: MapInputs): Plan {
 
   const deliveryStops = vehicles.reduce((n, v) => n + v.trips.reduce((m, t) => m + t.stops.length, 0), 0);
   const status = solution.status;
-  const valid = (status === 'OK' || status === 'LIMIT') && violations.length === 0;
+  // Soft advisories (tail-lift / vehicle-size access) do not invalidate the plan;
+  // only hard violations (time windows, capacity) do.
+  const hardViolations = violations.filter((v) => !(v as { soft?: boolean }).soft);
+  const valid = (status === 'OK' || status === 'LIMIT') && hardViolations.length === 0;
 
   // Estimated operating cost under the tariff (only used vehicles are charged).
   const perVehicle: PlanVehicleCost[] = vehicles.map((v) => {

@@ -116,6 +116,12 @@ const en: Dict = {
   'kpi.cost': 'Est. cost', 'kpi.demoTariff': 'demo tariff', 'kpi.extTariff': 'tariff',
   'compare.cost': 'Est. cost', 'compare.saved': '{p}% saved',
   'inspector.cost': 'Est. cost',
+  // Constraint surfacing (access: tail lift, vehicle size)
+  'constraint.tailLift': 'tail lift', 'constraint.maxT': 'max {n}t', 'constraint.tonnage': '{n}t',
+  'constraint.tailLiftMiss': '{ref} has no tail lift', 'constraint.sizeMiss': 'Vehicle {t}t exceeds the {max}t access limit',
+  'constraint.advisories': 'Access advisories', 'constraint.sizeAdvisory': '{n} oversize assignment(s)',
+  'constraint.tailAdvisory': '{n} tail-lift mismatch(es)',
+  'fleet.filterTailLift': 'Tail lift', 'fleet.filterAdvisories': 'Has advisories',
 };
 
 const hu: Dict = {
@@ -226,6 +232,12 @@ const hu: Dict = {
   'kpi.cost': 'Becsült költség', 'kpi.demoTariff': 'teszt tarifa', 'kpi.extTariff': 'tarifa',
   'compare.cost': 'Becsült költség', 'compare.saved': '{p}% megtakarítás',
   'inspector.cost': 'Becsült költség',
+  // Constraint surfacing
+  'constraint.tailLift': 'emelőhátfal', 'constraint.maxT': 'max {n}t', 'constraint.tonnage': '{n}t',
+  'constraint.tailLiftMiss': '{ref} nincs emelőhátfal', 'constraint.sizeMiss': 'A {t}t jármű meghaladja a {max}t behajtási korlátot',
+  'constraint.advisories': 'Behajtási figyelmeztetések', 'constraint.sizeAdvisory': '{n} túlméretes hozzárendelés',
+  'constraint.tailAdvisory': '{n} emelőhátfal-eltérés',
+  'fleet.filterTailLift': 'Emelőhátfal', 'fleet.filterAdvisories': 'Figyelmeztetéssel',
 };
 
 const DICTS: Record<Lang, Dict> = { en, hu };
