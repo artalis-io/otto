@@ -79,13 +79,16 @@ function pointAlong(coords: [number, number][], frac: number): [number, number] 
 }
 
 /* Active vehicle positions at `clockSec`: interpolated along each trip's road
- * geometry by the trip's elapsed-time fraction. */
-function playheadFC(plan: Plan, clockSec: number | null): FeatureCollection {
+ * geometry by the trip's elapsed-time fraction. Restricted to the selected
+ * vehicle/trip so markers match the visible (non-faded) routes. */
+function playheadFC(plan: Plan, clockSec: number | null, selVId: number | null, selTIdx: number | null): FeatureCollection {
   const features: FeatureCollection['features'] = [];
   if (clockSec == null) return { type: 'FeatureCollection', features };
   for (const v of plan.vehicles) {
+    if (selVId != null && v.id !== selVId) continue;
     for (const t of v.trips) {
       if (clockSec < t.startSec || clockSec > t.endSec || !t.geometry) continue;
+      if (selTIdx != null && t.index !== selTIdx) continue;
       const frac = (clockSec - t.startSec) / Math.max(1, t.endSec - t.startSec);
       const [lon, lat] = pointAlong(t.geometry.coordinates as [number, number][], frac);
       features.push({ type: 'Feature', properties: { color: v.color, ref: v.ref }, geometry: { type: 'Point', coordinates: [lon, lat] } });
@@ -104,7 +107,7 @@ export function MapView({ plan, selection, onSelect, clockSec }: { plan: Plan; s
   const routes = useMemo(() => routesFC(plan), [plan]);
   const stops = useMemo(() => stopsFC(plan), [plan]);
   const depot = useMemo(() => pointFC(plan.depot.lon, plan.depot.lat), [plan.depot.lon, plan.depot.lat]);
-  const playhead = useMemo(() => playheadFC(plan, clockSec), [plan, clockSec]);
+  const playhead = useMemo(() => playheadFC(plan, clockSec, selVehicle(selection), selTripIndex(selection)), [plan, clockSec, selection]);
   const [hovering, setHovering] = useState(false);
 
   const vId = selVehicle(selection);
