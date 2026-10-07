@@ -69,7 +69,17 @@ export const api = {
   },
   onboardPreview: (uploadId: string, entity: Entity, mapping: Record<string, number>) =>
     jsend<OnboardPreview>('/api/import/preview', 'POST', { uploadId, entity, mapping }),
+  onboardGeocode: (uploadId: string, mapping: Record<string, number>) =>
+    jsend<GeocodeResult>('/api/import/geocode', 'POST', { uploadId, mapping }),
 };
+
+export type GeoTier = 'GREEN' | 'YELLOW' | 'APPROX' | 'RED';
+export interface GeoPoint { lon: number; lat: number; tier: GeoTier; city: string; orderNo: string; customer: string }
+export interface GeocodeResult {
+  ok: boolean; error?: string; mode: 'offline' | 'online';
+  total: number; resolved: number; unresolved: number;
+  byTier: Record<GeoTier, number>; points: GeoPoint[];
+}
 
 export type Entity = 'orders' | 'vehicles' | 'routes';
 export interface CanonicalField { field: string; type: string; required: boolean; label: string; hint?: string; aliases: string[] }

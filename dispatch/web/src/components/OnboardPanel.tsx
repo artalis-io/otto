@@ -1,10 +1,16 @@
-import { useEffect, useState } from 'react';
-import { Upload, CheckCircle2, XCircle, AlertTriangle, Loader2, FileUp } from 'lucide-react';
+import { useEffect, useMemo, useState } from 'react';
+import { Upload, CheckCircle2, XCircle, AlertTriangle, Loader2, FileUp, MapPin } from 'lucide-react';
+import Map, { Layer, Source } from 'react-map-gl/maplibre';
+import type { FeatureCollection } from 'geojson';
+import maplibregl from 'maplibre-gl';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { ScrollArea } from '@/components/ui/scroll-area';
-import { api, type Entity, type CanonicalField, type UploadResult, type OnboardPreview } from '@/lib/api';
+import { cartaStyle } from '@/map/cartaStyle';
+import { api, type Entity, type CanonicalField, type UploadResult, type OnboardPreview, type GeocodeResult, type GeoTier } from '@/lib/api';
 import { useT } from '@/i18n';
+
+const TIER_COLOR: Record<GeoTier, string> = { GREEN: '#16a34a', YELLOW: '#ca8a04', APPROX: '#ea580c', RED: '#dc2626' };
 
 /* M1 onboarding: upload a raw CSV, map its columns to canonical fields, and run
  * the real Nexus ingest + reconcile gate as a reviewed dry-run. Admit (creating
@@ -16,7 +22,8 @@ export function OnboardPanel() {
   const [upload, setUpload] = useState<UploadResult | null>(null);
   const [mapping, setMapping] = useState<Record<string, number>>({});
   const [preview, setPreview] = useState<OnboardPreview | null>(null);
-  const [busy, setBusy] = useState<'upload' | 'preview' | null>(null);
+  const [geo, setGeo] = useState<GeocodeResult | null>(null);
+  const [busy, setBusy] = useState<'upload' | 'preview' | 'geocode' | null>(null);
   const [err, setErr] = useState<string | null>(null);
 
   useEffect(() => { api.onboardCatalog().then(setCatalog).catch((e) => setErr(String(e))); }, []);
@@ -25,7 +32,7 @@ export function OnboardPanel() {
   const missing = fields.filter((f) => f.required && mapping[f.field] == null).map((f) => f.label);
 
   async function onFile(file: File) {
-    setErr(null); setPreview(null); setBusy('upload');
+    setErr(null); setPreview(null); setGeo(null); setBusy('upload');
     try {
       const u = await api.onboardUpload(entity, file);
       setUpload(u); setMapping(u.suggested);
@@ -34,8 +41,15 @@ export function OnboardPanel() {
   }
   async function validate() {
     if (!upload) return;
-    setErr(null); setBusy('preview');
+    setErr(null); setGeo(null); setBusy('preview');
     try { setPreview(await api.onboardPreview(upload.uploadId, entity, mapping)); }
+    catch (e) { setErr(e instanceof Error ? e.message : String(e)); }
+    finally { setBusy(null); }
+  }
+  async function geocode() {
+    if (!upload) return;
+    setErr(null); setBusy('geocode');
+    try { setGeo(await api.onboardGeocode(upload.uploadId, mapping)); }
     catch (e) { setErr(e instanceof Error ? e.message : String(e)); }
     finally { setBusy(null); }
   }
@@ -113,8 +127,61 @@ export function OnboardPanel() {
 
         {/* 3. Preview */}
         {preview && <PreviewPanel preview={preview} />}
+
+        {/* 4. Geocode (orders, after the gate passes) */}
+        {preview?.ok && entity === 'orders' && (
+          <div className="space-y-2">
+            <Button size="sm" variant="outline" onClick={() => void geocode()} disabled={busy != null}>
+              {busy === 'geocode' ? <Loader2 className="h-4 w-4 animate-spin" /> : <MapPin className="h-4 w-4" />} {t('onboard.geocode')}
+            </Button>
+            {geo && <GeocodePanel geo={geo} />}
+          </div>
+        )}
       </div>
     </ScrollArea>
+  );
+}
+
+function GeocodePanel({ geo }: { geo: GeocodeResult }) {
+  const t = useT();
+  if (geo.error) return <div className="rounded border border-destructive/40 bg-destructive/10 px-2.5 py-2 text-sm text-destructive">{geo.error}</div>;
+  return (
+    <div className="space-y-2 rounded-md border border-divider bg-muted/20 p-3">
+      <div className="flex flex-wrap items-center gap-2 text-[11px]">
+        <Badge variant="outline">{t(geo.mode === 'online' ? 'onboard.modeOnline' : 'onboard.modeOffline')}</Badge>
+        <span className="tnum text-muted-foreground">{t('onboard.resolved', { r: geo.resolved, n: geo.total })}{geo.unresolved > 0 ? ` · ${t('onboard.unresolved', { n: geo.unresolved })}` : ''}</span>
+        <span className="ml-auto flex items-center gap-1.5">
+          {(['GREEN', 'YELLOW', 'APPROX', 'RED'] as const).map((tier) => geo.byTier[tier] > 0 && (
+            <span key={tier} className="inline-flex items-center gap-1 tnum"><span className="h-2.5 w-2.5 rounded-full" style={{ backgroundColor: TIER_COLOR[tier] }} />{geo.byTier[tier]}</span>
+          ))}
+        </span>
+      </div>
+      {geo.points.length > 0 && <GeoMiniMap points={geo.points} />}
+    </div>
+  );
+}
+
+const transformRequest = (url: string) => ({ url: url.startsWith('/') ? window.location.origin + url : url });
+function GeoMiniMap({ points }: { points: GeocodeResult['points'] }) {
+  const style = useMemo(() => cartaStyle(), []);
+  const fc = useMemo<FeatureCollection>(() => ({
+    type: 'FeatureCollection',
+    features: points.map((p) => ({ type: 'Feature', properties: { color: TIER_COLOR[p.tier] }, geometry: { type: 'Point', coordinates: [p.lon, p.lat] } })),
+  }), [points]);
+  const bounds = useMemo(() => {
+    const b = new maplibregl.LngLatBounds();
+    for (const p of points) b.extend([p.lon, p.lat]);
+    return b;
+  }, [points]);
+  return (
+    <div className="h-56 overflow-hidden rounded border border-divider">
+      <Map initialViewState={{ bounds, fitBoundsOptions: { padding: 24 } }} mapStyle={style} transformRequest={transformRequest}
+        attributionControl={false} dragRotate={false} style={{ width: '100%', height: '100%' }}>
+        <Source id="geo" type="geojson" data={fc}>
+          <Layer id="geo-pts" type="circle" paint={{ 'circle-radius': 3.5, 'circle-color': ['get', 'color'], 'circle-stroke-color': '#fff', 'circle-stroke-width': 0.6, 'circle-opacity': 0.9 }} />
+        </Source>
+      </Map>
+    </div>
   );
 }
 

@@ -18,7 +18,7 @@ import { loadTariff } from './cost.js';
 import { planToCsv, planToRouteSheetHtml } from './export.js';
 import { RateLimiter } from './ratelimit.js';
 import { CATALOG, suggestMapping, type Entity } from './data/catalog.js';
-import { newUploadPath, uploadPath, sampleUpload, runIngestPreview, type Mapping } from './data/onboard.js';
+import { newUploadPath, uploadPath, sampleUpload, runIngestPreview, runGeocode, type Mapping } from './data/onboard.js';
 import type { Plan } from './types.js';
 
 const ENTITIES: Entity[] = ['orders', 'vehicles', 'routes'];
@@ -327,6 +327,16 @@ app.post<{ Body: { uploadId?: string; entity?: string; mapping?: Mapping } }>('/
   const path = uploadPath(uploadId, entity as Entity);
   if (!existsSync(path)) return reply.code(404).send({ error: 'upload not found (re-upload)' });
   return runIngestPreview(path, entity as Entity, mapping);
+});
+
+// Geocode the mapped orders (cache-first; keys-if-present else offline) -> tiers + points.
+app.post<{ Body: { uploadId?: string; mapping?: Mapping } }>('/api/import/geocode', async (req, reply) => {
+  const { uploadId, mapping } = req.body ?? {};
+  if (!uploadId || !/^up_[a-z0-9-]+$/.test(uploadId)) return reply.code(400).send({ error: 'valid uploadId required' });
+  if (!mapping || typeof mapping !== 'object') return reply.code(400).send({ error: 'mapping required' });
+  const path = uploadPath(uploadId, 'orders');
+  if (!existsSync(path)) return reply.code(404).send({ error: 'upload not found (re-upload)' });
+  return runGeocode(path, mapping);
 });
 
 /* ---- Carta tile proxy (same-origin so the reused style's relative URLs work) ---- */

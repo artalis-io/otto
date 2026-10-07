@@ -36,8 +36,10 @@ export async function sampleUpload(path: string, limit = 8): Promise<Sample> {
 
 export type Mapping = Record<string, number>; // canonical field -> raw column index
 
-/** Generate an nx_schema v2 from a column mapping (direct column->field). */
-export function buildSchema(entity: Entity, mapping: Mapping): object {
+/** Generate an nx_schema v2 from a column mapping (direct column->field). For
+ * orders, also derive `address_geocode` (a merge of street/zip/city) so the
+ * output is geocode-ready; reconcile verifies merge-derived fields too. */
+export function buildSchema(entity: Entity, mapping: Mapping, rawCols = 18): object {
   const fields = CATALOG[entity];
   const byField = new Map(fields.map((f) => [f.field, f]));
   const columns: object[] = [];
@@ -46,10 +48,34 @@ export function buildSchema(entity: Entity, mapping: Mapping): object {
     if (!f || typeof idx !== 'number' || idx < 0) continue;
     columns.push(columnSpec(idx, field, f.type, f.required));
   }
-  return {
+  const schema: Record<string, unknown> = {
     nx_schema: 2, version: `onboard-${entity}`, output_type: 'record',
     table_selector: { index: 0 }, skip_rows: 0, columns,
   };
+  const merge = entity === 'orders' ? addressMerge(mapping, rawCols) : null;
+  if (merge) {
+    schema.multi_transforms = [merge.transform];
+    columns.push({ source: merge.virtualIndex, target: 'address_geocode', type: 'string', default: '' });
+  }
+  return schema;
+}
+
+/** An address_geocode merge "street, zip city" from whichever of street/zip/city
+ * are mapped (city is required). Virtual columns start at raw-column-count; with
+ * one transform the merge target lands at index 18 (raw cols 0-17 in this format). */
+function addressMerge(mapping: Mapping, rawCols: number): { transform: object; virtualIndex: number } | null {
+  if (mapping.city == null) return null;
+  const sources: number[] = [];
+  const pos: Record<string, number> = {};
+  for (const f of ['street', 'zip', 'city'] as const) {
+    if (mapping[f] != null) { pos[f] = sources.length; sources.push(mapping[f]!); }
+  }
+  const segs: string[] = [];
+  if ('street' in pos) segs.push(`{${pos.street}},`);
+  if ('zip' in pos) segs.push(`{${pos.zip}}`);
+  segs.push(`{${pos.city}}`);
+  // Virtual columns are appended after the raw width (actual column count).
+  return { transform: { type: 'merge', sources, template: segs.join(' '), target: 'address_geocode' }, virtualIndex: rawCols };
 }
 function columnSpec(source: number, target: string, type: FieldType, required: boolean): object {
   const base: Record<string, unknown> = { source, target, type };
@@ -81,9 +107,10 @@ export async function runIngestPreview(path: string, entity: Entity, mapping: Ma
   if (miss.length) return emptyPreview(`map required fields: ${miss.join(', ')}`);
   if (!existsSync(INGEST_SH)) return emptyPreview(`nexus ingest not found at ${INGEST_SH} (build: make -C nexus tools)`);
 
+  const rawCols = (await sampleUpload(path, 1)).headers.length;
   const schemaPath = `${path}.schema.json`;
   const outPath = `${path}.canonical.json`;
-  writeFileSync(schemaPath, JSON.stringify(buildSchema(entity, mapping)));
+  writeFileSync(schemaPath, JSON.stringify(buildSchema(entity, mapping, rawCols)));
 
   let stdout = '', exitCode = 0;
   try {
@@ -135,4 +162,78 @@ export function parseSemantic(stdout: string): Preview['semantic'] {
     if (level === 'ERROR') errors += count; else if (level === 'WARN') warnings += count; else info += count;
   }
   return { errors, warnings, info, items };
+}
+
+/* ---- M2: geocode the mapped orders (cache-first; keys-if-present else offline) ---- */
+
+export type Tier = 'GREEN' | 'YELLOW' | 'APPROX' | 'RED';
+export interface GeoPoint { lon: number; lat: number; tier: Tier; city: string; orderNo: string; customer: string }
+export interface GeocodeResult {
+  ok: boolean;
+  error?: string;
+  mode: 'offline' | 'online';
+  total: number;
+  resolved: number;
+  unresolved: number;
+  byTier: Record<Tier, number>;
+  points: GeoPoint[];          // capped for the map
+}
+
+function envHasKeys(): boolean {
+  if (config.geocodeForceOffline) return false;
+  try {
+    const txt = readFileSync(config.geocodeEnv, 'utf8');
+    return /\b(GOOGLE\w*KEY|HERE\w*KEY|GOOGLE_API_KEY|HERE_API_KEY)\s*=\s*\S+/i.test(txt);
+  } catch { return false; }
+}
+
+/** Run the real 3-way geocoder on the mapped orders, cache-first. Online calls
+ * are allowed only when API keys are configured (else cache-only/offline). */
+export async function runGeocode(path: string, mapping: Mapping): Promise<GeocodeResult> {
+  if (mapping.city == null) return emptyGeo('map the City column before geocoding');
+  const sample = await sampleUpload(path, 1);
+  const schemaPath = `${path}.geo.schema.json`;
+  const canonPath = `${path}.geo.canonical.json`;
+  const outPath = `${path}.geocoded.json`;
+  writeFileSync(schemaPath, JSON.stringify(buildSchema('orders', mapping, sample.headers.length)));
+
+  const online = envHasKeys();
+  const nx = resolve(config.nexusDir, 'nx_pipeline');
+  const gc = resolve(config.nexusDir, 'scripts/geocode_verify.py');
+  try {
+    await pExecFile(nx, [path, '--schema', schemaPath, '-o', canonPath], { timeout: config.ingestTimeoutSec * 1000, maxBuffer: 32 * 1024 * 1024 });
+    const args = [gc, '--orders', canonPath, '--out', outPath, '--cache-dir', config.geocodeCacheDir];
+    if (existsSync(config.geocodePbf)) args.push('--pbf', config.geocodePbf);
+    const env = { ...process.env, ...(online ? {} : { GEOCODE_OFFLINE: '1' }) };
+    await pExecFile('python3', args, { timeout: config.geocodeTimeoutSec * 1000, maxBuffer: 64 * 1024 * 1024, env });
+  } catch (e) {
+    const err = e as { killed?: boolean; stderr?: string };
+    cleanup(schemaPath, canonPath, outPath);
+    return emptyGeo(err.killed ? `geocode timed out after ${config.geocodeTimeoutSec}s` : (err.stderr || 'geocode failed').trim().slice(0, 300), online ? 'online' : 'offline');
+  }
+
+  let recs: Record<string, unknown>[] = [];
+  try {
+    const raw = JSON.parse(readFileSync(outPath, 'utf8')) as unknown;
+    recs = (Array.isArray(raw) ? raw : (raw as { records?: Record<string, unknown>[] }).records) ?? [];
+  } catch { /* below */ }
+  cleanup(schemaPath, canonPath, outPath);
+
+  const byTier: Record<Tier, number> = { GREEN: 0, YELLOW: 0, APPROX: 0, RED: 0 };
+  const points: GeoPoint[] = [];
+  let resolved = 0;
+  for (const o of recs) {
+    const lat = o.lat, lon = o.lon;
+    const tier = (['GREEN', 'YELLOW', 'APPROX', 'RED'].includes(String(o.geo_tier)) ? o.geo_tier : 'RED') as Tier;
+    byTier[tier]++;
+    if (typeof lat === 'number' && typeof lon === 'number') {
+      resolved++;
+      if (points.length < 2000) points.push({ lon, lat, tier, city: String(o.city ?? ''), orderNo: String(o.order_no ?? ''), customer: String(o.customer ?? '') });
+    }
+  }
+  return { ok: resolved > 0, mode: online ? 'online' : 'offline', total: recs.length, resolved, unresolved: recs.length - resolved, byTier, points };
+}
+
+function emptyGeo(error: string, mode: 'offline' | 'online' = 'offline'): GeocodeResult {
+  return { ok: false, error, mode, total: 0, resolved: 0, unresolved: 0, byTier: { GREEN: 0, YELLOW: 0, APPROX: 0, RED: 0 }, points: [] };
 }

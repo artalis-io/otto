@@ -14,7 +14,29 @@ test('buildSchema: generates a valid nx_schema from a column mapping', () => {
   assert.equal(byTarget.get('order_no')!.required, true);   // required field flagged
   assert.equal(byTarget.get('weight_kg')!.type, 'double');
   assert.equal(byTarget.get('city')!.type, 'string');
-  assert.equal(byTarget.size, 5);
+  // 5 mapped + the derived address_geocode (city is mapped so the merge fires)
+  assert.equal(byTarget.size, 6);
+  assert.ok(byTarget.has('address_geocode'));
+});
+
+test('buildSchema: orders derive an address_geocode merge at the raw width', () => {
+  const s = buildSchema('orders', { order_no: 0, customer: 4, city: 6, zip: 5, street: 7 }, 18) as {
+    multi_transforms?: { type: string; sources: number[]; template: string; target: string }[];
+    columns: { source: number; target: string }[];
+  };
+  assert.ok(s.multi_transforms, 'has multi_transforms');
+  const mt = s.multi_transforms![0]!;
+  assert.equal(mt.type, 'merge');
+  assert.equal(mt.target, 'address_geocode');
+  assert.deepEqual(mt.sources, [7, 5, 6]); // street, zip, city order
+  // the virtual merge column is appended at the raw width (18)
+  const addr = s.columns.find((c) => c.target === 'address_geocode');
+  assert.ok(addr && addr.source === 18);
+});
+
+test('buildSchema: non-orders entities get no address merge', () => {
+  const s = buildSchema('vehicles', { id: 0, plate: 1 }, 10) as { multi_transforms?: unknown };
+  assert.equal(s.multi_transforms, undefined);
 });
 
 test('missingRequired: reports unmapped required fields', () => {

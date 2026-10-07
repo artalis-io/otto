@@ -113,6 +113,9 @@ cd dispatch/server && npm start
 | `DISPATCH_UPLOADS_DIR` | `${GYERMELYI_ROOT}/uploads` | Where uploaded datasets land (external, never committed). |
 | `NEXUS_DIR` | `${OTTO_ROOT}/nexus` | Nexus engines (`ingest.sh`, `reconcile.py`, `nx_pipeline`) for onboarding. |
 | `DISPATCH_MAX_UPLOAD_MB` / `_ROWS` | 25 / 50000 | Upload size / row caps. |
+| `GEOCODE_CACHE_DIR` | `${GYERMELYI_ROOT}/.geocode_cache` | Geocode cache (reused; known addresses are free). |
+| `GEOCODE_PBF` / `GEOCODE_ENV` | `${OTTO_ROOT}/data/…pbf` / `${OTTO_ROOT}/.env` | OSM PBF for the Locus cross-check; `.env` with API keys. |
+| `DISPATCH_GEOCODE_OFFLINE` | 0 | `1` forces cache-only geocoding even when keys exist. |
 | `rates/tariff.json` | (demo) | Optional real carrier tariff under `GYERMELYI_ROOT` (uncommitted). Absent → an illustrative demo tariff drives the cost KPI, labelled as such. |
 | `VITE_API_ORIGIN` | `localhost:8091` | Frontend → backend origin (dev proxy). |
 | `VITE_SOLVE_SECONDS` | 60 | UI-triggered solve budget. |

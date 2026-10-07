@@ -140,6 +140,8 @@ const en: Dict = {
   'onboard.semantic': 'Semantic', 'onboard.canonical': 'Canonical records ({n})',
   'onboard.admitSoon': 'Reconcile is the admit boundary (every field traced to the raw bytes). Creating a dataset from this upload arrives in a later milestone.',
   'onboard.fixToAdmit': 'Fix the mapping until reconcile passes.',
+  'onboard.geocode': 'Geocode addresses', 'onboard.modeOnline': 'online (keys)', 'onboard.modeOffline': 'offline (cache)',
+  'onboard.resolved': '{r}/{n} resolved', 'onboard.unresolved': '{n} unresolved',
 };
 
 const hu: Dict = {
@@ -274,6 +276,8 @@ const hu: Dict = {
   'onboard.semantic': 'Szemantika', 'onboard.canonical': 'Kanonikus rekordok ({n})',
   'onboard.admitSoon': 'Az egyeztetés az átvételi határ (minden mező visszavezetve a nyers bájtokra). Az adathalmaz létrehozása későbbi mérföldkő.',
   'onboard.fixToAdmit': 'Javítsd a megfeleltetést, amíg az egyeztetés rendben nem lesz.',
+  'onboard.geocode': 'Címek geokódolása', 'onboard.modeOnline': 'online (kulcsok)', 'onboard.modeOffline': 'offline (gyorsítótár)',
+  'onboard.resolved': '{r}/{n} feloldva', 'onboard.unresolved': '{n} feloldatlan',
 };
 
 const DICTS: Record<Lang, Dict> = { en, hu };

@@ -29,4 +29,20 @@ test.describe('data onboarding (M1)', () => {
     await expect(page.getByText(/Canonical records/)).toBeVisible();
     expectNoErrors(page);
   });
+
+  test('geocode the mapped orders and preview tiers on a map', async ({ page }) => {
+    test.setTimeout(120_000);
+    await loadApp(page);
+    await page.getByRole('button', { name: 'Data' }).click();
+    await page.getByRole('tab', { name: 'Upload' }).click();
+    await page.locator('input[type=file]').setInputFiles(RAW);
+    await expect(page.getByText('Map columns')).toBeVisible();
+    await page.getByRole('button', { name: 'Validate' }).click();
+    await expect(page.getByText('Reconcile passed')).toBeVisible({ timeout: 60_000 });
+
+    await page.getByRole('button', { name: 'Geocode addresses' }).click();
+    await expect(page.getByText(/\d+\/\d+ resolved/)).toBeVisible({ timeout: 60_000 });
+    await expect(page.getByRole('dialog').locator('canvas.maplibregl-canvas')).toBeVisible();
+    expectNoErrors(page);
+  });
 });

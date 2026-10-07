@@ -115,7 +115,14 @@ Canonical field catalog (for the mapping UI), from the existing canonical shapes
   `scripts/sample_table.py`; routes `/api/import/{catalog,upload,preview}`.
   Frontend: `OnboardPanel` as an "Upload" tab in the data dialog. Uploads land in
   the external uploads dir. Tests: 6 unit + 1 UI.
-- **M2 — Geocoding.** Cache-first; keys-if-present else offline; tier preview + map.
+- **M2 — Geocoding. ✅ DONE.** After the gate passes, derive `address_geocode` (a
+  street/zip/city merge added to the schema) and run the real 3-way
+  `geocode_verify.py` cache-first (online only when `.env` has keys, else
+  `GEOCODE_OFFLINE`; reuses the dataset geocode cache + pbf). Preview shows mode,
+  resolved/unresolved, tier counts (GREEN/YELLOW/APPROX/RED) and the points on a
+  MapLibre mini-map coloured by tier. Route `/api/import/geocode`; `runGeocode` in
+  onboard.ts. On the real data: 332/332 resolved from cache in ~0.6s. +2 unit, +1
+  UI test.
 - **M3 — Matrix + request + admit.** Hybrid matrix (Velo table for new O-D),
   request build, registry, days become selectable.
 - **M4 — Polish.** Sub-stage progress UI, cancel/resume, re-map + re-run, dataset

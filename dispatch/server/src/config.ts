@@ -73,6 +73,12 @@ export const config = {
   maxUploadMB: Number(env('DISPATCH_MAX_UPLOAD_MB', '25')),
   maxUploadRows: Number(env('DISPATCH_MAX_UPLOAD_ROWS', '50000')),
   ingestTimeoutSec: Number(env('DISPATCH_INGEST_TIMEOUT_SEC', '90')),
+  // Geocoding (reuse the dataset cache; keys-if-present else offline).
+  geocodeCacheDir: env('GEOCODE_CACHE_DIR', resolve(env('GYERMELYI_ROOT', '/Users/mark/artalis.io/data/gyermelyi'), '.geocode_cache')),
+  geocodePbf: env('GEOCODE_PBF', resolve(env('OTTO_ROOT', '/Users/mark/artalis.io/src/otto'), 'data/hungary-latest.osm.pbf')),
+  geocodeEnv: env('GEOCODE_ENV', resolve(env('OTTO_ROOT', '/Users/mark/artalis.io/src/otto'), '.env')),
+  geocodeForceOffline: env('DISPATCH_GEOCODE_OFFLINE', '0') === '1', // force cache-only even if keys exist
+  geocodeTimeoutSec: Number(env('DISPATCH_GEOCODE_TIMEOUT_SEC', '180')),
 } as const;
 
 export type Config = typeof config;
