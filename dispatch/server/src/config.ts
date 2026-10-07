@@ -22,6 +22,24 @@ export const config = {
   port: Number(env('DISPATCH_PORT', '8091')),
   host: env('DISPATCH_HOST', '127.0.0.1'),
 
+  // ---- Security ----
+  // A shared secret for the (future) auth layer. Today it gates binding to a
+  // non-loopback host: the server refuses to listen on a public interface
+  // without it, so an unauthenticated API is never exposed by a config slip.
+  authToken: env('DISPATCH_AUTH_TOKEN', ''),
+  // Default-deny CORS: comma-separated allowed origins. Empty = same-origin only
+  // (the SPA is served same-origin, so this is the correct default).
+  corsOrigins: env('DISPATCH_CORS_ORIGINS', '').split(',').map((s) => s.trim()).filter(Boolean),
+  // Content-Security-Policy for the backend-served SPA. Permits MapLibre's blob
+  // workers + data/blob images and same-origin api/tiles; tune via env if needed.
+  contentSecurityPolicy: env('DISPATCH_CSP',
+    "default-src 'self'; img-src 'self' data: blob:; style-src 'self' 'unsafe-inline'; " +
+    "script-src 'self'; worker-src 'self' blob:; connect-src 'self'; font-src 'self' data:; object-src 'none'; frame-ancestors 'none'"),
+  // Carta tile proxy gets its own, more generous per-IP limit (a map view pulls
+  // many tiles) but is no longer unthrottled.
+  tileRateRps: Number(env('DISPATCH_TILE_RATE_RPS', '200')),
+  tileRateBurst: Number(env('DISPATCH_TILE_RATE_BURST', '400')),
+
   ottoRoot: env('OTTO_ROOT', '/Users/mark/artalis.io/src/otto'),
   surgeBin: env('SURGE_BIN', resolve(env('OTTO_ROOT', '/Users/mark/artalis.io/src/otto'), 'surge/surge_solve')),
 

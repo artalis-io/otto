@@ -42,12 +42,42 @@ app.setErrorHandler((err, req, reply) => {
 // Don't let a stray async rejection take the process down silently.
 process.on('unhandledRejection', (reason) => app.log.error({ reason }, 'unhandledRejection'));
 
-// Per-IP rate limit on the API surface (tiles proxy + static are exempt; health
-// is exempt for monitoring).
-const limiter = new RateLimiter(config.rateLimitRps, config.rateLimitBurst);
+// A5: security headers on every response + default-deny CORS. Hand-rolled (no
+// new deps), matching the existing hand-rolled rate limiter.
+const corsAllow = new Set(config.corsOrigins);
 app.addHook('onRequest', (req, reply, done) => {
+  reply.header('X-Content-Type-Options', 'nosniff');
+  reply.header('X-Frame-Options', 'DENY');
+  reply.header('Referrer-Policy', 'no-referrer');
+  reply.header('Strict-Transport-Security', 'max-age=15552000');
+  reply.header('Content-Security-Policy', config.contentSecurityPolicy);
+  // CORS: only reflect an explicitly allow-listed Origin; otherwise emit nothing
+  // (same-origin requests are unaffected; cross-origin is denied by default).
+  const origin = req.headers.origin;
+  if (origin && corsAllow.has(origin)) {
+    reply.header('Access-Control-Allow-Origin', origin);
+    reply.header('Vary', 'Origin');
+    reply.header('Access-Control-Allow-Methods', 'GET,POST,DELETE,OPTIONS');
+    reply.header('Access-Control-Allow-Headers', 'content-type');
+    if (req.method === 'OPTIONS') { reply.code(204).send(); return; }
+  } else if (req.method === 'OPTIONS' && req.url.startsWith('/api')) {
+    reply.code(204).send(); return;   // preflight for a non-allowed origin: no CORS headers
+  }
+  done();
+});
+
+// Per-IP rate limit. The API surface uses the standard bucket; the tile proxy
+// gets its own, more generous bucket (was unthrottled). Health is exempt.
+const limiter = new RateLimiter(config.rateLimitRps, config.rateLimitBurst);
+const tileLimiter = new RateLimiter(config.tileRateRps, config.tileRateBurst);
+app.addHook('onRequest', (req, reply, done) => {
+  const ip = req.ip || 'unknown';
+  if (req.url.startsWith('/tiles')) {
+    if (!tileLimiter.allow(ip)) { reply.code(429).send({ error: 'too many tile requests' }); return; }
+    return done();
+  }
   if (!req.url.startsWith('/api') || req.url.startsWith('/api/health')) return done();
-  if (!limiter.allow(req.ip || 'unknown')) { reply.code(429).send({ error: 'too many requests' }); return; }
+  if (!limiter.allow(ip)) { reply.code(429).send({ error: 'too many requests' }); return; }
   done();
 });
 
@@ -414,8 +444,13 @@ app.delete<{ Params: { id: string } }>('/api/import/datasets/:id', async (req, r
 });
 
 /* ---- Carta tile proxy (same-origin so the reused style's relative URLs work) ---- */
+// Only forward the known tile shapes, path-only (drop any client query), so the
+// proxy can't be used as a general relay to the internal Carta origin.
+const TILE_PATH = /^\/tiles\/\d{1,2}\/\d{1,7}\/\d{1,7}(?:\.[a-z0-9]{1,8})?$/i;
 async function proxyCarta(req: FastifyRequest, reply: FastifyReply): Promise<void> {
-  const target = config.cartaOrigin + req.url;
+  const path = req.url.split('?')[0]!;
+  if (path !== '/tiles.vector.json' && !TILE_PATH.test(path)) { reply.code(400).send({ error: 'bad tile path' }); return; }
+  const target = config.cartaOrigin + path;
   try {
     const res = await fetch(target, { signal: AbortSignal.timeout(15000) });
     reply.code(res.status);
@@ -446,7 +481,18 @@ if (existsSync(join(webDist, 'index.html'))) {
   app.log.info('no web build found; run the frontend via Vite in dev');
 }
 
+/* A5: refuse to expose an unauthenticated API on a public interface. There is
+ * no auth layer yet, so binding to a non-loopback host without an auth token
+ * configured would publish destructive + subprocess-spawning endpoints to the
+ * network. Fail fast with a clear message rather than quietly doing that. */
+function isLoopbackHost(h: string): boolean {
+  return h === '127.0.0.1' || h === '::1' || h === 'localhost';
+}
 const start = async () => {
+  if (!isLoopbackHost(config.host) && !config.authToken) {
+    app.log.error(`refusing to bind ${config.host} without auth: set DISPATCH_AUTH_TOKEN, or bind 127.0.0.1 (behind a trusted proxy)`);
+    process.exit(1);
+  }
   try { await app.listen({ port: config.port, host: config.host }); }
   catch (err) { app.log.error(err); process.exit(1); }
 };

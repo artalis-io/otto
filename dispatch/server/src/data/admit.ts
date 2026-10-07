@@ -7,6 +7,7 @@ import { randomUUID } from 'node:crypto';
 import { config } from '../config.js';
 import { buildSchema, sampleUpload, type Mapping } from './onboard.js';
 import { buildFleetFromUpload } from './fleet.js';
+import { minimalEnv } from '../util/childenv.js';
 import { buildMatrix, type MatrixLoc } from '../geometry/matrix.js';
 import { loadDay } from './gyermelyi.js';
 import { registerDataset, datasetDir, isRoutableOrder, type Dataset, type RegDay } from './registry.js';
@@ -65,9 +66,9 @@ export async function admitDataset(uploadPath: string, mapping: Mapping, label: 
     const rawCols = (await sampleUpload(uploadPath, 1)).headers.length;
     writeFileSync(schemaPath, JSON.stringify(buildSchema('orders', mapping, rawCols)));
     await pExecFile(INGEST_NX, [uploadPath, '--schema', schemaPath, '-o', canonPath], { timeout: config.ingestTimeoutSec * 1000, maxBuffer: 32 * 1024 * 1024 });
-    const args = [GEOCODE_PY, '--orders', canonPath, '--out', geoPath, '--cache-dir', config.geocodeCacheDir];
+    const args = [GEOCODE_PY, '--orders', canonPath, '--out', geoPath, '--cache-dir', config.geocodeCacheDir, '--env', config.geocodeEnv];
     if (existsSync(config.geocodePbf)) args.push('--pbf', config.geocodePbf);
-    const env = { ...process.env, ...(envHasKeys() ? {} : { GEOCODE_OFFLINE: '1' }) };
+    const env = minimalEnv(envHasKeys() ? {} : { GEOCODE_OFFLINE: '1' });
     await pExecFile('python3', args, { timeout: config.geocodeTimeoutSec * 1000, maxBuffer: 64 * 1024 * 1024, env });
   } catch (e) {
     rmSync(dir, { recursive: true, force: true });

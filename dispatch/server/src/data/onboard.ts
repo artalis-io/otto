@@ -5,6 +5,7 @@ import { resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { randomUUID } from 'node:crypto';
 import { config } from '../config.js';
+import { minimalEnv } from '../util/childenv.js';
 import { CATALOG, type Entity, type FieldType } from './catalog.js';
 
 const pExecFile = promisify(execFile);
@@ -242,9 +243,10 @@ export async function runGeocode(path: string, mapping: Mapping): Promise<Geocod
   const gc = resolve(config.nexusDir, 'scripts/geocode_verify.py');
   try {
     await pExecFile(nx, [path, '--schema', schemaPath, '-o', canonPath], { timeout: config.ingestTimeoutSec * 1000, maxBuffer: 32 * 1024 * 1024 });
-    const args = [gc, '--orders', canonPath, '--out', outPath, '--cache-dir', config.geocodeCacheDir];
+    const args = [gc, '--orders', canonPath, '--out', outPath, '--cache-dir', config.geocodeCacheDir, '--env', config.geocodeEnv];
     if (existsSync(config.geocodePbf)) args.push('--pbf', config.geocodePbf);
-    const env = { ...process.env, ...(online ? {} : { GEOCODE_OFFLINE: '1' }) };
+    // A5: a minimal child env (keys come from --env, not inherited process.env).
+    const env = minimalEnv(online ? {} : { GEOCODE_OFFLINE: '1' });
     await pExecFile('python3', args, { timeout: config.geocodeTimeoutSec * 1000, maxBuffer: 64 * 1024 * 1024, env });
   } catch (e) {
     const err = e as { killed?: boolean; stderr?: string };
