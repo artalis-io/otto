@@ -74,6 +74,9 @@ export default function App() {
   const [weekOpen, setWeekOpen] = useState(false);
   const [leftOpen, setLeftOpen] = useState(true);
   const [rightOpen, setRightOpen] = useState(true);
+  // Fleet-panel filter (tail-lift / advisories / search) -> the map shows only
+  // the matching vehicles' routes. null = no filter (show all).
+  const [visibleVehicleIds, setVisibleVehicleIds] = useState<number[] | null>(null);
   const [objective, setObjective] = useState<Objective>('vehicles');
   const [budgetSec, setBudgetSec] = useState<number>(SOLVE_BUDGET_SEC);
   const [fullBudget, setFullBudget] = useState(false); // keep searching until the time limit
@@ -328,7 +331,8 @@ export default function App() {
             <aside className="w-[310px] shrink-0 border-r border-divider">
               <FleetPanel plan={plan} scenario={scenario} selection={selection} onSelect={navigate}
                 onMarkUnavailable={(id) => void applyEdit({ op: 'removeVehicle', vehicleId: id })}
-                onRestoreVehicle={(id) => void applyEdit({ op: 'restoreVehicle', vehicleId: id })} solving={!!solving} />
+                onRestoreVehicle={(id) => void applyEdit({ op: 'restoreVehicle', vehicleId: id })} solving={!!solving}
+                onFilterChange={setVisibleVehicleIds} />
             </aside>
           )}
 
@@ -342,7 +346,7 @@ export default function App() {
                   {rightOpen ? <PanelRightClose className="h-4 w-4" /> : <PanelRightOpen className="h-4 w-4" />}
                 </Button>
               </div>
-              <MapView plan={plan} selection={selection} onSelect={navigate} clockSec={clockSec} />
+              <MapView plan={plan} selection={selection} onSelect={navigate} clockSec={clockSec} visibleVehicleIds={visibleVehicleIds} />
             </div>
             <div className="h-48 shrink-0 border-t border-divider">
               <Timeline plan={plan} selection={selection} onSelect={navigate}

@@ -134,7 +134,7 @@ function playheadFC(plan: Plan, clockSec: number | null, selVId: number | null, 
   return { type: 'FeatureCollection', features };
 }
 
-export function MapView({ plan, selection, onSelect, clockSec }: { plan: Plan; selection: Selection; onSelect: (s: Selection) => void; clockSec: number | null }) {
+export function MapView({ plan, selection, onSelect, clockSec, visibleVehicleIds }: { plan: Plan; selection: Selection; onSelect: (s: Selection) => void; clockSec: number | null; visibleVehicleIds?: number[] | null }) {
   const mapRef = useRef<MapRef | null>(null);
   // Respect reduced-motion: snap the camera instead of animating.
   const reduced = useRef(typeof window !== 'undefined' && window.matchMedia('(prefers-reduced-motion: reduce)').matches);
@@ -150,6 +150,16 @@ export function MapView({ plan, selection, onSelect, clockSec }: { plan: Plan; s
   const vId = selVehicle(selection);
   const tIdx = selTripIndex(selection);
 
+  // Fleet-panel filter (tail-lift / advisories / search): restrict rendered
+  // routes + stops to the matching vehicles. null = no filter (show all). An
+  // empty set hides everything. Applied as a layer filter so filtered-out
+  // features are neither drawn nor clickable; selection highlighting still
+  // works within what remains.
+  const layerFilter = useMemo(
+    () => (visibleVehicleIds ? (['in', ['get', 'vehicleId'], ['literal', visibleVehicleIds]] as unknown) : undefined),
+    [visibleVehicleIds],
+  );
+
   // Match expression for the selected subset (vehicle, or vehicle+trip).
   const match = useMemo(() => {
     if (vId == null) return null;
@@ -160,22 +170,25 @@ export function MapView({ plan, selection, onSelect, clockSec }: { plan: Plan; s
 
   const routeCasing: LayerProps = useMemo(() => ({
     id: 'route-casing', type: 'line', layout: { 'line-cap': 'round', 'line-join': 'round' },
+    ...(layerFilter ? { filter: layerFilter as never } : {}),
     paint: {
       'line-color': '#223a2e',
       'line-width': match ? (['case', match, 8, 4] as never) : 6,
       'line-opacity': match ? (['case', match, 0.9, 0.05] as never) : 0.85,
     },
-  }), [match]);
+  }), [match, layerFilter]);
   const routeLine: LayerProps = useMemo(() => ({
     id: 'route-line', type: 'line', layout: { 'line-cap': 'round', 'line-join': 'round' },
+    ...(layerFilter ? { filter: layerFilter as never } : {}),
     paint: {
       'line-color': ['get', 'color'],
       'line-width': match ? (['case', match, 5, 2.5] as never) : 4,
       'line-opacity': match ? (['case', match, 0.98, 0.1] as never) : 0.92,
     },
-  }), [match]);
+  }), [match, layerFilter]);
   const stopLayer: LayerProps = useMemo(() => ({
     id: 'stops', type: 'circle',
+    ...(layerFilter ? { filter: layerFilter as never } : {}),
     paint: {
       'circle-radius': 4.5,
       'circle-color': ['get', 'color'],
@@ -184,7 +197,7 @@ export function MapView({ plan, selection, onSelect, clockSec }: { plan: Plan; s
       'circle-opacity': match ? (['case', match, 1, 0.1] as never) : 0.95,
       'circle-stroke-opacity': match ? (['case', match, 1, 0.1] as never) : 0.9,
     },
-  }), [match]);
+  }), [match, layerFilter]);
 
   const depotLayer: LayerProps = { id: 'depot', type: 'circle', paint: { 'circle-radius': 7, 'circle-color': '#223a2e', 'circle-stroke-color': '#fbfaf5', 'circle-stroke-width': 2.5 } };
 
@@ -272,7 +285,7 @@ export function MapView({ plan, selection, onSelect, clockSec }: { plan: Plan; s
       >
         <Source id="routes" type="geojson" data={routes}>
           {/* wide transparent hit target so thin routes are easy to click */}
-          <Layer id="route-hit" type="line" paint={{ 'line-color': '#000', 'line-opacity': 0, 'line-width': 16 }} />
+          <Layer id="route-hit" type="line" {...(layerFilter ? { filter: layerFilter as never } : {})} paint={{ 'line-color': '#000', 'line-opacity': 0, 'line-width': 16 }} />
           <Layer {...routeCasing} />
           <Layer {...routeLine} />
         </Source>

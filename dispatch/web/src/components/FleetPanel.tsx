@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { ChevronRight, Search, Ban, RotateCcw } from 'lucide-react';
 import { Input } from '@/components/ui/input';
 import { ScrollArea } from '@/components/ui/scroll-area';
@@ -96,10 +96,11 @@ function VehicleCard({
 /* Left fleet panel: search, vehicle cards (expandable to trips + mark-unavailable),
  * and a collapsible unassigned-orders section. Selection is lifted to App. */
 export function FleetPanel({
-  plan, scenario, selection, onSelect, onMarkUnavailable, onRestoreVehicle, solving,
+  plan, scenario, selection, onSelect, onMarkUnavailable, onRestoreVehicle, solving, onFilterChange,
 }: {
   plan: Plan; scenario: Scenario; selection: Selection; onSelect: (s: Selection) => void;
   onMarkUnavailable: (id: number) => void; onRestoreVehicle: (id: number) => void; solving: boolean;
+  onFilterChange?: (visibleVehicleIds: number[] | null) => void;
 }) {
   const t = useT();
   const [query, setQuery] = useState('');
@@ -121,6 +122,19 @@ export function FleetPanel({
       (s.customer ?? '').toLowerCase().includes(q) || s.orderNo.toLowerCase().includes(q) || (s.city ?? '').toLowerCase().includes(q)));
   };
   const vehicles = plan.vehicles.filter(matches);
+
+  // Report the visible vehicle set to the map so it filters routes/stops to
+  // match the list. null = no filter active (show all). Keyed on the id list so
+  // we only notify when the visible set actually changes.
+  const filterActive = onlyTailLift || onlyAdvisories || q !== '';
+  const visibleIds = filterActive ? vehicles.map((v) => v.id) : null;
+  const visKey = visibleIds ? visibleIds.join(',') : 'all';
+  useEffect(() => {
+    onFilterChange?.(visibleIds);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [visKey]);
+  // Clear the map filter when the panel unmounts (e.g. the fleet column is collapsed).
+  useEffect(() => () => onFilterChange?.(null), []); // eslint-disable-line react-hooks/exhaustive-deps
 
   const selUnassigned = selection?.kind === 'unassigned' ? selection.orderNo : null;
 
