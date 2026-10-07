@@ -1,7 +1,9 @@
 import Fastify, { type FastifyReply, type FastifyRequest } from 'fastify';
 import fastifyStatic from '@fastify/static';
-import { existsSync } from 'node:fs';
+import fastifyMultipart from '@fastify/multipart';
+import { existsSync, createWriteStream, rmSync } from 'node:fs';
 import { join } from 'node:path';
+import { pipeline } from 'node:stream/promises';
 import { config } from './config.js';
 import { DAYS, loadDay, loadEnrichment, loadVehicleInfo } from './data/gyermelyi.js';
 import { mapSolutionToPlan } from './plan/mapper.js';
@@ -15,7 +17,11 @@ import { sageReachable, narratePlan, narrateComparison, type Lang } from './sage
 import { loadTariff } from './cost.js';
 import { planToCsv, planToRouteSheetHtml } from './export.js';
 import { RateLimiter } from './ratelimit.js';
+import { CATALOG, suggestMapping, type Entity } from './data/catalog.js';
+import { newUploadPath, uploadPath, sampleUpload, runIngestPreview, type Mapping } from './data/onboard.js';
 import type { Plan } from './types.js';
+
+const ENTITIES: Entity[] = ['orders', 'vehicles', 'routes'];
 
 const app = Fastify({ logger: { level: 'info' }, bodyLimit: 4 * 1024 * 1024 });
 
@@ -36,6 +42,9 @@ app.addHook('onRequest', (req, reply, done) => {
   if (!limiter.allow(req.ip || 'unknown')) { reply.code(429).send({ error: 'too many requests' }); return; }
   done();
 });
+
+// Multipart uploads (onboarding). Bounded file size; one file per request.
+await app.register(fastifyMultipart, { limits: { fileSize: config.maxUploadMB * 1024 * 1024, files: 1, fields: 4 } });
 
 const enrichment = loadEnrichment();
 const vehicleInfo = loadVehicleInfo();
@@ -276,6 +285,48 @@ app.get<{ Querystring: { limit?: string } }>('/api/import/canonical', async (req
   const s = canonicalSample(req.query.limit ? Number(req.query.limit) : 8);
   if (!s) return reply.code(404).send({ error: 'canonical not available' });
   return s;
+});
+
+/* ---- Data onboarding (M1: upload CSV -> map columns -> reconcile preview) ---- */
+// The canonical field catalog the mapping UI maps raw columns to.
+app.get('/api/import/catalog', async () => CATALOG);
+
+// Upload a raw CSV for an entity; store it, return headers + sample + a suggested mapping.
+app.post<{ Querystring: { entity?: string } }>('/api/import/upload', async (req, reply) => {
+  const entity = req.query.entity as Entity;
+  if (!ENTITIES.includes(entity)) return reply.code(400).send({ error: 'unknown entity (orders|vehicles|routes)' });
+  const data = await req.file();
+  if (!data) return reply.code(400).send({ error: 'no file' });
+  if (!/\.csv$/i.test(data.filename ?? '') && data.mimetype !== 'text/csv') return reply.code(400).send({ error: 'CSV only (M1)' });
+
+  const { uploadId, path } = newUploadPath(entity);
+  try {
+    await pipeline(data.file, createWriteStream(path));
+  } catch (e) {
+    try { rmSync(path, { force: true }); } catch { /* ignore */ }
+    return reply.code(500).send({ error: `upload failed: ${(e as Error).message}` });
+  }
+  if (data.file.truncated) { try { rmSync(path, { force: true }); } catch { /* ignore */ } return reply.code(413).send({ error: `file exceeds ${config.maxUploadMB} MB` }); }
+
+  try {
+    const sample = await sampleUpload(path, 8);
+    if (sample.totalRows > config.maxUploadRows) { rmSync(path, { force: true }); return reply.code(413).send({ error: `too many rows (> ${config.maxUploadRows})` }); }
+    return { uploadId, entity, headers: sample.headers, rows: sample.rows, totalRows: sample.totalRows, delimiter: sample.delimiter, suggested: suggestMapping(entity, sample.headers) };
+  } catch (e) {
+    try { rmSync(path, { force: true }); } catch { /* ignore */ }
+    return reply.code(400).send({ error: `could not read CSV: ${(e as Error).message}` });
+  }
+});
+
+// Dry-run: run the real Nexus ingest + reconcile gate on the mapped upload.
+app.post<{ Body: { uploadId?: string; entity?: string; mapping?: Mapping } }>('/api/import/preview', async (req, reply) => {
+  const { uploadId, entity, mapping } = req.body ?? {};
+  if (!uploadId || !/^up_[a-z0-9-]+$/.test(uploadId)) return reply.code(400).send({ error: 'valid uploadId required' });
+  if (!ENTITIES.includes(entity as Entity)) return reply.code(400).send({ error: 'unknown entity' });
+  if (!mapping || typeof mapping !== 'object') return reply.code(400).send({ error: 'mapping required' });
+  const path = uploadPath(uploadId, entity as Entity);
+  if (!existsSync(path)) return reply.code(404).send({ error: 'upload not found (re-upload)' });
+  return runIngestPreview(path, entity as Entity, mapping);
 });
 
 /* ---- Carta tile proxy (same-origin so the reused style's relative URLs work) ---- */

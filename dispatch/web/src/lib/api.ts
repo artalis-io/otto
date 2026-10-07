@@ -57,7 +57,30 @@ export const api = {
   importSummary: () => jget<ImportSummary>('/api/import/summary'),
   importRaw: (file: string) => jget<RawSample>(`/api/import/raw?file=${file}&limit=8`),
   importCanonical: () => jget<CanonicalSample>('/api/import/canonical?limit=8'),
+
+  // ---- Onboarding (upload a dataset) ----
+  onboardCatalog: () => jget<Record<Entity, CanonicalField[]>>('/api/import/catalog'),
+  onboardUpload: async (entity: Entity, file: File): Promise<UploadResult> => {
+    const fd = new FormData();
+    fd.append('file', file);
+    const r = await fetch(`/api/import/upload?entity=${entity}`, { method: 'POST', body: fd });
+    if (!r.ok) throw new Error((await r.json().catch(() => ({}))).error ?? `upload: ${r.status}`);
+    return r.json() as Promise<UploadResult>;
+  },
+  onboardPreview: (uploadId: string, entity: Entity, mapping: Record<string, number>) =>
+    jsend<OnboardPreview>('/api/import/preview', 'POST', { uploadId, entity, mapping }),
 };
+
+export type Entity = 'orders' | 'vehicles' | 'routes';
+export interface CanonicalField { field: string; type: string; required: boolean; label: string; hint?: string; aliases: string[] }
+export interface UploadResult { uploadId: string; entity: Entity; headers: string[]; rows: string[][]; totalRows: number; delimiter: string; suggested: Record<string, number> }
+export interface OnboardPreview {
+  ok: boolean;
+  error?: string;
+  reconcile: { provenanceOk: boolean; rowsReconciled: number; fieldsVerified: string[]; mismatches: number; mismatchSamples: string[] };
+  semantic: { errors: number; warnings: number; info: number; items: { level: string; kind: string; count: number }[] };
+  canonical: { count: number; sample: Record<string, unknown>[] };
+}
 
 export interface ImportSummary {
   sources: { kind: string; label: string; file: string; present: boolean; sha256: string | null; rawRows: number }[];

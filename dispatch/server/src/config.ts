@@ -63,6 +63,16 @@ export const config = {
   // Per-IP API rate limit (token bucket): sustained rps and burst.
   rateLimitRps: Number(env('DISPATCH_RATE_RPS', '40')),
   rateLimitBurst: Number(env('DISPATCH_RATE_BURST', '120')),
+
+  // ---- Data onboarding (upload) ----
+  // Where uploaded datasets live (external, never committed).
+  uploadsDir: env('DISPATCH_UPLOADS_DIR', resolve(env('GYERMELYI_ROOT', '/Users/mark/artalis.io/data/gyermelyi'), 'uploads')),
+  // Nexus engines (ingest.sh, reconcile.py, nx_pipeline) in the main checkout.
+  nexusDir: env('NEXUS_DIR', resolve(env('OTTO_ROOT', '/Users/mark/artalis.io/src/otto'), 'nexus')),
+  // Upload limits.
+  maxUploadMB: Number(env('DISPATCH_MAX_UPLOAD_MB', '25')),
+  maxUploadRows: Number(env('DISPATCH_MAX_UPLOAD_ROWS', '50000')),
+  ingestTimeoutSec: Number(env('DISPATCH_INGEST_TIMEOUT_SEC', '90')),
 } as const;
 
 export type Config = typeof config;

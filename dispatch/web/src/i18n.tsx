@@ -129,6 +129,17 @@ const en: Dict = {
   'week.perVehicle': 'Per-vehicle utilization', 'week.vehicle': 'Vehicle', 'week.total': 'Total', 'week.bothDays': 'both days',
   // Timeline playback
   'play.play': 'Play', 'play.pause': 'Pause', 'play.stop': 'Stop', 'play.seek': 'Seek', 'play.speed': 'Speed',
+  // Onboarding (upload a dataset)
+  'import.tabProvenance': 'Provenance', 'import.tabUpload': 'Upload',
+  'onboard.entity.orders': 'Orders', 'onboard.entity.vehicles': 'Vehicles', 'onboard.entity.routes': 'Routes',
+  'onboard.choose': 'Choose CSV', 'onboard.rows': '{n} rows', 'onboard.map': 'Map columns',
+  'onboard.field': 'Canonical field', 'onboard.column': 'Source column', 'onboard.sample': 'Sample', 'onboard.none': '— none —',
+  'onboard.validate': 'Validate', 'onboard.mapRequired': 'Map required: {f}',
+  'onboard.reconcilePass': 'Reconcile passed', 'onboard.reconcileFail': 'Reconcile failed',
+  'onboard.rowsReconciled': '{n} rows reconciled', 'onboard.fieldsVerified': '{n} fields verified',
+  'onboard.semantic': 'Semantic', 'onboard.canonical': 'Canonical records ({n})',
+  'onboard.admitSoon': 'Reconcile is the admit boundary (every field traced to the raw bytes). Creating a dataset from this upload arrives in a later milestone.',
+  'onboard.fixToAdmit': 'Fix the mapping until reconcile passes.',
 };
 
 const hu: Dict = {
@@ -252,6 +263,17 @@ const hu: Dict = {
   'week.perVehicle': 'Járművenkénti kihasználtság', 'week.vehicle': 'Jármű', 'week.total': 'Összes', 'week.bothDays': 'mindkét nap',
   // Timeline playback
   'play.play': 'Lejátszás', 'play.pause': 'Szünet', 'play.stop': 'Leállítás', 'play.seek': 'Keresés', 'play.speed': 'Sebesség',
+  // Onboarding (upload a dataset)
+  'import.tabProvenance': 'Adateredet', 'import.tabUpload': 'Feltöltés',
+  'onboard.entity.orders': 'Megrendelések', 'onboard.entity.vehicles': 'Járművek', 'onboard.entity.routes': 'Útvonalak',
+  'onboard.choose': 'CSV kiválasztása', 'onboard.rows': '{n} sor', 'onboard.map': 'Oszlopok megfeleltetése',
+  'onboard.field': 'Kanonikus mező', 'onboard.column': 'Forrásoszlop', 'onboard.sample': 'Minta', 'onboard.none': '— nincs —',
+  'onboard.validate': 'Ellenőrzés', 'onboard.mapRequired': 'Kötelező: {f}',
+  'onboard.reconcilePass': 'Egyeztetés rendben', 'onboard.reconcileFail': 'Egyeztetés sikertelen',
+  'onboard.rowsReconciled': '{n} sor egyeztetve', 'onboard.fieldsVerified': '{n} mező igazolva',
+  'onboard.semantic': 'Szemantika', 'onboard.canonical': 'Kanonikus rekordok ({n})',
+  'onboard.admitSoon': 'Az egyeztetés az átvételi határ (minden mező visszavezetve a nyers bájtokra). Az adathalmaz létrehozása későbbi mérföldkő.',
+  'onboard.fixToAdmit': 'Javítsd a megfeleltetést, amíg az egyeztetés rendben nem lesz.',
 };
 
 const DICTS: Record<Lang, Dict> = { en, hu };

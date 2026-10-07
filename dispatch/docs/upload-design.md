@@ -107,9 +107,14 @@ Canonical field catalog (for the mapping UI), from the existing canonical shapes
 
 ## Milestones (sequenced; each is a shippable PR)
 
-- **M1 — Intake + mapping + reconcile preview.** Upload, column-mapping UI,
-  `ingest.sh` + reconcile/semantic, dry-run preview, reject on gate failure. Proves
-  the trust boundary + mapping without any external calls. *(Highest value / risk.)*
+- **M1 — Intake + mapping + reconcile preview. ✅ DONE.** Upload CSV, column-mapping
+  UI (auto-suggest from headers), the real `ingest.sh` (nx_pipeline + reconcile
+  HARD gate + semantic advisory) as a bounded subprocess, dry-run preview
+  (reconcile pass/fail + canonical sample + semantic chips), reject on gate
+  failure. No external calls. Backend: `data/catalog.ts`, `data/onboard.ts`,
+  `scripts/sample_table.py`; routes `/api/import/{catalog,upload,preview}`.
+  Frontend: `OnboardPanel` as an "Upload" tab in the data dialog. Uploads land in
+  the external uploads dir. Tests: 6 unit + 1 UI.
 - **M2 — Geocoding.** Cache-first; keys-if-present else offline; tier preview + map.
 - **M3 — Matrix + request + admit.** Hybrid matrix (Velo table for new O-D),
   request build, registry, days become selectable.

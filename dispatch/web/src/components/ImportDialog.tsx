@@ -4,10 +4,12 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/u
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { Badge } from '@/components/ui/badge';
 import { api, type ImportSummary, type RawSample, type CanonicalSample } from '@/lib/api';
+import { OnboardPanel } from '@/components/OnboardPanel';
 import { useT } from '@/i18n';
 
 export function ImportDialog({ open, onOpenChange }: { open: boolean; onOpenChange: (o: boolean) => void }) {
   const t = useT();
+  const [mode, setMode] = useState<'provenance' | 'upload'>('provenance');
   const [summary, setSummary] = useState<ImportSummary | null>(null);
   const [rawFile, setRawFile] = useState('orders');
   const [raw, setRaw] = useState<RawSample | null>(null);
@@ -33,8 +35,16 @@ export function ImportDialog({ open, onOpenChange }: { open: boolean; onOpenChan
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="max-w-4xl">
         <DialogHeader><DialogTitle className="flex items-center gap-2"><FileSpreadsheet className="h-4 w-4" /> {t('import.title')}</DialogTitle></DialogHeader>
+        <div className="flex items-center rounded-md border border-divider p-0.5 text-xs" role="tablist">
+          {(['provenance', 'upload'] as const).map((m) => (
+            <button key={m} type="button" role="tab" aria-selected={mode === m} onClick={() => setMode(m)}
+              className={`rounded px-3 py-1 font-medium transition-colors ${mode === m ? 'bg-primary text-primary-foreground' : 'text-muted-foreground hover:bg-accent'}`}>
+              {t(m === 'provenance' ? 'import.tabProvenance' : 'import.tabUpload')}
+            </button>
+          ))}
+        </div>
         {err && <p className="text-sm text-destructive">{err}</p>}
-        {!summary ? <p className="py-8 text-center text-sm text-muted-foreground">{t('import.loading')}</p> : (
+        {mode === 'upload' ? <OnboardPanel /> : !summary ? <p className="py-8 text-center text-sm text-muted-foreground">{t('import.loading')}</p> : (
           <ScrollArea className="max-h-[72vh]">
             <div className="space-y-4 pr-3">
               {/* Provenance summary */}

@@ -110,6 +110,9 @@ cd dispatch/server && npm start
 | `DISPATCH_MAX_SOLVE_OUTPUT_MB` | 128 | Cap on captured solver stdout; beyond it the job fails instead of OOMing. |
 | `DISPATCH_RETAIN_PLANS` / `_JOBS` | 200 / 200 | Retention: oldest persisted plans/jobs (and their request files) are pruned. |
 | `DISPATCH_RATE_RPS` / `_BURST` | 40 / 120 | Per-IP API rate limit (token bucket); `/tiles` and `/api/health` are exempt. |
+| `DISPATCH_UPLOADS_DIR` | `${GYERMELYI_ROOT}/uploads` | Where uploaded datasets land (external, never committed). |
+| `NEXUS_DIR` | `${OTTO_ROOT}/nexus` | Nexus engines (`ingest.sh`, `reconcile.py`, `nx_pipeline`) for onboarding. |
+| `DISPATCH_MAX_UPLOAD_MB` / `_ROWS` | 25 / 50000 | Upload size / row caps. |
 | `rates/tariff.json` | (demo) | Optional real carrier tariff under `GYERMELYI_ROOT` (uncommitted). Absent → an illustrative demo tariff drives the cost KPI, labelled as such. |
 | `VITE_API_ORIGIN` | `localhost:8091` | Frontend → backend origin (dev proxy). |
 | `VITE_SOLVE_SECONDS` | 60 | UI-triggered solve budget. |
