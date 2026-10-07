@@ -108,6 +108,9 @@ export interface Job {
   planId: string | null;
   termination: string | null;
   error: string | null;
+  kind?: 'solve' | 'import';   // 'import' = dataset admit (geocode/matrix/request)
+  stage?: string;              // coarse progress stage for import jobs
+  result?: unknown;            // the admit result on completion
 }
 
 function dir(sub: string): string {
@@ -313,6 +316,18 @@ export class Store {
     this.jobs.set(j.id, j);
     this.saveJob(j);
     if (this.jobs.size > config.retainJobs + 20) this.gcJobs(); // cheap trigger
+    return j;
+  }
+  createImportJob(): Job {
+    const j: Job = {
+      id: this.newId('imp'), scenarioId: '', scenarioRevision: 0, kind: 'import',
+      status: 'pending', createdAt: new Date().toISOString(),
+      startedAt: null, finishedAt: null, elapsedSec: 0,
+      planId: null, termination: null, error: null, stage: 'queued',
+    };
+    this.jobs.set(j.id, j);
+    this.saveJob(j);
+    if (this.jobs.size > config.retainJobs + 20) this.gcJobs();
     return j;
   }
   getJob(id: string): Job | undefined { return this.jobs.get(id); }

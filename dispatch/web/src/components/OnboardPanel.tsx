@@ -8,7 +8,7 @@ import { Button } from '@/components/ui/button';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { cartaStyle } from '@/map/cartaStyle';
 import { Input } from '@/components/ui/input';
-import { api, type Entity, type CanonicalField, type UploadResult, type OnboardPreview, type GeocodeResult, type GeoTier, type AdmitResult, type DatasetSummary } from '@/lib/api';
+import { api, pollJob, type Entity, type CanonicalField, type UploadResult, type OnboardPreview, type GeocodeResult, type GeoTier, type AdmitResult, type DatasetSummary } from '@/lib/api';
 import { useT } from '@/i18n';
 
 const TIER_COLOR: Record<GeoTier, string> = { GREEN: '#16a34a', YELLOW: '#ca8a04', APPROX: '#ea580c', RED: '#dc2626' };
@@ -28,6 +28,7 @@ export function OnboardPanel({ onAdmitted, onDatasetsChanged }: { onAdmitted?: (
   const [preview, setPreview] = useState<OnboardPreview | null>(null);
   const [geo, setGeo] = useState<GeocodeResult | null>(null);
   const [admit, setAdmit] = useState<AdmitResult | null>(null);
+  const [admitStage, setAdmitStage] = useState<string | null>(null);
   const [label, setLabel] = useState('');
   const [busy, setBusy] = useState<'upload' | 'preview' | 'geocode' | 'admit' | null>(null);
   const [err, setErr] = useState<string | null>(null);
@@ -61,14 +62,17 @@ export function OnboardPanel({ onAdmitted, onDatasetsChanged }: { onAdmitted?: (
   }
   async function doAdmit() {
     if (!upload) return;
-    setErr(null); setBusy('admit');
+    setErr(null); setBusy('admit'); setAdmitStage('queued');
     try {
-      const r = await api.onboardAdmit(upload.uploadId, mapping, label || (upload ? `Upload ${new Date().toLocaleDateString()}` : ''));
+      const { jobId } = await api.onboardAdmit(upload.uploadId, mapping, label || `Upload ${new Date().toLocaleDateString()}`);
+      const final = await pollJob(jobId, (j) => setAdmitStage(j.stage ?? null));
+      if (final.status !== 'completed') { setErr(final.error ?? 'admit failed'); return; }
+      const r = final.result as AdmitResult;
       setAdmit(r);
-      if (r.ok) { refreshDatasets(); onDatasetsChanged?.(); }
-      if (r.ok && r.days?.length && onAdmitted) onAdmitted(r.days[0]!.dayId);
+      if (r.ok) { refreshDatasets(); onDatasetsChanged?.(); if (r.days?.length) onAdmitted?.(r.days[0]!.dayId); }
+      else setErr(r.error ?? 'admit failed');
     } catch (e) { setErr(e instanceof Error ? e.message : String(e)); }
-    finally { setBusy(null); }
+    finally { setBusy(null); setAdmitStage(null); }
   }
   async function deleteDataset(id: string) {
     try { await api.onboardDeleteDataset(id); refreshDatasets(); onDatasetsChanged?.(); }
@@ -187,7 +191,11 @@ export function OnboardPanel({ onAdmitted, onDatasetsChanged }: { onAdmitted?: (
                   </Button>
                 </div>
                 {mapping.delivery_date == null && <p className="text-[11px] text-destructive">{t('onboard.needDate')}</p>}
-                <p className="text-[10px] text-muted-foreground">{busy === 'admit' ? t('onboard.admitWorking') : t('onboard.admitNote')}</p>
+                {busy === 'admit' ? (
+                  <p className="flex items-center gap-1.5 text-[11px] text-foreground"><Loader2 className="h-3 w-3 animate-spin" /> {t('onboard.admitWorking')} · {t(`onboard.stage.${admitStage ?? 'queued'}`)}</p>
+                ) : (
+                  <p className="text-[10px] text-muted-foreground">{t('onboard.admitNote')}</p>
+                )}
                 {admit?.ok && (
                   <div className="rounded border border-primary/30 bg-primary/5 px-2 py-1.5 text-[11px] text-primary">
                     {t('onboard.admitDone', { r: admit.routable ?? 0, x: admit.excluded ?? 0, d: admit.days?.length ?? 0 })}

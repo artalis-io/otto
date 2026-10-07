@@ -351,13 +351,30 @@ app.post<{ Body: { uploadId?: string; mapping?: Mapping; label?: string } }>('/a
   const path = uploadPath(uploadId, 'orders');
   if (!existsSync(path)) return reply.code(404).send({ error: 'upload not found (re-upload)' });
 
-  const result = await admitDataset(path, mapping, label ?? 'Uploaded dataset');
-  if (!result.ok) return reply.code(400).send({ error: result.error });
-  // Build an (empty) baseline for each new day so it loads like a built-in day.
-  for (const d of result.days ?? []) {
-    try { buildBaseline(d.dayId, d.label); } catch (e) { app.log.warn(`baseline ${d.dayId}: ${(e as Error).message}`); }
-  }
-  return result;
+  // Admit runs in the background (geocode + matrix can take ~1 min); the client
+  // polls /api/jobs/:id for the stage and the result.
+  const job = store.createImportJob();
+  job.status = 'running';
+  job.startedAt = new Date().toISOString();
+  job.stage = 'geocoding';
+  store.saveJob(job);
+  const t0 = Date.now();
+  void (async () => {
+    try {
+      const result = await admitDataset(path, mapping, label ?? 'Uploaded dataset', (stage) => { job.stage = stage; store.saveJob(job); });
+      job.elapsedSec = (Date.now() - t0) / 1000;
+      job.finishedAt = new Date().toISOString();
+      if (!result.ok) { job.status = 'failed'; job.error = result.error ?? 'admit failed'; store.saveJob(job); return; }
+      for (const d of result.days ?? []) {
+        try { buildBaseline(d.dayId, d.label); } catch (e) { app.log.warn(`baseline ${d.dayId}: ${(e as Error).message}`); }
+      }
+      job.status = 'completed'; job.result = result; store.saveJob(job);
+    } catch (e) {
+      job.status = 'failed'; job.error = (e as Error).message; job.finishedAt = new Date().toISOString();
+      job.elapsedSec = (Date.now() - t0) / 1000; store.saveJob(job);
+    }
+  })();
+  return reply.code(202).send({ jobId: job.id });
 });
 
 // List / delete admitted datasets.

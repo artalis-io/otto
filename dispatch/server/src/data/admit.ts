@@ -41,7 +41,7 @@ export interface AdmitResult {
 
 /** Admit an onboarded orders upload as a dataset: geocode -> matrix -> Surge
  * request (all tasks; the known fleet) -> register days by delivery date. */
-export async function admitDataset(uploadPath: string, mapping: Mapping, label: string): Promise<AdmitResult> {
+export async function admitDataset(uploadPath: string, mapping: Mapping, label: string, onStage?: (stage: string) => void): Promise<AdmitResult> {
   if (mapping.city == null) return { ok: false, error: 'map the City column' };
   if (mapping.delivery_date == null) return { ok: false, error: 'map the Delivery date column (days are split by it)' };
   if (!existsSync(INGEST_NX)) return { ok: false, error: 'nx_pipeline not built (make -C nexus tools)' };
@@ -54,6 +54,7 @@ export async function admitDataset(uploadPath: string, mapping: Mapping, label: 
   const geoPath = resolve(dir, 'orders.geocoded.json');
 
   // 1. canonical (with address_geocode) + geocode
+  onStage?.('geocoding');
   try {
     const rawCols = (await sampleUpload(uploadPath, 1)).headers.length;
     writeFileSync(schemaPath, JSON.stringify(buildSchema('orders', mapping, rawCols)));
@@ -80,9 +81,11 @@ export async function admitDataset(uploadPath: string, mapping: Mapping, label: 
   const template = loadDay('day1').request;
   const depotLoc = template.locations[0]!;
   const locs: MatrixLoc[] = [{ id: 'depot', lat: depotLoc.y, lon: depotLoc.x }, ...routable.map((o, i) => ({ id: `o${i}`, lat: o.lat as number, lon: o.lon as number }))];
+  onStage?.('matrix');
   const matrix = await buildMatrix(locs);
 
   // 4. Surge request: clone the template, swap the order-dependent parts.
+  onStage?.('request');
   const req = structuredClone(template) as SurgeRequest;
   req.locations = [depotLoc, ...routable.map((o) => ({ x: o.lon as number, y: o.lat as number }))];
   // Task/request ids are 0-indexed and contiguous (Surge uses them as indices);
@@ -113,6 +116,7 @@ export async function admitDataset(uploadPath: string, mapping: Mapping, label: 
     depot: { name: 'Depot', lon: depotLoc.x, lat: depotLoc.y },
     requestPath: resolve(dir, 'request.json'), geocodedPath: geoPath, days,
   };
+  onStage?.('registering');
   registerDataset(dataset);
 
   return {

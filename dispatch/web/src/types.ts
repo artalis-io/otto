@@ -203,6 +203,9 @@ export interface Job {
   planId: string | null;
   termination: string | null;
   error: string | null;
+  kind?: 'solve' | 'import';
+  stage?: string;
+  result?: unknown;
 }
 
 export interface Comparison {

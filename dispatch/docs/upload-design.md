@@ -140,9 +140,11 @@ Canonical field catalog (for the mapping UI), from the existing canonical shapes
   windows from an "HH:MM - HH:MM" column via a regex split; 235/263 real on the
   real data). ✅ Dataset management (GET/DELETE `/api/import/datasets`; a list +
   delete in the Upload tab; removing a dataset drops its days/baselines and the
-  app falls back if the current day vanishes). *Remaining:* background admit with
-  sub-stage progress (admit is synchronous ~66s today), re-map + re-run, custom
-  fleet from an uploaded vehicles file, hybrid matrix reuse, XLSX input.
+  app falls back if the current day vanishes). ✅ Background admit: admit now runs
+  as a job (store `kind:'import'`), returns a jobId immediately, and the UI polls
+  for the stage (geocoding → building travel matrix → building request →
+  registering) instead of a frozen ~66s request. *Remaining:* re-map + re-run,
+  custom fleet from an uploaded vehicles file, hybrid matrix reuse, XLSX input.
 
 ## Risks / open items
 

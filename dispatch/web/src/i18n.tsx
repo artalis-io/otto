@@ -149,6 +149,7 @@ const en: Dict = {
   'onboard.admitWorking': 'Building the travel matrix… (about a minute)',
   'onboard.admitDone': '{r} routable orders admitted ({x} excluded) as {d} day(s) — now in the day picker.',
   'onboard.datasets': 'Admitted datasets', 'onboard.dsSummary': '{d} days · {n} orders', 'onboard.delete': 'Delete',
+  'onboard.stage.queued': 'queued', 'onboard.stage.geocoding': 'geocoding addresses', 'onboard.stage.matrix': 'building travel matrix', 'onboard.stage.request': 'building request', 'onboard.stage.registering': 'registering days',
 };
 
 const hu: Dict = {
@@ -292,6 +293,7 @@ const hu: Dict = {
   'onboard.admitWorking': 'Utazási mátrix építése… (kb. egy perc)',
   'onboard.admitDone': '{r} útvonalazható rendelés átvéve ({x} kizárva) {d} napként — már a napválasztóban.',
   'onboard.datasets': 'Átvett adathalmazok', 'onboard.dsSummary': '{d} nap · {n} rendelés', 'onboard.delete': 'Törlés',
+  'onboard.stage.queued': 'sorban', 'onboard.stage.geocoding': 'címek geokódolása', 'onboard.stage.matrix': 'utazási mátrix építése', 'onboard.stage.request': 'kérés építése', 'onboard.stage.registering': 'napok regisztrálása',
 };
 
 const DICTS: Record<Lang, Dict> = { en, hu };
