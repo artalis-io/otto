@@ -4,7 +4,7 @@ import fastifyMultipart from '@fastify/multipart';
 import { existsSync, createWriteStream, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { pipeline } from 'node:stream/promises';
-import { config } from './config.js';
+import { config, missingConfigPaths } from './config.js';
 import { DAYS, allDayIds, loadDay, loadEnrichment, loadVehicleInfo } from './data/gyermelyi.js';
 import { admitDataset } from './data/admit.js';
 import { allDatasets, unregisterDataset } from './data/registry.js';
@@ -489,6 +489,14 @@ function isLoopbackHost(h: string): boolean {
   return h === '127.0.0.1' || h === '::1' || h === 'localhost';
 }
 const start = async () => {
+  // A11: report (and under strict mode, refuse to start on) missing external
+  // dependency paths, naming the env var and the feature each blocks.
+  const missing = missingConfigPaths();
+  for (const m of missing) app.log.warn(`config: ${m.variable} not found at ${m.path} -- ${m.feature} will fail until set`);
+  if (missing.length && config.strictConfig) {
+    app.log.error(`strict config: ${missing.length} required path(s) missing (see warnings); set the env vars or unset DISPATCH_STRICT_CONFIG`);
+    process.exit(1);
+  }
   if (!isLoopbackHost(config.host) && !config.authToken) {
     app.log.error(`refusing to bind ${config.host} without auth: set DISPATCH_AUTH_TOKEN, or bind 127.0.0.1 (behind a trusted proxy)`);
     process.exit(1);

@@ -1,5 +1,6 @@
 import { fileURLToPath } from 'node:url';
 import { dirname, resolve } from 'node:path';
+import { existsSync } from 'node:fs';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const serverRoot = resolve(here, '..'); // dispatch/server
@@ -113,6 +114,27 @@ export const config = {
   veloGraph: env('VELO_GRAPH', resolve(env('OTTO_ROOT', '/Users/mark/artalis.io/src/otto'), 'data/index/hungary-velo.vlg')),
   matrixTimeoutSec: Number(env('DISPATCH_MATRIX_TIMEOUT_SEC', '300')),
   maxMatrixLocations: Number(env('DISPATCH_MAX_MATRIX_LOCATIONS', '1500')),
+
+  // When set, a missing required dependency path is a hard startup error rather
+  // than a warning. The absolute-path defaults above are developer conveniences;
+  // a real deployment should set the env vars and run strict.
+  strictConfig: env('DISPATCH_STRICT_CONFIG', '0') === '1',
 } as const;
 
 export type Config = typeof config;
+
+export interface MissingPath { variable: string; path: string; feature: string }
+/* A11: turn "fails late and cryptically on a wrong path" into a clear startup
+ * report. Returns the external-dependency paths that do not exist, each naming
+ * the env var to set and the feature it blocks. The server logs these (and,
+ * under strictConfig, refuses to start). */
+export function missingConfigPaths(): MissingPath[] {
+  const checks: MissingPath[] = [
+    { variable: 'SURGE_BIN', path: config.surgeBin, feature: 'solving' },
+    { variable: 'VELO_GRAPH', path: config.veloGraph, feature: 'travel matrix / dataset admit' },
+    { variable: 'MATRIX_BUILD_BIN', path: config.matrixBuildBin, feature: 'dataset admit' },
+    { variable: 'NEXUS_DIR/nx_pipeline', path: resolve(config.nexusDir, 'nx_pipeline'), feature: 'data onboarding' },
+    { variable: 'GYERMELYI_ROOT', path: config.gyermelyiRoot, feature: 'built-in days + tariff' },
+  ];
+  return checks.filter((c) => !existsSync(c.path));
+}
