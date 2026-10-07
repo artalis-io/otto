@@ -300,7 +300,7 @@ export function MapView({ plan, selection, onSelect, clockSec }: { plan: Plan; s
         )}
       </Map>
 
-      <div className="maplibregl-ctrl-group absolute right-3 top-3 flex flex-col overflow-hidden text-graphite-foreground">
+      <div className="absolute right-3 top-3 flex flex-col overflow-hidden rounded-md bg-graphite/80 text-graphite-foreground shadow-lg backdrop-blur-sm">
         <button type="button" aria-label="Zoom in" onClick={() => zoomBy(1)} className="flex h-8 w-8 items-center justify-center hover:bg-white/10"><Plus className="h-4 w-4" /></button>
         <button type="button" aria-label="Zoom out" onClick={() => zoomBy(-1)} className="flex h-8 w-8 items-center justify-center border-t border-white/10 hover:bg-white/10"><Minus className="h-4 w-4" /></button>
         <button type="button" aria-label="Fit plan" onClick={() => { onSelect(null); fitAll(); }} className="flex h-8 w-8 items-center justify-center border-t border-white/10 hover:bg-white/10"><Maximize2 className="h-4 w-4" /></button>
