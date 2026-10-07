@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { PanelLeftClose, PanelLeftOpen, PanelRightClose, PanelRightOpen } from 'lucide-react';
 import { TooltipProvider } from '@/components/ui/tooltip';
 import { Button } from '@/components/ui/button';
@@ -55,6 +55,10 @@ export default function App() {
   const [rightOpen, setRightOpen] = useState(true);
   const [objective, setObjective] = useState<Objective>('vehicles');
   const [budgetSec, setBudgetSec] = useState<number>(SOLVE_BUDGET_SEC);
+  // Timeline playback: a clock (sec from midnight) swept across the planned day.
+  const [clockSec, setClockSec] = useState<number | null>(null);
+  const [playing, setPlaying] = useState(false);
+  const [speed, setSpeed] = useState(360); // plan-seconds advanced per real second
 
   const activeJobId = useRef<string | null>(null);
   const pollAbort = useRef<AbortController | null>(null);
@@ -78,6 +82,7 @@ export default function App() {
     persistActiveJob(null);
     setJob(null);
     setSelection(null);
+    setPlaying(false); setClockSec(null);
     setDayId(d.id);
     const base = await api.plan(d.baselinePlanId);
     setBaseline(base);
@@ -209,6 +214,33 @@ export default function App() {
     } catch (e) { setError(e instanceof Error ? e.message : String(e)); }
   }, [days, baseline]);
 
+  // Planned-day time range (for the playback cursor).
+  const dayRange = useMemo(() => {
+    let lo = Infinity, hi = -Infinity;
+    for (const v of plan?.vehicles ?? []) for (const tr of v.trips) { lo = Math.min(lo, tr.startSec); hi = Math.max(hi, tr.endSec); }
+    return Number.isFinite(lo) ? { lo, hi } : { lo: 6 * 3600, hi: 18 * 3600 };
+  }, [plan]);
+
+  // Advance the playback clock while playing; stop at the end of the day.
+  useEffect(() => {
+    if (!playing) return;
+    const id = setInterval(() => {
+      setClockSec((c) => {
+        const next = (c ?? dayRange.lo) + speed * 0.12;
+        if (next >= dayRange.hi) { setPlaying(false); return dayRange.hi; }
+        return next;
+      });
+    }, 120);
+    return () => clearInterval(id);
+  }, [playing, speed, dayRange.lo, dayRange.hi]);
+
+  const togglePlay = useCallback(() => {
+    setClockSec((c) => (c == null || c >= dayRange.hi ? dayRange.lo : c));
+    setPlaying((p) => !p);
+  }, [dayRange.lo, dayRange.hi]);
+  const seekClock = useCallback((sec: number) => { setPlaying(false); setClockSec(sec); }, []);
+  const stopClock = useCallback(() => { setPlaying(false); setClockSec(null); }, []);
+
   if (error && !plan) return <div className="flex h-full items-center justify-center text-sm text-destructive">{t('app.failed', { e: error })}</div>;
   if (!plan || !baseline || !scenario) return <div className="flex h-full items-center justify-center text-sm text-muted-foreground">{t('app.loading')}</div>;
 
@@ -265,10 +297,12 @@ export default function App() {
                   {rightOpen ? <PanelRightClose className="h-4 w-4" /> : <PanelRightOpen className="h-4 w-4" />}
                 </Button>
               </div>
-              <MapView plan={plan} selection={selection} onSelect={setSelection} />
+              <MapView plan={plan} selection={selection} onSelect={setSelection} clockSec={clockSec} />
             </div>
             <div className="h-48 shrink-0 border-t border-divider">
-              <Timeline plan={plan} selection={selection} onSelect={setSelection} />
+              <Timeline plan={plan} selection={selection} onSelect={setSelection}
+                clockSec={clockSec} playing={playing} speed={speed} dayRange={dayRange}
+                onTogglePlay={togglePlay} onSeek={seekClock} onStop={stopClock} onSpeed={setSpeed} />
             </div>
           </main>
 

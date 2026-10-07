@@ -126,6 +126,8 @@ const en: Dict = {
   'topbar.week': 'Week', 'week.title': 'Week overview', 'week.loading': 'Loading…',
   'week.orders': 'Orders', 'week.vehicles': 'Vehicles', 'week.trips': 'Trips', 'week.distance': 'Distance', 'week.cost': 'Est. cost',
   'week.perVehicle': 'Per-vehicle utilization', 'week.vehicle': 'Vehicle', 'week.total': 'Total', 'week.bothDays': 'both days',
+  // Timeline playback
+  'play.play': 'Play', 'play.pause': 'Pause', 'play.stop': 'Stop', 'play.seek': 'Seek', 'play.speed': 'Speed',
 };
 
 const hu: Dict = {
@@ -246,6 +248,8 @@ const hu: Dict = {
   'topbar.week': 'Hét', 'week.title': 'Heti áttekintés', 'week.loading': 'Betöltés…',
   'week.orders': 'Megrendelés', 'week.vehicles': 'Járművek', 'week.trips': 'Fordulók', 'week.distance': 'Távolság', 'week.cost': 'Becsült költség',
   'week.perVehicle': 'Járművenkénti kihasználtság', 'week.vehicle': 'Jármű', 'week.total': 'Összes', 'week.bothDays': 'mindkét nap',
+  // Timeline playback
+  'play.play': 'Lejátszás', 'play.pause': 'Szünet', 'play.stop': 'Leállítás', 'play.seek': 'Keresés', 'play.speed': 'Sebesség',
 };
 
 const DICTS: Record<Lang, Dict> = { en, hu };

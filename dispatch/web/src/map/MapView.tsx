@@ -57,7 +57,45 @@ function selTripIndex(sel: Selection): number | null {
   return sel && (sel.kind === 'trip' || sel.kind === 'stop') ? sel.tripIndex : null;
 }
 
-export function MapView({ plan, selection, onSelect }: { plan: Plan; selection: Selection; onSelect: (s: Selection) => void }) {
+/* Point at fraction `frac` (0..1) along a polyline, by cumulative segment length. */
+function pointAlong(coords: [number, number][], frac: number): [number, number] {
+  if (coords.length === 0) return [0, 0];
+  if (coords.length === 1 || frac <= 0) return coords[0]!;
+  if (frac >= 1) return coords[coords.length - 1]!;
+  const seg: number[] = []; let total = 0;
+  for (let i = 1; i < coords.length; i++) {
+    const dx = coords[i]![0] - coords[i - 1]![0], dy = coords[i]![1] - coords[i - 1]![1];
+    const d = Math.hypot(dx, dy); seg.push(d); total += d;
+  }
+  let target = frac * total;
+  for (let i = 0; i < seg.length; i++) {
+    if (target <= seg[i]!) {
+      const r = seg[i]! === 0 ? 0 : target / seg[i]!;
+      return [coords[i]![0] + (coords[i + 1]![0] - coords[i]![0]) * r, coords[i]![1] + (coords[i + 1]![1] - coords[i]![1]) * r];
+    }
+    target -= seg[i]!;
+  }
+  return coords[coords.length - 1]!;
+}
+
+/* Active vehicle positions at `clockSec`: interpolated along each trip's road
+ * geometry by the trip's elapsed-time fraction. */
+function playheadFC(plan: Plan, clockSec: number | null): FeatureCollection {
+  const features: FeatureCollection['features'] = [];
+  if (clockSec == null) return { type: 'FeatureCollection', features };
+  for (const v of plan.vehicles) {
+    for (const t of v.trips) {
+      if (clockSec < t.startSec || clockSec > t.endSec || !t.geometry) continue;
+      const frac = (clockSec - t.startSec) / Math.max(1, t.endSec - t.startSec);
+      const [lon, lat] = pointAlong(t.geometry.coordinates as [number, number][], frac);
+      features.push({ type: 'Feature', properties: { color: v.color, ref: v.ref }, geometry: { type: 'Point', coordinates: [lon, lat] } });
+      break;
+    }
+  }
+  return { type: 'FeatureCollection', features };
+}
+
+export function MapView({ plan, selection, onSelect, clockSec }: { plan: Plan; selection: Selection; onSelect: (s: Selection) => void; clockSec: number | null }) {
   const mapRef = useRef<MapRef | null>(null);
   // Respect reduced-motion: snap the camera instead of animating.
   const reduced = useRef(typeof window !== 'undefined' && window.matchMedia('(prefers-reduced-motion: reduce)').matches);
@@ -66,6 +104,7 @@ export function MapView({ plan, selection, onSelect }: { plan: Plan; selection: 
   const routes = useMemo(() => routesFC(plan), [plan]);
   const stops = useMemo(() => stopsFC(plan), [plan]);
   const depot = useMemo(() => pointFC(plan.depot.lon, plan.depot.lat), [plan.depot.lon, plan.depot.lat]);
+  const playhead = useMemo(() => playheadFC(plan, clockSec), [plan, clockSec]);
   const [hovering, setHovering] = useState(false);
 
   const vId = selVehicle(selection);
@@ -213,6 +252,12 @@ export function MapView({ plan, selection, onSelect }: { plan: Plan; selection: 
         <Source id="depot" type="geojson" data={depot}>
           <Layer {...depotLayer} />
         </Source>
+        {playhead.features.length > 0 && (
+          <Source id="playhead" type="geojson" data={playhead}>
+            <Layer id="playhead-halo" type="circle" paint={{ 'circle-radius': 9, 'circle-color': ['get', 'color'], 'circle-opacity': 0.25 }} />
+            <Layer id="playhead-dot" type="circle" paint={{ 'circle-radius': 5, 'circle-color': ['get', 'color'], 'circle-stroke-color': '#111', 'circle-stroke-width': 1.5 }} />
+          </Source>
+        )}
       </Map>
 
       <div className="maplibregl-ctrl-group absolute right-3 top-3 flex flex-col overflow-hidden text-graphite-foreground">
