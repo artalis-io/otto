@@ -1,4 +1,5 @@
 import { createContext, useCallback, useContext, useState, type ReactNode } from 'react';
+import { ApiError } from '@/lib/api';
 
 /* Lightweight i18n: a language context + t() with {name} interpolation. English
  * and Hungarian. Hungarian uses the customer's own domain terms where they exist
@@ -14,6 +15,12 @@ const en: Dict = {
 
   'app.loading': 'Loading planning day…',
   'app.failed': 'Failed to load: {e}',
+  'err.rate_limited': 'Server busy, please retry in a moment.',
+  'err.server': 'Server error. Please try again.',
+  'err.not_found': 'Not found (it may have been removed).',
+  'err.bad_request': 'Request rejected.',
+  'err.network': 'Connection lost. Check your network and retry.',
+  'err.unknown': 'Something went wrong.',
 
   'topbar.selectDay': 'Select planning day',
   'topbar.ordersSuffix': '{n} orders',
@@ -149,6 +156,7 @@ const en: Dict = {
   'onboard.admitWorking': 'Building the travel matrix… (about a minute)',
   'onboard.admitDone': '{r} routable orders admitted ({x} excluded) as {d} day(s) — now in the day picker.',
   'onboard.datasets': 'Admitted datasets', 'onboard.dsSummary': '{d} days · {n} orders', 'onboard.delete': 'Delete',
+  'onboard.deleteConfirm': 'Delete dataset "{label}"? This removes its days and any plans on them.',
   'onboard.stage.queued': 'queued', 'onboard.stage.geocoding': 'geocoding addresses', 'onboard.stage.fleet': 'reading fleet', 'onboard.stage.matrix': 'building travel matrix', 'onboard.stage.request': 'building request', 'onboard.stage.registering': 'registering days',
   'onboard.fleetTitle': 'Custom fleet (optional)', 'onboard.fleetChoose': 'Vehicles file', 'onboard.fleetClear': 'Remove',
   'onboard.fleetNote': 'Upload a vehicles file (CSV or XLSX) to plan with your own fleet instead of the built-in one.',
@@ -162,6 +170,12 @@ const hu: Dict = {
 
   'app.loading': 'Tervezési nap betöltése…',
   'app.failed': 'Betöltés sikertelen: {e}',
+  'err.rate_limited': 'A szerver túlterhelt, próbáld újra egy pillanat múlva.',
+  'err.server': 'Szerverhiba. Kérlek próbáld újra.',
+  'err.not_found': 'Nem található (lehet, hogy törölték).',
+  'err.bad_request': 'A kérést elutasítottuk.',
+  'err.network': 'Megszakadt a kapcsolat. Ellenőrizd a hálózatot, majd próbáld újra.',
+  'err.unknown': 'Hiba történt.',
 
   'topbar.selectDay': 'Válassz tervezési napot',
   'topbar.ordersSuffix': '{n} megrendelés',
@@ -297,6 +311,7 @@ const hu: Dict = {
   'onboard.admitWorking': 'Utazási mátrix építése… (kb. egy perc)',
   'onboard.admitDone': '{r} útvonalazható rendelés átvéve ({x} kizárva) {d} napként — már a napválasztóban.',
   'onboard.datasets': 'Átvett adathalmazok', 'onboard.dsSummary': '{d} nap · {n} rendelés', 'onboard.delete': 'Törlés',
+  'onboard.deleteConfirm': 'Törlöd a(z) "{label}" adathalmazt? Ez eltávolítja a napjait és a hozzájuk tartozó terveket.',
   'onboard.stage.queued': 'sorban', 'onboard.stage.geocoding': 'címek geokódolása', 'onboard.stage.fleet': 'flotta beolvasása', 'onboard.stage.matrix': 'utazási mátrix építése', 'onboard.stage.request': 'kérés építése', 'onboard.stage.registering': 'napok regisztrálása',
   'onboard.fleetTitle': 'Saját flotta (opcionális)', 'onboard.fleetChoose': 'Jármű fájl', 'onboard.fleetClear': 'Eltávolítás',
   'onboard.fleetNote': 'Tölts fel egy jármű fájlt (CSV vagy XLSX), hogy a saját flottáddal tervezz a beépített helyett.',
@@ -331,3 +346,14 @@ export function LangProvider({ children }: { children: ReactNode }) {
 
 export const useI18n = () => useContext(Ctx);
 export const useT = (): TFn => useContext(Ctx).t;
+
+/* Turn any thrown error into a humane, localized message. ApiError maps by code
+ * (a 4xx keeps its server message, which is usually actionable); anything else
+ * falls back to its message. Keeps raw "/api/...: 429" strings off the screen. */
+export function describeApiError(e: unknown, t: TFn): string {
+  if (e instanceof ApiError) {
+    if (e.code === 'bad_request' && e.serverMessage) return e.serverMessage;
+    return t(`err.${e.code}`);
+  }
+  return e instanceof Error ? e.message : String(e);
+}

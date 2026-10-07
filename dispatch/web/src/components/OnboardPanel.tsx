@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Upload, CheckCircle2, XCircle, AlertTriangle, Loader2, FileUp, MapPin, Trash2, Database } from 'lucide-react';
 import Map, { Layer, Source } from 'react-map-gl/maplibre';
 import type { FeatureCollection } from 'geojson';
@@ -9,7 +9,7 @@ import { ScrollArea } from '@/components/ui/scroll-area';
 import { cartaStyle } from '@/map/cartaStyle';
 import { Input } from '@/components/ui/input';
 import { api, pollJob, type Entity, type CanonicalField, type UploadResult, type OnboardPreview, type GeocodeResult, type GeoTier, type AdmitResult, type DatasetSummary } from '@/lib/api';
-import { useT } from '@/i18n';
+import { useT, describeApiError } from '@/i18n';
 
 const TIER_COLOR: Record<GeoTier, string> = { GREEN: '#16a34a', YELLOW: '#ca8a04', APPROX: '#ea580c', RED: '#dc2626' };
 
@@ -20,8 +20,13 @@ export function OnboardPanel({ onAdmitted, onDatasetsChanged }: { onAdmitted?: (
   const t = useT();
   const [catalog, setCatalog] = useState<Record<Entity, CanonicalField[]> | null>(null);
   const [datasets, setDatasets] = useState<DatasetSummary[] | null>(null);
-  const refreshDatasets = useCallback(() => { void api.onboardDatasets().then(setDatasets).catch(() => setDatasets([])); }, []);
+  const refreshDatasets = useCallback(() => {
+    void api.onboardDatasets().then(setDatasets).catch((e) => { setDatasets([]); setErr(describeApiError(e, t)); });
+  }, [t]);
   useEffect(() => { refreshDatasets(); }, [refreshDatasets]);
+  // A4: abort the (minute-long) admit poll if the panel unmounts / dialog closes.
+  const admitAbort = useRef<AbortController | null>(null);
+  useEffect(() => () => admitAbort.current?.abort(), []);
   const [entity, setEntity] = useState<Entity>('orders');
   const [upload, setUpload] = useState<UploadResult | null>(null);
   const [mapping, setMapping] = useState<Record<string, number>>({});
@@ -35,7 +40,11 @@ export function OnboardPanel({ onAdmitted, onDatasetsChanged }: { onAdmitted?: (
   const [busy, setBusy] = useState<'upload' | 'preview' | 'geocode' | 'admit' | 'vehicles' | null>(null);
   const [err, setErr] = useState<string | null>(null);
 
-  useEffect(() => { api.onboardCatalog().then(setCatalog).catch((e) => setErr(String(e))); }, []);
+  useEffect(() => {
+    let alive = true;
+    api.onboardCatalog().then((c) => { if (alive) setCatalog(c); }).catch((e) => { if (alive) setErr(describeApiError(e, t)); });
+    return () => { alive = false; };
+  }, [t]);
 
   const fields = catalog?.[entity] ?? [];
   const missing = fields.filter((f) => f.required && mapping[f.field] == null).map((f) => f.label);
@@ -45,27 +54,27 @@ export function OnboardPanel({ onAdmitted, onDatasetsChanged }: { onAdmitted?: (
     try {
       const u = await api.onboardUpload(entity, file);
       setUpload(u); setMapping(u.suggested);
-    } catch (e) { setErr(e instanceof Error ? e.message : String(e)); }
+    } catch (e) { setErr(describeApiError(e, t)); }
     finally { setBusy(null); }
   }
   async function validate() {
     if (!upload) return;
     setErr(null); setGeo(null); setBusy('preview');
     try { setPreview(await api.onboardPreview(upload.uploadId, entity, mapping)); }
-    catch (e) { setErr(e instanceof Error ? e.message : String(e)); }
+    catch (e) { setErr(describeApiError(e, t)); }
     finally { setBusy(null); }
   }
   async function geocode() {
     if (!upload) return;
     setErr(null); setAdmit(null); setBusy('geocode');
     try { setGeo(await api.onboardGeocode(upload.uploadId, mapping)); }
-    catch (e) { setErr(e instanceof Error ? e.message : String(e)); }
+    catch (e) { setErr(describeApiError(e, t)); }
     finally { setBusy(null); }
   }
   async function onVehFile(file: File) {
     setErr(null); setBusy('vehicles');
     try { const u = await api.onboardUpload('vehicles', file); setVehUpload(u); setVehMapping(u.suggested); }
-    catch (e) { setErr(e instanceof Error ? e.message : String(e)); }
+    catch (e) { setErr(describeApiError(e, t)); }
     finally { setBusy(null); }
   }
   function clearVeh() { setVehUpload(null); setVehMapping({}); }
@@ -73,21 +82,27 @@ export function OnboardPanel({ onAdmitted, onDatasetsChanged }: { onAdmitted?: (
   async function doAdmit() {
     if (!upload) return;
     setErr(null); setBusy('admit'); setAdmitStage('queued');
+    admitAbort.current?.abort();
+    const ctrl = new AbortController();
+    admitAbort.current = ctrl;
     try {
       const fleet = vehUpload ? { vehiclesUploadId: vehUpload.uploadId, vehiclesMapping: vehMapping } : undefined;
       const { jobId } = await api.onboardAdmit(upload.uploadId, mapping, label || `Upload ${new Date().toLocaleDateString()}`, fleet);
-      const final = await pollJob(jobId, (j) => setAdmitStage(j.stage ?? null));
+      const final = await pollJob(jobId, (j) => setAdmitStage(j.stage ?? null), { signal: ctrl.signal });
       if (final.status !== 'completed') { setErr(final.error ?? 'admit failed'); return; }
       const r = final.result as AdmitResult;
       setAdmit(r);
       if (r.ok) { refreshDatasets(); onDatasetsChanged?.(); if (r.days?.length) onAdmitted?.(r.days[0]!.dayId); }
       else setErr(r.error ?? 'admit failed');
-    } catch (e) { setErr(e instanceof Error ? e.message : String(e)); }
-    finally { setBusy(null); setAdmitStage(null); }
+    } catch (e) {
+      if ((e as Error).name === 'AbortError') return;   // panel closed mid-admit
+      setErr(describeApiError(e, t));
+    } finally { setBusy(null); setAdmitStage(null); }
   }
-  async function deleteDataset(id: string) {
+  async function deleteDataset(id: string, datasetLabel: string) {
+    if (!window.confirm(t('onboard.deleteConfirm', { label: datasetLabel }))) return;
     try { await api.onboardDeleteDataset(id); refreshDatasets(); onDatasetsChanged?.(); }
-    catch (e) { setErr(e instanceof Error ? e.message : String(e)); }
+    catch (e) { setErr(describeApiError(e, t)); }
   }
 
   return (
@@ -104,7 +119,7 @@ export function OnboardPanel({ onAdmitted, onDatasetsChanged }: { onAdmitted?: (
                 <div key={ds.id} className="flex items-center gap-2 rounded border border-divider bg-card px-2 py-1 text-[11px]">
                   <span className="min-w-0 flex-1 truncate font-medium">{ds.label}</span>
                   <span className="tnum shrink-0 text-muted-foreground">{t('onboard.dsSummary', { d: ds.days.length, n: ds.totalOrders })}</span>
-                  <button type="button" onClick={() => void deleteDataset(ds.id)} aria-label={t('onboard.delete')} title={t('onboard.delete')}
+                  <button type="button" onClick={() => void deleteDataset(ds.id, ds.label)} aria-label={t('onboard.delete')} title={t('onboard.delete')}
                     className="shrink-0 rounded p-0.5 text-muted-foreground hover:bg-destructive/10 hover:text-destructive">
                     <Trash2 className="h-3.5 w-3.5" />
                   </button>

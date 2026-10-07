@@ -14,7 +14,7 @@ import { HistoryDialog } from '@/components/HistoryDialog';
 import { ChangesDialog } from '@/components/ChangesDialog';
 import { WeekDialog } from '@/components/WeekDialog';
 import { api, pollJob } from '@/lib/api';
-import { useT } from '@/i18n';
+import { useT, describeApiError } from '@/i18n';
 import type { DaySummary, Job, Objective, Plan, Scenario, ScenarioEdit, Selection } from '@/types';
 
 /* The live solve budget for UI-triggered solves. The saved baseline used ~240s
@@ -93,7 +93,7 @@ export default function App() {
         const ds = await api.days();
         setDays(ds);
         if (!(await tryResume(ds))) await loadDay(ds.find((d) => d.id === 'day1') ?? ds[0]!);
-      } catch (e) { setError(e instanceof Error ? e.message : String(e)); }
+      } catch (e) { setError(describeApiError(e, t)); }
     })();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -135,7 +135,7 @@ export default function App() {
     } catch (e) {
       if ((e as Error).name === 'AbortError') return null;
       persistActiveJob(null);
-      setError(e instanceof Error ? e.message : String(e));
+      setError(describeApiError(e, t));
       setJob((j) => (j ? { ...j, status: 'failed', error: String(e) } : j));
       return null;
     }
@@ -152,7 +152,7 @@ export default function App() {
       return await followJob(jobId, scenarioId, dayIdForJob, ctrl);
     } catch (e) {
       if ((e as Error).name === 'AbortError') return null;
-      setError(e instanceof Error ? e.message : String(e));
+      setError(describeApiError(e, t));
       return null;
     }
   }, [budgetSec, objective, fullBudget, followJob]);
@@ -203,7 +203,7 @@ export default function App() {
       const label = scenario.kind === 'base' ? t('scn.edited', { day: scenario.label }) : undefined;
       const updated = await api.editScenario(scenario.id, edit, label);
       setScenario(updated);
-    } catch (e) { setError(e instanceof Error ? e.message : String(e)); }
+    } catch (e) { setError(describeApiError(e, t)); }
   }, [scenario, t]);
 
   // Replan: solve the current (edited) scenario, then surface the comparison if
@@ -229,7 +229,7 @@ export default function App() {
       setImportOpen(false);
       const d = ds.find((x) => x.id === dayId);
       if (d) await loadDay(d);
-    } catch (e) { setError(e instanceof Error ? e.message : String(e)); }
+    } catch (e) { setError(describeApiError(e, t)); }
   }, [loadDay]);
 
   // A dataset was deleted (or admitted): refresh days; if the current day vanished, fall back.
@@ -238,8 +238,8 @@ export default function App() {
       const ds = await api.days();
       setDays(ds);
       if (!ds.some((x) => x.id === dayId)) { const d = ds.find((x) => x.id === 'day1') ?? ds[0]; if (d) await loadDay(d); }
-    } catch { /* ignore */ }
-  }, [dayId, loadDay]);
+    } catch (e) { setError(describeApiError(e, t)); }
+  }, [dayId, loadDay, t]);
 
   const reopenPlan = useCallback(async (planId: string) => {
     pollAbort.current?.abort();
@@ -250,10 +250,12 @@ export default function App() {
       const p = await api.plan(planId);
       const sc = await api.scenario(p.scenarioId);
       const d = days.find((x) => x.id === sc.day);
-      if (d && baseline?.day !== d.isoDate) { setBaseline(await api.plan(d.baselinePlanId)); setDayId(d.id); }
+      // Only swap the baseline when actually changing day. baseline.day and d.id
+      // are both day ids (comparing to d.isoDate never matched).
+      if (d && baseline?.day !== d.id) { setBaseline(await api.plan(d.baselinePlanId)); setDayId(d.id); }
       setScenario(sc);
       setPlan(p);
-    } catch (e) { setError(e instanceof Error ? e.message : String(e)); }
+    } catch (e) { setError(describeApiError(e, t)); }
   }, [days, baseline]);
 
   // Planned-day time range (for the playback cursor).

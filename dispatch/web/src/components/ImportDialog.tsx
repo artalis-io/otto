@@ -5,7 +5,7 @@ import { ScrollArea } from '@/components/ui/scroll-area';
 import { Badge } from '@/components/ui/badge';
 import { api, type ImportSummary, type RawSample, type CanonicalSample } from '@/lib/api';
 import { OnboardPanel } from '@/components/OnboardPanel';
-import { useT } from '@/i18n';
+import { useT, describeApiError } from '@/i18n';
 
 export function ImportDialog({ open, onOpenChange, onAdmitted, onDatasetsChanged }: { open: boolean; onOpenChange: (o: boolean) => void; onAdmitted?: (dayId: string) => void; onDatasetsChanged?: () => void }) {
   const t = useT();
@@ -18,13 +18,17 @@ export function ImportDialog({ open, onOpenChange, onAdmitted, onDatasetsChanged
 
   useEffect(() => {
     if (!open) return;
+    let alive = true;
     setErr(null);
-    api.importSummary().then(setSummary).catch((e) => setErr(String(e)));
-    api.importCanonical().then(setCanon).catch(() => {});
-  }, [open]);
+    api.importSummary().then((s) => { if (alive) setSummary(s); }).catch((e) => { if (alive) setErr(describeApiError(e, t)); });
+    api.importCanonical().then((c) => { if (alive) setCanon(c); }).catch(() => {});
+    return () => { alive = false; };
+  }, [open, t]);
   useEffect(() => {
     if (!open) return;
-    api.importRaw(rawFile).then(setRaw).catch(() => setRaw(null));
+    let alive = true;   // guard the last-write-wins race when switching raw file fast
+    api.importRaw(rawFile).then((r) => { if (alive) setRaw(r); }).catch(() => { if (alive) setRaw(null); });
+    return () => { alive = false; };
   }, [open, rawFile]);
 
   const audit = summary?.canonical.orders.audit;

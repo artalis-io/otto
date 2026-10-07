@@ -3,19 +3,49 @@ import type { Comparison, DaySummary, Job, Objective, Plan, Scenario, ScenarioEd
 /* Same-origin API client. In dev, Vite proxies /api and /tiles to the backend
  * (VITE_API_ORIGIN); in production the backend serves the SPA and these paths. */
 
+export type ApiErrorCode = 'rate_limited' | 'server' | 'not_found' | 'bad_request' | 'network' | 'unknown';
+/* A typed error so the UI can show a humane, localized message (429 -> "server
+ * busy", 5xx -> "server error", offline -> "connection lost") instead of a raw
+ * "/api/...: 429". serverMessage carries a 4xx body message worth surfacing. */
+export class ApiError extends Error {
+  constructor(public status: number | null, public code: ApiErrorCode, message: string, public serverMessage?: string) {
+    super(message); this.name = 'ApiError';
+  }
+}
+function classify(status: number): ApiErrorCode {
+  if (status === 429) return 'rate_limited';
+  if (status === 404) return 'not_found';
+  if (status >= 500) return 'server';
+  if (status >= 400) return 'bad_request';
+  return 'unknown';
+}
+async function handle<T>(r: Response, url: string): Promise<T> {
+  if (r.ok) return (await r.json()) as T;
+  const code = classify(r.status);
+  let serverMessage: string | undefined;
+  try { serverMessage = ((await r.json()) as { error?: string }).error; } catch { /* non-JSON body */ }
+  throw new ApiError(r.status, code, serverMessage ?? `${url}: ${r.status}`, serverMessage);
+}
+function asNetworkError(e: unknown, url: string): never {
+  if (e instanceof ApiError) throw e;
+  throw new ApiError(null, 'network', `${url}: ${(e as Error).message}`);
+}
+
 async function jget<T>(url: string): Promise<T> {
-  const r = await fetch(url);
-  if (!r.ok) throw new Error(`${url}: ${r.status}`);
-  return (await r.json()) as T;
+  let r: Response;
+  try { r = await fetch(url); } catch (e) { asNetworkError(e, url); }
+  return handle<T>(r, url);
 }
 async function jsend<T>(url: string, method: string, body?: unknown): Promise<T> {
-  const r = await fetch(url, {
-    method,
-    headers: body ? { 'content-type': 'application/json' } : undefined,
-    body: body ? JSON.stringify(body) : undefined,
-  });
-  if (!r.ok) throw new Error(`${url}: ${r.status}`);
-  return (await r.json()) as T;
+  let r: Response;
+  try {
+    r = await fetch(url, {
+      method,
+      headers: body ? { 'content-type': 'application/json' } : undefined,
+      body: body ? JSON.stringify(body) : undefined,
+    });
+  } catch (e) { asNetworkError(e, url); }
+  return handle<T>(r, url);
 }
 
 export const api = {
@@ -145,9 +175,20 @@ export async function pollJob(
   opts: { intervalMs?: number; signal?: AbortSignal } = {},
 ): Promise<Job> {
   const interval = opts.intervalMs ?? 1200;
+  const maxTransientFailures = 5;      // tolerate brief blips; don't abort a healthy server-side job
+  let failures = 0;
   for (;;) {
     if (opts.signal?.aborted) throw new DOMException('aborted', 'AbortError');
-    const job = await api.job(jobId);
+    let job: Job;
+    try {
+      job = await api.job(jobId);
+      failures = 0;
+    } catch (e) {
+      // A network blip or a transient 5xx shouldn't kill the whole solve view.
+      if (++failures > maxTransientFailures) throw e;
+      await new Promise((res) => setTimeout(res, interval));
+      continue;
+    }
     onTick(job);
     if (job.status === 'completed' || job.status === 'failed' || job.status === 'cancelled') return job;
     await new Promise((res) => setTimeout(res, interval));

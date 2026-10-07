@@ -5,7 +5,7 @@ import { ScrollArea } from '@/components/ui/scroll-area';
 import { api } from '@/lib/api';
 import { km, money } from '@/lib/format';
 import { NarrationPanel } from '@/components/NarrationPanel';
-import { useT } from '@/i18n';
+import { useT, describeApiError } from '@/i18n';
 import type { Comparison } from '@/types';
 
 function DeltaCell({ value, goodWhenNegative, unit = '' }: { value: number; goodWhenNegative?: boolean; unit?: string }) {
@@ -45,9 +45,11 @@ export function CompareDialog({ open, onOpenChange, basePlanId, revisedPlanId, s
 
   useEffect(() => {
     if (!open) return;
+    let alive = true;
     setCmp(null); setErr(null);
-    api.compare(basePlanId, revisedPlanId).then(setCmp).catch((e) => setErr(String(e)));
-  }, [open, basePlanId, revisedPlanId]);
+    api.compare(basePlanId, revisedPlanId).then((c) => { if (alive) setCmp(c); }).catch((e) => { if (alive) setErr(describeApiError(e, t)); });
+    return () => { alive = false; };
+  }, [open, basePlanId, revisedPlanId, t]);
 
   const b = cmp?.base.stats, r = cmp?.revised.stats;
   const servedDrop = cmp ? cmp.deltas.servedOrders < 0 : false;

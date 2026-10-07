@@ -91,11 +91,12 @@ function TripDetail({ trip, vehicle, currency, onSelectStop }: { trip: Trip; veh
 /* Per-stop manual assignment overrides: pin an order to its current vehicle,
  * move it to another, or forbid a vehicle. These accumulate on the scenario and
  * take effect on the next Replan (they do not solve immediately). */
-function AssignmentSection({ plan, scenario, orderNo, currentVehicleId, onPin, onUnpin, onForbid }: {
+function AssignmentSection({ plan, scenario, orderNo, currentVehicleId, onPin, onUnpin, onForbid, disabled }: {
   plan: Plan; scenario: Scenario; orderNo: string; currentVehicleId: number;
   onPin: (orderNo: string, vehicleId: number) => void;
   onUnpin: (orderNo: string) => void;
   onForbid: (orderNo: string, vehicleId: number) => void;
+  disabled?: boolean;
 }) {
   const t = useT();
   const refOf = (id: number): string => plan.vehicles.find((v) => v.id === id)?.ref ?? `#${id}`;
@@ -110,25 +111,25 @@ function AssignmentSection({ plan, scenario, orderNo, currentVehicleId, onPin, o
       {pin ? (
         <div className="flex items-center justify-between gap-2">
           <Badge variant="outline" className="gap-1"><Pin className="h-3 w-3" /> {t('inspector.pinned', { ref: refOf(pin.vehicleId) })}</Badge>
-          <button type="button" onClick={() => onUnpin(orderNo)} className="inline-flex items-center gap-1 rounded border border-divider px-1.5 py-0.5 text-[11px] hover:bg-accent">
+          <button type="button" disabled={disabled} onClick={() => onUnpin(orderNo)} className="inline-flex items-center gap-1 rounded border border-divider px-1.5 py-0.5 text-[11px] hover:bg-accent disabled:opacity-40">
             <PinOff className="h-3 w-3" /> {t('inspector.unpin')}
           </button>
         </div>
       ) : (
-        <button type="button" onClick={() => onPin(orderNo, currentVehicleId)}
-          className="flex w-full items-center justify-center gap-1.5 rounded border border-divider px-2 py-1 text-xs hover:bg-accent">
+        <button type="button" disabled={disabled} onClick={() => onPin(orderNo, currentVehicleId)}
+          className="flex w-full items-center justify-center gap-1.5 rounded border border-divider px-2 py-1 text-xs hover:bg-accent disabled:opacity-40">
           <Pin className="h-3.5 w-3.5" /> {t('inspector.pinHere', { ref: curRef })}
         </button>
       )}
 
       <div className="flex items-center gap-1.5">
-        <select defaultValue="" onChange={(e) => { const id = Number(e.target.value); if (id) { onPin(orderNo, id); e.target.value = ''; } }}
-          className="h-7 min-w-0 flex-1 rounded border border-divider bg-card px-1.5 text-xs">
+        <select defaultValue="" disabled={disabled} onChange={(e) => { const id = Number(e.target.value); if (id) { onPin(orderNo, id); e.target.value = ''; } }}
+          className="h-7 min-w-0 flex-1 rounded border border-divider bg-card px-1.5 text-xs disabled:opacity-40">
           <option value="" disabled>{t('inspector.moveTo')}</option>
           {others.map((v) => <option key={v.id} value={v.id}>{v.ref}{v.vehicleClass ? ` · ${v.vehicleClass.replace(/_/g, ' ')}` : ''}</option>)}
         </select>
-        <button type="button" onClick={() => onForbid(orderNo, currentVehicleId)} title={t('inspector.forbidHere', { ref: curRef })}
-          className="inline-flex items-center gap-1 rounded border border-warning/40 px-1.5 py-1 text-[11px] text-warning hover:bg-warning/10">
+        <button type="button" disabled={disabled} onClick={() => onForbid(orderNo, currentVehicleId)} title={t('inspector.forbidHere', { ref: curRef })}
+          className="inline-flex items-center gap-1 rounded border border-warning/40 px-1.5 py-1 text-[11px] text-warning hover:bg-warning/10 disabled:opacity-40">
           <Ban className="h-3 w-3" /> {t('inspector.forbidHere', { ref: curRef })}
         </button>
       </div>
@@ -144,9 +145,9 @@ function AssignmentSection({ plan, scenario, orderNo, currentVehicleId, onPin, o
 /* Staged per-vehicle constraint editor: capacity, shift window, and max trips/
  * distance/duration. Blank fields keep the dataset default; changes stage on the
  * scenario and apply on the next Replan. */
-function ConstraintsEditor({ vehicle, override, onSet, onClear }: {
+function ConstraintsEditor({ vehicle, override, onSet, onClear, disabled }: {
   vehicle: Vehicle; override?: import('@/types').VehicleOverride;
-  onSet: (patch: VehicleConstraintPatch) => void; onClear: () => void;
+  onSet: (patch: VehicleConstraintPatch) => void; onClear: () => void; disabled?: boolean;
 }) {
   const t = useT();
   const [open, setOpen] = useState(Boolean(override));
@@ -164,12 +165,12 @@ function ConstraintsEditor({ vehicle, override, onSet, onClear }: {
       {open && (
         <div className="space-y-2 px-2 pb-2">
           <div className="grid grid-cols-2 gap-2">
-            <Num label={t('inspector.capKg')} def={override?.capacityKg} ph={vehicle.capacityKg} onCommit={(v) => onSet({ capacityKg: v })} />
-            <Num label={t('inspector.capPlt')} def={override?.capacityPallets} ph={vehicle.capacityPallets} onCommit={(v) => onSet({ capacityPallets: v })} />
-            <Field2 label={t('inspector.shiftStart')}><input type="time" defaultValue={secToTime(override?.shiftEarlySec)} onChange={(e) => onSet({ shiftEarlySec: timeToSec(e.target.value) })} className="h-7 w-full rounded border border-divider bg-card px-1 text-xs" /></Field2>
-            <Field2 label={t('inspector.shiftEnd')}><input type="time" defaultValue={secToTime(override?.shiftLateSec)} onChange={(e) => onSet({ shiftLateSec: timeToSec(e.target.value) })} className="h-7 w-full rounded border border-divider bg-card px-1 text-xs" /></Field2>
-            <Num label={t('inspector.maxTrips')} def={override?.maxTrips} ph={vehicle.tripCount} onCommit={(v) => onSet({ maxTrips: v })} />
-            <Num label={t('inspector.maxDist')} def={override?.maxDistanceKm} ph={Math.round(vehicle.distanceKm)} onCommit={(v) => onSet({ maxDistanceKm: v })} />
+            <Num label={t('inspector.capKg')} def={override?.capacityKg} ph={vehicle.capacityKg} onCommit={(v) => onSet({ capacityKg: v })} disabled={disabled} />
+            <Num label={t('inspector.capPlt')} def={override?.capacityPallets} ph={vehicle.capacityPallets} onCommit={(v) => onSet({ capacityPallets: v })} disabled={disabled} />
+            <Field2 label={t('inspector.shiftStart')}><input type="time" disabled={disabled} defaultValue={secToTime(override?.shiftEarlySec)} onChange={(e) => onSet({ shiftEarlySec: timeToSec(e.target.value) })} className="h-7 w-full rounded border border-divider bg-card px-1 text-xs disabled:opacity-40" /></Field2>
+            <Field2 label={t('inspector.shiftEnd')}><input type="time" disabled={disabled} defaultValue={secToTime(override?.shiftLateSec)} onChange={(e) => onSet({ shiftLateSec: timeToSec(e.target.value) })} className="h-7 w-full rounded border border-divider bg-card px-1 text-xs disabled:opacity-40" /></Field2>
+            <Num label={t('inspector.maxTrips')} def={override?.maxTrips} ph={vehicle.tripCount} onCommit={(v) => onSet({ maxTrips: v })} disabled={disabled} />
+            <Num label={t('inspector.maxDist')} def={override?.maxDistanceKm} ph={Math.round(vehicle.distanceKm)} onCommit={(v) => onSet({ maxDistanceKm: v })} disabled={disabled} />
           </div>
           <p className="text-[10px] text-muted-foreground">{t('inspector.constraintsHint')}</p>
           {has && (
@@ -186,13 +187,13 @@ function ConstraintsEditor({ vehicle, override, onSet, onClear }: {
 function Field2({ label, children }: { label: string; children: React.ReactNode }) {
   return <label className="block"><span className="mb-0.5 block text-[10px] text-muted-foreground">{label}</span>{children}</label>;
 }
-function Num({ label, def, ph, onCommit }: { label: string; def?: number; ph: number; onCommit: (v: number | undefined) => void }) {
+function Num({ label, def, ph, onCommit, disabled }: { label: string; def?: number; ph: number; onCommit: (v: number | undefined) => void; disabled?: boolean }) {
   return (
     <Field2 label={label}>
-      <input type="number" defaultValue={def ?? ''} placeholder={String(ph)}
+      <input type="number" disabled={disabled} defaultValue={def ?? ''} placeholder={String(ph)}
         onBlur={(e) => { const n = Number(e.target.value); onCommit(e.target.value.trim() === '' || Number.isNaN(n) ? undefined : n); }}
         onKeyDown={(e) => { if (e.key === 'Enter') (e.target as HTMLInputElement).blur(); }}
-        className="h-7 w-full rounded border border-divider bg-card px-1.5 text-xs" />
+        className="h-7 w-full rounded border border-divider bg-card px-1.5 text-xs disabled:opacity-40" />
     </Field2>
   );
 }
@@ -315,8 +316,8 @@ export function Inspector({ plan, scenario, selection, onSelect, onBack, onForwa
                   <button type="button" onClick={() => onUnpin(u.orderNo)} className="inline-flex items-center gap-1 rounded border border-divider px-1.5 py-0.5 text-[11px] hover:bg-accent"><PinOff className="h-3 w-3" /> {t('inspector.unpin')}</button>
                 </div>
               ) : (
-                <select defaultValue="" onChange={(e) => { const id = Number(e.target.value); if (id) onPin(u.orderNo, id); }}
-                  className="h-7 w-full rounded border border-divider bg-card px-1.5 text-xs">
+                <select defaultValue="" disabled={solving} onChange={(e) => { const id = Number(e.target.value); if (id) onPin(u.orderNo, id); }}
+                  className="h-7 w-full rounded border border-divider bg-card px-1.5 text-xs disabled:opacity-40">
                   <option value="" disabled>{t('inspector.assignTo')}</option>
                   {plan.vehicles.map((v) => <option key={v.id} value={v.id}>{v.ref}{v.vehicleClass ? ` · ${v.vehicleClass.replace(/_/g, ' ')}` : ''}</option>)}
                 </select>
@@ -367,14 +368,14 @@ export function Inspector({ plan, scenario, selection, onSelect, onBack, onForwa
                   : <VehicleSummary vehicle={vehicle} plan={plan} onSelectTrip={(i) => onSelect({ kind: 'trip', vehicleId: vehicle.id, tripIndex: i })} />}
               {stop && (
                 <AssignmentSection plan={plan} scenario={scenario} orderNo={stop.orderNo} currentVehicleId={vehicle.id}
-                  onPin={onPin} onUnpin={onUnpin} onForbid={onForbid} />
+                  onPin={onPin} onUnpin={onUnpin} onForbid={onForbid} disabled={solving} />
               )}
               <Separator />
               <ValidationRow plan={plan} vehicle={vehicle} />
               {!stop && !trip && (
                 <ConstraintsEditor vehicle={vehicle}
                   override={scenario.vehicleOverrides.find((o) => o.vehicleId === vehicle.id)}
-                  onSet={(patch) => onSetConstraint(vehicle.id, patch)} onClear={() => onClearConstraint(vehicle.id)} />
+                  onSet={(patch) => onSetConstraint(vehicle.id, patch)} onClear={() => onClearConstraint(vehicle.id)} disabled={solving} />
               )}
               {overrideCount > 0 && (
                 <button type="button" onClick={onClearOverrides}

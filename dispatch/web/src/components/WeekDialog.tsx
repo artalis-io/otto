@@ -5,7 +5,7 @@ import { ScrollArea } from '@/components/ui/scroll-area';
 import { Badge } from '@/components/ui/badge';
 import { km, money } from '@/lib/format';
 import { api, type WeekSummary } from '@/lib/api';
-import { useT } from '@/i18n';
+import { useT, describeApiError } from '@/i18n';
 
 /* Cross-day week roll-up: combined totals, per-day breakdown, and per-vehicle
  * two-day utilization (vehicles matched by ref). Read-only over both baselines. */
@@ -13,7 +13,13 @@ export function WeekDialog({ open, onOpenChange }: { open: boolean; onOpenChange
   const t = useT();
   const [w, setW] = useState<WeekSummary | null>(null);
   const [err, setErr] = useState<string | null>(null);
-  useEffect(() => { if (open) { setW(null); setErr(null); api.week().then(setW).catch((e) => setErr(String(e))); } }, [open]);
+  useEffect(() => {
+    if (!open) return;
+    let alive = true;
+    setW(null); setErr(null);
+    api.week().then((x) => { if (alive) setW(x); }).catch((e) => { if (alive) setErr(describeApiError(e, t)); });
+    return () => { alive = false; };
+  }, [open, t]);
 
   const cur = w?.currency ?? 'HUF';
   const short = (iso: string) => new Date(`${iso}T00:00:00`).toLocaleDateString('en-GB', { weekday: 'short', day: 'numeric', month: 'short' });

@@ -14,7 +14,13 @@ export function HistoryDialog({ open, onOpenChange, dayId, currentPlanId, onReop
 }) {
   const t = useT();
   const [plans, setPlans] = useState<PlanSummary[] | null>(null);
-  useEffect(() => { if (open) { setPlans(null); api.plans(dayId).then(setPlans).catch(() => setPlans([])); } }, [open, dayId]);
+  useEffect(() => {
+    if (!open) return;
+    let alive = true;
+    setPlans(null);
+    api.plans(dayId).then((p) => { if (alive) setPlans(p); }).catch(() => { if (alive) setPlans([]); });
+    return () => { alive = false; };
+  }, [open, dayId]);
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
