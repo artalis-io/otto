@@ -143,8 +143,16 @@ Canonical field catalog (for the mapping UI), from the existing canonical shapes
   app falls back if the current day vanishes). ✅ Background admit: admit now runs
   as a job (store `kind:'import'`), returns a jobId immediately, and the UI polls
   for the stage (geocoding → building travel matrix → building request →
-  registering) instead of a frozen ~66s request. *Remaining:* re-map + re-run,
-  custom fleet from an uploaded vehicles file, hybrid matrix reuse, XLSX input.
+  registering) instead of a frozen ~66s request. ✅ **XLSX input**: uploads accept
+  `.xlsx` as well as CSV (the real `nx_pipeline` parses both natively, so ingest /
+  reconcile / geocode are format-agnostic); `sampleUpload` branches to
+  `nx_pipeline --raw` for headers+rows (Node never parses the bytes — the XLSX
+  parse stays in the Role-P subprocess); `uploadPath` resolves an upload by its
+  `id_entity.*` prefix whatever the extension. Verified end-to-end on the real
+  orders as XLSX: upload (332 rows) → reconcile gate PASS (0 mismatches, 18 fields)
+  → geocode 332/332 → admit (262 routable, 2 days). *Remaining:* re-map + re-run
+  (largely covered — the mapping stays editable and re-running Validate/Geocode
+  uses it), custom fleet from an uploaded vehicles file, hybrid matrix reuse.
 
 ## Risks / open items
 

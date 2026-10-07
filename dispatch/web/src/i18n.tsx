@@ -133,7 +133,7 @@ const en: Dict = {
   // Onboarding (upload a dataset)
   'import.tabProvenance': 'Provenance', 'import.tabUpload': 'Upload',
   'onboard.entity.orders': 'Orders', 'onboard.entity.vehicles': 'Vehicles', 'onboard.entity.routes': 'Routes',
-  'onboard.choose': 'Choose CSV', 'onboard.rows': '{n} rows', 'onboard.map': 'Map columns',
+  'onboard.choose': 'Choose file', 'onboard.rows': '{n} rows', 'onboard.map': 'Map columns',
   'onboard.field': 'Canonical field', 'onboard.column': 'Source column', 'onboard.sample': 'Sample', 'onboard.none': '— none —',
   'onboard.validate': 'Validate', 'onboard.mapRequired': 'Map required: {f}',
   'onboard.reconcilePass': 'Reconcile passed', 'onboard.reconcileFail': 'Reconcile failed',
@@ -277,7 +277,7 @@ const hu: Dict = {
   // Onboarding (upload a dataset)
   'import.tabProvenance': 'Adateredet', 'import.tabUpload': 'Feltöltés',
   'onboard.entity.orders': 'Megrendelések', 'onboard.entity.vehicles': 'Járművek', 'onboard.entity.routes': 'Útvonalak',
-  'onboard.choose': 'CSV kiválasztása', 'onboard.rows': '{n} sor', 'onboard.map': 'Oszlopok megfeleltetése',
+  'onboard.choose': 'Fájl kiválasztása', 'onboard.rows': '{n} sor', 'onboard.map': 'Oszlopok megfeleltetése',
   'onboard.field': 'Kanonikus mező', 'onboard.column': 'Forrásoszlop', 'onboard.sample': 'Minta', 'onboard.none': '— nincs —',
   'onboard.validate': 'Ellenőrzés', 'onboard.mapRequired': 'Kötelező: {f}',
   'onboard.reconcilePass': 'Egyeztetés rendben', 'onboard.reconcileFail': 'Egyeztetés sikertelen',

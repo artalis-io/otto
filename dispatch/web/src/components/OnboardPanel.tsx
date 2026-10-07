@@ -115,7 +115,7 @@ export function OnboardPanel({ onAdmitted, onDatasetsChanged }: { onAdmitted?: (
           </div>
           <label className="inline-flex cursor-pointer items-center gap-1.5 rounded-md border border-divider px-2.5 py-1 text-xs font-medium hover:bg-accent">
             {busy === 'upload' ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <FileUp className="h-3.5 w-3.5" />} {t('onboard.choose')}
-            <input type="file" accept=".csv,text/csv" className="hidden" onChange={(e) => { const f = e.target.files?.[0]; if (f) void onFile(f); e.target.value = ''; }} />
+            <input type="file" accept=".csv,text/csv,.xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" className="hidden" onChange={(e) => { const f = e.target.files?.[0]; if (f) void onFile(f); e.target.value = ''; }} />
           </label>
           {upload && <span className="tnum text-[11px] text-muted-foreground">{t('onboard.rows', { n: upload.totalRows })}</span>}
         </div>

@@ -20,7 +20,7 @@ import { loadTariff } from './cost.js';
 import { planToCsv, planToRouteSheetHtml } from './export.js';
 import { RateLimiter } from './ratelimit.js';
 import { CATALOG, suggestMapping, type Entity } from './data/catalog.js';
-import { newUploadPath, uploadPath, sampleUpload, runIngestPreview, runGeocode, type Mapping } from './data/onboard.js';
+import { newUploadPath, uploadPath, sampleUpload, runIngestPreview, runGeocode, extFromName, type Mapping } from './data/onboard.js';
 import type { Plan } from './types.js';
 
 const ENTITIES: Entity[] = ['orders', 'vehicles', 'routes'];
@@ -300,9 +300,11 @@ app.post<{ Querystring: { entity?: string } }>('/api/import/upload', async (req,
   if (!ENTITIES.includes(entity)) return reply.code(400).send({ error: 'unknown entity (orders|vehicles|routes)' });
   const data = await req.file();
   if (!data) return reply.code(400).send({ error: 'no file' });
-  if (!/\.csv$/i.test(data.filename ?? '') && data.mimetype !== 'text/csv') return reply.code(400).send({ error: 'CSV only (M1)' });
+  const XLSX_MIME = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
+  const ext = extFromName(data.filename) ?? (data.mimetype === 'text/csv' ? 'csv' : data.mimetype === XLSX_MIME ? 'xlsx' : null);
+  if (!ext) return reply.code(400).send({ error: 'unsupported file type (CSV or XLSX only)' });
 
-  const { uploadId, path } = newUploadPath(entity);
+  const { uploadId, path } = newUploadPath(entity, ext);
   try {
     await pipeline(data.file, createWriteStream(path));
   } catch (e) {
@@ -317,7 +319,7 @@ app.post<{ Querystring: { entity?: string } }>('/api/import/upload', async (req,
     return { uploadId, entity, headers: sample.headers, rows: sample.rows, totalRows: sample.totalRows, delimiter: sample.delimiter, suggested: suggestMapping(entity, sample.headers) };
   } catch (e) {
     try { rmSync(path, { force: true }); } catch { /* ignore */ }
-    return reply.code(400).send({ error: `could not read CSV: ${(e as Error).message}` });
+    return reply.code(400).send({ error: `could not read file: ${(e as Error).message}` });
   }
 });
 

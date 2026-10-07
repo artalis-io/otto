@@ -1,6 +1,6 @@
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
-import { mkdirSync, writeFileSync, readFileSync, rmSync, existsSync } from 'node:fs';
+import { mkdirSync, writeFileSync, readFileSync, readdirSync, rmSync, existsSync } from 'node:fs';
 import { resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { randomUUID } from 'node:crypto';
@@ -11,27 +11,60 @@ const pExecFile = promisify(execFile);
 const here = dirname(fileURLToPath(import.meta.url));            // dispatch/server/src/data
 const SAMPLE_PY = resolve(here, '../../scripts/sample_table.py');
 const INGEST_SH = resolve(config.nexusDir, 'scripts/ingest.sh');
+const NX_PIPELINE = resolve(config.nexusDir, 'nx_pipeline');
+
+/** Upload formats we accept. nx_pipeline parses both; Node never parses the bytes. */
+export type UploadExt = 'csv' | 'xlsx';
+export function extFromName(filename: string | undefined): UploadExt | null {
+  if (!filename) return null;
+  if (/\.xlsx$/i.test(filename)) return 'xlsx';
+  if (/\.csv$/i.test(filename)) return 'csv';
+  return null;
+}
+function isXlsx(path: string): boolean { return /\.xlsx$/i.test(path); }
 
 function tmpDir(): string { const d = resolve(config.uploadsDir, 'tmp'); mkdirSync(d, { recursive: true }); return d; }
 
 /** A server-side path for an upload (generated name; the client filename is never trusted). */
-export function newUploadPath(entity: Entity): { uploadId: string; path: string } {
+export function newUploadPath(entity: Entity, ext: UploadExt = 'csv'): { uploadId: string; path: string } {
   const uploadId = `up_${randomUUID().slice(0, 12)}`;
-  return { uploadId, path: resolve(tmpDir(), `${uploadId}_${entity}.csv`) };
+  return { uploadId, path: resolve(tmpDir(), `${uploadId}_${entity}.${ext}`) };
 }
+/** Resolve an upload's stored path by its id+entity prefix, whatever extension it has. */
 export function uploadPath(uploadId: string, entity: Entity): string {
-  return resolve(tmpDir(), `${uploadId}_${entity}.csv`);
+  const prefix = `${uploadId}_${entity}.`;
+  const dir = tmpDir();
+  try {
+    const hit = readdirSync(dir).find((f) => f.startsWith(prefix) && (f.endsWith('.csv') || f.endsWith('.xlsx')));
+    if (hit) return resolve(dir, hit);
+  } catch { /* dir may not exist yet */ }
+  return resolve(dir, `${prefix}csv`); // fallback (existsSync check by caller will 404)
 }
 
 export interface Sample { headers: string[]; rows: string[][]; totalRows: number; delimiter: string }
 
-/** Headers + sample rows + row count, parsed in Python (not in Node). */
+/** Headers + sample rows + row count. CSV is parsed by sample_table.py; XLSX is
+ * parsed by nx_pipeline --raw (the Role-P parser). Node never parses raw bytes. */
 export async function sampleUpload(path: string, limit = 8): Promise<Sample> {
   if (!existsSync(path)) throw new Error('upload not found');
+  if (isXlsx(path)) return sampleXlsx(path, limit);
   const { stdout } = await pExecFile('python3', [SAMPLE_PY, path, String(limit)], { timeout: 15_000, maxBuffer: 8 * 1024 * 1024 });
   const o = JSON.parse(stdout) as Sample & { error?: string };
   if (o.error) throw new Error(`sample failed: ${o.error}`);
   return o;
+}
+
+interface NxRaw { tables?: { headers?: string[]; rows?: { cells?: string[] }[]; row_count?: number }[]; error?: string }
+/** Sample an XLSX via `nx_pipeline --raw` (first table): headers + first N rows. */
+async function sampleXlsx(path: string, limit: number): Promise<Sample> {
+  const { stdout } = await pExecFile(NX_PIPELINE, [path, '--raw'], { timeout: 15_000, maxBuffer: 16 * 1024 * 1024 });
+  const o = JSON.parse(stdout) as NxRaw;
+  if (o.error) throw new Error(`xlsx parse failed: ${o.error}`);
+  const t = o.tables?.[0];
+  if (!t) throw new Error('no tables in workbook');
+  const headers = t.headers ?? [];
+  const rows = (t.rows ?? []).slice(0, limit).map((r) => r.cells ?? []);
+  return { headers, rows, totalRows: t.row_count ?? rows.length, delimiter: 'xlsx' };
 }
 
 export type Mapping = Record<string, number>; // canonical field -> raw column index

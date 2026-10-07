@@ -1,8 +1,18 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { buildSchema, missingRequired, parseReconcile, parseSemantic } from './onboard.js';
+import { buildSchema, missingRequired, parseReconcile, parseSemantic, extFromName } from './onboard.js';
 import { suggestMapping } from './catalog.js';
+
+test('extFromName: recognizes csv and xlsx, rejects others', () => {
+  assert.equal(extFromName('orders.csv'), 'csv');
+  assert.equal(extFromName('Orders.CSV'), 'csv');
+  assert.equal(extFromName('book.xlsx'), 'xlsx');
+  assert.equal(extFromName('BOOK.XLSX'), 'xlsx');
+  assert.equal(extFromName('data.xls'), null);   // legacy binary xls not supported
+  assert.equal(extFromName('data.txt'), null);
+  assert.equal(extFromName(undefined), null);
+});
 
 test('buildSchema: generates a valid nx_schema from a column mapping', () => {
   const s = buildSchema('orders', { order_no: 0, customer: 4, city: 6, weight_kg: 11, pallets: 12 }) as {
