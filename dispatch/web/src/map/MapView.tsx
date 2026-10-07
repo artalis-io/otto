@@ -57,40 +57,76 @@ function selTripIndex(sel: Selection): number | null {
   return sel && (sel.kind === 'trip' || sel.kind === 'stop') ? sel.tripIndex : null;
 }
 
-/* Point at fraction `frac` (0..1) along a polyline, by cumulative segment length. */
-function pointAlong(coords: [number, number][], frac: number): [number, number] {
-  if (coords.length === 0) return [0, 0];
-  if (coords.length === 1 || frac <= 0) return coords[0]!;
-  if (frac >= 1) return coords[coords.length - 1]!;
-  const seg: number[] = []; let total = 0;
-  for (let i = 1; i < coords.length; i++) {
-    const dx = coords[i]![0] - coords[i - 1]![0], dy = coords[i]![1] - coords[i - 1]![1];
-    const d = Math.hypot(dx, dy); seg.push(d); total += d;
-  }
-  let target = frac * total;
-  for (let i = 0; i < seg.length; i++) {
-    if (target <= seg[i]!) {
-      const r = seg[i]! === 0 ? 0 : target / seg[i]!;
-      return [coords[i]![0] + (coords[i + 1]![0] - coords[i]![0]) * r, coords[i]![1] + (coords[i + 1]![1] - coords[i]![1]) * r];
+/* A trip's road geometry annotated with a time->distance schedule, so a marker
+ * can be placed where the truck actually is at a given clock: moving along the
+ * road during travel legs, parked at a stop during its wait+service. */
+interface TripSchedule { coords: [number, number][]; cum: number[]; anchors: { t: number; len: number }[] }
+
+function buildSchedules(plan: Plan): Record<string, TripSchedule> {
+  const m: Record<string, TripSchedule> = {};
+  for (const v of plan.vehicles) {
+    for (const t of v.trips) {
+      const coords = (t.geometry?.coordinates ?? []) as [number, number][];
+      if (coords.length < 2) continue;
+      const cum = [0];
+      for (let i = 1; i < coords.length; i++) cum[i] = cum[i - 1]! + Math.hypot(coords[i]![0] - coords[i - 1]![0], coords[i]![1] - coords[i - 1]![1]);
+      const total = cum[cum.length - 1]!;
+      // Anchors map schedule times to a distance along the road. A stop occupies
+      // two anchors at the same distance (arrival -> departure) so the marker parks.
+      const anchors: { t: number; len: number }[] = [{ t: t.startSec, len: 0 }];
+      let startIdx = 0, prevLen = 0;
+      for (const s of t.stops) {
+        let bestI = startIdx, bestD = Infinity;                 // nearest geometry vertex, searched forward (monotonic)
+        for (let i = startIdx; i < coords.length; i++) { const d = Math.hypot(coords[i]![0] - s.lon, coords[i]![1] - s.lat); if (d < bestD) { bestD = d; bestI = i; } }
+        const len = Math.max(prevLen, cum[bestI]!);
+        anchors.push({ t: s.arrivalSec, len });
+        anchors.push({ t: s.departureSec, len });
+        startIdx = bestI; prevLen = len;
+      }
+      anchors.push({ t: t.endSec, len: total });
+      m[`${v.id}:${t.index}`] = { coords, cum, anchors };
     }
-    target -= seg[i]!;
   }
-  return coords[coords.length - 1]!;
+  return m;
 }
 
-/* Active vehicle positions at `clockSec`: interpolated along each trip's road
- * geometry by the trip's elapsed-time fraction. Restricted to the selected
- * vehicle/trip so markers match the visible (non-faded) routes. */
-function playheadFC(plan: Plan, clockSec: number | null, selVId: number | null, selTIdx: number | null): FeatureCollection {
+function pointAtLength(coords: [number, number][], cum: number[], len: number): [number, number] {
+  const total = cum[cum.length - 1]!;
+  if (len <= 0) return coords[0]!;
+  if (len >= total) return coords[coords.length - 1]!;
+  let lo = 1, hi = cum.length - 1;
+  while (lo < hi) { const mid = (lo + hi) >> 1; if (cum[mid]! < len) lo = mid + 1; else hi = mid; }
+  const seg = cum[lo]! - cum[lo - 1]!;
+  const r = seg > 0 ? (len - cum[lo - 1]!) / seg : 0;
+  return [coords[lo - 1]![0] + (coords[lo]![0] - coords[lo - 1]![0]) * r, coords[lo - 1]![1] + (coords[lo]![1] - coords[lo - 1]![1]) * r];
+}
+
+function positionAt(sch: TripSchedule, clock: number): [number, number] {
+  const a = sch.anchors;
+  if (clock <= a[0]!.t) return sch.coords[0]!;
+  if (clock >= a[a.length - 1]!.t) return sch.coords[sch.coords.length - 1]!;
+  let k = 0;
+  while (k < a.length - 1 && clock > a[k + 1]!.t) k++;
+  const span = a[k + 1]!.t - a[k]!.t;
+  const frac = span > 0 ? (clock - a[k]!.t) / span : 0;
+  const len = a[k]!.len + frac * (a[k + 1]!.len - a[k]!.len);
+  return pointAtLength(sch.coords, sch.cum, len);
+}
+
+/* Active vehicle positions at `clockSec`, placed by the trip's time->distance
+ * schedule (travel along the road, park during service). Restricted to the
+ * selected vehicle/trip so markers match the visible (non-faded) routes. */
+function playheadFC(plan: Plan, clockSec: number | null, selVId: number | null, selTIdx: number | null, schedules: Record<string, TripSchedule>): FeatureCollection {
   const features: FeatureCollection['features'] = [];
   if (clockSec == null) return { type: 'FeatureCollection', features };
   for (const v of plan.vehicles) {
     if (selVId != null && v.id !== selVId) continue;
     for (const t of v.trips) {
-      if (clockSec < t.startSec || clockSec > t.endSec || !t.geometry) continue;
+      if (clockSec < t.startSec || clockSec > t.endSec) continue;
       if (selTIdx != null && t.index !== selTIdx) continue;
-      const frac = (clockSec - t.startSec) / Math.max(1, t.endSec - t.startSec);
-      const [lon, lat] = pointAlong(t.geometry.coordinates as [number, number][], frac);
+      const sch = schedules[`${v.id}:${t.index}`];
+      if (!sch) continue;
+      const [lon, lat] = positionAt(sch, clockSec);
       features.push({ type: 'Feature', properties: { color: v.color, ref: v.ref }, geometry: { type: 'Point', coordinates: [lon, lat] } });
       break;
     }
@@ -107,7 +143,8 @@ export function MapView({ plan, selection, onSelect, clockSec }: { plan: Plan; s
   const routes = useMemo(() => routesFC(plan), [plan]);
   const stops = useMemo(() => stopsFC(plan), [plan]);
   const depot = useMemo(() => pointFC(plan.depot.lon, plan.depot.lat), [plan.depot.lon, plan.depot.lat]);
-  const playhead = useMemo(() => playheadFC(plan, clockSec, selVehicle(selection), selTripIndex(selection)), [plan, clockSec, selection]);
+  const schedules = useMemo(() => buildSchedules(plan), [plan]);
+  const playhead = useMemo(() => playheadFC(plan, clockSec, selVehicle(selection), selTripIndex(selection), schedules), [plan, clockSec, selection, schedules]);
   const [hovering, setHovering] = useState(false);
 
   const vId = selVehicle(selection);
