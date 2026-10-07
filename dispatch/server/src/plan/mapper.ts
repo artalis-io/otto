@@ -7,7 +7,7 @@ import type { LoadedDay, OrderInfo, VehicleInfo } from '../data/gyermelyi.js';
 import { vehicleInfoFor } from '../data/gyermelyi.js';
 import { colorForIndex } from '../colors.js';
 import { metersToKm } from '../units.js';
-import { loadTariff, vehicleCostFor, type Tariff } from '../cost.js';
+import { loadTariff, vehicleCostFor, tripCost, type Tariff } from '../cost.js';
 
 export interface MapInputs {
   day: LoadedDay;
@@ -43,6 +43,7 @@ export function mapSolutionToPlan(inp: MapInputs): Plan {
   const depotLoc = 0;
   const violations: unknown[] = [];
   const servedOrderNos = new Set<string>();
+  const tariff = inp.tariff ?? loadTariff();
 
   const vehicles: PlanVehicle[] = solution.routes.map((route, ri) => {
     const rv = vehById.get(route.vehicle_id);
@@ -107,11 +108,13 @@ export function mapSolutionToPlan(inp: MapInputs): Plan {
       const endSec = last ? last.departureSec + legDur(prevLoc, depotLoc) : startSec;
       if (loadKg > capKg + 1) violations.push({ type: 'CAPACITY', dimension: 'kg', vehicle_id: route.vehicle_id, trip: ti, actual: loadKg, limit: capKg });
       if (loadPallets > capPal + 1e-6) violations.push({ type: 'CAPACITY', dimension: 'pallets', vehicle_id: route.vehicle_id, trip: ti, actual: loadPallets, limit: capPal });
+      const tripKm = metersToKm(tripMeters);
       return {
         index: ti, startSec, endSec,
-        distanceKm: metersToKm(tripMeters),
+        distanceKm: tripKm,
         reloadSecAfter: 0, // filled below once we know the next trip's start
         loadKg, loadPallets,
+        costFt: tripCost(tariff, { vehicleClass: vinfo?.vehicleClass ?? null, isSubcontractor: Boolean(vinfo?.isSubcontractor) }, { distanceKm: tripKm, drops: stops.length }, tripIdx.length),
         stops,
         geometry: null,
       };
@@ -163,7 +166,6 @@ export function mapSolutionToPlan(inp: MapInputs): Plan {
   const valid = (status === 'OK' || status === 'LIMIT') && violations.length === 0;
 
   // Estimated operating cost under the tariff (only used vehicles are charged).
-  const tariff = inp.tariff ?? loadTariff();
   const perVehicle: PlanVehicleCost[] = vehicles.map((v) => {
     const c = vehicleCostFor(tariff, {
       vehicleClass: v.vehicleClass, isSubcontractor: v.isSubcontractor, distanceKm: v.distanceKm,

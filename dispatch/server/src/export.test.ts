@@ -14,7 +14,7 @@ function mkStop(orderNo: string, over: Partial<PlanStop> = {}): PlanStop {
   };
 }
 function mkTrip(stops: PlanStop[]): PlanTrip {
-  return { index: 0, startSec: 7 * 3600, endSec: 10 * 3600, distanceKm: 42.5, reloadSecAfter: 0, loadKg: 2000, loadPallets: 5, stops, geometry: null };
+  return { index: 0, startSec: 7 * 3600, endSec: 10 * 3600, distanceKm: 42.5, reloadSecAfter: 0, loadKg: 2000, loadPallets: 5, costFt: 50000, stops, geometry: null };
 }
 function mkVehicle(): PlanVehicle {
   return {

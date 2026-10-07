@@ -40,6 +40,7 @@ function mkTrip(stops: PlanStop[]): PlanTrip {
     reloadSecAfter: 0,
     loadKg: 0,
     loadPallets: 0,
+    costFt: null,
     stops,
     geometry: null,
   };

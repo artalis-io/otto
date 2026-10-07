@@ -100,6 +100,7 @@ const en: Dict = {
   'inspector.forbiddenN': 'Forbidden: {refs}', 'inspector.clearOverrides': 'Clear overrides',
   'inspector.overrideHint': 'Overrides apply on the next Replan.',
   'inspector.subcontractor': 'subcontractor',
+  'inspector.driveWait': 'Drive · wait', 'inspector.backToVehicle': 'Back to vehicle',
   // Cost
   'kpi.cost': 'Est. cost', 'kpi.demoTariff': 'demo tariff', 'kpi.extTariff': 'tariff',
   'compare.cost': 'Est. cost', 'compare.saved': '{p}% saved',
@@ -198,6 +199,7 @@ const hu: Dict = {
   'inspector.forbiddenN': 'Tiltva: {refs}', 'inspector.clearOverrides': 'Módosítások törlése',
   'inspector.overrideHint': 'A módosítások a következő újratervezéskor lépnek életbe.',
   'inspector.subcontractor': 'alvállalkozó',
+  'inspector.driveWait': 'Vezetés · várakozás', 'inspector.backToVehicle': 'Vissza a járműhöz',
   // Cost
   'kpi.cost': 'Becsült költség', 'kpi.demoTariff': 'teszt tarifa', 'kpi.extTariff': 'tarifa',
   'compare.cost': 'Becsült költség', 'compare.saved': '{p}% megtakarítás',

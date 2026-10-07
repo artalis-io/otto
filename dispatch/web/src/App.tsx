@@ -269,7 +269,7 @@ export default function App() {
 
           {rightOpen && (
             <aside className="w-[340px] shrink-0 border-l border-divider">
-              <Inspector plan={plan} baseline={baseline} scenario={scenario} selection={selection}
+              <Inspector plan={plan} baseline={baseline} scenario={scenario} selection={selection} onSelect={setSelection}
                 onMarkUnavailable={(id) => void replanWithout(id)} solving={!!solving}
                 onPin={(orderNo, vehicleId) => void applyEdit({ op: 'pin', orderNo, vehicleId })}
                 onUnpin={(orderNo) => void applyEdit({ op: 'unpin', orderNo })}

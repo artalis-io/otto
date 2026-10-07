@@ -67,6 +67,7 @@ export interface Trip {
   reloadSecAfter: number;
   loadKg: number;
   loadPallets: number;
+  costFt: number | null;
   stops: Stop[];
   /** Road-following path from Velo, cached with the plan. [lon, lat] pairs. */
   geometry: GeoJSON.LineString | null;

@@ -43,21 +43,28 @@ function StopDetail({ stop }: { stop: Stop }) {
   );
 }
 
-function TripDetail({ trip, onSelectStop }: { trip: Trip; onSelectStop: (seq: number) => void }) {
+function TripDetail({ trip, vehicle, currency, onSelectStop }: { trip: Trip; vehicle: Vehicle; currency: string; onSelectStop: (seq: number) => void }) {
   const t = useT();
+  const util = Math.max(ratio(trip.loadKg, vehicle.capacityKg), ratio(trip.loadPallets, vehicle.capacityPallets));
+  const drive = trip.stops.reduce((n, s) => n + s.travelToSec, 0) + Math.max(0, trip.endSec - (trip.stops.at(-1)?.departureSec ?? trip.endSec));
+  const wait = trip.stops.reduce((n, s) => n + s.waitSec, 0);
   return (
     <div className="space-y-2">
       <Field label={t('inspector.window')} value={`${hhmm(trip.startSec)}–${hhmm(trip.endSec)}`} />
       <Field label={t('inspector.distance')} value={km(trip.distanceKm)} />
-      <Field label={t('inspector.load')} value={`${kg(trip.loadKg)} · ${plt(trip.loadPallets)}`} />
+      <Field label={t('inspector.load')} value={`${kg(trip.loadKg)} · ${plt(trip.loadPallets)} (${pct(util)})`} warn={util > 0.98} />
+      <Field label={t('inspector.driveWait')} value={`${t('inspector.minN', { n: Math.round(drive / 60) })} · ${t('inspector.minN', { n: Math.round(wait / 60) })}`} />
+      {trip.costFt != null && <Field label={t('inspector.cost')} value={money(trip.costFt, currency, true)} />}
       {trip.reloadSecAfter > 0 && <Field label={t('inspector.reloadAfter')} value={t('inspector.minN', { n: Math.round(trip.reloadSecAfter / 60) })} />}
       <Separator />
       <ol className="space-y-0.5">
         {trip.stops.map((s) => (
           <li key={s.seq}>
-            <button type="button" onClick={() => onSelectStop(s.seq)} className="flex w-full items-baseline justify-between rounded px-1 py-0.5 text-left text-xs hover:bg-accent">
-              <span><span className="tnum text-muted-foreground">{s.seq}.</span> {s.customer ?? s.orderNo}</span>
-              <span className="tnum text-muted-foreground">{hhmm(s.arrivalSec)}{s.lateBySec > 0 && <span className="ml-1 text-warning">late</span>}</span>
+            <button type="button" onClick={() => onSelectStop(s.seq)} className="flex w-full items-baseline justify-between gap-2 rounded px-1 py-1 text-left text-xs hover:bg-accent">
+              <span className="min-w-0 truncate"><span className="tnum text-muted-foreground">{s.seq}.</span> {s.customer ?? s.orderNo}
+                <span className="tnum ml-1 text-[10px] text-muted-foreground">+{Math.round(s.travelToSec / 60)}m</span>
+              </span>
+              <span className="tnum shrink-0 text-muted-foreground">{hhmm(s.arrivalSec)}{s.lateBySec > 0 && <span className="ml-1 text-warning">+{Math.round(s.lateBySec / 60)}m</span>}</span>
             </button>
           </li>
         ))}
@@ -188,8 +195,8 @@ function LoadTab({ vehicle }: { vehicle: Vehicle }) {
   );
 }
 
-export function Inspector({ plan, scenario, selection, onMarkUnavailable, solving, onPin, onUnpin, onForbid, onClearOverrides }: {
-  plan: Plan; baseline: Plan; scenario: Scenario; selection: Selection; onMarkUnavailable: (id: number) => void; solving: boolean;
+export function Inspector({ plan, scenario, selection, onSelect, onMarkUnavailable, solving, onPin, onUnpin, onForbid, onClearOverrides }: {
+  plan: Plan; baseline: Plan; scenario: Scenario; selection: Selection; onSelect: (s: Selection) => void; onMarkUnavailable: (id: number) => void; solving: boolean;
   onPin: (orderNo: string, vehicleId: number) => void;
   onUnpin: (orderNo: string) => void;
   onForbid: (orderNo: string, vehicleId: number) => void;
@@ -197,6 +204,7 @@ export function Inspector({ plan, scenario, selection, onMarkUnavailable, solvin
 }) {
   const t = useT();
   const overrideCount = scenario.pins.length + scenario.forbids.length;
+  const currency = plan.cost?.currency ?? 'HUF';
   // Unassigned order context.
   if (selection?.kind === 'unassigned') {
     const u = plan.unassigned.find((x) => x.orderNo === selection.orderNo);
@@ -229,11 +237,14 @@ export function Inspector({ plan, scenario, selection, onMarkUnavailable, solvin
         <div className="px-3 pt-3">
           <div className="mb-2 flex items-center gap-2">
             <span className="h-3 w-3 rounded-sm" style={{ backgroundColor: vehicle.color }} />
-            <span className="font-semibold">{vehicle.ref}</span>
+            <button type="button" onClick={() => onSelect({ kind: 'vehicle', vehicleId: vehicle.id })}
+              className={`font-semibold ${trip ? 'hover:underline' : ''}`} title={trip ? t('inspector.backToVehicle') : undefined}>{vehicle.ref}</button>
             {vehicle.vehicleClass && <Badge variant="outline">{vehicle.vehicleClass.replace(/_/g, ' ')}</Badge>}
             {vehicle.isSubcontractor && <Badge variant="warning">{t('inspector.subcontractor')}</Badge>}
-            {stop ? <span className="tnum ml-auto text-xs text-muted-foreground">{t('inspector.stopN', { n: stop.seq })}</span>
-              : trip ? <span className="tnum ml-auto text-xs text-muted-foreground">{t('inspector.tripN', { n: trip.index + 1 })}</span> : null}
+            {stop && trip ? (
+              <button type="button" onClick={() => onSelect({ kind: 'trip', vehicleId: vehicle.id, tripIndex: trip.index })}
+                className="tnum ml-auto text-xs text-muted-foreground hover:underline">{t('inspector.tripN', { n: trip.index + 1 })} · {t('inspector.stopN', { n: stop.seq })}</button>
+            ) : trip ? <span className="tnum ml-auto text-xs text-muted-foreground">{t('inspector.tripN', { n: trip.index + 1 })}</span> : null}
           </div>
           <TabsList className="w-full">
             <TabsTrigger value="details" className="flex-1">{t('inspector.tabDetails')}</TabsTrigger>
@@ -244,8 +255,8 @@ export function Inspector({ plan, scenario, selection, onMarkUnavailable, solvin
           <div className="space-y-3 p-3">
             <TabsContent value="details" className="mt-0 space-y-3">
               {stop ? <StopDetail stop={stop} />
-                : trip ? <TripDetail trip={trip} onSelectStop={() => { /* handled by timeline/map */ }} />
-                  : <VehicleSummary vehicle={vehicle} plan={plan} onSelectTrip={() => { /* handled by fleet */ }} />}
+                : trip ? <TripDetail trip={trip} vehicle={vehicle} currency={currency} onSelectStop={(seq) => onSelect({ kind: 'stop', vehicleId: vehicle.id, tripIndex: trip.index, seq })} />
+                  : <VehicleSummary vehicle={vehicle} plan={plan} onSelectTrip={(i) => onSelect({ kind: 'trip', vehicleId: vehicle.id, tripIndex: i })} />}
               {stop && (
                 <AssignmentSection plan={plan} scenario={scenario} orderNo={stop.orderNo} currentVehicleId={vehicle.id}
                   onPin={onPin} onUnpin={onUnpin} onForbid={onForbid} />

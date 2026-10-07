@@ -168,7 +168,7 @@ export function MapView({ plan, selection, onSelect }: { plan: Plan; selection: 
     const p = f.properties as { vehicleId?: number; tripIndex?: number; seq?: number } | null;
     if (f.layer.id === 'stops' && p?.vehicleId != null) {
       onSelect({ kind: 'stop', vehicleId: p.vehicleId, tripIndex: p.tripIndex ?? 0, seq: p.seq ?? 1 });
-    } else if (f.layer.id === 'route-line' && p?.vehicleId != null) {
+    } else if ((f.layer.id === 'route-line' || f.layer.id === 'route-hit') && p?.vehicleId != null) {
       onSelect({ kind: 'trip', vehicleId: p.vehicleId, tripIndex: p.tripIndex ?? 0 });
     }
   }, [onSelect]);
@@ -183,7 +183,7 @@ export function MapView({ plan, selection, onSelect }: { plan: Plan; selection: 
         mapStyle={style}
         transformRequest={transformRequest}
         attributionControl={false}
-        interactiveLayerIds={['route-line', 'stops']}
+        interactiveLayerIds={['stops', 'route-hit', 'route-line']}
         cursor={hovering ? 'pointer' : 'default'}
         onMouseEnter={() => setHovering(true)}
         onMouseLeave={() => setHovering(false)}
@@ -192,6 +192,8 @@ export function MapView({ plan, selection, onSelect }: { plan: Plan; selection: 
         style={{ position: 'absolute', inset: 0 }}
       >
         <Source id="routes" type="geojson" data={routes}>
+          {/* wide transparent hit target so thin routes are easy to click */}
+          <Layer id="route-hit" type="line" paint={{ 'line-color': '#000', 'line-opacity': 0, 'line-width': 16 }} />
           <Layer {...routeCasing} />
           <Layer {...routeLine} />
         </Source>

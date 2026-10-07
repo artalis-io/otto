@@ -137,3 +137,23 @@ export function vehicleCostFor(
   variable = Math.round(variable * mult);
   return { fixed, variable, total: fixed + variable };
 }
+
+/** Estimated cost of a single trip (for the trip inspector). Under per_trip this
+ * is base + per-km + per-drop; under per_vehicle it is the per-km variable plus
+ * an even share of the vehicle's fixed cost across its trips. */
+export function tripCost(
+  tariff: Tariff,
+  v: { vehicleClass: string | null; isSubcontractor: boolean },
+  trip: { distanceKm: number; drops: number },
+  tripsOnVehicle: number,
+): number {
+  if (tariff.model === 'per_trip') {
+    const mult = v.isSubcontractor ? tariff.subcontractorMultiplier : tariff.ownFleetMultiplier;
+    const extra = Math.max(0, trip.drops - tariff.includedDrops);
+    return Math.round((tariff.perTripBase + tariff.perKm * trip.distanceKm + tariff.perDrop * extra) * mult);
+  }
+  const perKm = rateForClass(tariff.perKmByClass, v.vehicleClass, tariff.perKmDefault);
+  const fixedBase = rateForClass(tariff.fixedByClass, v.vehicleClass, tariff.fixedPerVehicle);
+  const mult = v.isSubcontractor ? tariff.subcontractorMultiplier : 1;
+  return Math.round((perKm * trip.distanceKm + fixedBase / Math.max(1, tripsOnVehicle)) * mult);
+}

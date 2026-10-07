@@ -113,6 +113,7 @@ export interface PlanTrip {
   reloadSecAfter: number; // reload dwell before next trip (0 if last)
   loadKg: number;         // summed delivery load for the trip
   loadPallets: number;
+  costFt: number | null;  // estimated cost of this trip under the tariff
   stops: PlanStop[];
   geometry: GeoJSONLineString | null; // road-following; null until computed
 }
