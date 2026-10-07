@@ -31,6 +31,11 @@ export interface VehicleOverride {
 }
 export type VehicleConstraintPatch = Omit<VehicleOverride, 'vehicleId'>;
 
+/* A manual stop order for one vehicle: the listed orders are locked to that
+ * vehicle and solved in this sequence (via allowed_vehicles + precedence). */
+export interface VehicleSequence { vehicleId: number; orderNos: string[] }
+export const MAX_SEQUENCE_LEN = 500;
+
 export interface Scenario {
   id: string;
   day: string;            // 'day1' | 'day2'
@@ -42,6 +47,7 @@ export interface Scenario {
   pins: Pin[];
   forbids: Forbid[];
   vehicleOverrides: VehicleOverride[];
+  sequences: VehicleSequence[];
   createdAt: string;
 }
 
@@ -56,6 +62,8 @@ export type ScenarioEdit =
   | { op: 'unforbid'; orderNo: string; vehicleId: number }
   | { op: 'setVehicleConstraint'; vehicleId: number; patch: VehicleConstraintPatch }
   | { op: 'clearVehicleConstraint'; vehicleId: number }
+  | { op: 'setSequence'; vehicleId: number; orderNos: string[] }
+  | { op: 'clearSequence'; vehicleId: number }
   | { op: 'clearOverrides' };
 
 /* Validate + bounds-check an untrusted edit from the API. Returns an error
@@ -71,8 +79,16 @@ export function validateScenarioEdit(edit: unknown): string | null {
   const isVid = (v: unknown): v is number => typeof v === 'number' && Number.isInteger(v) && v >= 0 && v < 1e9;
   const isOrder = (v: unknown): v is string => typeof v === 'string' && v.length > 0 && v.length <= 64;
   switch (e.op) {
-    case 'removeVehicle': case 'restoreVehicle': case 'clearVehicleConstraint':
+    case 'removeVehicle': case 'restoreVehicle': case 'clearVehicleConstraint': case 'clearSequence':
       return isVid(e.vehicleId) ? null : 'valid vehicleId required';
+    case 'setSequence': {
+      if (!isVid(e.vehicleId)) return 'valid vehicleId required';
+      if (!Array.isArray(e.orderNos)) return 'orderNos array required';
+      if (e.orderNos.length > MAX_SEQUENCE_LEN) return `too many orders (> ${MAX_SEQUENCE_LEN})`;
+      if (!e.orderNos.every(isOrder)) return 'orderNos must be valid order numbers';
+      if (new Set(e.orderNos).size !== e.orderNos.length) return 'orderNos must be unique';
+      return null;
+    }
     case 'pin': case 'forbid': case 'unforbid':
       return isOrder(e.orderNo) && isVid(e.vehicleId) ? null : 'valid orderNo and vehicleId required';
     case 'unpin':
@@ -156,6 +172,7 @@ export class Store {
       if (!Array.isArray(s.pins)) s.pins = [];
       if (!Array.isArray(s.forbids)) s.forbids = [];
       if (!Array.isArray(s.vehicleOverrides)) s.vehicleOverrides = [];
+      if (!Array.isArray(s.sequences)) s.sequences = [];
     }
     this.reconcileInterruptedJobs();  // no subprocess survives a restart
     this.gcPlans(); this.gcJobs(); // prune any backlog left from prior runs
@@ -214,7 +231,7 @@ export class Store {
     const id = `${day}-base`;
     let s = this.scenarios.get(id);
     if (!s) {
-      s = { id, day, kind: 'base', parentId: null, revision: 0, label, removedVehicleIds: [], pins: [], forbids: [], vehicleOverrides: [], createdAt: new Date().toISOString() };
+      s = { id, day, kind: 'base', parentId: null, revision: 0, label, removedVehicleIds: [], pins: [], forbids: [], vehicleOverrides: [], sequences: [], createdAt: new Date().toISOString() };
       this.scenarios.set(id, s);
       writeJson(join(dir('scenarios'), `${id}.json`), s);
     }
@@ -235,6 +252,7 @@ export class Store {
       pins: parent.pins.map((p) => ({ ...p })),
       forbids: parent.forbids.map((f) => ({ ...f })),
       vehicleOverrides: parent.vehicleOverrides.map((o) => ({ ...o })),
+      sequences: parent.sequences.map((q) => ({ vehicleId: q.vehicleId, orderNos: [...q.orderNos] })),
       createdAt: new Date().toISOString(),
     };
     this.scenarios.set(s.id, s);
@@ -258,9 +276,10 @@ export class Store {
     switch (edit.op) {
       case 'removeVehicle':
         if (!s.removedVehicleIds.includes(edit.vehicleId)) s.removedVehicleIds.push(edit.vehicleId);
-        // orders cannot be pinned to, nor constraints set on, a removed vehicle
+        // orders cannot be pinned/sequenced to, nor constraints set on, a removed vehicle
         s.pins = s.pins.filter((p) => p.vehicleId !== edit.vehicleId);
         s.vehicleOverrides = s.vehicleOverrides.filter((o) => o.vehicleId !== edit.vehicleId);
+        s.sequences = s.sequences.filter((q) => q.vehicleId !== edit.vehicleId);
         break;
       case 'restoreVehicle':
         s.removedVehicleIds = s.removedVehicleIds.filter((v) => v !== edit.vehicleId);
@@ -280,6 +299,15 @@ export class Store {
       case 'clearVehicleConstraint':
         s.vehicleOverrides = s.vehicleOverrides.filter((o) => o.vehicleId !== edit.vehicleId);
         break;
+      case 'setSequence': {
+        const rest = s.sequences.filter((q) => q.vehicleId !== edit.vehicleId);
+        // a sequence of <2 orders carries no ordering -> treat as clear
+        s.sequences = edit.orderNos.length >= 2 ? [...rest, { vehicleId: edit.vehicleId, orderNos: [...edit.orderNos] }] : rest;
+        break;
+      }
+      case 'clearSequence':
+        s.sequences = s.sequences.filter((q) => q.vehicleId !== edit.vehicleId);
+        break;
       case 'pin':
         s.pins = s.pins.filter((p) => p.orderNo !== edit.orderNo);
         s.pins.push({ orderNo: edit.orderNo, vehicleId: edit.vehicleId });
@@ -297,7 +325,7 @@ export class Store {
         s.forbids = s.forbids.filter((f) => !(f.orderNo === edit.orderNo && f.vehicleId === edit.vehicleId));
         break;
       case 'clearOverrides':
-        s.pins = []; s.forbids = [];
+        s.pins = []; s.forbids = []; s.sequences = [];
         break;
     }
     s.revision += 1;

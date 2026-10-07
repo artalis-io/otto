@@ -51,7 +51,10 @@ export interface SurgeRequest {
   tasks: SurgeTask[];
   requests: SurgeRequestDef[];
   travel: SurgeTravel;
+  precedences?: SurgePrecedence[];   // before_request completes before after_request
 }
+
+export interface SurgePrecedence { before: number; after: number }
 
 export interface SurgeSolutionStop {
   request_id: number;

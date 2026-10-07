@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { applyOverrides, applyVehicleOverrides } from './solve.js';
+import { applyOverrides, applyVehicleOverrides, applySequences } from './solve.js';
 import type { SurgeRequest } from './types.js';
 import type { Scenario } from './store.js';
 
@@ -31,7 +31,7 @@ function mkRequest(): SurgeRequest {
 function mkScenario(over: Partial<Scenario> = {}): Scenario {
   return {
     id: 'scn', day: 'day1', kind: 'copy', parentId: 'day1-base', revision: 1,
-    label: 'edited', removedVehicleIds: [], pins: [], forbids: [], vehicleOverrides: [], createdAt: '',
+    label: 'edited', removedVehicleIds: [], pins: [], forbids: [], vehicleOverrides: [], sequences: [], createdAt: '',
     ...over,
   };
 }
@@ -93,4 +93,28 @@ test('applyVehicleOverrides: partial patch leaves other fields at defaults', () 
   const v = req.vehicles.find((x) => x.id === 2)!;
   assert.deepEqual(v.capacity, [1, 10]); // kg kept, pallets overridden
   assert.equal(v.shift_early, undefined);
+});
+
+test('applySequences: locks orders to the vehicle and chains precedence in order', () => {
+  const req = mkRequest();
+  // dispatcher wants O2 before O1 on vehicle 1
+  applySequences(req, mkScenario({ sequences: [{ vehicleId: 1, orderNos: ['O2', 'O1'] }] }));
+  const byId = new Map(req.requests.map((r) => [r.id, r]));
+  assert.deepEqual(byId.get(100)!.allowed_vehicles, [1]); // O1 locked to v1
+  assert.deepEqual(byId.get(101)!.allowed_vehicles, [1]); // O2 locked to v1
+  // precedence: req(O2)=101 before req(O1)=100
+  assert.deepEqual(req.precedences, [{ before: 101, after: 100 }]);
+});
+
+test('applySequences: skips a sequence on an unavailable vehicle', () => {
+  const req = mkRequest();
+  applySequences(req, mkScenario({ sequences: [{ vehicleId: 1, orderNos: ['O1', 'O2'] }] }), new Set([2, 3]));
+  assert.equal(req.precedences, undefined);
+  assert.equal(req.requests.find((r) => r.id === 100)!.allowed_vehicles, undefined);
+});
+
+test('applySequences: a single-order sequence adds no precedence', () => {
+  const req = mkRequest();
+  applySequences(req, mkScenario({ sequences: [{ vehicleId: 1, orderNos: ['O1'] }] }));
+  assert.equal(req.precedences, undefined);
 });

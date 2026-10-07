@@ -49,6 +49,7 @@ export function buildRequest(scenario: Scenario, budgetSec: number, objective: O
 
   applyOverrides(request, scenario, available);
   applyVehicleOverrides(request, scenario);
+  applySequences(request, scenario, available);
 
   request.config = {
     ...request.config,
@@ -107,6 +108,32 @@ export function applyVehicleOverrides(request: SurgeRequest, scenario: Scenario)
     if (o.maxDistanceKm != null) v.max_distance = o.maxDistanceKm * 1000;
     if (o.maxDurationMin != null) v.max_duration = o.maxDurationMin * 60;
   }
+}
+
+/** Apply manual stop sequences (mutates request). Each sequence locks its orders
+ * to one vehicle (allowed_vehicles) and chains precedence between consecutive
+ * orders so the solver keeps them in the dispatcher's order. Orders not in scope
+ * or on an unavailable vehicle are skipped. */
+export function applySequences(request: SurgeRequest, scenario: Scenario, available?: Set<number>): void {
+  if (!scenario.sequences?.length) return;
+  const avail = available ?? new Set(request.vehicles.map((v) => v.id));
+  const reqIdByOrderNo = new Map<string, number>();
+  const taskRefById = new Map(request.tasks.map((t) => [t.id, t.ref]));
+  for (const r of request.requests) {
+    const ref = taskRefById.get(r.delivery_task_id);
+    if (ref != null) reqIdByOrderNo.set(String(ref), r.id);
+  }
+  const reqById = new Map(request.requests.map((r) => [r.id, r]));
+  const prec = request.precedences ?? [];
+  for (const seq of scenario.sequences) {
+    if (!avail.has(seq.vehicleId)) continue; // vehicle removed/out of scope
+    // resolve to in-scope request ids, preserving the dispatcher's order
+    const ids = seq.orderNos.map((o) => reqIdByOrderNo.get(o)).filter((x): x is number => x != null);
+    if (ids.length < 2) continue;
+    for (const id of ids) { const r = reqById.get(id); if (r) r.allowed_vehicles = [seq.vehicleId]; } // lock to the vehicle
+    for (let i = 0; i + 1 < ids.length; i++) prec.push({ before: ids[i]!, after: ids[i + 1]! });
+  }
+  if (prec.length) request.precedences = prec;
 }
 
 function dayLabel(dayId: string): string {
