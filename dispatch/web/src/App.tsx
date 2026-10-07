@@ -36,6 +36,13 @@ function readActiveJob(): ActiveJobRef | null {
   try { const s = localStorage.getItem(ACTIVE_JOB_KEY); return s ? (JSON.parse(s) as ActiveJobRef) : null; } catch { return null; }
 }
 
+/** Structural equality for selection history de-duplication. */
+function sameSel(a: Selection, b: Selection): boolean {
+  if (a === b) return true;
+  if (!a || !b) return false;
+  return JSON.stringify(a) === JSON.stringify(b);
+}
+
 export default function App() {
   const t = useT();
   const [days, setDays] = useState<DaySummary[]>([]);
@@ -43,7 +50,21 @@ export default function App() {
   const [scenario, setScenario] = useState<Scenario | null>(null);
   const [plan, setPlan] = useState<Plan | null>(null);
   const [baseline, setBaseline] = useState<Plan | null>(null);
-  const [selection, setSelection] = useState<Selection>(null);
+  // Selection history: browser-style back/forward through inspected items.
+  const [nav, setNav] = useState<{ stack: Selection[]; idx: number }>({ stack: [null], idx: 0 });
+  const selection = nav.stack[nav.idx] ?? null;
+  const navigate = useCallback((sel: Selection) => {
+    setNav((n) => {
+      if (sameSel(n.stack[n.idx] ?? null, sel)) return n;
+      const stack = [...n.stack.slice(0, n.idx + 1), sel].slice(-50);
+      return { stack, idx: stack.length - 1 };
+    });
+  }, []);
+  const resetSelection = useCallback(() => setNav({ stack: [null], idx: 0 }), []);
+  const goBack = useCallback(() => setNav((n) => (n.idx > 0 ? { ...n, idx: n.idx - 1 } : n)), []);
+  const goForward = useCallback(() => setNav((n) => (n.idx < n.stack.length - 1 ? { ...n, idx: n.idx + 1 } : n)), []);
+  const canGoBack = nav.idx > 0;
+  const canGoForward = nav.idx < nav.stack.length - 1;
   const [job, setJob] = useState<JobView | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [compareOpen, setCompareOpen] = useState(false);
@@ -81,8 +102,8 @@ export default function App() {
     activeJobId.current = null;
     persistActiveJob(null);
     setJob(null);
-    setSelection(null);
     setPlaying(false); setClockSec(null);
+    resetSelection();
     setDayId(d.id);
     const base = await api.plan(d.baselinePlanId);
     setBaseline(base);
@@ -106,7 +127,7 @@ export default function App() {
       if (final.status === 'completed' && final.planId) {
         const revised = await api.plan(final.planId);
         setPlan(revised);
-        setSelection(null);
+        resetSelection();
         return revised;
       }
       return null;
@@ -203,7 +224,7 @@ export default function App() {
     pollAbort.current?.abort();
     activeJobId.current = null;
     persistActiveJob(null);
-    setJob(null); setSelection(null); setError(null);
+    setJob(null); resetSelection(); setError(null);
     try {
       const p = await api.plan(planId);
       const sc = await api.scenario(p.scenarioId);
@@ -281,7 +302,7 @@ export default function App() {
         <div className="flex min-h-0 flex-1">
           {leftOpen && (
             <aside className="w-[310px] shrink-0 border-r border-divider">
-              <FleetPanel plan={plan} scenario={scenario} selection={selection} onSelect={setSelection}
+              <FleetPanel plan={plan} scenario={scenario} selection={selection} onSelect={navigate}
                 onMarkUnavailable={(id) => void applyEdit({ op: 'removeVehicle', vehicleId: id })}
                 onRestoreVehicle={(id) => void applyEdit({ op: 'restoreVehicle', vehicleId: id })} solving={!!solving} />
             </aside>
@@ -297,10 +318,10 @@ export default function App() {
                   {rightOpen ? <PanelRightClose className="h-4 w-4" /> : <PanelRightOpen className="h-4 w-4" />}
                 </Button>
               </div>
-              <MapView plan={plan} selection={selection} onSelect={setSelection} clockSec={clockSec} />
+              <MapView plan={plan} selection={selection} onSelect={navigate} clockSec={clockSec} />
             </div>
             <div className="h-48 shrink-0 border-t border-divider">
-              <Timeline plan={plan} selection={selection} onSelect={setSelection}
+              <Timeline plan={plan} selection={selection} onSelect={navigate}
                 clockSec={clockSec} playing={playing} speed={speed} dayRange={dayRange}
                 onTogglePlay={togglePlay} onSeek={seekClock} onStop={stopClock} onSpeed={setSpeed} />
             </div>
@@ -308,7 +329,8 @@ export default function App() {
 
           {rightOpen && (
             <aside className="w-[340px] shrink-0 border-l border-divider">
-              <Inspector plan={plan} baseline={baseline} scenario={scenario} selection={selection} onSelect={setSelection} solving={!!solving}
+              <Inspector plan={plan} baseline={baseline} scenario={scenario} selection={selection} onSelect={navigate} solving={!!solving}
+                onBack={goBack} onForward={goForward} canGoBack={canGoBack} canGoForward={canGoForward}
                 onMarkUnavailable={(id) => void applyEdit({ op: 'removeVehicle', vehicleId: id })}
                 onRestoreVehicle={(id) => void applyEdit({ op: 'restoreVehicle', vehicleId: id })}
                 onSetConstraint={(vehicleId, patch) => void applyEdit({ op: 'setVehicleConstraint', vehicleId, patch })}

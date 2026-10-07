@@ -27,4 +27,25 @@ test.describe('inspector navigation', () => {
     await expect(inspector.getByText('Drive · wait')).toBeVisible();
     expectNoErrors(page);
   });
+
+  test('back/forward buttons retrace the selection history', async ({ page }) => {
+    await loadApp(page);
+    const fleet = page.locator('aside').first();
+    const inspector = page.locator('aside').last();
+    await expect(inspector.getByRole('button', { name: 'Back' })).toBeDisabled();
+
+    await fleet.getByText('RIC-124', { exact: true }).click();
+    await fleet.getByRole('button', { name: 'Expand trips' }).first().click();
+    await fleet.getByRole('button', { name: /^Trip 1/ }).first().click();
+    await inspector.locator('ol button').first().click();
+    await expect(inspector.getByText('Time window')).toBeVisible(); // stop
+
+    await inspector.getByRole('button', { name: 'Back' }).click();
+    await expect(inspector.getByText('Drive · wait')).toBeVisible();  // trip
+    await inspector.getByRole('button', { name: 'Back' }).click();
+    await expect(inspector.getByText('Trips', { exact: true })).toBeVisible(); // vehicle
+    await inspector.getByRole('button', { name: 'Forward' }).click();
+    await expect(inspector.getByText('Drive · wait')).toBeVisible();  // trip again
+    expectNoErrors(page);
+  });
 });

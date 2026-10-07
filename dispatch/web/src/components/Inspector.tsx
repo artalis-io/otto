@@ -1,4 +1,4 @@
-import { Ban, CheckCircle2, AlertTriangle, Pin, PinOff, X, RotateCcw, SlidersHorizontal, ChevronRight } from 'lucide-react';
+import { Ban, CheckCircle2, AlertTriangle, Pin, PinOff, X, RotateCcw, SlidersHorizontal, ChevronRight, ArrowLeft, ArrowRight } from 'lucide-react';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { Badge } from '@/components/ui/badge';
@@ -277,8 +277,9 @@ function LoadTab({ vehicle }: { vehicle: Vehicle }) {
   );
 }
 
-export function Inspector({ plan, scenario, selection, onSelect, onMarkUnavailable, onRestoreVehicle, onSetConstraint, onClearConstraint, solving, onPin, onUnpin, onForbid, onClearOverrides }: {
+export function Inspector({ plan, scenario, selection, onSelect, onBack, onForward, canGoBack, canGoForward, onMarkUnavailable, onRestoreVehicle, onSetConstraint, onClearConstraint, solving, onPin, onUnpin, onForbid, onClearOverrides }: {
   plan: Plan; baseline: Plan; scenario: Scenario; selection: Selection; onSelect: (s: Selection) => void; onMarkUnavailable: (id: number) => void; solving: boolean;
+  onBack: () => void; onForward: () => void; canGoBack: boolean; canGoForward: boolean;
   onRestoreVehicle: (id: number) => void;
   onSetConstraint: (vehicleId: number, patch: VehicleConstraintPatch) => void;
   onClearConstraint: (vehicleId: number) => void;
@@ -290,13 +291,14 @@ export function Inspector({ plan, scenario, selection, onSelect, onMarkUnavailab
   const t = useT();
   const overrideCount = scenario.pins.length + scenario.forbids.length;
   const currency = plan.cost?.currency ?? 'HUF';
+  const nav = { onBack, onForward, canGoBack, canGoForward };
   // Unassigned order context.
   if (selection?.kind === 'unassigned') {
     const u = plan.unassigned.find((x) => x.orderNo === selection.orderNo);
     const pin = u ? scenario.pins.find((p) => p.orderNo === u.orderNo) : undefined;
     const refOf = (id: number): string => plan.vehicles.find((v) => v.id === id)?.ref ?? `#${id}`;
     return (
-      <Panel>
+      <Panel nav={nav}>
         {u ? (
           <div className="space-y-2 p-3">
             <div className="text-sm font-semibold">{u.customer ?? `Order ${u.orderNo}`}</div>
@@ -329,14 +331,14 @@ export function Inspector({ plan, scenario, selection, onSelect, onMarkUnavailab
 
   const vehicleId = selection ? selection.vehicleId : null;
   const vehicle = vehicleId != null ? plan.vehicles.find((v) => v.id === vehicleId) : undefined;
-  if (!vehicle) return <Panel><Empty planId={plan.id} /></Panel>;
+  if (!vehicle) return <Panel nav={nav}><Empty planId={plan.id} /></Panel>;
 
   const trip = selection && (selection.kind === 'trip' || selection.kind === 'stop')
     ? vehicle.trips.find((t) => t.index === selection.tripIndex) : undefined;
   const stop = selection?.kind === 'stop' && trip ? trip.stops.find((s) => s.seq === selection.seq) : undefined;
 
   return (
-    <Panel>
+    <Panel nav={nav}>
       <Tabs defaultValue="details" className="flex min-h-0 flex-1 flex-col">
         <div className="px-3 pt-3">
           <div className="mb-2 flex items-center gap-2">
@@ -402,11 +404,21 @@ export function Inspector({ plan, scenario, selection, onSelect, onMarkUnavailab
   );
 }
 
-function Panel({ children }: { children: React.ReactNode }) {
+function Panel({ children, nav }: { children: React.ReactNode; nav: { onBack: () => void; onForward: () => void; canGoBack: boolean; canGoForward: boolean } }) {
   const t = useT();
   return (
     <div className="flex h-full flex-col bg-card">
-      <div className="shrink-0 px-3 py-2"><h2 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">{t('inspector.title')}</h2></div>
+      <div className="flex shrink-0 items-center gap-1 px-2 py-1.5">
+        <button type="button" onClick={nav.onBack} disabled={!nav.canGoBack} aria-label={t('inspector.back')} title={t('inspector.back')}
+          className="flex h-6 w-6 items-center justify-center rounded text-muted-foreground hover:bg-accent hover:text-foreground disabled:opacity-30 disabled:hover:bg-transparent">
+          <ArrowLeft className="h-4 w-4" />
+        </button>
+        <button type="button" onClick={nav.onForward} disabled={!nav.canGoForward} aria-label={t('inspector.forward')} title={t('inspector.forward')}
+          className="flex h-6 w-6 items-center justify-center rounded text-muted-foreground hover:bg-accent hover:text-foreground disabled:opacity-30 disabled:hover:bg-transparent">
+          <ArrowRight className="h-4 w-4" />
+        </button>
+        <h2 className="ml-1 text-xs font-semibold uppercase tracking-wide text-muted-foreground">{t('inspector.title')}</h2>
+      </div>
       <Separator />
       {children}
     </div>
