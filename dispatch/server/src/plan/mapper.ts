@@ -1,12 +1,13 @@
 import { createHash } from 'node:crypto';
 import type {
-  Plan, PlanStop, PlanTrip, PlanVehicle, PlanUnassigned,
+  Plan, PlanStop, PlanTrip, PlanVehicle, PlanUnassigned, PlanCost, PlanVehicleCost,
   SurgeRequest, SurgeSolution, SurgeTask,
 } from '../types.js';
 import type { LoadedDay, OrderInfo, VehicleInfo } from '../data/gyermelyi.js';
 import { vehicleInfoFor } from '../data/gyermelyi.js';
 import { colorForIndex } from '../colors.js';
 import { metersToKm } from '../units.js';
+import { loadTariff, vehicleCost, type Tariff } from '../cost.js';
 
 export interface MapInputs {
   day: LoadedDay;
@@ -14,6 +15,7 @@ export interface MapInputs {
   solution: SurgeSolution;
   enrichment: Map<string, OrderInfo>;
   vehicleInfo: Map<string, VehicleInfo>;
+  tariff?: Tariff;           // cost tariff; defaults to the resolved tariff
   scenarioId: string;
   scenarioRevision: number;
   planId: string;
@@ -127,6 +129,7 @@ export function mapSolutionToPlan(inp: MapInputs): Plan {
       id: route.vehicle_id,
       ref,
       vehicleClass: vinfo?.vehicleClass ?? null,
+      isSubcontractor: Boolean(vinfo?.isSubcontractor),
       color: colorForIndex(ri),
       capacityKg: capKg,
       capacityPallets: capPal,
@@ -159,6 +162,22 @@ export function mapSolutionToPlan(inp: MapInputs): Plan {
   const status = solution.status;
   const valid = (status === 'OK' || status === 'LIMIT') && violations.length === 0;
 
+  // Estimated operating cost under the tariff (only used vehicles are charged).
+  const tariff = inp.tariff ?? loadTariff();
+  const perVehicle: PlanVehicleCost[] = vehicles.map((v) => {
+    const c = vehicleCost(tariff, v.vehicleClass, v.isSubcontractor, v.distanceKm);
+    return { vehicleId: v.id, ref: v.ref, vehicleClass: v.vehicleClass, distanceKm: v.distanceKm, fixedCost: c.fixed, variableCost: c.variable, totalCost: c.total };
+  });
+  const cost: PlanCost = {
+    currency: tariff.currency,
+    source: tariff.source,
+    total: perVehicle.reduce((n, c) => n + c.totalCost, 0),
+    fixed: perVehicle.reduce((n, c) => n + c.fixedCost, 0),
+    variable: perVehicle.reduce((n, c) => n + c.variableCost, 0),
+    perVehicle,
+  };
+  const objective: 'vehicles' | 'distance' = request.config.lexicographic_objective === false ? 'distance' : 'vehicles';
+
   return {
     id: inp.planId,
     scenarioId: inp.scenarioId,
@@ -166,6 +185,7 @@ export function mapSolutionToPlan(inp: MapInputs): Plan {
     day: inp.day.def.isoDate,
     createdAt: inp.createdAt,
     source: inp.source,
+    objective,
     provenance: {
       inputSha256: sha256(JSON.stringify(request)),
       solverConfig: request.config,
@@ -181,6 +201,7 @@ export function mapSolutionToPlan(inp: MapInputs): Plan {
       totalDistanceKm: metersToKm(solution.stats.total_distance ?? 0),
       solveElapsedSeconds: solution.stats.elapsed_seconds ?? null,
     },
+    cost,
     depot: inp.day.depot,
     vehicles,
     unassigned,

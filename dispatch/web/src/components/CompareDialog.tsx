@@ -3,7 +3,7 @@ import { ArrowRight, TriangleAlert } from 'lucide-react';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { api } from '@/lib/api';
-import { km } from '@/lib/format';
+import { km, money } from '@/lib/format';
 import { NarrationPanel } from '@/components/NarrationPanel';
 import { useT } from '@/i18n';
 import type { Comparison } from '@/types';
@@ -12,6 +12,17 @@ function DeltaCell({ value, goodWhenNegative, unit = '' }: { value: number; good
   if (value === 0) return <span className="tnum text-muted-foreground">±0{unit}</span>;
   const good = goodWhenNegative ? value < 0 : value > 0;
   return <span className={`tnum font-medium ${good ? 'text-primary' : 'text-warning'}`}>{value > 0 ? '+' : ''}{value}{unit}</span>;
+}
+
+function CostDelta({ delta, baseTotal, currency, savedLabel }: { delta: number; baseTotal: number; currency: string; savedLabel: (p: number) => string }) {
+  if (delta === 0) return <span className="tnum text-muted-foreground">±0</span>;
+  const good = delta < 0;
+  const pctSaved = good && baseTotal > 0 ? Math.round((-delta / baseTotal) * 100) : 0;
+  return (
+    <span className={`tnum font-medium ${good ? 'text-primary' : 'text-warning'}`}>
+      {delta > 0 ? '+' : '−'}{money(Math.abs(delta), currency, true)}{good && pctSaved > 0 ? ` · ${savedLabel(pctSaved)}` : ''}
+    </span>
+  );
 }
 
 function Row({ label, base, revised, delta }: { label: string; base: string; revised: string; delta: React.ReactNode }) {
@@ -71,6 +82,12 @@ export function CompareDialog({ open, onOpenChange, basePlanId, revisedPlanId, s
               <Row label={t('compare.vehiclesUsed')} base={`${b!.vehiclesUsed}`} revised={`${r!.vehiclesUsed}`} delta={<DeltaCell value={cmp.deltas.vehiclesUsed} goodWhenNegative />} />
               <Row label={t('compare.trips')} base={`${b!.trips}`} revised={`${r!.trips}`} delta={<DeltaCell value={cmp.deltas.trips} goodWhenNegative />} />
               <Row label={t('compare.totalDistance')} base={km(b!.totalDistanceKm)} revised={km(r!.totalDistanceKm)} delta={<DeltaCell value={cmp.deltas.totalDistanceKm} goodWhenNegative unit=" km" />} />
+              {cmp.base.cost && cmp.revised.cost && cmp.deltas.costTotal != null && (
+                <Row label={t('compare.cost')}
+                  base={money(cmp.base.cost.total, cmp.base.cost.currency, true)}
+                  revised={money(cmp.revised.cost.total, cmp.revised.cost.currency, true)}
+                  delta={<CostDelta delta={cmp.deltas.costTotal} baseTotal={cmp.base.cost.total} currency={cmp.revised.cost.currency} savedLabel={(p) => t('compare.saved', { p })} />} />
+              )}
             </div>
 
             <ScrollArea className="max-h-64">

@@ -50,6 +50,7 @@ function mkVehicle(ref: string, stops: PlanStop[]): PlanVehicle {
     id: 0,
     ref,
     vehicleClass: null,
+    isSubcontractor: false,
     color: '#000000',
     capacityKg: 10_000,
     capacityPallets: 100,
@@ -75,6 +76,7 @@ function mkPlan(
     day: '2026-05-06',
     createdAt: '2026-05-06T08:00:00.000Z',
     source: 'saved',
+    objective: 'vehicles',
     provenance: {
       inputSha256: 'deadbeef',
       solverConfig: {},
@@ -82,6 +84,7 @@ function mkPlan(
       validation: { valid: true, violations: [] },
     },
     stats,
+    cost: null,
     depot: { name: 'D', lon: 10, lat: 50 },
     vehicles,
     unassigned: unassignedOrderNos.map((orderNo) => ({

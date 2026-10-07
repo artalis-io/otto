@@ -19,9 +19,9 @@ export interface DayDef {
 }
 
 export const DAYS: DayDef[] = [
-  { id: 'day1', date: '5/6/26', isoDate: '2026-05-06', label: 'Tuesday 6 May 2026',
+  { id: 'day1', date: '5/6/26', isoDate: '2026-05-06', label: 'Wednesday 6 May 2026',
     requestFile: 'results/perday/day1_request.json', solutionFile: 'results/perday/day1_solution.json' },
-  { id: 'day2', date: '5/7/26', isoDate: '2026-05-07', label: 'Wednesday 7 May 2026',
+  { id: 'day2', date: '5/7/26', isoDate: '2026-05-07', label: 'Thursday 7 May 2026',
     requestFile: 'results/perday/day2_request.json', solutionFile: 'results/perday/day2_solution.json' },
 ];
 

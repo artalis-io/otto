@@ -9,6 +9,13 @@ import type { Plan } from './types.js';
  * nothing here is client-private (plans are derived, scenarios are edits).
  * Source data stays immutable and external. */
 
+/* Manual dispatcher overrides, applied to the Surge request at solve time:
+ * a pin forces an order onto one vehicle (allowed_vehicles = [vehicleId]);
+ * a forbid excludes a vehicle for an order (forbidden_vehicles). Pins win over
+ * forbids for the same order. Orders are keyed by order_no (stable across days). */
+export interface Pin { orderNo: string; vehicleId: number }
+export interface Forbid { orderNo: string; vehicleId: number }
+
 export interface Scenario {
   id: string;
   day: string;            // 'day1' | 'day2'
@@ -17,8 +24,20 @@ export interface Scenario {
   revision: number;       // bumped on each edit
   label: string;
   removedVehicleIds: number[];
+  pins: Pin[];
+  forbids: Forbid[];
   createdAt: string;
 }
+
+/* A single dispatcher edit applied to an editable (copy) scenario. */
+export type ScenarioEdit =
+  | { op: 'removeVehicle'; vehicleId: number }
+  | { op: 'restoreVehicle'; vehicleId: number }
+  | { op: 'pin'; orderNo: string; vehicleId: number }
+  | { op: 'unpin'; orderNo: string }
+  | { op: 'forbid'; orderNo: string; vehicleId: number }
+  | { op: 'unforbid'; orderNo: string; vehicleId: number }
+  | { op: 'clearOverrides' };
 
 export type JobStatus = 'pending' | 'running' | 'completed' | 'failed' | 'cancelled';
 export interface Job {
@@ -62,6 +81,11 @@ export class Store {
 
   constructor() {
     for (const [id, p] of this.persistedPlans) this.plans.set(id, p);
+    // Normalize scenarios persisted before overrides existed.
+    for (const s of this.scenarios.values()) {
+      if (!Array.isArray(s.pins)) s.pins = [];
+      if (!Array.isArray(s.forbids)) s.forbids = [];
+    }
   }
 
   newId(prefix: string): string { return `${prefix}_${randomUUID().slice(0, 8)}`; }
@@ -71,7 +95,7 @@ export class Store {
     const id = `${day}-base`;
     let s = this.scenarios.get(id);
     if (!s) {
-      s = { id, day, kind: 'base', parentId: null, revision: 0, label, removedVehicleIds: [], createdAt: new Date().toISOString() };
+      s = { id, day, kind: 'base', parentId: null, revision: 0, label, removedVehicleIds: [], pins: [], forbids: [], createdAt: new Date().toISOString() };
       this.scenarios.set(id, s);
       writeJson(join(dir('scenarios'), `${id}.json`), s);
     }
@@ -89,8 +113,58 @@ export class Store {
       revision: 1,
       label: label ?? `${parent.label} (edited)`,
       removedVehicleIds: removed,
+      pins: parent.pins.map((p) => ({ ...p })),
+      forbids: parent.forbids.map((f) => ({ ...f })),
       createdAt: new Date().toISOString(),
     };
+    this.scenarios.set(s.id, s);
+    writeJson(join(dir('scenarios'), `${s.id}.json`), s);
+    return s;
+  }
+
+  /** Return an editable (copy) scenario for the given one: copies forked from an
+   * immutable base so the baseline is never mutated; copies are edited in place. */
+  forkForEdit(current: Scenario, label?: string): Scenario {
+    if (current.kind === 'copy') return current;
+    return this.createCopy(current, {}, label);
+  }
+
+  /** Apply a dispatcher edit to an editable scenario, bump its revision, persist.
+   * Throws on a base scenario (immutable). Returns the updated scenario. */
+  editScenario(id: string, edit: ScenarioEdit): Scenario {
+    const s = this.scenarios.get(id);
+    if (!s) throw new Error('scenario not found');
+    if (s.kind === 'base') throw new Error('base scenario is immutable; fork a copy first');
+    switch (edit.op) {
+      case 'removeVehicle':
+        if (!s.removedVehicleIds.includes(edit.vehicleId)) s.removedVehicleIds.push(edit.vehicleId);
+        // an order cannot be pinned to a vehicle that is no longer available
+        s.pins = s.pins.filter((p) => p.vehicleId !== edit.vehicleId);
+        break;
+      case 'restoreVehicle':
+        s.removedVehicleIds = s.removedVehicleIds.filter((v) => v !== edit.vehicleId);
+        break;
+      case 'pin':
+        s.pins = s.pins.filter((p) => p.orderNo !== edit.orderNo);
+        s.pins.push({ orderNo: edit.orderNo, vehicleId: edit.vehicleId });
+        s.forbids = s.forbids.filter((f) => f.orderNo !== edit.orderNo); // pin supersedes forbids
+        break;
+      case 'unpin':
+        s.pins = s.pins.filter((p) => p.orderNo !== edit.orderNo);
+        break;
+      case 'forbid':
+        if (!s.forbids.some((f) => f.orderNo === edit.orderNo && f.vehicleId === edit.vehicleId))
+          s.forbids.push({ orderNo: edit.orderNo, vehicleId: edit.vehicleId });
+        s.pins = s.pins.filter((p) => !(p.orderNo === edit.orderNo && p.vehicleId === edit.vehicleId));
+        break;
+      case 'unforbid':
+        s.forbids = s.forbids.filter((f) => !(f.orderNo === edit.orderNo && f.vehicleId === edit.vehicleId));
+        break;
+      case 'clearOverrides':
+        s.pins = []; s.forbids = [];
+        break;
+    }
+    s.revision += 1;
     this.scenarios.set(s.id, s);
     writeJson(join(dir('scenarios'), `${s.id}.json`), s);
     return s;

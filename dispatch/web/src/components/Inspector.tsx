@@ -1,12 +1,12 @@
-import { Ban, CheckCircle2, AlertTriangle } from 'lucide-react';
+import { Ban, CheckCircle2, AlertTriangle, Pin, PinOff, X } from 'lucide-react';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { Badge } from '@/components/ui/badge';
 import { Separator } from '@/components/ui/separator';
-import { hhmm, km, pct, ratio } from '@/lib/format';
+import { hhmm, km, money, pct, ratio } from '@/lib/format';
 import { NarrationPanel } from '@/components/NarrationPanel';
 import { useT } from '@/i18n';
-import type { Plan, Selection, Vehicle, Trip, Stop, ValidationViolation } from '@/types';
+import type { Plan, Scenario, Selection, Vehicle, Trip, Stop, ValidationViolation } from '@/types';
 
 function Field({ label, value, warn }: { label: string; value: string; warn?: boolean }) {
   return (
@@ -66,14 +66,69 @@ function TripDetail({ trip, onSelectStop }: { trip: Trip; onSelectStop: (seq: nu
   );
 }
 
-function VehicleSummary({ vehicle, onSelectTrip }: { vehicle: Vehicle; onSelectTrip: (i: number) => void }) {
+/* Per-stop manual assignment overrides: pin an order to its current vehicle,
+ * move it to another, or forbid a vehicle. These accumulate on the scenario and
+ * take effect on the next Replan (they do not solve immediately). */
+function AssignmentSection({ plan, scenario, orderNo, currentVehicleId, onPin, onUnpin, onForbid }: {
+  plan: Plan; scenario: Scenario; orderNo: string; currentVehicleId: number;
+  onPin: (orderNo: string, vehicleId: number) => void;
+  onUnpin: (orderNo: string) => void;
+  onForbid: (orderNo: string, vehicleId: number) => void;
+}) {
   const t = useT();
+  const refOf = (id: number): string => plan.vehicles.find((v) => v.id === id)?.ref ?? `#${id}`;
+  const pin = scenario.pins.find((p) => p.orderNo === orderNo);
+  const forbidden = scenario.forbids.filter((f) => f.orderNo === orderNo).map((f) => f.vehicleId);
+  const curRef = refOf(currentVehicleId);
+  const others = plan.vehicles.filter((v) => v.id !== currentVehicleId);
+
+  return (
+    <div className="space-y-2 rounded-md border border-divider bg-muted/30 p-2.5">
+      <div className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">{t('inspector.assignment')}</div>
+      {pin ? (
+        <div className="flex items-center justify-between gap-2">
+          <Badge variant="outline" className="gap-1"><Pin className="h-3 w-3" /> {t('inspector.pinned', { ref: refOf(pin.vehicleId) })}</Badge>
+          <button type="button" onClick={() => onUnpin(orderNo)} className="inline-flex items-center gap-1 rounded border border-divider px-1.5 py-0.5 text-[11px] hover:bg-accent">
+            <PinOff className="h-3 w-3" /> {t('inspector.unpin')}
+          </button>
+        </div>
+      ) : (
+        <button type="button" onClick={() => onPin(orderNo, currentVehicleId)}
+          className="flex w-full items-center justify-center gap-1.5 rounded border border-divider px-2 py-1 text-xs hover:bg-accent">
+          <Pin className="h-3.5 w-3.5" /> {t('inspector.pinHere', { ref: curRef })}
+        </button>
+      )}
+
+      <div className="flex items-center gap-1.5">
+        <select defaultValue="" onChange={(e) => { const id = Number(e.target.value); if (id) { onPin(orderNo, id); e.target.value = ''; } }}
+          className="h-7 min-w-0 flex-1 rounded border border-divider bg-card px-1.5 text-xs">
+          <option value="" disabled>{t('inspector.moveTo')}</option>
+          {others.map((v) => <option key={v.id} value={v.id}>{v.ref}{v.vehicleClass ? ` · ${v.vehicleClass.replace(/_/g, ' ')}` : ''}</option>)}
+        </select>
+        <button type="button" onClick={() => onForbid(orderNo, currentVehicleId)} title={t('inspector.forbidHere', { ref: curRef })}
+          className="inline-flex items-center gap-1 rounded border border-warning/40 px-1.5 py-1 text-[11px] text-warning hover:bg-warning/10">
+          <Ban className="h-3 w-3" /> {t('inspector.forbidHere', { ref: curRef })}
+        </button>
+      </div>
+
+      {forbidden.length > 0 && (
+        <div className="text-[11px] text-muted-foreground">{t('inspector.forbiddenN', { refs: forbidden.map(refOf).join(', ') })}</div>
+      )}
+      <p className="text-[10px] text-muted-foreground">{t('inspector.overrideHint')}</p>
+    </div>
+  );
+}
+
+function VehicleSummary({ vehicle, plan, onSelectTrip }: { vehicle: Vehicle; plan: Plan; onSelectTrip: (i: number) => void }) {
+  const t = useT();
+  const vcost = plan.cost?.perVehicle.find((c) => c.vehicleId === vehicle.id);
   return (
     <div className="space-y-2">
       <Field label={t('inspector.trips')} value={`${vehicle.tripCount}`} />
       <Field label={t('inspector.distance')} value={km(vehicle.distanceKm)} />
       <Field label={t('inspector.finish')} value={hhmm(vehicle.finishTimeSec)} />
       <Field label={t('inspector.capacity')} value={`${kg(vehicle.capacityKg)} · ${plt(vehicle.capacityPallets)}`} />
+      {vcost && plan.cost && <Field label={t('inspector.cost')} value={money(vcost.totalCost, plan.cost.currency, true)} />}
       <Separator />
       <div className="space-y-1">
         {vehicle.trips.map((trip) => (
@@ -133,10 +188,15 @@ function LoadTab({ vehicle }: { vehicle: Vehicle }) {
   );
 }
 
-export function Inspector({ plan, selection, onMarkUnavailable, solving }: {
-  plan: Plan; baseline: Plan; selection: Selection; onMarkUnavailable: (id: number) => void; solving: boolean;
+export function Inspector({ plan, scenario, selection, onMarkUnavailable, solving, onPin, onUnpin, onForbid, onClearOverrides }: {
+  plan: Plan; baseline: Plan; scenario: Scenario; selection: Selection; onMarkUnavailable: (id: number) => void; solving: boolean;
+  onPin: (orderNo: string, vehicleId: number) => void;
+  onUnpin: (orderNo: string) => void;
+  onForbid: (orderNo: string, vehicleId: number) => void;
+  onClearOverrides: () => void;
 }) {
   const t = useT();
+  const overrideCount = scenario.pins.length + scenario.forbids.length;
   // Unassigned order context.
   if (selection?.kind === 'unassigned') {
     const u = plan.unassigned.find((x) => x.orderNo === selection.orderNo);
@@ -171,6 +231,7 @@ export function Inspector({ plan, selection, onMarkUnavailable, solving }: {
             <span className="h-3 w-3 rounded-sm" style={{ backgroundColor: vehicle.color }} />
             <span className="font-semibold">{vehicle.ref}</span>
             {vehicle.vehicleClass && <Badge variant="outline">{vehicle.vehicleClass.replace(/_/g, ' ')}</Badge>}
+            {vehicle.isSubcontractor && <Badge variant="warning">{t('inspector.subcontractor')}</Badge>}
             {stop ? <span className="tnum ml-auto text-xs text-muted-foreground">{t('inspector.stopN', { n: stop.seq })}</span>
               : trip ? <span className="tnum ml-auto text-xs text-muted-foreground">{t('inspector.tripN', { n: trip.index + 1 })}</span> : null}
           </div>
@@ -184,9 +245,19 @@ export function Inspector({ plan, selection, onMarkUnavailable, solving }: {
             <TabsContent value="details" className="mt-0 space-y-3">
               {stop ? <StopDetail stop={stop} />
                 : trip ? <TripDetail trip={trip} onSelectStop={() => { /* handled by timeline/map */ }} />
-                  : <VehicleSummary vehicle={vehicle} onSelectTrip={() => { /* handled by fleet */ }} />}
+                  : <VehicleSummary vehicle={vehicle} plan={plan} onSelectTrip={() => { /* handled by fleet */ }} />}
+              {stop && (
+                <AssignmentSection plan={plan} scenario={scenario} orderNo={stop.orderNo} currentVehicleId={vehicle.id}
+                  onPin={onPin} onUnpin={onUnpin} onForbid={onForbid} />
+              )}
               <Separator />
               <ValidationRow plan={plan} vehicle={vehicle} />
+              {overrideCount > 0 && (
+                <button type="button" onClick={onClearOverrides}
+                  className="flex w-full items-center justify-center gap-1.5 rounded border border-divider px-2 py-1 text-[11px] text-muted-foreground hover:bg-accent">
+                  <X className="h-3 w-3" /> {t('inspector.clearOverrides')} ({overrideCount})
+                </button>
+              )}
               <button type="button" disabled={solving} onClick={() => onMarkUnavailable(vehicle.id)}
                 className="flex w-full items-center justify-center gap-1.5 rounded border border-warning/40 px-2 py-1.5 text-xs font-medium text-warning hover:bg-warning/10 disabled:opacity-40">
                 <Ban className="h-3.5 w-3.5" /> {t('inspector.markUnavailable', { ref: vehicle.ref })}

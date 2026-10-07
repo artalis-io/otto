@@ -1,9 +1,26 @@
 # OTTO Dispatch
 
 A polished dispatch-planning workspace over the Gyermelyi dataset: load a
-planning day, optimize deliveries with **Surge**, inspect vehicle trips, replan
-after making a vehicle unavailable, and compare plans — on a **Carta** basemap
-with **Velo** road geometry. One desktop workspace; precision-industrial styling.
+planning day, optimize deliveries with **Surge**, inspect vehicle trips, apply
+manual overrides, replan, and compare plans — on a **Carta** basemap with
+**Velo** road geometry. One desktop workspace; precision-industrial styling.
+
+Dispatcher workflow features:
+
+- **Manual overrides (human-in-the-loop):** pin an order to a vehicle, move it
+  to another, or forbid a vehicle for it; the solver respects these on the next
+  replan (Surge `allowed_vehicles` / `forbidden_vehicles`). Overrides accumulate
+  on an editable scenario copy; the baseline is never mutated.
+- **Cost in forint:** every plan carries an estimated operating cost under a
+  carrier tariff (per-km + fixed per used vehicle, subcontractor surcharge),
+  shown as a KPI and in the before/after comparison. Uses a real rate card from
+  `${GYERMELYI_ROOT}/rates/tariff.json` when present, else an illustrative demo
+  tariff (clearly labelled). Nothing confidential is committed.
+- **Solve controls:** choose the objective (fewest vehicles vs least distance)
+  and the time budget; cancel a running solve; a solve survives a page reload
+  (the job runs server-side and the UI reconnects to it).
+- **Operational exports:** printable per-vehicle driver route sheets (stops,
+  ETAs, windows, loads, nav links), a flat stops CSV, and the plan JSON.
 
 This is a complete dispatch-planning slice. It reuses OTTO's existing engines
 (optimization stays in C/Surge, geometry in C/Velo, tiles in C/Carta) behind a
@@ -85,13 +102,15 @@ cd dispatch/server && npm start
 | `SAGE_ORIGIN` | `127.0.0.1:8084` | Optional LLM narration (Spark). |
 | `DISPATCH_SOLVE_SECONDS` | 240 | Default solve budget. |
 | `DISPATCH_ANONYMIZE` | 0 | `1` pseudonymizes customer names (cities/coords kept) for shippable screenshots. |
+| `rates/tariff.json` | (demo) | Optional real carrier tariff under `GYERMELYI_ROOT` (uncommitted). Absent → an illustrative demo tariff drives the cost KPI, labelled as such. |
 | `VITE_API_ORIGIN` | `localhost:8091` | Frontend → backend origin (dev proxy). |
 | `VITE_SOLVE_SECONDS` | 60 | UI-triggered solve budget. |
 
 ## Tests & screenshots
 
 - Backend unit tests: `cd dispatch/server && npm test` (result mapping,
-  comparison, scenario edits + stale-job association).
+  comparison incl. cost, scenario edits + stale-job association, override
+  application, cost tariff, CSV/route-sheet export).
 - Screenshots (real browser via Playwright, cached Chromium):
   `cd dispatch/web && PW_CHROMIUM=… node scripts/shot.mjs` (and `shot-replan`,
   `shot-import`, `shot-stage4`). Committed screenshots are captured with
@@ -105,4 +124,6 @@ cd dispatch/server && npm start
 - The saved per-day baselines are authoritative real Surge results; a clean
   day-1 117/0 solve needs the full ~240s budget (shorter budgets report their
   honest LIMIT status and may leave orders unassigned).
-- Defers billing, carrier management, driver apps, POD, ERP sync.
+- Cost is an **estimate** under a tariff (demo tariff unless a real rate card is
+  provided); it is not invoicing. Carrier management, driver apps, POD and ERP
+  sync are out of scope.

@@ -6,11 +6,13 @@ import { config } from './config.js';
 import { DAYS, loadDay, loadEnrichment, loadVehicleInfo } from './data/gyermelyi.js';
 import { mapSolutionToPlan } from './plan/mapper.js';
 import { fillPlanGeometry, veloReachable } from './geometry/velo.js';
-import { store } from './store.js';
-import { startSolve, cancelJob } from './solve.js';
+import { store, type ScenarioEdit } from './store.js';
+import { startSolve, cancelJob, type Objective } from './solve.js';
 import { comparePlans } from './plan/compare.js';
 import { importSummary, rawSample, canonicalSample } from './data/import.js';
 import { sageReachable, narratePlan, narrateComparison, type Lang } from './sage.js';
+import { loadTariff } from './cost.js';
+import { planToCsv, planToRouteSheetHtml } from './export.js';
 import type { Plan } from './types.js';
 
 const app = Fastify({ logger: { level: 'info' }, bodyLimit: 4 * 1024 * 1024 });
@@ -54,7 +56,13 @@ void (async () => {
 
 /* ---- Meta ---- */
 app.get('/api/health', async () => ({ status: 'ok', service: 'dispatch-api', days: DAYS.map((d) => d.id) }));
-app.get('/api/config', async () => ({ carta: config.cartaOrigin, velo: config.veloOrigin, solveTimeSeconds: config.solveTimeSeconds }));
+app.get('/api/config', async () => {
+  const tariff = loadTariff();
+  return {
+    carta: config.cartaOrigin, velo: config.veloOrigin, solveTimeSeconds: config.solveTimeSeconds,
+    cost: { available: true, currency: tariff.currency, source: tariff.source },
+  };
+});
 
 app.get('/api/days', async () => DAYS.map((d) => {
   const plan = store.getPlan(`${d.id}-baseline`);
@@ -84,6 +92,24 @@ app.post<{ Body: { day?: string; from?: string; removeVehicleId?: number; label?
   return reply.code(400).send({ error: 'day or from required' });
 });
 
+/* Apply a manual dispatcher edit (pin/forbid/remove-vehicle...). Forks an
+ * editable copy from an immutable base so the baseline is never mutated; edits
+ * an existing copy in place. Returns the (possibly new) scenario. */
+app.post<{ Params: { id: string }; Body: { edit?: ScenarioEdit; label?: string } }>('/api/scenarios/:id/edit', async (req, reply) => {
+  const cur = store.getScenario(req.params.id);
+  if (!cur) return reply.code(404).send({ error: 'scenario not found' });
+  const edit = req.body?.edit;
+  if (!edit || typeof edit.op !== 'string') return reply.code(400).send({ error: 'edit op required' });
+  try {
+    const forked = cur.kind === 'base';
+    const target = store.forkForEdit(cur, req.body?.label);
+    const updated = store.editScenario(target.id, edit);
+    return reply.code(forked ? 201 : 200).send(updated);
+  } catch (e) {
+    return reply.code(400).send({ error: (e as Error).message });
+  }
+});
+
 app.get<{ Params: { id: string } }>('/api/scenarios/:id', async (req, reply) => {
   const s = store.getScenario(req.params.id);
   if (!s) return reply.code(404).send({ error: 'scenario not found' });
@@ -107,13 +133,14 @@ app.get<{ Params: { id: string } }>('/api/scenarios/:id/plans', async (req, repl
 });
 
 /* ---- Solve jobs ---- */
-app.post<{ Params: { id: string }; Body: { budgetSec?: number } }>('/api/scenarios/:id/solve', async (req, reply) => {
+app.post<{ Params: { id: string }; Body: { budgetSec?: number; objective?: string } }>('/api/scenarios/:id/solve', async (req, reply) => {
   const scenario = store.getScenario(req.params.id);
   if (!scenario) return reply.code(404).send({ error: 'scenario not found' });
   const budget = Math.max(5, Math.min(600, req.body?.budgetSec ?? config.solveTimeSeconds));
+  const objective: Objective = req.body?.objective === 'distance' ? 'distance' : 'vehicles';
   const job = store.createJob(scenario.id, scenario.revision);
-  startSolve(job, scenario, budget); // off the event loop (child process)
-  return reply.code(202).send({ jobId: job.id, scenarioId: scenario.id, scenarioRevision: scenario.revision, budgetSec: budget });
+  startSolve(job, scenario, budget, objective); // off the event loop (child process)
+  return reply.code(202).send({ jobId: job.id, scenarioId: scenario.id, scenarioRevision: scenario.revision, budgetSec: budget, objective });
 });
 
 app.get<{ Params: { id: string } }>('/api/jobs/:id', async (req, reply) => {
@@ -157,6 +184,24 @@ app.get<{ Params: { id: string } }>('/api/plans/:id', async (req, reply) => {
   if (!plan) return reply.code(404).send({ error: 'plan not found' });
   try { await fillPlanGeometry(plan); } catch (e) { app.log.warn(`geometry fill: ${(e as Error).message}`); }
   return plan;
+});
+
+/* ---- Operational exports (stops CSV, printable route sheets) ---- */
+function dayLabelForPlan(plan: Plan): string {
+  return DAYS.find((d) => d.isoDate === plan.day)?.label ?? plan.day;
+}
+app.get<{ Params: { id: string } }>('/api/plans/:id/export.csv', async (req, reply) => {
+  const plan = store.getPlan(req.params.id);
+  if (!plan) return reply.code(404).send({ error: 'plan not found' });
+  reply.header('content-type', 'text/csv; charset=utf-8');
+  reply.header('content-disposition', `attachment; filename="otto-plan-${plan.day}-${plan.id}.csv"`);
+  return reply.send(planToCsv(plan));
+});
+app.get<{ Params: { id: string } }>('/api/plans/:id/routesheet.html', async (req, reply) => {
+  const plan = store.getPlan(req.params.id);
+  if (!plan) return reply.code(404).send({ error: 'plan not found' });
+  reply.header('content-type', 'text/html; charset=utf-8');
+  return reply.send(planToRouteSheetHtml(plan, dayLabelForPlan(plan)));
 });
 
 app.get<{ Querystring: { base?: string; revised?: string } }>('/api/compare', async (req, reply) => {

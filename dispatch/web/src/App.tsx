@@ -13,7 +13,7 @@ import { ImportDialog } from '@/components/ImportDialog';
 import { HistoryDialog } from '@/components/HistoryDialog';
 import { api, pollJob } from '@/lib/api';
 import { useT } from '@/i18n';
-import type { DaySummary, Job, Plan, Scenario, Selection } from '@/types';
+import type { DaySummary, Job, Objective, Plan, Scenario, ScenarioEdit, Selection } from '@/types';
 
 /* The live solve budget for UI-triggered solves. The saved baseline used ~240s
  * to reach day-1 117/0; 60s gives a believable, genuinely-elapsed optimize/replan
@@ -22,6 +22,17 @@ import type { DaySummary, Job, Plan, Scenario, Selection } from '@/types';
 const SOLVE_BUDGET_SEC = Number(import.meta.env.VITE_SOLVE_SECONDS ?? 60);
 
 export interface JobView { id: string; status: Job['status']; elapsedSec: number; scenarioId: string; error: string | null }
+
+/* A running solve is persisted so a page reload can reconnect to it (the solve
+ * runs server-side, independent of the tab). */
+const ACTIVE_JOB_KEY = 'otto.activeJob';
+interface ActiveJobRef { jobId: string; scenarioId: string; dayId: string }
+function persistActiveJob(v: ActiveJobRef | null): void {
+  try { v ? localStorage.setItem(ACTIVE_JOB_KEY, JSON.stringify(v)) : localStorage.removeItem(ACTIVE_JOB_KEY); } catch { /* ignore */ }
+}
+function readActiveJob(): ActiveJobRef | null {
+  try { const s = localStorage.getItem(ACTIVE_JOB_KEY); return s ? (JSON.parse(s) as ActiveJobRef) : null; } catch { return null; }
+}
 
 export default function App() {
   const t = useT();
@@ -38,17 +49,20 @@ export default function App() {
   const [historyOpen, setHistoryOpen] = useState(false);
   const [leftOpen, setLeftOpen] = useState(true);
   const [rightOpen, setRightOpen] = useState(true);
+  const [objective, setObjective] = useState<Objective>('vehicles');
+  const [budgetSec, setBudgetSec] = useState<number>(SOLVE_BUDGET_SEC);
 
   const activeJobId = useRef<string | null>(null);
   const pollAbort = useRef<AbortController | null>(null);
 
-  // Initial load: days + day-1 baseline.
+  // Initial load: days, then reconnect to a running solve if one survives a
+  // reload, else load the day-1 baseline.
   useEffect(() => {
     (async () => {
       try {
         const ds = await api.days();
         setDays(ds);
-        await loadDay(ds.find((d) => d.id === 'day1') ?? ds[0]!);
+        if (!(await tryResume(ds))) await loadDay(ds.find((d) => d.id === 'day1') ?? ds[0]!);
       } catch (e) { setError(e instanceof Error ? e.message : String(e)); }
     })();
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -57,31 +71,29 @@ export default function App() {
   const loadDay = useCallback(async (d: DaySummary) => {
     pollAbort.current?.abort();
     activeJobId.current = null;
+    persistActiveJob(null);
     setJob(null);
     setSelection(null);
     setDayId(d.id);
     const base = await api.plan(d.baselinePlanId);
     setBaseline(base);
     setPlan(base);
-    setScenario({ id: d.baseScenarioId, day: d.id, kind: 'base', parentId: null, revision: 0, label: d.label, removedVehicleIds: [], createdAt: '' });
+    setScenario({ id: d.baseScenarioId, day: d.id, kind: 'base', parentId: null, revision: 0, label: d.label, removedVehicleIds: [], pins: [], forbids: [], createdAt: '' });
   }, []);
 
-  // Run a live solve of a scenario; apply + return the plan only if still current.
-  const runSolve = useCallback(async (scenarioId: string): Promise<Plan | null> => {
-    pollAbort.current?.abort();
-    const ctrl = new AbortController();
-    pollAbort.current = ctrl;
-    setError(null);
+  // Follow a running job (already created) to its terminal state; apply + return
+  // the plan only if still current. Shared by fresh solves and reload-resume.
+  const followJob = useCallback(async (jobId: string, scenarioId: string, dayId: string, ctrl: AbortController): Promise<Plan | null> => {
+    activeJobId.current = jobId;
+    persistActiveJob({ jobId, scenarioId, dayId });
+    setJob({ id: jobId, status: 'running', elapsedSec: 0, scenarioId, error: null });
     try {
-      const { jobId } = await api.solve(scenarioId, SOLVE_BUDGET_SEC);
-      activeJobId.current = jobId;
-      setJob({ id: jobId, status: 'running', elapsedSec: 0, scenarioId, error: null });
       const final = await pollJob(jobId, (j) => {
         if (activeJobId.current !== jobId) return;
         setJob({ id: j.id, status: j.status, elapsedSec: j.elapsedSec, scenarioId, error: j.error });
       }, { signal: ctrl.signal });
-      // Stale-job guard: ignore if a newer job/day superseded this one.
-      if (activeJobId.current !== jobId) return null;
+      if (activeJobId.current !== jobId) return null; // superseded
+      persistActiveJob(null);
       if (final.status === 'completed' && final.planId) {
         const revised = await api.plan(final.planId);
         setPlan(revised);
@@ -91,11 +103,77 @@ export default function App() {
       return null;
     } catch (e) {
       if ((e as Error).name === 'AbortError') return null;
+      persistActiveJob(null);
       setError(e instanceof Error ? e.message : String(e));
       setJob((j) => (j ? { ...j, status: 'failed', error: String(e) } : j));
       return null;
     }
   }, []);
+
+  // Run a live solve of a scenario with the current objective/budget.
+  const runSolve = useCallback(async (scenarioId: string, dayIdForJob: string): Promise<Plan | null> => {
+    pollAbort.current?.abort();
+    const ctrl = new AbortController();
+    pollAbort.current = ctrl;
+    setError(null);
+    try {
+      const { jobId } = await api.solve(scenarioId, budgetSec, objective);
+      return await followJob(jobId, scenarioId, dayIdForJob, ctrl);
+    } catch (e) {
+      if ((e as Error).name === 'AbortError') return null;
+      setError(e instanceof Error ? e.message : String(e));
+      return null;
+    }
+  }, [budgetSec, objective, followJob]);
+
+  // Cancel the active solve (server-side) and drop back to the current plan.
+  const cancelSolve = useCallback(async () => {
+    const id = activeJobId.current;
+    if (!id) return;
+    activeJobId.current = null;
+    pollAbort.current?.abort();
+    persistActiveJob(null);
+    try { await api.cancelJob(id); } catch { /* best effort */ }
+    setJob(null);
+  }, []);
+
+  // Reconnect to a solve persisted before a reload. Returns true if it set up state.
+  const tryResume = useCallback(async (ds: DaySummary[]): Promise<boolean> => {
+    const ref = readActiveJob();
+    if (!ref) return false;
+    try {
+      const j = await api.job(ref.jobId);
+      if (j.status === 'failed' || j.status === 'cancelled') { persistActiveJob(null); return false; }
+      const sc = await api.scenario(ref.scenarioId);
+      const d = ds.find((x) => x.id === sc.day) ?? ds.find((x) => x.id === ref.dayId);
+      if (!d) { persistActiveJob(null); return false; }
+      setDayId(d.id);
+      setBaseline(await api.plan(d.baselinePlanId));
+      setScenario(sc);
+      if (j.status === 'completed' && j.planId) {
+        persistActiveJob(null);
+        setPlan(await api.plan(j.planId));
+        return true;
+      }
+      // still running: show its scenario's last plan context and resume polling
+      setPlan(await api.plan(d.baselinePlanId));
+      const ctrl = new AbortController();
+      pollAbort.current = ctrl;
+      void followJob(ref.jobId, ref.scenarioId, d.id, ctrl);
+      return true;
+    } catch { persistActiveJob(null); return false; }
+  }, [followJob]);
+
+  // Apply a manual override (forks an editable copy from a base scenario). Does
+  // not solve; overrides take effect on the next Replan.
+  const applyEdit = useCallback(async (edit: ScenarioEdit) => {
+    if (!scenario) return;
+    try {
+      const label = scenario.kind === 'base' ? t('scn.edited', { day: scenario.label }) : undefined;
+      const updated = await api.editScenario(scenario.id, edit, label);
+      setScenario(updated);
+    } catch (e) { setError(e instanceof Error ? e.message : String(e)); }
+  }, [scenario, t]);
 
   // Make a vehicle unavailable: create a scenario copy and solve it (replan).
   const replanWithout = useCallback(async (vehicleId: number) => {
@@ -105,7 +183,7 @@ export default function App() {
     const copy = await api.createCopy(parentId, vehicleId, t('scn.unavailable', { ref }));
     setScenario(copy);
     setSelection(null);
-    const revised = await runSolve(copy.id);
+    const revised = await runSolve(copy.id, copy.day);
     if (revised) setCompareOpen(true);
   }, [scenario, plan, runSolve, t]);
 
@@ -118,6 +196,7 @@ export default function App() {
   const reopenPlan = useCallback(async (planId: string) => {
     pollAbort.current?.abort();
     activeJobId.current = null;
+    persistActiveJob(null);
     setJob(null); setSelection(null); setError(null);
     try {
       const p = await api.plan(planId);
@@ -134,6 +213,9 @@ export default function App() {
 
   const isReplan = scenario.kind === 'copy';
   const solving = job?.status === 'running' || job?.status === 'pending';
+  const overrideCount = scenario.pins.length + scenario.forbids.length;
+  // The plan no longer reflects the scenario once it has been edited since solve.
+  const dirty = scenario.revision !== plan.scenarioRevision;
 
   return (
     <TooltipProvider delayDuration={200}>
@@ -141,7 +223,11 @@ export default function App() {
         <TopBar
           days={days} dayId={dayId} onDayChange={(id) => { const d = days.find((x) => x.id === id); if (d) void loadDay(d); }}
           scenario={scenario} plan={plan} job={job} solving={!!solving}
-          onOptimize={() => void runSolve(scenario.id)}
+          objective={objective} onObjectiveChange={setObjective}
+          budgetSec={budgetSec} onBudgetChange={setBudgetSec}
+          overrideCount={overrideCount} dirty={dirty}
+          onOptimize={() => void runSolve(scenario.id, dayId)}
+          onCancel={() => void cancelSolve()}
           onReset={resetToBaseline}
           showCompare={isReplan && plan.source === 'live'}
           onCompare={() => setCompareOpen(true)}
@@ -149,6 +235,13 @@ export default function App() {
           onOpenHistory={() => setHistoryOpen(true)}
         />
         <KpiStrip plan={plan} baseline={baseline} compare={isReplan} job={job} />
+
+        {dirty && overrideCount > 0 && !solving && (
+          <button type="button" onClick={() => void runSolve(scenario.id, dayId)}
+            className="flex shrink-0 items-center justify-center gap-2 border-b border-warning/40 bg-warning/10 px-4 py-1.5 text-xs font-medium text-warning hover:bg-warning/15">
+            {t('edits.pending', { n: overrideCount })}
+          </button>
+        )}
 
         <div className="flex min-h-0 flex-1">
           {leftOpen && (
@@ -176,7 +269,12 @@ export default function App() {
 
           {rightOpen && (
             <aside className="w-[340px] shrink-0 border-l border-divider">
-              <Inspector plan={plan} baseline={baseline} selection={selection} onMarkUnavailable={(id) => void replanWithout(id)} solving={!!solving} />
+              <Inspector plan={plan} baseline={baseline} scenario={scenario} selection={selection}
+                onMarkUnavailable={(id) => void replanWithout(id)} solving={!!solving}
+                onPin={(orderNo, vehicleId) => void applyEdit({ op: 'pin', orderNo, vehicleId })}
+                onUnpin={(orderNo) => void applyEdit({ op: 'unpin', orderNo })}
+                onForbid={(orderNo, vehicleId) => void applyEdit({ op: 'forbid', orderNo, vehicleId })}
+                onClearOverrides={() => void applyEdit({ op: 'clearOverrides' })} />
             </aside>
           )}
         </div>

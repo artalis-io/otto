@@ -26,6 +26,8 @@ export interface SurgeRequestDef {
   id: number;
   delivery_task_id: number;
   unassigned_penalty?: number;
+  allowed_vehicles?: number[];   // restrict this order to these vehicles (pin)
+  forbidden_vehicles?: number[]; // exclude these vehicles for this order
 }
 
 export interface SurgeTravel {
@@ -124,6 +126,7 @@ export interface PlanVehicle {
   id: number;
   ref: string;
   vehicleClass: string | null;
+  isSubcontractor: boolean;
   color: string;
   capacityKg: number;
   capacityPallets: number;
@@ -162,6 +165,27 @@ export interface PlanStats {
   solveElapsedSeconds: number | null;
 }
 
+/* Estimated operating cost of a plan under a carrier tariff. `source` is 'demo'
+ * for the illustrative in-repo tariff or 'external' when a real rate card is
+ * loaded from the (uncommitted) dataset dir. */
+export interface PlanVehicleCost {
+  vehicleId: number;
+  ref: string;
+  vehicleClass: string | null;
+  distanceKm: number;
+  fixedCost: number;
+  variableCost: number;
+  totalCost: number;
+}
+export interface PlanCost {
+  currency: string;          // ISO code, e.g. 'HUF'
+  source: 'demo' | 'external';
+  total: number;
+  fixed: number;
+  variable: number;
+  perVehicle: PlanVehicleCost[];
+}
+
 export interface Plan {
   id: string;
   scenarioId: string;
@@ -169,8 +193,10 @@ export interface Plan {
   day: string;
   createdAt: string;
   source: 'saved' | 'live';
+  objective: 'vehicles' | 'distance'; // solve objective used (fewest vehicles | least distance)
   provenance: PlanProvenance;
   stats: PlanStats;
+  cost: PlanCost | null;              // null when no tariff is available
   depot: { name: string; lon: number; lat: number };
   vehicles: PlanVehicle[];
   unassigned: PlanUnassigned[];

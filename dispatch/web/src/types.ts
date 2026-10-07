@@ -76,6 +76,7 @@ export interface Vehicle {
   id: number;
   ref: string;
   vehicleClass: string | null;
+  isSubcontractor: boolean;
   /** Assigned by the backend from a fixed distinct palette; stable within a plan. */
   color: string;
   capacityKg: number;
@@ -98,6 +99,26 @@ export interface UnassignedOrder {
   reason: string | null;
 }
 
+export interface PlanVehicleCost {
+  vehicleId: number;
+  ref: string;
+  vehicleClass: string | null;
+  distanceKm: number;
+  fixedCost: number;
+  variableCost: number;
+  totalCost: number;
+}
+export interface PlanCost {
+  currency: string;
+  source: 'demo' | 'external';
+  total: number;
+  fixed: number;
+  variable: number;
+  perVehicle: PlanVehicleCost[];
+}
+
+export type Objective = 'vehicles' | 'distance';
+
 export interface Plan {
   id: string;
   scenarioId: string;
@@ -105,8 +126,10 @@ export interface Plan {
   day: string;
   createdAt: string;
   source: PlanSource;
+  objective: Objective;
   provenance: PlanProvenance;
   stats: PlanStats;
+  cost: PlanCost | null;
   depot: Depot;
   vehicles: Vehicle[];
   unassigned: UnassignedOrder[];
@@ -123,6 +146,9 @@ export interface DaySummary {
   baselinePlanId: string;
 }
 
+export interface Pin { orderNo: string; vehicleId: number }
+export interface Forbid { orderNo: string; vehicleId: number }
+
 export interface Scenario {
   id: string;
   day: string;
@@ -131,8 +157,20 @@ export interface Scenario {
   revision: number;
   label: string;
   removedVehicleIds: number[];
+  pins: Pin[];
+  forbids: Forbid[];
   createdAt: string;
 }
+
+/* A single dispatcher edit; mirrors the backend ScenarioEdit union. */
+export type ScenarioEdit =
+  | { op: 'removeVehicle'; vehicleId: number }
+  | { op: 'restoreVehicle'; vehicleId: number }
+  | { op: 'pin'; orderNo: string; vehicleId: number }
+  | { op: 'unpin'; orderNo: string }
+  | { op: 'forbid'; orderNo: string; vehicleId: number }
+  | { op: 'unforbid'; orderNo: string; vehicleId: number }
+  | { op: 'clearOverrides' };
 
 export type JobStatus = 'pending' | 'running' | 'completed' | 'failed' | 'cancelled';
 export interface Job {
@@ -147,9 +185,9 @@ export interface Job {
 }
 
 export interface Comparison {
-  base: { planId: string; stats: PlanStats };
-  revised: { planId: string; stats: PlanStats };
-  deltas: { servedOrders: number; vehiclesUsed: number; trips: number; totalDistanceKm: number; unassigned: number };
+  base: { planId: string; stats: PlanStats; cost: PlanCost | null };
+  revised: { planId: string; stats: PlanStats; cost: PlanCost | null };
+  deltas: { servedOrders: number; vehiclesUsed: number; trips: number; totalDistanceKm: number; unassigned: number; costTotal: number | null };
   newlyUnassigned: { orderNo: string; customer: string | null; city: string | null; fromVehicleRef: string }[];
   nowServed: { orderNo: string; customer: string | null; city: string | null; toVehicleRef: string }[];
   movedOrders: { orderNo: string; customer: string | null; fromVehicleRef: string; toVehicleRef: string }[];

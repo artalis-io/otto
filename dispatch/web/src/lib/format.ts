@@ -22,6 +22,15 @@ export function pct(value: number): string {
   return `${Math.round(value * 100)}%`;
 }
 
+/** Money with a currency suffix. Large sums are shown compact (e.g. "1.44M Ft").
+ * HUF renders as "Ft" (the Hungarian convention) and never with decimals. */
+export function money(value: number, currency: string, compact = false): string {
+  const unit = currency === 'HUF' ? 'Ft' : currency;
+  if (compact && Math.abs(value) >= 1_000_000) return `${(value / 1_000_000).toFixed(2)}M ${unit}`;
+  if (compact && Math.abs(value) >= 10_000) return `${Math.round(value / 1000)}k ${unit}`;
+  return `${Math.round(value).toLocaleString('en-US')} ${unit}`;
+}
+
 /** Fraction in [0,1], clamped, for capacity bars. */
 export function ratio(used: number, cap: number): number {
   if (cap <= 0) return 0;

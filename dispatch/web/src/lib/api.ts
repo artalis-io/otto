@@ -1,4 +1,4 @@
-import type { Comparison, DaySummary, Job, Plan, Scenario } from '@/types';
+import type { Comparison, DaySummary, Job, Objective, Plan, Scenario, ScenarioEdit } from '@/types';
 
 /* Same-origin API client. In dev, Vite proxies /api and /tiles to the backend
  * (VITE_API_ORIGIN); in production the backend serves the SPA and these paths. */
@@ -23,13 +23,22 @@ export const api = {
   plan: (id: string) => jget<Plan>(`/api/plans/${id}`),
   scenario: (id: string) => jget<Scenario & { ordersInScope: number; vehicleCount: number; isoDate: string }>(`/api/scenarios/${id}`),
 
+  config: () => jget<{ carta: string; velo: string; solveTimeSeconds: number; cost: { available: boolean; currency: string; source: 'demo' | 'external' } }>('/api/config'),
+
   createBaseScenario: (day: string) => jsend<Scenario>('/api/scenarios', 'POST', { day }),
   createCopy: (from: string, removeVehicleId: number, label?: string) =>
     jsend<Scenario>('/api/scenarios', 'POST', { from, removeVehicleId, label }),
 
-  solve: (scenarioId: string, budgetSec?: number) =>
-    jsend<{ jobId: string; scenarioId: string; scenarioRevision: number; budgetSec: number }>(
-      `/api/scenarios/${scenarioId}/solve`, 'POST', budgetSec ? { budgetSec } : {}),
+  /** Apply a manual override; the backend forks a copy from a base scenario. */
+  editScenario: (id: string, edit: ScenarioEdit, label?: string) =>
+    jsend<Scenario>(`/api/scenarios/${id}/edit`, 'POST', { edit, label }),
+
+  solve: (scenarioId: string, budgetSec?: number, objective?: Objective) =>
+    jsend<{ jobId: string; scenarioId: string; scenarioRevision: number; budgetSec: number; objective: Objective }>(
+      `/api/scenarios/${scenarioId}/solve`, 'POST', { ...(budgetSec ? { budgetSec } : {}), ...(objective ? { objective } : {}) }),
+
+  exportCsvUrl: (planId: string) => `/api/plans/${planId}/export.csv`,
+  routeSheetUrl: (planId: string) => `/api/plans/${planId}/routesheet.html`,
 
   plans: (day?: string) => jget<PlanSummary[]>(`/api/plans${day ? `?day=${day}` : ''}`),
 

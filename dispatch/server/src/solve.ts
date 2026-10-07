@@ -14,26 +14,64 @@ const running = new Map<string, ChildProcess>();
 
 export interface BuiltRequest { request: SurgeRequest; day: ReturnType<typeof loadDay> }
 
+export type Objective = 'vehicles' | 'distance';
+
 /** Build the exact Surge request for a scenario: day-scoped requests, edited
- * fleet, demo solve budget. The base day's vehicles are already day-specific. */
-export function buildRequest(scenario: Scenario, budgetSec: number): BuiltRequest {
+ * fleet, manual pins/forbids, solve budget and objective. The base day's
+ * vehicles are already day-specific.
+ *
+ * Objective maps to Surge's lexicographic_objective: 'vehicles' (true) serves
+ * then minimizes fleet size then distance; 'distance' (false) minimizes the
+ * single cost objective (fixed + distance), i.e. the least-distance plan. */
+export function buildRequest(scenario: Scenario, budgetSec: number, objective: Objective = 'vehicles'): BuiltRequest {
   const day = loadDay(scenario.day);
   const request = structuredClone(day.request) as SurgeRequest;
   request.requests = request.requests.filter((r) => day.scopeTaskIds.has(r.delivery_task_id));
+
+  const available = new Set(request.vehicles.map((v) => v.id));
   if (scenario.removedVehicleIds.length) {
     const drop = new Set(scenario.removedVehicleIds);
     request.vehicles = request.vehicles.filter((v) => !drop.has(v.id));
+    for (const id of drop) available.delete(id);
   }
+
+  applyOverrides(request, scenario, available);
+
   request.config = {
     ...request.config,
     max_time_seconds: budgetSec,
     seed: 42,
-    lexicographic_objective: true,
+    lexicographic_objective: objective !== 'distance',
     hard_capacity: true,
     hard_time_windows: true,
     hard_max_duration: true,
   };
   return { request, day };
+}
+
+/** Apply a scenario's manual pins/forbids onto a request (mutates request). Orders
+ * are keyed by order_no (task.ref); pins set allowed_vehicles=[v] and supersede
+ * forbids on the same order; forbids append to forbidden_vehicles. Overrides
+ * naming a vehicle not in `available` (e.g. one that was removed) are skipped. */
+export function applyOverrides(request: SurgeRequest, scenario: Scenario, available?: Set<number>): void {
+  if (!scenario.pins.length && !scenario.forbids.length) return;
+  const avail = available ?? new Set(request.vehicles.map((v) => v.id));
+  const taskRefById = new Map(request.tasks.map((t) => [t.id, t.ref]));
+  const reqByOrderNo = new Map<string, SurgeRequest['requests'][number]>();
+  for (const r of request.requests) {
+    const ref = taskRefById.get(r.delivery_task_id);
+    if (ref != null) reqByOrderNo.set(String(ref), r);
+  }
+  for (const p of scenario.pins) {
+    const r = reqByOrderNo.get(p.orderNo);
+    if (r && avail.has(p.vehicleId)) r.allowed_vehicles = [p.vehicleId];
+  }
+  for (const f of scenario.forbids) {
+    const r = reqByOrderNo.get(f.orderNo);
+    if (!r || !avail.has(f.vehicleId)) continue;
+    if (r.allowed_vehicles) continue; // a pin on this order supersedes forbids
+    r.forbidden_vehicles = [...(r.forbidden_vehicles ?? []), f.vehicleId];
+  }
 }
 
 function dayLabel(dayId: string): string {
@@ -42,8 +80,8 @@ function dayLabel(dayId: string): string {
 
 /** Spawn surge_solve for a job (off the event loop), then map + geometry-fill +
  * store the resulting plan. Updates job status throughout. */
-export function startSolve(job: Job, scenario: Scenario, budgetSec: number): void {
-  const built = buildRequest(scenario, budgetSec);
+export function startSolve(job: Job, scenario: Scenario, budgetSec: number, objective: Objective = 'vehicles'): void {
+  const built = buildRequest(scenario, budgetSec, objective);
   const jobsDir = resolve(config.dataDir, 'jobs');
   mkdirSync(jobsDir, { recursive: true });
   const reqFile = resolve(jobsDir, `${job.id}_request.json`);

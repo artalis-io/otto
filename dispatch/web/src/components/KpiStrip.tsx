@@ -1,4 +1,4 @@
-import { km, seconds } from '@/lib/format';
+import { km, money, seconds } from '@/lib/format';
 import { useT } from '@/i18n';
 import type { Plan } from '@/types';
 import type { JobView } from '@/App';
@@ -31,6 +31,7 @@ export function KpiStrip({ plan, baseline, compare, job }: { plan: Plan; baselin
   const s = plan.stats;
   const b = baseline.stats;
   const solveT = s.solveElapsedSeconds ?? (job?.status === 'running' ? job.elapsedSec : null);
+  const costDelta = compare && plan.cost && baseline.cost ? plan.cost.total - baseline.cost.total : null;
 
   return (
     <div className="flex shrink-0 items-stretch overflow-x-auto border-b border-divider bg-card [&>*+*]:border-l [&>*+*]:border-divider">
@@ -51,6 +52,18 @@ export function KpiStrip({ plan, baseline, compare, job }: { plan: Plan; baselin
         value={km(s.totalDistanceKm)}
         delta={compare ? <Delta value={Math.round(s.totalDistanceKm - b.totalDistanceKm)} goodWhenNegative unit=" km" /> : undefined}
       />
+      {plan.cost && (
+        <Kpi
+          label={t('kpi.cost')}
+          value={money(plan.cost.total, plan.cost.currency, true)}
+          sub={costDelta == null ? t(plan.cost.source === 'demo' ? 'kpi.demoTariff' : 'kpi.extTariff') : undefined}
+          delta={costDelta != null ? (
+            <span className={`tnum text-[11px] font-medium ${costDelta <= 0 ? 'text-primary' : 'text-warning'}`}>
+              {costDelta > 0 ? '+' : costDelta < 0 ? '−' : '±'}{money(Math.abs(costDelta), plan.cost.currency, true)} {t('kpi.vsBaseline')}
+            </span>
+          ) : undefined}
+        />
+      )}
       <Kpi label={t('kpi.deliveryStops')} value={`${s.deliveryStops}`} />
       <Kpi
         label={t('kpi.solveTime')}
