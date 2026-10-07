@@ -27,6 +27,11 @@ architectural lifts), phased.
 
 ## Part A: Hardening punch-list (in-scope now)
 
+> Status: **all of A1-A15 shipped** on `dispatch/gyermelyi-workspace` as six
+> focused commits (durability; admission control + backpressure; security quick
+> wins; config validation; frontend robustness; CI gate). A13 needed no change
+> (bounded by nx_xlsx's existing 50 MB/entry cap).
+
 Ordered by value. Each is achievable without introducing a database, auth
 provider, or multi-node infra, so each can ship as a focused PR against the
 current design. Severity reflects a real deployment, not the demo.

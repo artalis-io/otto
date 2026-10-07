@@ -1,0 +1,51 @@
+name: Dispatch CI
+
+# Typecheck + unit-test the Dispatch TS app (server + web) on any PR or push that
+# touches it. The C engines and the confidential Gyermelyi dataset are NOT needed:
+# typechecking is fully self-contained, and test:ci runs only the data-independent
+# unit suites. (mapper/solve/admit tests load the external dataset at import time,
+# so they run locally where it is present; the Playwright UI suite needs a live
+# stack and is likewise a local/manual gate.)
+
+on:
+  push:
+    branches: [main, master, develop]
+    paths: ['dispatch/**', '.github/workflows/dispatch-ci.yml']
+  pull_request:
+    paths: ['dispatch/**', '.github/workflows/dispatch-ci.yml']
+  workflow_dispatch:
+
+jobs:
+  server:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: dispatch/server
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+          cache-dependency-path: dispatch/server/package-lock.json
+      - run: npm ci
+      - name: Typecheck
+        run: npm run typecheck
+      - name: Unit tests (data-independent)
+        run: npm run test:ci
+
+  web:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: dispatch/web
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+          cache-dependency-path: dispatch/web/package-lock.json
+      - run: npm ci
+      - name: Typecheck
+        run: npx tsc --noEmit
