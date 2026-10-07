@@ -19,11 +19,23 @@ import { config } from './config.js';
 export interface Tariff {
   currency: string;
   source: 'demo' | 'external';
+  /* 'per_vehicle': fixed per used vehicle + per-km (the demo model).
+   * 'per_trip': base per trip + per round-trip km + per extra drop (the real
+   * carrier rate card, which prices each truck trip to a destination zone). */
+  model: 'per_vehicle' | 'per_trip';
+  // per_vehicle model
   perKmDefault: number;
   fixedPerVehicle: number;
   perKmByClass: Record<string, number>;   // keyed by UPPERCASED class token
   fixedByClass: Record<string, number>;
+  // per_trip model (round-trip km basis)
+  perTripBase: number;
+  perKm: number;
+  perDrop: number;
+  includedDrops: number;
+  // multipliers
   subcontractorMultiplier: number;
+  ownFleetMultiplier: number;
 }
 
 /* Illustrative tariff (Hungarian forint). NOT a real rate card - replace by
@@ -33,11 +45,17 @@ export interface Tariff {
 const DEMO_TARIFF: Tariff = {
   currency: 'HUF',
   source: 'demo',
+  model: 'per_vehicle',
   perKmDefault: 260,
   fixedPerVehicle: 38000,
   perKmByClass: { SOLO: 210, RIGID: 230, SEMI: 300, TRAILER: 300, PONYVA: 260 },
   fixedByClass: { SOLO: 28000, SEMI: 52000, TRAILER: 52000 },
-  subcontractorMultiplier: 1.12,
+  perTripBase: 49000,
+  perKm: 337,
+  perDrop: 7200,
+  includedDrops: 2,
+  subcontractorMultiplier: 1.0,
+  ownFleetMultiplier: 1.0,
 };
 
 let cached: Tariff | null = null;
@@ -52,11 +70,17 @@ export function loadTariff(): Tariff {
       cached = {
         currency: ext.currency ?? 'HUF',
         source: 'external',
+        model: ext.model === 'per_trip' ? 'per_trip' : 'per_vehicle',
         perKmDefault: ext.perKmDefault ?? DEMO_TARIFF.perKmDefault,
         fixedPerVehicle: ext.fixedPerVehicle ?? DEMO_TARIFF.fixedPerVehicle,
         perKmByClass: upperKeys(ext.perKmByClass ?? {}),
         fixedByClass: upperKeys(ext.fixedByClass ?? {}),
+        perTripBase: ext.perTripBase ?? DEMO_TARIFF.perTripBase,
+        perKm: ext.perKm ?? DEMO_TARIFF.perKm,
+        perDrop: ext.perDrop ?? DEMO_TARIFF.perDrop,
+        includedDrops: ext.includedDrops ?? DEMO_TARIFF.includedDrops,
         subcontractorMultiplier: ext.subcontractorMultiplier ?? 1,
+        ownFleetMultiplier: ext.ownFleetMultiplier ?? 1,
       };
       return cached;
     } catch { /* fall through to demo */ }
@@ -80,8 +104,10 @@ function rateForClass(table: Record<string, number>, vehicleClass: string | null
 }
 
 export interface VehicleCost { fixed: number; variable: number; total: number }
+export interface TripShape { distanceKm: number; drops: number } // drops = delivery stops on the trip
 
-/** Cost of one used vehicle given its class, subcontractor flag, and route km. */
+/** Cost of one used vehicle given its class, subcontractor flag, and route km
+ * (per_vehicle model only). */
 export function vehicleCost(
   tariff: Tariff, vehicleClass: string | null, isSubcontractor: boolean, distanceKm: number,
 ): VehicleCost {
@@ -90,5 +116,24 @@ export function vehicleCost(
   const mult = isSubcontractor ? tariff.subcontractorMultiplier : 1;
   const fixed = Math.round(fixedBase * mult);
   const variable = Math.round(perKm * distanceKm * mult);
+  return { fixed, variable, total: fixed + variable };
+}
+
+/** Cost of one vehicle under whichever model the tariff declares. The per_trip
+ * model charges each trip a base + per round-trip km + a surcharge per drop
+ * beyond those included, with a multiplier for own fleet vs subcontractor. */
+export function vehicleCostFor(
+  tariff: Tariff,
+  v: { vehicleClass: string | null; isSubcontractor: boolean; distanceKm: number; trips: TripShape[] },
+): VehicleCost {
+  if (tariff.model !== 'per_trip') return vehicleCost(tariff, v.vehicleClass, v.isSubcontractor, v.distanceKm);
+  const mult = v.isSubcontractor ? tariff.subcontractorMultiplier : tariff.ownFleetMultiplier;
+  let fixed = 0, variable = 0;
+  for (const t of v.trips) {
+    fixed += tariff.perTripBase;
+    variable += tariff.perKm * t.distanceKm + tariff.perDrop * Math.max(0, t.drops - tariff.includedDrops);
+  }
+  fixed = Math.round(fixed * mult);
+  variable = Math.round(variable * mult);
   return { fixed, variable, total: fixed + variable };
 }

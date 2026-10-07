@@ -12,10 +12,13 @@ Dispatcher workflow features:
   replan (Surge `allowed_vehicles` / `forbidden_vehicles`). Overrides accumulate
   on an editable scenario copy; the baseline is never mutated.
 - **Cost in forint:** every plan carries an estimated operating cost under a
-  carrier tariff (per-km + fixed per used vehicle, subcontractor surcharge),
-  shown as a KPI and in the before/after comparison. Uses a real rate card from
-  `${GYERMELYI_ROOT}/rates/tariff.json` when present, else an illustrative demo
-  tariff (clearly labelled). Nothing confidential is committed.
+  carrier tariff, shown as a KPI and in the before/after comparison. Two tariff
+  models: `per_vehicle` (fixed + per-km, the illustrative demo) and `per_trip`
+  (base + per round-trip km + per-drop surcharge, own-fleet vs subcontractor
+  multiplier) — the real rate card shape. Uses `${GYERMELYI_ROOT}/rates/tariff.json`
+  when present (a `per_trip` tariff regressed from the real TS/BHS carrier rate
+  card lands the two-day optimized plan at ~6.0M HUF, matching the known figure),
+  else the demo tariff. The tariff file is confidential and never committed.
 - **Solve controls:** choose the objective (fewest vehicles vs least distance)
   and the time budget; cancel a running solve; a solve survives a page reload
   (the job runs server-side and the UI reconnects to it).

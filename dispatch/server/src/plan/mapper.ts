@@ -7,7 +7,7 @@ import type { LoadedDay, OrderInfo, VehicleInfo } from '../data/gyermelyi.js';
 import { vehicleInfoFor } from '../data/gyermelyi.js';
 import { colorForIndex } from '../colors.js';
 import { metersToKm } from '../units.js';
-import { loadTariff, vehicleCost, type Tariff } from '../cost.js';
+import { loadTariff, vehicleCostFor, type Tariff } from '../cost.js';
 
 export interface MapInputs {
   day: LoadedDay;
@@ -165,7 +165,10 @@ export function mapSolutionToPlan(inp: MapInputs): Plan {
   // Estimated operating cost under the tariff (only used vehicles are charged).
   const tariff = inp.tariff ?? loadTariff();
   const perVehicle: PlanVehicleCost[] = vehicles.map((v) => {
-    const c = vehicleCost(tariff, v.vehicleClass, v.isSubcontractor, v.distanceKm);
+    const c = vehicleCostFor(tariff, {
+      vehicleClass: v.vehicleClass, isSubcontractor: v.isSubcontractor, distanceKm: v.distanceKm,
+      trips: v.trips.map((t) => ({ distanceKm: t.distanceKm, drops: t.stops.length })),
+    });
     return { vehicleId: v.id, ref: v.ref, vehicleClass: v.vehicleClass, distanceKm: v.distanceKm, fixedCost: c.fixed, variableCost: c.variable, totalCost: c.total };
   });
   const cost: PlanCost = {
