@@ -1,0 +1,46 @@
+import { test, expect } from '@playwright/test';
+import { loadApp, expectNoErrors, closePopover, selectVehicle } from './helpers';
+
+test.describe('tier-2 features', () => {
+  test('week view shows combined totals and per-vehicle utilization', async ({ page }) => {
+    await loadApp(page);
+    await page.getByRole('button', { name: 'Week' }).click();
+    const dialog = page.getByRole('dialog');
+    await expect(dialog.getByText('Week overview')).toBeVisible();
+    await expect(dialog.getByText('262/263')).toBeVisible();   // orders across both days
+    await expect(dialog.getByText('Per-vehicle utilization')).toBeVisible();
+    await expect(dialog.getByText('both days').first()).toBeVisible();
+    expectNoErrors(page);
+  });
+
+  test('constraint advisories: filter chip and inspector block', async ({ page }) => {
+    await loadApp(page);
+    await expect(page.getByText(/Has advisories/)).toBeVisible();
+    // RIX-419 has access advisories
+    await selectVehicle(page, 'RIX-419');
+    await expect(page.locator('aside').last().getByText('Access advisories')).toBeVisible();
+    expectNoErrors(page);
+  });
+
+  test('timeline playback advances the clock', async ({ page }) => {
+    await loadApp(page);
+    await selectVehicle(page, 'RIC-124'); // show a vehicle working day
+    await page.getByRole('button', { name: 'Play' }).click();
+    await expect(page.getByRole('button', { name: 'Pause' })).toBeVisible();
+    const seek = page.getByRole('slider', { name: 'Seek' });
+    const v1 = Number(await seek.inputValue());
+    await page.waitForTimeout(1500);
+    const v2 = Number(await seek.inputValue());
+    expect(v2).toBeGreaterThan(v1);
+    expectNoErrors(page);
+  });
+
+  test('solve settings offer objective and budget', async ({ page }) => {
+    await loadApp(page);
+    await page.getByRole('button', { name: 'Solve settings' }).click();
+    await expect(page.getByText('Fewest vehicles')).toBeVisible();
+    await expect(page.getByText('Least distance')).toBeVisible();
+    await closePopover(page);
+    expectNoErrors(page);
+  });
+});

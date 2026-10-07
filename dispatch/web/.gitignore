@@ -4,3 +4,7 @@ tsconfig.tsbuildinfo
 *.tsbuildinfo
 *.local
 .DS_Store
+
+# Playwright
+test-results/
+playwright-report/

@@ -113,7 +113,13 @@ cd dispatch/server && npm start
 
 - Backend unit tests: `cd dispatch/server && npm test` (result mapping,
   comparison incl. cost, scenario edits + stale-job association, override
-  application, cost tariff, CSV/route-sheet export).
+  application, cost tariff, CSV/route-sheet export, week roll-up).
+- UI tests (Playwright, real browser against the running app): with the stack up
+  (backend + Carta + Velo) and the web app on :5179 (or set `VIEWER_URL`), run
+  `cd dispatch/web && npm run test:ui`. Covers load/KPIs/cost, i18n, inspector
+  vehicle→trip→stop navigation, the staged edit stack + a full Replan, week view,
+  constraint advisories, playback and solve settings. Uses the cached Chromium
+  (`PW_CHROMIUM`) with software WebGL.
 - Screenshots (real browser via Playwright, cached Chromium):
   `cd dispatch/web && PW_CHROMIUM=… node scripts/shot.mjs` (and `shot-replan`,
   `shot-import`, `shot-stage4`). Committed screenshots are captured with
