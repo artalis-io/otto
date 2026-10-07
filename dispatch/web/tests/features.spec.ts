@@ -40,6 +40,7 @@ test.describe('tier-2 features', () => {
     await page.getByRole('button', { name: 'Solve settings' }).click();
     await expect(page.getByText('Fewest vehicles')).toBeVisible();
     await expect(page.getByText('Least distance')).toBeVisible();
+    await expect(page.getByText('Run full budget')).toBeVisible();
     await closePopover(page);
     expectNoErrors(page);
   });

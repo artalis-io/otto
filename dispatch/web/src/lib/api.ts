@@ -33,9 +33,9 @@ export const api = {
   editScenario: (id: string, edit: ScenarioEdit, label?: string) =>
     jsend<Scenario>(`/api/scenarios/${id}/edit`, 'POST', { edit, label }),
 
-  solve: (scenarioId: string, budgetSec?: number, objective?: Objective) =>
+  solve: (scenarioId: string, budgetSec?: number, objective?: Objective, fullBudget?: boolean) =>
     jsend<{ jobId: string; scenarioId: string; scenarioRevision: number; budgetSec: number; objective: Objective }>(
-      `/api/scenarios/${scenarioId}/solve`, 'POST', { ...(budgetSec ? { budgetSec } : {}), ...(objective ? { objective } : {}) }),
+      `/api/scenarios/${scenarioId}/solve`, 'POST', { ...(budgetSec ? { budgetSec } : {}), ...(objective ? { objective } : {}), ...(fullBudget ? { fullBudget: true } : {}) }),
 
   exportCsvUrl: (planId: string) => `/api/plans/${planId}/export.csv`,
   routeSheetUrl: (planId: string) => `/api/plans/${planId}/routesheet.html`,

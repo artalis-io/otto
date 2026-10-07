@@ -88,6 +88,7 @@ const en: Dict = {
   'obj.vehicles': 'Fewest vehicles', 'obj.distance': 'Least distance',
   'obj.vehiclesHint': 'Serve all, then the smallest fleet, then distance.',
   'obj.distanceHint': 'Minimize total driving distance (cost-weighted).',
+  'topbar.fullBudget': 'Run full budget', 'topbar.fullBudgetHint': 'Keep searching until the time limit (no early stop).',
   'topbar.resumed': 'Resumed running solve',
   // Export menu
   'export.json': 'Plan (JSON)', 'export.csv': 'Stops (CSV)', 'export.routesheet': 'Driver route sheets',
@@ -230,6 +231,7 @@ const hu: Dict = {
   'obj.vehicles': 'Legkevesebb jármű', 'obj.distance': 'Legrövidebb út',
   'obj.vehiclesHint': 'Mindet kiszolgálni, majd a legkisebb flotta, majd távolság.',
   'obj.distanceHint': 'A teljes megtett távolság minimalizálása (költségsúlyozott).',
+  'topbar.fullBudget': 'Teljes időkeret', 'topbar.fullBudgetHint': 'Keresés az időkorlátig (nincs korai leállás).',
   'topbar.resumed': 'Futó megoldás folytatva',
   // Export menu
   'export.json': 'Terv (JSON)', 'export.csv': 'Megállók (CSV)', 'export.routesheet': 'Sofőr útvonallapok',

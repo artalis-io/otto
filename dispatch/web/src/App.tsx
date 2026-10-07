@@ -76,6 +76,7 @@ export default function App() {
   const [rightOpen, setRightOpen] = useState(true);
   const [objective, setObjective] = useState<Objective>('vehicles');
   const [budgetSec, setBudgetSec] = useState<number>(SOLVE_BUDGET_SEC);
+  const [fullBudget, setFullBudget] = useState(false); // keep searching until the time limit
   // Timeline playback: a clock (sec from midnight) swept across the planned day.
   const [clockSec, setClockSec] = useState<number | null>(null);
   const [playing, setPlaying] = useState(false);
@@ -147,14 +148,14 @@ export default function App() {
     pollAbort.current = ctrl;
     setError(null);
     try {
-      const { jobId } = await api.solve(scenarioId, budgetSec, objective);
+      const { jobId } = await api.solve(scenarioId, budgetSec, objective, fullBudget);
       return await followJob(jobId, scenarioId, dayIdForJob, ctrl);
     } catch (e) {
       if ((e as Error).name === 'AbortError') return null;
       setError(e instanceof Error ? e.message : String(e));
       return null;
     }
-  }, [budgetSec, objective, followJob]);
+  }, [budgetSec, objective, fullBudget, followJob]);
 
   // Cancel the active solve (server-side) and drop back to the current plan.
   const cancelSolve = useCallback(async () => {
@@ -299,6 +300,7 @@ export default function App() {
           scenario={scenario} plan={plan} job={job} solving={!!solving}
           objective={objective} onObjectiveChange={setObjective}
           budgetSec={budgetSec} onBudgetChange={setBudgetSec}
+          fullBudget={fullBudget} onFullBudgetChange={setFullBudget}
           changesCount={changesCount} dirty={dirty}
           onOptimize={() => void replan()}
           onCancel={() => void cancelSolve()}

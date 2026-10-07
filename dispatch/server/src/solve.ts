@@ -16,7 +16,7 @@ const vehicleInfo = loadVehicleInfo();
  * has a watchdog that hard-kills a solver that overruns its budget, and caps the
  * captured stdout so a pathological solver can't exhaust memory. */
 const running = new Map<string, ChildProcess>();
-interface QueuedSolve { job: Job; scenario: Scenario; budgetSec: number; objective: Objective }
+interface QueuedSolve { job: Job; scenario: Scenario; budgetSec: number; objective: Objective; fullBudget: boolean }
 const queue: QueuedSolve[] = [];
 
 export interface BuiltRequest { request: SurgeRequest; day: ReturnType<typeof loadDay> }
@@ -30,7 +30,7 @@ export type Objective = 'vehicles' | 'distance';
  * Objective maps to Surge's lexicographic_objective: 'vehicles' (true) serves
  * then minimizes fleet size then distance; 'distance' (false) minimizes the
  * single cost objective (fixed + distance), i.e. the least-distance plan. */
-export function buildRequest(scenario: Scenario, budgetSec: number, objective: Objective = 'vehicles'): BuiltRequest {
+export function buildRequest(scenario: Scenario, budgetSec: number, objective: Objective = 'vehicles', fullBudget = false): BuiltRequest {
   const day = loadDay(scenario.day);
   const request = structuredClone(day.request) as SurgeRequest;
   request.requests = request.requests.filter((r) => day.scopeTaskIds.has(r.delivery_task_id));
@@ -53,6 +53,9 @@ export function buildRequest(scenario: Scenario, budgetSec: number, objective: O
     hard_capacity: true,
     hard_time_windows: true,
     hard_max_duration: true,
+    // "Run full budget": raise the iteration cap so only the time limit stops the
+    // search (keep improving/searching until budgetSec), instead of converging early.
+    ...(fullBudget ? { max_iterations: 2_000_000_000 } : {}),
   };
   return { request, day };
 }
@@ -109,21 +112,21 @@ function dayLabel(dayId: string): string {
  * store the resulting plan. Updates job status throughout. */
 /** Enqueue a solve: runs immediately if a slot is free, else queues (the job
  * stays 'pending' until a slot frees). */
-export function enqueueSolve(job: Job, scenario: Scenario, budgetSec: number, objective: Objective = 'vehicles'): void {
-  if (running.size < Math.max(1, config.maxConcurrentSolves)) runSolveProcess(job, scenario, budgetSec, objective);
-  else queue.push({ job, scenario, budgetSec, objective });
+export function enqueueSolve(job: Job, scenario: Scenario, budgetSec: number, objective: Objective = 'vehicles', fullBudget = false): void {
+  if (running.size < Math.max(1, config.maxConcurrentSolves)) runSolveProcess(job, scenario, budgetSec, objective, fullBudget);
+  else queue.push({ job, scenario, budgetSec, objective, fullBudget });
 }
 
 function pumpQueue(): void {
   while (running.size < Math.max(1, config.maxConcurrentSolves) && queue.length) {
     const next = queue.shift()!;
     if (next.job.status === 'cancelled') continue; // cancelled while queued
-    runSolveProcess(next.job, next.scenario, next.budgetSec, next.objective);
+    runSolveProcess(next.job, next.scenario, next.budgetSec, next.objective, next.fullBudget);
   }
 }
 
-function runSolveProcess(job: Job, scenario: Scenario, budgetSec: number, objective: Objective): void {
-  const built = buildRequest(scenario, budgetSec, objective);
+function runSolveProcess(job: Job, scenario: Scenario, budgetSec: number, objective: Objective, fullBudget: boolean): void {
+  const built = buildRequest(scenario, budgetSec, objective, fullBudget);
   const jobsDir = resolve(config.dataDir, 'jobs');
   mkdirSync(jobsDir, { recursive: true });
   const reqFile = resolve(jobsDir, `${job.id}_request.json`);

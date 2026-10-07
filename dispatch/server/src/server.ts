@@ -166,14 +166,15 @@ app.get<{ Params: { id: string } }>('/api/scenarios/:id/plans', async (req, repl
 });
 
 /* ---- Solve jobs ---- */
-app.post<{ Params: { id: string }; Body: { budgetSec?: number; objective?: string } }>('/api/scenarios/:id/solve', async (req, reply) => {
+app.post<{ Params: { id: string }; Body: { budgetSec?: number; objective?: string; fullBudget?: boolean } }>('/api/scenarios/:id/solve', async (req, reply) => {
   const scenario = store.getScenario(req.params.id);
   if (!scenario) return reply.code(404).send({ error: 'scenario not found' });
   const budget = Math.max(5, Math.min(600, req.body?.budgetSec ?? config.solveTimeSeconds));
   const objective: Objective = req.body?.objective === 'distance' ? 'distance' : 'vehicles';
+  const fullBudget = req.body?.fullBudget === true;
   const job = store.createJob(scenario.id, scenario.revision);
-  enqueueSolve(job, scenario, budget, objective); // off the event loop (child process)
-  return reply.code(202).send({ jobId: job.id, scenarioId: scenario.id, scenarioRevision: scenario.revision, budgetSec: budget, objective });
+  enqueueSolve(job, scenario, budget, objective, fullBudget); // off the event loop (child process)
+  return reply.code(202).send({ jobId: job.id, scenarioId: scenario.id, scenarioRevision: scenario.revision, budgetSec: budget, objective, fullBudget });
 });
 
 app.get<{ Params: { id: string } }>('/api/jobs/:id', async (req, reply) => {

@@ -32,13 +32,13 @@ function Popover({ open, onClose, align = 'right', children }: { open: boolean; 
 
 export function TopBar({
   days, dayId, onDayChange, scenario, plan, job, solving,
-  objective, onObjectiveChange, budgetSec, onBudgetChange, changesCount, dirty,
+  objective, onObjectiveChange, budgetSec, onBudgetChange, fullBudget, onFullBudgetChange, changesCount, dirty,
   onOptimize, onCancel, onReset, onOpenChanges, showCompare, onCompare, onOpenImport, onOpenHistory, onOpenWeek,
 }: {
   days: DaySummary[]; dayId: string; onDayChange: (id: string) => void;
   scenario: Scenario; plan: Plan; job: JobView | null; solving: boolean;
   objective: Objective; onObjectiveChange: (o: Objective) => void;
-  budgetSec: number; onBudgetChange: (n: number) => void; changesCount: number; dirty: boolean;
+  budgetSec: number; onBudgetChange: (n: number) => void; fullBudget: boolean; onFullBudgetChange: (b: boolean) => void; changesCount: number; dirty: boolean;
   onOptimize: () => void; onCancel: () => void; onReset: () => void; onOpenChanges: () => void;
   showCompare: boolean; onCompare: () => void; onOpenImport: () => void; onOpenHistory: () => void; onOpenWeek: () => void;
 }) {
@@ -159,6 +159,13 @@ export function TopBar({
                 <input type="range" min={15} max={240} step={5} value={budgetSec}
                   onChange={(e) => onBudgetChange(Number(e.target.value))} className="w-full accent-[var(--primary)]" />
               </div>
+              <label className="flex cursor-pointer items-start gap-2 text-xs">
+                <input type="checkbox" checked={fullBudget} onChange={(e) => onFullBudgetChange(e.target.checked)} className="mt-0.5 accent-[var(--primary)]" />
+                <span>
+                  <span className="font-medium">{t('topbar.fullBudget')}</span>
+                  <span className="block text-[10px] text-muted-foreground">{t('topbar.fullBudgetHint')}</span>
+                </span>
+              </label>
             </div>
           </Popover>
         </div>
