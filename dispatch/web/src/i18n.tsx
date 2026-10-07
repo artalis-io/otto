@@ -149,7 +149,11 @@ const en: Dict = {
   'onboard.admitWorking': 'Building the travel matrix… (about a minute)',
   'onboard.admitDone': '{r} routable orders admitted ({x} excluded) as {d} day(s) — now in the day picker.',
   'onboard.datasets': 'Admitted datasets', 'onboard.dsSummary': '{d} days · {n} orders', 'onboard.delete': 'Delete',
-  'onboard.stage.queued': 'queued', 'onboard.stage.geocoding': 'geocoding addresses', 'onboard.stage.matrix': 'building travel matrix', 'onboard.stage.request': 'building request', 'onboard.stage.registering': 'registering days',
+  'onboard.stage.queued': 'queued', 'onboard.stage.geocoding': 'geocoding addresses', 'onboard.stage.fleet': 'reading fleet', 'onboard.stage.matrix': 'building travel matrix', 'onboard.stage.request': 'building request', 'onboard.stage.registering': 'registering days',
+  'onboard.fleetTitle': 'Custom fleet (optional)', 'onboard.fleetChoose': 'Vehicles file', 'onboard.fleetClear': 'Remove',
+  'onboard.fleetNote': 'Upload a vehicles file (CSV or XLSX) to plan with your own fleet instead of the built-in one.',
+  'onboard.fleetNeedId': 'Map the Vehicle id column to use this fleet.',
+  'onboard.fleetUsed': 'custom fleet: {n} vehicles ({d} used a default capacity)',
 };
 
 const hu: Dict = {
@@ -293,7 +297,11 @@ const hu: Dict = {
   'onboard.admitWorking': 'Utazási mátrix építése… (kb. egy perc)',
   'onboard.admitDone': '{r} útvonalazható rendelés átvéve ({x} kizárva) {d} napként — már a napválasztóban.',
   'onboard.datasets': 'Átvett adathalmazok', 'onboard.dsSummary': '{d} nap · {n} rendelés', 'onboard.delete': 'Törlés',
-  'onboard.stage.queued': 'sorban', 'onboard.stage.geocoding': 'címek geokódolása', 'onboard.stage.matrix': 'utazási mátrix építése', 'onboard.stage.request': 'kérés építése', 'onboard.stage.registering': 'napok regisztrálása',
+  'onboard.stage.queued': 'sorban', 'onboard.stage.geocoding': 'címek geokódolása', 'onboard.stage.fleet': 'flotta beolvasása', 'onboard.stage.matrix': 'utazási mátrix építése', 'onboard.stage.request': 'kérés építése', 'onboard.stage.registering': 'napok regisztrálása',
+  'onboard.fleetTitle': 'Saját flotta (opcionális)', 'onboard.fleetChoose': 'Jármű fájl', 'onboard.fleetClear': 'Eltávolítás',
+  'onboard.fleetNote': 'Tölts fel egy jármű fájlt (CSV vagy XLSX), hogy a saját flottáddal tervezz a beépített helyett.',
+  'onboard.fleetNeedId': 'Feleltesd meg a Jármű azonosító oszlopot a flotta használatához.',
+  'onboard.fleetUsed': 'saját flotta: {n} jármű ({d} alapértelmezett kapacitással)',
 };
 
 const DICTS: Record<Lang, Dict> = { en, hu };

@@ -71,8 +71,8 @@ export const api = {
     jsend<OnboardPreview>('/api/import/preview', 'POST', { uploadId, entity, mapping }),
   onboardGeocode: (uploadId: string, mapping: Record<string, number>) =>
     jsend<GeocodeResult>('/api/import/geocode', 'POST', { uploadId, mapping }),
-  onboardAdmit: (uploadId: string, mapping: Record<string, number>, label: string) =>
-    jsend<{ jobId: string }>('/api/import/admit', 'POST', { uploadId, mapping, label }),
+  onboardAdmit: (uploadId: string, mapping: Record<string, number>, label: string, fleet?: { vehiclesUploadId: string; vehiclesMapping: Record<string, number> }) =>
+    jsend<{ jobId: string }>('/api/import/admit', 'POST', { uploadId, mapping, label, ...(fleet ? { vehiclesUploadId: fleet.vehiclesUploadId, vehiclesMapping: fleet.vehiclesMapping } : {}) }),
   onboardDatasets: () => jget<DatasetSummary[]>('/api/import/datasets'),
   onboardDeleteDataset: (id: string) => jsend<{ deleted: boolean; days: number }>(`/api/import/datasets/${id}`, 'DELETE'),
 };
@@ -88,6 +88,7 @@ export interface AdmitResult {
   datasetId?: string; label?: string;
   days?: { dayId: string; isoDate: string; label: string; orders: number }[];
   routable?: number; excluded?: number; unresolved?: number; snapWarnings?: number;
+  fleet?: { count: number; defaulted: number; custom: boolean };
 }
 
 export type GeoTier = 'GREEN' | 'YELLOW' | 'APPROX' | 'RED';

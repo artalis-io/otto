@@ -6,6 +6,7 @@ import { fileURLToPath } from 'node:url';
 import { randomUUID } from 'node:crypto';
 import { config } from '../config.js';
 import { buildSchema, sampleUpload, type Mapping } from './onboard.js';
+import { buildFleetFromUpload } from './fleet.js';
 import { buildMatrix, type MatrixLoc } from '../geometry/matrix.js';
 import { loadDay } from './gyermelyi.js';
 import { registerDataset, datasetDir, isRoutableOrder, type Dataset, type RegDay } from './registry.js';
@@ -37,11 +38,16 @@ export interface AdmitResult {
   datasetId?: string; label?: string;
   days?: { dayId: string; isoDate: string; label: string; orders: number }[];
   routable?: number; excluded?: number; unresolved?: number; snapWarnings?: number;
+  fleet?: { count: number; defaulted: number; custom: boolean };
 }
 
+/** An uploaded + mapped vehicles file to use as the fleet instead of the built-in one. */
+export interface FleetSource { path: string; mapping: Mapping }
+
 /** Admit an onboarded orders upload as a dataset: geocode -> matrix -> Surge
- * request (all tasks; the known fleet) -> register days by delivery date. */
-export async function admitDataset(uploadPath: string, mapping: Mapping, label: string, onStage?: (stage: string) => void): Promise<AdmitResult> {
+ * request -> register days by delivery date. The fleet is the built-in template
+ * unless `fleetSource` provides an uploaded vehicles file. */
+export async function admitDataset(uploadPath: string, mapping: Mapping, label: string, onStage?: (stage: string) => void, fleetSource?: FleetSource): Promise<AdmitResult> {
   if (mapping.city == null) return { ok: false, error: 'map the City column' };
   if (mapping.delivery_date == null) return { ok: false, error: 'map the Delivery date column (days are split by it)' };
   if (!existsSync(INGEST_NX)) return { ok: false, error: 'nx_pipeline not built (make -C nexus tools)' };
@@ -77,6 +83,15 @@ export async function admitDataset(uploadPath: string, mapping: Mapping, label: 
   const unresolved = recs.filter((o) => typeof o.lat !== 'number').length;
   if (routable.length < 1) { rmSync(dir, { recursive: true, force: true }); return { ok: false, error: 'no routable orders (need GREEN/YELLOW geocode on the Hungary graph)' }; }
 
+  // 2b. optional custom fleet from an uploaded vehicles file (fail fast, before
+  // the ~1 min matrix). When absent, the built-in template fleet is used.
+  let customFleet: Awaited<ReturnType<typeof buildFleetFromUpload>> | null = null;
+  if (fleetSource) {
+    onStage?.('fleet');
+    customFleet = await buildFleetFromUpload(fleetSource.path, fleetSource.mapping);
+    if (!customFleet.ok) { rmSync(dir, { recursive: true, force: true }); return { ok: false, error: `fleet: ${customFleet.error}` }; }
+  }
+
   // 3. template (depot, fleet, config, depots) from the built-in day-1 request
   const template = loadDay('day1').request;
   const depotLoc = template.locations[0]!;
@@ -87,6 +102,10 @@ export async function admitDataset(uploadPath: string, mapping: Mapping, label: 
   // 4. Surge request: clone the template, swap the order-dependent parts.
   onStage?.('request');
   const req = structuredClone(template) as SurgeRequest;
+  const fleetInfo = customFleet?.ok
+    ? { count: customFleet.fleet.count, defaulted: customFleet.fleet.defaulted, custom: true }
+    : { count: req.vehicles.length, defaulted: 0, custom: false };
+  if (customFleet?.ok) req.vehicles = customFleet.fleet.vehicles;
   req.locations = [depotLoc, ...routable.map((o) => ({ x: o.lon as number, y: o.lat as number }))];
   // Task/request ids are 0-indexed and contiguous (Surge uses them as indices);
   // location 0 is the depot, so order i is at location i+1.
@@ -123,6 +142,7 @@ export async function admitDataset(uploadPath: string, mapping: Mapping, label: 
     ok: true, datasetId, label: dataset.label,
     days: days.map((d) => ({ dayId: d.dayId, isoDate: d.isoDate, label: d.label, orders: d.orders })),
     routable: routable.length, excluded: recs.length - routable.length, unresolved, snapWarnings: matrix.snapWarnings.length,
+    fleet: fleetInfo,
   };
 }
 

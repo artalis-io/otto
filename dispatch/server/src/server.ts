@@ -345,13 +345,23 @@ app.post<{ Body: { uploadId?: string; mapping?: Mapping } }>('/api/import/geocod
 });
 
 // Admit: geocode + build the travel matrix + Surge request, register the days.
-app.post<{ Body: { uploadId?: string; mapping?: Mapping; label?: string } }>('/api/import/admit', async (req, reply) => {
-  const { uploadId, mapping, label } = req.body ?? {};
+app.post<{ Body: { uploadId?: string; mapping?: Mapping; label?: string; vehiclesUploadId?: string; vehiclesMapping?: Mapping } }>('/api/import/admit', async (req, reply) => {
+  const { uploadId, mapping, label, vehiclesUploadId, vehiclesMapping } = req.body ?? {};
   if (!uploadId || !/^up_[a-z0-9-]+$/.test(uploadId)) return reply.code(400).send({ error: 'valid uploadId required' });
   if (!mapping || typeof mapping !== 'object') return reply.code(400).send({ error: 'mapping required' });
   if (label != null && (typeof label !== 'string' || label.length > 120)) return reply.code(400).send({ error: 'invalid label' });
   const path = uploadPath(uploadId, 'orders');
   if (!existsSync(path)) return reply.code(404).send({ error: 'upload not found (re-upload)' });
+
+  // Optional custom fleet from an uploaded vehicles file.
+  let fleetSource: { path: string; mapping: Mapping } | undefined;
+  if (vehiclesUploadId != null) {
+    if (!/^up_[a-z0-9-]+$/.test(vehiclesUploadId)) return reply.code(400).send({ error: 'valid vehiclesUploadId required' });
+    if (!vehiclesMapping || typeof vehiclesMapping !== 'object') return reply.code(400).send({ error: 'vehiclesMapping required' });
+    const vpath = uploadPath(vehiclesUploadId, 'vehicles');
+    if (!existsSync(vpath)) return reply.code(404).send({ error: 'vehicles upload not found (re-upload)' });
+    fleetSource = { path: vpath, mapping: vehiclesMapping };
+  }
 
   // Admit runs in the background (geocode + matrix can take ~1 min); the client
   // polls /api/jobs/:id for the stage and the result.
@@ -363,7 +373,7 @@ app.post<{ Body: { uploadId?: string; mapping?: Mapping; label?: string } }>('/a
   const t0 = Date.now();
   void (async () => {
     try {
-      const result = await admitDataset(path, mapping, label ?? 'Uploaded dataset', (stage) => { job.stage = stage; store.saveJob(job); });
+      const result = await admitDataset(path, mapping, label ?? 'Uploaded dataset', (stage) => { job.stage = stage; store.saveJob(job); }, fleetSource);
       job.elapsedSec = (Date.now() - t0) / 1000;
       job.finishedAt = new Date().toISOString();
       if (!result.ok) { job.status = 'failed'; job.error = result.error ?? 'admit failed'; store.saveJob(job); return; }

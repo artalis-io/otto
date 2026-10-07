@@ -5,6 +5,7 @@ import { existsSync } from 'node:fs';
 import { loadApp, expectNoErrors } from './helpers';
 
 const RAW = join(homedir(), 'artalis.io/data/gyermelyi/raw/gyermelyi_orders_raw.csv');
+const VEH = join(homedir(), 'artalis.io/data/gyermelyi/raw/gyermelyi_vehicles_raw.csv');
 
 test.describe('data onboarding (M1)', () => {
   test.skip(!existsSync(RAW), 'raw dataset not present');
@@ -14,7 +15,7 @@ test.describe('data onboarding (M1)', () => {
     await loadApp(page);
     await page.getByRole('button', { name: 'Data' }).click();
     await page.getByRole('tab', { name: 'Upload' }).click();
-    await expect(page.getByText('Choose CSV')).toBeVisible();
+    await expect(page.getByText('Choose file')).toBeVisible();
 
     await page.locator('input[type=file]').setInputFiles(RAW);
     await expect(page.getByText('Map columns')).toBeVisible();
@@ -43,6 +44,28 @@ test.describe('data onboarding (M1)', () => {
     await page.getByRole('button', { name: 'Geocode addresses' }).click();
     await expect(page.getByText(/\d+\/\d+ resolved/)).toBeVisible({ timeout: 60_000 });
     await expect(page.getByRole('dialog').locator('canvas.maplibregl-canvas')).toBeVisible();
+    expectNoErrors(page);
+  });
+
+  test('offer an optional custom fleet after geocoding', async ({ page }) => {
+    test.setTimeout(120_000);
+    test.skip(!existsSync(VEH), 'vehicles file not present');
+    await loadApp(page);
+    await page.getByRole('button', { name: 'Data' }).click();
+    await page.getByRole('tab', { name: 'Upload' }).click();
+    await page.locator('input[type=file]').setInputFiles(RAW);
+    await expect(page.getByText('Map columns')).toBeVisible();
+    await page.getByRole('button', { name: 'Validate' }).click();
+    await expect(page.getByText('Reconcile passed')).toBeVisible({ timeout: 60_000 });
+    await page.getByRole('button', { name: 'Geocode addresses' }).click();
+    await expect(page.getByText(/\d+\/\d+ resolved/)).toBeVisible({ timeout: 60_000 });
+
+    // the admit box offers an optional custom fleet; uploading a vehicles file
+    // reveals its id + capacity mapping (auto-suggested).
+    await expect(page.getByText('Custom fleet (optional)')).toBeVisible();
+    await page.locator('input[type=file]').last().setInputFiles(VEH);
+    await expect(page.getByText('Vehicle id')).toBeVisible({ timeout: 30_000 });
+    await expect(page.getByText('Capacity (kg)')).toBeVisible();
     expectNoErrors(page);
   });
 });

@@ -150,9 +150,19 @@ Canonical field catalog (for the mapping UI), from the existing canonical shapes
   parse stays in the Role-P subprocess); `uploadPath` resolves an upload by its
   `id_entity.*` prefix whatever the extension. Verified end-to-end on the real
   orders as XLSX: upload (332 rows) → reconcile gate PASS (0 mismatches, 18 fields)
-  → geocode 332/332 → admit (262 routable, 2 days). *Remaining:* re-map + re-run
-  (largely covered — the mapping stays editable and re-running Validate/Geocode
-  uses it), custom fleet from an uploaded vehicles file, hybrid matrix reuse.
+  → geocode 332/332 → admit (262 routable, 2 days). ✅ **Custom fleet from an
+  uploaded vehicles file**: the admit step has an optional "Custom fleet" picker
+  (CSV/XLSX, mapped the same way: Vehicle id + capacity kg/pallets). When present,
+  `buildFleetFromUpload` ingests it through the real nx_pipeline and `toSurgeFleet`
+  maps the canonical vehicles to a 0-indexed single-depot Surge fleet (a row that
+  omits a capacity dimension falls back to a standard truck and is counted so the
+  UI can warn); that fleet replaces the built-in template in the request, fail-fast
+  before the matrix. `admitDataset(..., fleetSource?)`; `POST /api/import/admit`
+  gains `vehiclesUploadId` + `vehiclesMapping`. Verified live: 38 vehicles from the
+  real fleet file flow into the admitted request (`fleet {count:38, custom:true}`).
+  *Remaining:* re-map + re-run (largely covered — the mapping stays editable and
+  re-running Validate/Geocode uses it), hybrid matrix reuse (much less pressing now
+  that admit is backgrounded).
 
 ## Risks / open items
 

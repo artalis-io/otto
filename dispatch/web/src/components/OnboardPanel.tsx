@@ -30,7 +30,9 @@ export function OnboardPanel({ onAdmitted, onDatasetsChanged }: { onAdmitted?: (
   const [admit, setAdmit] = useState<AdmitResult | null>(null);
   const [admitStage, setAdmitStage] = useState<string | null>(null);
   const [label, setLabel] = useState('');
-  const [busy, setBusy] = useState<'upload' | 'preview' | 'geocode' | 'admit' | null>(null);
+  const [vehUpload, setVehUpload] = useState<UploadResult | null>(null);
+  const [vehMapping, setVehMapping] = useState<Record<string, number>>({});
+  const [busy, setBusy] = useState<'upload' | 'preview' | 'geocode' | 'admit' | 'vehicles' | null>(null);
   const [err, setErr] = useState<string | null>(null);
 
   useEffect(() => { api.onboardCatalog().then(setCatalog).catch((e) => setErr(String(e))); }, []);
@@ -60,11 +62,20 @@ export function OnboardPanel({ onAdmitted, onDatasetsChanged }: { onAdmitted?: (
     catch (e) { setErr(e instanceof Error ? e.message : String(e)); }
     finally { setBusy(null); }
   }
+  async function onVehFile(file: File) {
+    setErr(null); setBusy('vehicles');
+    try { const u = await api.onboardUpload('vehicles', file); setVehUpload(u); setVehMapping(u.suggested); }
+    catch (e) { setErr(e instanceof Error ? e.message : String(e)); }
+    finally { setBusy(null); }
+  }
+  function clearVeh() { setVehUpload(null); setVehMapping({}); }
+
   async function doAdmit() {
     if (!upload) return;
     setErr(null); setBusy('admit'); setAdmitStage('queued');
     try {
-      const { jobId } = await api.onboardAdmit(upload.uploadId, mapping, label || `Upload ${new Date().toLocaleDateString()}`);
+      const fleet = vehUpload ? { vehiclesUploadId: vehUpload.uploadId, vehiclesMapping: vehMapping } : undefined;
+      const { jobId } = await api.onboardAdmit(upload.uploadId, mapping, label || `Upload ${new Date().toLocaleDateString()}`, fleet);
       const final = await pollJob(jobId, (j) => setAdmitStage(j.stage ?? null));
       if (final.status !== 'completed') { setErr(final.error ?? 'admit failed'); return; }
       const r = final.result as AdmitResult;
@@ -184,13 +195,52 @@ export function OnboardPanel({ onAdmitted, onDatasetsChanged }: { onAdmitted?: (
             {geo?.ok && (
               <div className="space-y-2 rounded-md border border-divider bg-muted/20 p-3">
                 <div className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">{t('onboard.admitTitle')}</div>
+
+                {/* optional: plan with an uploaded fleet instead of the built-in one */}
+                <div className="rounded border border-divider bg-card p-2">
+                  <div className="mb-1 flex items-center justify-between gap-2">
+                    <span className="text-[11px] font-medium">{t('onboard.fleetTitle')}</span>
+                    {!vehUpload ? (
+                      <label className="inline-flex cursor-pointer items-center gap-1 rounded border border-divider px-2 py-0.5 text-[11px] hover:bg-accent">
+                        {busy === 'vehicles' ? <Loader2 className="h-3 w-3 animate-spin" /> : <FileUp className="h-3 w-3" />} {t('onboard.fleetChoose')}
+                        <input type="file" accept=".csv,text/csv,.xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" className="hidden" onChange={(e) => { const f = e.target.files?.[0]; if (f) void onVehFile(f); e.target.value = ''; }} />
+                      </label>
+                    ) : (
+                      <button type="button" onClick={clearVeh} className="text-[11px] text-muted-foreground hover:text-destructive" disabled={busy != null}>{t('onboard.fleetClear')}</button>
+                    )}
+                  </div>
+                  {!vehUpload ? (
+                    <p className="text-[10px] text-muted-foreground">{t('onboard.fleetNote')}</p>
+                  ) : (
+                    <div className="space-y-1">
+                      <div className="tnum text-[10px] text-muted-foreground">{t('onboard.rows', { n: vehUpload.totalRows })}</div>
+                      {(['id', 'capacity_kg', 'capacity_pallets'] as const).map((field) => {
+                        const cf = catalog?.vehicles.find((c) => c.field === field);
+                        const idx = vehMapping[field];
+                        const unmappedReq = field === 'id' && idx == null;
+                        return (
+                          <div key={field} className="flex items-center gap-2 text-[11px]">
+                            <span className="w-28 shrink-0">{cf?.label ?? field}{field === 'id' && <span className={unmappedReq ? 'text-destructive' : 'text-muted-foreground'}> *</span>}</span>
+                            <select value={idx ?? ''} onChange={(e) => { const v = e.target.value; setVehMapping((m) => { const n = { ...m }; if (v === '') delete n[field]; else n[field] = Number(v); return n; }); }}
+                              className={`h-6 flex-1 rounded border bg-card px-1 text-[11px] ${unmappedReq ? 'border-destructive' : 'border-divider'}`} disabled={busy != null}>
+                              <option value="">{t('onboard.none')}</option>
+                              {vehUpload.headers.map((h, i) => <option key={i} value={i}>{i}: {h || `col ${i}`}</option>)}
+                            </select>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
+                </div>
+
                 <div className="flex items-center gap-2">
                   <Input value={label} onChange={(e) => setLabel(e.target.value)} placeholder={t('onboard.datasetName')} className="h-8 flex-1" disabled={busy != null} />
-                  <Button size="sm" onClick={() => void doAdmit()} disabled={busy != null || mapping.delivery_date == null}>
+                  <Button size="sm" onClick={() => void doAdmit()} disabled={busy != null || mapping.delivery_date == null || (vehUpload != null && vehMapping.id == null)}>
                     {busy === 'admit' ? <Loader2 className="h-4 w-4 animate-spin" /> : <Upload className="h-4 w-4" />} {t('onboard.admit')}
                   </Button>
                 </div>
                 {mapping.delivery_date == null && <p className="text-[11px] text-destructive">{t('onboard.needDate')}</p>}
+                {vehUpload != null && vehMapping.id == null && <p className="text-[11px] text-destructive">{t('onboard.fleetNeedId')}</p>}
                 {busy === 'admit' ? (
                   <p className="flex items-center gap-1.5 text-[11px] text-foreground"><Loader2 className="h-3 w-3 animate-spin" /> {t('onboard.admitWorking')} · {t(`onboard.stage.${admitStage ?? 'queued'}`)}</p>
                 ) : (
@@ -199,6 +249,7 @@ export function OnboardPanel({ onAdmitted, onDatasetsChanged }: { onAdmitted?: (
                 {admit?.ok && (
                   <div className="rounded border border-primary/30 bg-primary/5 px-2 py-1.5 text-[11px] text-primary">
                     {t('onboard.admitDone', { r: admit.routable ?? 0, x: admit.excluded ?? 0, d: admit.days?.length ?? 0 })}
+                    {admit.fleet?.custom && <> · {t('onboard.fleetUsed', { n: admit.fleet.count, d: admit.fleet.defaulted })}</>}
                   </div>
                 )}
               </div>
