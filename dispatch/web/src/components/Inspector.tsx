@@ -4,7 +4,7 @@ import { ScrollArea } from '@/components/ui/scroll-area';
 import { Badge } from '@/components/ui/badge';
 import { Separator } from '@/components/ui/separator';
 import { hhmm, km, money, pct, ratio } from '@/lib/format';
-import { setDraggedOrder } from '@/lib/dnd';
+import { setDraggedOrder, isOrderDrag, readDraggedOrder } from '@/lib/dnd';
 import { NarrationPanel } from '@/components/NarrationPanel';
 import { useT } from '@/i18n';
 import { useState } from 'react';
@@ -59,8 +59,23 @@ function StopDetail({ stop, vehicle }: { stop: Stop; vehicle: Vehicle }) {
   );
 }
 
-function TripDetail({ trip, vehicle, currency, onSelectStop, canDrag }: { trip: Trip; vehicle: Vehicle; currency: string; onSelectStop: (seq: number) => void; canDrag?: boolean }) {
+function TripDetail({ trip, vehicle, currency, onSelectStop, canDrag, onResequence }: { trip: Trip; vehicle: Vehicle; currency: string; onSelectStop: (seq: number) => void; canDrag?: boolean; onResequence?: (newOrderNos: string[]) => void }) {
   const t = useT();
+  const [overSeq, setOverSeq] = useState<number | null>(null);
+  // Reorder this trip's stops by dropping one stop onto another (same drag used
+  // for drag-to-reassign; here the drop target is a sibling stop, not a vehicle).
+  const reorder = (draggedOrderNo: string, targetSeq: number): void => {
+    const order = trip.stops.map((s) => s.orderNo);
+    const from = order.indexOf(draggedOrderNo);
+    const target = trip.stops.find((s) => s.seq === targetSeq);
+    if (from < 0 || !target) return;                 // dragged stop not in this trip (cross-vehicle drag)
+    const to = order.indexOf(target.orderNo);
+    if (to < 0 || from === to) return;
+    const next = [...order];
+    next.splice(from, 1);
+    next.splice(to, 0, draggedOrderNo);
+    if (next.some((o, i) => o !== order[i])) onResequence?.(next);
+  };
   const util = Math.max(ratio(trip.loadKg, vehicle.capacityKg), ratio(trip.loadPallets, vehicle.capacityPallets));
   const drive = trip.stops.reduce((n, s) => n + s.travelToSec, 0) + Math.max(0, trip.endSec - (trip.stops.at(-1)?.departureSec ?? trip.endSec));
   const wait = trip.stops.reduce((n, s) => n + s.waitSec, 0);
@@ -74,19 +89,26 @@ function TripDetail({ trip, vehicle, currency, onSelectStop, canDrag }: { trip: 
       {trip.reloadSecAfter > 0 && <Field label={t('inspector.reloadAfter')} value={t('inspector.minN', { n: Math.round(trip.reloadSecAfter / 60) })} />}
       <Separator />
       <ol className="space-y-0.5">
-        {trip.stops.map((s) => (
-          <li key={s.seq}>
-            <button type="button" onClick={() => onSelectStop(s.seq)}
-              draggable={canDrag} onDragStart={canDrag ? (e) => setDraggedOrder(e, s.orderNo) : undefined}
-              title={canDrag ? t('inspector.dragToReassign') : undefined}
-              className={`flex w-full items-baseline justify-between gap-2 rounded px-1 py-1 text-left text-xs hover:bg-accent ${canDrag ? 'cursor-grab active:cursor-grabbing' : ''}`}>
-              <span className="min-w-0 truncate"><span className="tnum text-muted-foreground">{s.seq}.</span> {s.customer ?? s.orderNo}
-                <span className="tnum ml-1 text-[10px] text-muted-foreground">+{Math.round(s.travelToSec / 60)}m</span>
-              </span>
-              <span className="tnum shrink-0 text-muted-foreground">{hhmm(s.arrivalSec)}{s.lateBySec > 0 && <span className="ml-1 text-warning">+{Math.round(s.lateBySec / 60)}m</span>}</span>
-            </button>
-          </li>
-        ))}
+        {trip.stops.map((s) => {
+          const reorderable = canDrag && !!onResequence;
+          return (
+            <li key={s.seq}
+              onDragOver={reorderable ? (e) => { if (isOrderDrag(e)) { e.preventDefault(); if (overSeq !== s.seq) setOverSeq(s.seq); } } : undefined}
+              onDragLeave={reorderable ? () => setOverSeq((v) => (v === s.seq ? null : v)) : undefined}
+              onDrop={reorderable ? (e) => { e.preventDefault(); setOverSeq(null); const o = readDraggedOrder(e); if (o) reorder(o, s.seq); } : undefined}
+              className={overSeq === s.seq ? 'rounded ring-2 ring-primary/50' : ''}>
+              <button type="button" onClick={() => onSelectStop(s.seq)}
+                draggable={canDrag} onDragStart={canDrag ? (e) => setDraggedOrder(e, s.orderNo) : undefined}
+                title={canDrag ? t(reorderable ? 'inspector.dragStop' : 'inspector.dragToReassign') : undefined}
+                className={`flex w-full items-baseline justify-between gap-2 rounded px-1 py-1 text-left text-xs hover:bg-accent ${canDrag ? 'cursor-grab active:cursor-grabbing' : ''}`}>
+                <span className="min-w-0 truncate"><span className="tnum text-muted-foreground">{s.seq}.</span> {s.customer ?? s.orderNo}
+                  <span className="tnum ml-1 text-[10px] text-muted-foreground">+{Math.round(s.travelToSec / 60)}m</span>
+                </span>
+                <span className="tnum shrink-0 text-muted-foreground">{hhmm(s.arrivalSec)}{s.lateBySec > 0 && <span className="ml-1 text-warning">+{Math.round(s.lateBySec / 60)}m</span>}</span>
+              </button>
+            </li>
+          );
+        })}
       </ol>
     </div>
   );
@@ -282,7 +304,7 @@ function LoadTab({ vehicle }: { vehicle: Vehicle }) {
   );
 }
 
-export function Inspector({ plan, scenario, selection, onSelect, onBack, onForward, canGoBack, canGoForward, onMarkUnavailable, onRestoreVehicle, onSetConstraint, onClearConstraint, solving, onPin, onUnpin, onForbid, onClearOverrides }: {
+export function Inspector({ plan, scenario, selection, onSelect, onBack, onForward, canGoBack, canGoForward, onMarkUnavailable, onRestoreVehicle, onSetConstraint, onClearConstraint, solving, onPin, onUnpin, onForbid, onClearOverrides, onSetSequence }: {
   plan: Plan; baseline: Plan; scenario: Scenario; selection: Selection; onSelect: (s: Selection) => void; onMarkUnavailable: (id: number) => void; solving: boolean;
   onBack: () => void; onForward: () => void; canGoBack: boolean; canGoForward: boolean;
   onRestoreVehicle: (id: number) => void;
@@ -292,6 +314,7 @@ export function Inspector({ plan, scenario, selection, onSelect, onBack, onForwa
   onUnpin: (orderNo: string) => void;
   onForbid: (orderNo: string, vehicleId: number) => void;
   onClearOverrides: () => void;
+  onSetSequence?: (vehicleId: number, orderNos: string[]) => void;
 }) {
   const t = useT();
   const overrideCount = scenario.pins.length + scenario.forbids.length;
@@ -368,7 +391,13 @@ export function Inspector({ plan, scenario, selection, onSelect, onBack, onForwa
           <div className="space-y-3 p-3">
             <TabsContent value="details" className="mt-0 space-y-3">
               {stop ? <StopDetail stop={stop} vehicle={vehicle} />
-                : trip ? <TripDetail trip={trip} vehicle={vehicle} currency={currency} canDrag={!solving} onSelectStop={(seq) => onSelect({ kind: 'stop', vehicleId: vehicle.id, tripIndex: trip.index, seq })} />
+                : trip ? <TripDetail trip={trip} vehicle={vehicle} currency={currency} canDrag={!solving}
+                    onSelectStop={(seq) => onSelect({ kind: 'stop', vehicleId: vehicle.id, tripIndex: trip.index, seq })}
+                    onResequence={onSetSequence ? (newOrderNos) => {
+                      // the vehicle's full manual order = each trip's stops, with THIS trip reordered
+                      const full = vehicle.trips.flatMap((tr) => (tr.index === trip.index ? newOrderNos : tr.stops.map((s) => s.orderNo)));
+                      onSetSequence(vehicle.id, full);
+                    } : undefined} />
                   : <VehicleSummary vehicle={vehicle} plan={plan} onSelectTrip={(i) => onSelect({ kind: 'trip', vehicleId: vehicle.id, tripIndex: i })} />}
               {stop && (
                 <AssignmentSection plan={plan} scenario={scenario} orderNo={stop.orderNo} currentVehicleId={vehicle.id}

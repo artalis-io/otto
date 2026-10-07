@@ -58,6 +58,36 @@ test.describe('staged edit stack', () => {
     expectNoErrors(page);
   });
 
+  test('drag-to-reorder within a trip stages a stop-order change', async ({ page }) => {
+    await loadApp(page);
+    const picked = await page.evaluate(async () => {
+      const days = await (await fetch('/api/days')).json();
+      const d1 = days.find((d: { id: string }) => d.id === 'day1') ?? days[0];
+      const plan = await (await fetch(`/api/plans/${d1.baselinePlanId}`)).json();
+      const v = plan.vehicles.find((x: { trips: { stops: unknown[] }[] }) => x.trips[0] && x.trips[0].stops.length >= 2);
+      return { ref: v.ref as string, orders: v.trips[0].stops.map((s: { orderNo: string }) => s.orderNo) as string[] };
+    });
+    await selectVehicle(page, picked.ref);
+    await page.locator('aside').last().getByRole('button', { name: /Trip 1/ }).click();
+    // reorder: drop the 2nd stop onto the 1st (move it to the front)
+    const reordered = await page.evaluate((order1) => {
+      const li = document.querySelectorAll('aside')[1]!.querySelectorAll('ol li')[0] as HTMLElement | undefined;
+      if (!li) return false;
+      const dt = new DataTransfer();
+      dt.setData('application/x-otto-order', order1);
+      li.dispatchEvent(new DragEvent('dragover', { bubbles: true, cancelable: true, dataTransfer: dt }));
+      li.dispatchEvent(new DragEvent('drop', { bubbles: true, cancelable: true, dataTransfer: dt }));
+      return true;
+    }, picked.orders[1]);
+    expect(reordered).toBe(true);
+
+    await expect(page.getByText('Optimizing')).toHaveCount(0);
+    await expect(page.getByText(/staged change/)).toBeVisible();
+    await page.getByRole('button', { name: /Changes/ }).click();
+    await expect(page.getByRole('dialog').getByText('Stop order')).toBeVisible();
+    expectNoErrors(page);
+  });
+
   test('vehicle constraint edit stacks', async ({ page }) => {
     await loadApp(page);
     await selectVehicle(page, 'RIX-419');

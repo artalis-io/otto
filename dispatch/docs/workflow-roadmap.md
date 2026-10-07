@@ -40,12 +40,16 @@ accepting or rejecting its output.
 - **Drag-to-reassign** an order onto a different vehicle (and place an unassigned
   order). Maps onto the existing `pin` edit (`allowed_vehicles=[v]`), stacks on the
   editable scenario, and is honored on Replan. **This is the first build.**
-- **Manual stop resequencing** within a trip (drag to reorder). Needs engine work:
-  the C engine has `sg_add_precedence(before, after)`, but `surge_solve.c` (the CLI
-  the backend drives over JSON) does not parse precedence. Plan: add a `precedence`
-  array to the request JSON + parse it in `surge_solve.c` -> `sg_add_precedence`, add
-  a `sequence`/`precedence` `ScenarioEdit`, wire it in `buildRequest`, and a
-  drag-to-reorder stop list. Scoped as the fast-follow after reassign.
+- **Manual stop resequencing** within a trip (drag to reorder). **DONE.** It turned
+  out no C change was needed: `sg_api_build_model` already parses
+  `precedences:[{before,after}]` from the request JSON into `sg_add_precedence`
+  (verified a forced order flips the solver's natural sequence). So it is pure Node +
+  frontend: a `setSequence`/`clearSequence` `ScenarioEdit` + `VehicleSequence` on the
+  scenario; `applySequences` locks the ordered orders to the vehicle
+  (`allowed_vehicles`) and chains precedence between consecutive ones; a drag-to-reorder
+  stop list in the Inspector (same drag as reassign, but dropping on a sibling stop
+  reorders). A feasible order is honored; an infeasible one (breaks a hard time window)
+  correctly drops the conflicting order as unassigned.
 - **Lock-and-resolve**: freeze some decisions (pinned assignments, a fixed partial
   sequence), let the solver fill the rest. Falls out of the two above plus the
   existing pin/forbid model.

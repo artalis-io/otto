@@ -1,4 +1,4 @@
-import { X, Ban, Pin, SlidersHorizontal, Repeat, RotateCcw } from 'lucide-react';
+import { X, Ban, Pin, SlidersHorizontal, Repeat, RotateCcw, ListOrdered } from 'lucide-react';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { Button } from '@/components/ui/button';
@@ -21,7 +21,7 @@ export function ChangesDialog({ open, onOpenChange, plan, scenario, dirty, solvi
     const u = plan.unassigned.find((x) => x.orderNo === orderNo);
     return u?.customer ?? orderNo;
   };
-  const total = scenario.removedVehicleIds.length + scenario.pins.length + scenario.forbids.length + scenario.vehicleOverrides.length;
+  const total = scenario.removedVehicleIds.length + scenario.pins.length + scenario.forbids.length + scenario.vehicleOverrides.length + scenario.sequences.length;
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -56,6 +56,13 @@ export function ChangesDialog({ open, onOpenChange, plan, scenario, dirty, solvi
                 <Group title={t('changes.constraints')} icon={<SlidersHorizontal className="h-3.5 w-3.5" />}>
                   {scenario.vehicleOverrides.map((o) => (
                     <Row key={o.vehicleId} label={refOf(o.vehicleId)} detail={summarize(o, t)} onUndo={() => onUndo({ op: 'clearVehicleConstraint', vehicleId: o.vehicleId })} />
+                  ))}
+                </Group>
+              )}
+              {scenario.sequences.length > 0 && (
+                <Group title={t('changes.sequences')} icon={<ListOrdered className="h-3.5 w-3.5" />}>
+                  {scenario.sequences.map((q) => (
+                    <Row key={q.vehicleId} label={refOf(q.vehicleId)} detail={t('changes.sequenceN', { n: q.orderNos.length })} onUndo={() => onUndo({ op: 'clearSequence', vehicleId: q.vehicleId })} />
                   ))}
                 </Group>
               )}

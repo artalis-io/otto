@@ -112,7 +112,7 @@ export default function App() {
     const base = await api.plan(d.baselinePlanId);
     setBaseline(base);
     setPlan(base);
-    setScenario({ id: d.baseScenarioId, day: d.id, kind: 'base', parentId: null, revision: 0, label: d.label, removedVehicleIds: [], pins: [], forbids: [], vehicleOverrides: [], createdAt: '' });
+    setScenario({ id: d.baseScenarioId, day: d.id, kind: 'base', parentId: null, revision: 0, label: d.label, removedVehicleIds: [], pins: [], forbids: [], vehicleOverrides: [], sequences: [], createdAt: '' });
   }, []);
 
   // Follow a running job (already created) to its terminal state; apply + return
@@ -293,7 +293,7 @@ export default function App() {
 
   const isReplan = scenario.kind === 'copy';
   const solving = job?.status === 'running' || job?.status === 'pending';
-  const changesCount = scenario.removedVehicleIds.length + scenario.pins.length + scenario.forbids.length + scenario.vehicleOverrides.length;
+  const changesCount = scenario.removedVehicleIds.length + scenario.pins.length + scenario.forbids.length + scenario.vehicleOverrides.length + scenario.sequences.length;
   // The plan no longer reflects the scenario once it has been edited since solve.
   const dirty = scenario.revision !== plan.scenarioRevision;
 
@@ -367,7 +367,8 @@ export default function App() {
                 onPin={(orderNo, vehicleId) => void applyEdit({ op: 'pin', orderNo, vehicleId })}
                 onUnpin={(orderNo) => void applyEdit({ op: 'unpin', orderNo })}
                 onForbid={(orderNo, vehicleId) => void applyEdit({ op: 'forbid', orderNo, vehicleId })}
-                onClearOverrides={() => void applyEdit({ op: 'clearOverrides' })} />
+                onClearOverrides={() => void applyEdit({ op: 'clearOverrides' })}
+                onSetSequence={(vehicleId, orderNos) => void applyEdit({ op: 'setSequence', vehicleId, orderNos })} />
             </aside>
           )}
         </div>

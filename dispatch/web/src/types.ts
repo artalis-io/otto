@@ -178,8 +178,12 @@ export interface Scenario {
   pins: Pin[];
   forbids: Forbid[];
   vehicleOverrides: VehicleOverride[];
+  sequences: VehicleSequence[];
   createdAt: string;
 }
+
+/* A manual stop order for one vehicle (orders locked to it, solved in order). */
+export interface VehicleSequence { vehicleId: number; orderNos: string[] }
 
 /* A single dispatcher edit; mirrors the backend ScenarioEdit union. */
 export type ScenarioEdit =
@@ -191,6 +195,8 @@ export type ScenarioEdit =
   | { op: 'unforbid'; orderNo: string; vehicleId: number }
   | { op: 'setVehicleConstraint'; vehicleId: number; patch: VehicleConstraintPatch }
   | { op: 'clearVehicleConstraint'; vehicleId: number }
+  | { op: 'setSequence'; vehicleId: number; orderNos: string[] }
+  | { op: 'clearSequence'; vehicleId: number }
   | { op: 'clearOverrides' };
 
 export type JobStatus = 'pending' | 'running' | 'completed' | 'failed' | 'cancelled';
