@@ -1,5 +1,5 @@
 import { spawn, type ChildProcess } from 'node:child_process';
-import { mkdirSync, writeFileSync } from 'node:fs';
+import { mkdirSync, writeFileSync, rmSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { config } from './config.js';
 import { loadDay, loadEnrichment, loadVehicleInfo, DAYS } from './data/gyermelyi.js';
@@ -10,7 +10,14 @@ import type { SurgeRequest, SurgeSolution } from './types.js';
 
 const enrichment = loadEnrichment();
 const vehicleInfo = loadVehicleInfo();
+
+/* Bounded solve execution: at most `maxConcurrentSolves` surge_solve processes
+ * run at once; the rest queue (jobs stay 'pending' until a slot frees). Each run
+ * has a watchdog that hard-kills a solver that overruns its budget, and caps the
+ * captured stdout so a pathological solver can't exhaust memory. */
 const running = new Map<string, ChildProcess>();
+interface QueuedSolve { job: Job; scenario: Scenario; budgetSec: number; objective: Objective }
+const queue: QueuedSolve[] = [];
 
 export interface BuiltRequest { request: SurgeRequest; day: ReturnType<typeof loadDay> }
 
@@ -100,7 +107,22 @@ function dayLabel(dayId: string): string {
 
 /** Spawn surge_solve for a job (off the event loop), then map + geometry-fill +
  * store the resulting plan. Updates job status throughout. */
-export function startSolve(job: Job, scenario: Scenario, budgetSec: number, objective: Objective = 'vehicles'): void {
+/** Enqueue a solve: runs immediately if a slot is free, else queues (the job
+ * stays 'pending' until a slot frees). */
+export function enqueueSolve(job: Job, scenario: Scenario, budgetSec: number, objective: Objective = 'vehicles'): void {
+  if (running.size < Math.max(1, config.maxConcurrentSolves)) runSolveProcess(job, scenario, budgetSec, objective);
+  else queue.push({ job, scenario, budgetSec, objective });
+}
+
+function pumpQueue(): void {
+  while (running.size < Math.max(1, config.maxConcurrentSolves) && queue.length) {
+    const next = queue.shift()!;
+    if (next.job.status === 'cancelled') continue; // cancelled while queued
+    runSolveProcess(next.job, next.scenario, next.budgetSec, next.objective);
+  }
+}
+
+function runSolveProcess(job: Job, scenario: Scenario, budgetSec: number, objective: Objective): void {
   const built = buildRequest(scenario, budgetSec, objective);
   const jobsDir = resolve(config.dataDir, 'jobs');
   mkdirSync(jobsDir, { recursive: true });
@@ -117,70 +139,88 @@ export function startSolve(job: Job, scenario: Scenario, budgetSec: number, obje
 
   const out: Buffer[] = [];
   const err: Buffer[] = [];
-  child.stdout.on('data', (c: Buffer) => out.push(c));
-  child.stderr.on('data', (c: Buffer) => err.push(c));
+  let outBytes = 0, overflow = false, timedOut = false;
+  const maxOut = Math.max(1, config.maxSolveOutputMB) * 1024 * 1024;
+
+  child.stdout.on('data', (c: Buffer) => {
+    outBytes += c.length;
+    if (outBytes > maxOut) { if (!overflow) { overflow = true; child.kill('SIGKILL'); } return; }
+    out.push(c);
+  });
+  child.stderr.on('data', (c: Buffer) => { if (err.length < 256) err.push(c); });
+
+  // Watchdog: a solver that overruns its budget is SIGTERM'd, then SIGKILL'd.
+  const killMs = (budgetSec + Math.max(5, config.solveWatchdogGraceSec)) * 1000;
+  const termTimer = setTimeout(() => { timedOut = true; child.kill('SIGTERM'); }, killMs);
+  const killTimer = setTimeout(() => { if (running.has(job.id)) child.kill('SIGKILL'); }, killMs + 5000);
 
   child.on('error', (e) => {
+    clearTimeout(termTimer); clearTimeout(killTimer);
+    running.delete(job.id);
+    try { rmSync(reqFile, { force: true }); } catch { /* best-effort */ }
     job.status = 'failed';
     job.error = `spawn failed: ${e.message}`;
     job.finishedAt = new Date().toISOString();
     job.elapsedSec = (Date.now() - t0) / 1000;
-    running.delete(job.id);
     store.saveJob(job);
+    pumpQueue();
   });
 
   child.on('close', (code, signal) => {
-    running.delete(job.id);
+    clearTimeout(termTimer); clearTimeout(killTimer);
+    running.delete(job.id); // the surge process has exited; free the slot
+    try { rmSync(reqFile, { force: true }); } catch { /* best-effort */ }
     job.elapsedSec = (Date.now() - t0) / 1000;
     job.finishedAt = new Date().toISOString();
 
-    if (job.status === 'cancelled' || signal === 'SIGTERM' || signal === 'SIGKILL') {
-      job.status = 'cancelled';
-      store.saveJob(job);
-      return;
-    }
+    try {
+      if (job.status === 'cancelled') { store.saveJob(job); return; }
+      if (timedOut) { job.status = 'failed'; job.error = `solve exceeded its budget (${budgetSec}s) and was terminated`; store.saveJob(job); return; }
+      if (overflow) { job.status = 'failed'; job.error = `solver output exceeded ${config.maxSolveOutputMB} MB`; store.saveJob(job); return; }
 
-    let solution: SurgeSolution | null = null;
-    try { solution = JSON.parse(Buffer.concat(out).toString('utf8')) as SurgeSolution; } catch { /* below */ }
+      let solution: SurgeSolution | null = null;
+      try { solution = JSON.parse(Buffer.concat(out).toString('utf8')) as SurgeSolution; } catch { /* below */ }
 
-    if (!solution || !Array.isArray(solution.routes) || solution.routes.length === 0) {
-      job.status = 'failed';
-      job.termination = solution?.status ?? null;
-      job.error = (Buffer.concat(err).toString('utf8').trim() || `surge_solve exited ${code} with no usable solution`).slice(0, 500);
-      store.saveJob(job);
-      return;
-    }
+      if (!solution || !Array.isArray(solution.routes) || solution.routes.length === 0) {
+        job.status = 'failed';
+        job.termination = solution?.status ?? null;
+        job.error = (Buffer.concat(err).toString('utf8').trim() || `surge_solve exited ${code}${signal ? ` (${signal})` : ''} with no usable solution`).slice(0, 500);
+        store.saveJob(job);
+        return;
+      }
 
-    const planId = store.newId('pln');
-    const plan = mapSolutionToPlan({
-      day: built.day,
-      request: built.request,
-      solution,
-      enrichment,
-      vehicleInfo,
-      scenarioId: scenario.id,
-      scenarioRevision: scenario.revision,
-      planId,
-      source: 'live',
-      createdAt: new Date().toISOString(),
-    });
-    // surge_solve does not emit elapsed; record the measured wall-clock.
-    plan.stats.solveElapsedSeconds = Math.round(job.elapsedSec * 10) / 10;
+      const planId = store.newId('pln');
+      const plan = mapSolutionToPlan({
+        day: built.day, request: built.request, solution, enrichment, vehicleInfo,
+        scenarioId: scenario.id, scenarioRevision: scenario.revision, planId,
+        source: 'live', createdAt: new Date().toISOString(),
+      });
+      plan.stats.solveElapsedSeconds = Math.round(job.elapsedSec * 10) / 10;
 
-    // Fill geometry before publishing so the plan renders immediately.
-    fillPlanGeometry(plan)
-      .catch(() => false)
-      .finally(() => {
+      // Fill geometry before publishing (async; does not hold the solve slot).
+      fillPlanGeometry(plan).catch(() => false).finally(() => {
         store.putPlan(plan);
         job.status = 'completed';
         job.planId = planId;
         job.termination = solution!.status;
         store.saveJob(job);
       });
+    } finally {
+      pumpQueue();
+    }
   });
 }
 
 export function cancelJob(job: Job): boolean {
+  // Queued but not yet started: drop it from the queue.
+  const qi = queue.findIndex((q) => q.job.id === job.id);
+  if (qi >= 0) {
+    queue.splice(qi, 1);
+    job.status = 'cancelled';
+    job.finishedAt = new Date().toISOString();
+    store.saveJob(job);
+    return true;
+  }
   const child = running.get(job.id);
   if (!child) return false;
   job.status = 'cancelled';

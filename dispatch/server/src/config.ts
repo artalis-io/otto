@@ -49,6 +49,20 @@ export const config = {
   // Pseudonymize customer names (cities/coords kept). For shippable screenshots
   // of real plans without exposing client PII. Off by default (real demo).
   anonymize: env('DISPATCH_ANONYMIZE', '0') === '1',
+
+  // ---- Robustness limits ----
+  // Max solver subprocesses at once; further solves queue (pending -> running).
+  maxConcurrentSolves: Number(env('DISPATCH_MAX_CONCURRENT_SOLVES', '2')),
+  // Hard-kill a solve this many seconds past its budget (SIGTERM, then SIGKILL).
+  solveWatchdogGraceSec: Number(env('DISPATCH_SOLVE_GRACE_SEC', '20')),
+  // Cap captured solver stdout; beyond this the job fails instead of OOMing.
+  maxSolveOutputMB: Number(env('DISPATCH_MAX_SOLVE_OUTPUT_MB', '128')),
+  // Retention: keep at most this many persisted plans / jobs (oldest pruned).
+  retainPlans: Number(env('DISPATCH_RETAIN_PLANS', '200')),
+  retainJobs: Number(env('DISPATCH_RETAIN_JOBS', '200')),
+  // Per-IP API rate limit (token bucket): sustained rps and burst.
+  rateLimitRps: Number(env('DISPATCH_RATE_RPS', '40')),
+  rateLimitBurst: Number(env('DISPATCH_RATE_BURST', '120')),
 } as const;
 
 export type Config = typeof config;

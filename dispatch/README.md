@@ -105,6 +105,11 @@ cd dispatch/server && npm start
 | `SAGE_ORIGIN` | `127.0.0.1:8084` | Optional LLM narration (Spark). |
 | `DISPATCH_SOLVE_SECONDS` | 240 | Default solve budget. |
 | `DISPATCH_ANONYMIZE` | 0 | `1` pseudonymizes customer names (cities/coords kept) for shippable screenshots. |
+| `DISPATCH_MAX_CONCURRENT_SOLVES` | 2 | Max `surge_solve` processes at once; the rest queue (jobs stay `pending`). |
+| `DISPATCH_SOLVE_GRACE_SEC` | 20 | A solve overrunning its budget by this much is hard-killed (SIGTERM→SIGKILL). |
+| `DISPATCH_MAX_SOLVE_OUTPUT_MB` | 128 | Cap on captured solver stdout; beyond it the job fails instead of OOMing. |
+| `DISPATCH_RETAIN_PLANS` / `_JOBS` | 200 / 200 | Retention: oldest persisted plans/jobs (and their request files) are pruned. |
+| `DISPATCH_RATE_RPS` / `_BURST` | 40 / 120 | Per-IP API rate limit (token bucket); `/tiles` and `/api/health` are exempt. |
 | `rates/tariff.json` | (demo) | Optional real carrier tariff under `GYERMELYI_ROOT` (uncommitted). Absent → an illustrative demo tariff drives the cost KPI, labelled as such. |
 | `VITE_API_ORIGIN` | `localhost:8091` | Frontend → backend origin (dev proxy). |
 | `VITE_SOLVE_SECONDS` | 60 | UI-triggered solve budget. |
@@ -113,7 +118,8 @@ cd dispatch/server && npm start
 
 - Backend unit tests: `cd dispatch/server && npm test` (result mapping,
   comparison incl. cost, scenario edits + stale-job association, override
-  application, cost tariff, CSV/route-sheet export, week roll-up).
+  application, cost tariff, CSV/route-sheet export, week roll-up, edit
+  validation/bounds, rate limiter).
 - UI tests (Playwright, real browser against the running app): with the stack up
   (backend + Carta + Velo) and the web app on :5179 (or set `VIEWER_URL`), run
   `cd dispatch/web && npm run test:ui`. Covers load/KPIs/cost, i18n, inspector

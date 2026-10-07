@@ -6,17 +6,36 @@ import { config } from './config.js';
 import { DAYS, loadDay, loadEnrichment, loadVehicleInfo } from './data/gyermelyi.js';
 import { mapSolutionToPlan } from './plan/mapper.js';
 import { fillPlanGeometry, veloReachable } from './geometry/velo.js';
-import { store, type ScenarioEdit } from './store.js';
-import { startSolve, cancelJob, type Objective } from './solve.js';
+import { store, validateScenarioEdit, type ScenarioEdit } from './store.js';
+import { enqueueSolve, cancelJob, type Objective } from './solve.js';
 import { comparePlans } from './plan/compare.js';
 import { weekSummary } from './plan/week.js';
 import { importSummary, rawSample, canonicalSample } from './data/import.js';
 import { sageReachable, narratePlan, narrateComparison, type Lang } from './sage.js';
 import { loadTariff } from './cost.js';
 import { planToCsv, planToRouteSheetHtml } from './export.js';
+import { RateLimiter } from './ratelimit.js';
 import type { Plan } from './types.js';
 
 const app = Fastify({ logger: { level: 'info' }, bodyLimit: 4 * 1024 * 1024 });
+
+// Consistent JSON error envelope; never leak a stack to the client.
+app.setErrorHandler((err, req, reply) => {
+  const status = err.statusCode && err.statusCode >= 400 ? err.statusCode : 500;
+  if (status >= 500) app.log.error({ err, url: req.url }, 'request failed');
+  reply.code(status).send({ error: status >= 500 ? 'internal error' : err.message });
+});
+// Don't let a stray async rejection take the process down silently.
+process.on('unhandledRejection', (reason) => app.log.error({ reason }, 'unhandledRejection'));
+
+// Per-IP rate limit on the API surface (tiles proxy + static are exempt; health
+// is exempt for monitoring).
+const limiter = new RateLimiter(config.rateLimitRps, config.rateLimitBurst);
+app.addHook('onRequest', (req, reply, done) => {
+  if (!req.url.startsWith('/api') || req.url.startsWith('/api/health')) return done();
+  if (!limiter.allow(req.ip || 'unknown')) { reply.code(429).send({ error: 'too many requests' }); return; }
+  done();
+});
 
 const enrichment = loadEnrichment();
 const vehicleInfo = loadVehicleInfo();
@@ -100,11 +119,13 @@ app.post<{ Params: { id: string }; Body: { edit?: ScenarioEdit; label?: string }
   const cur = store.getScenario(req.params.id);
   if (!cur) return reply.code(404).send({ error: 'scenario not found' });
   const edit = req.body?.edit;
-  if (!edit || typeof edit.op !== 'string') return reply.code(400).send({ error: 'edit op required' });
+  const invalid = validateScenarioEdit(edit);
+  if (invalid) return reply.code(400).send({ error: invalid });
+  if (req.body?.label != null && (typeof req.body.label !== 'string' || req.body.label.length > 120)) return reply.code(400).send({ error: 'invalid label' });
   try {
     const forked = cur.kind === 'base';
     const target = store.forkForEdit(cur, req.body?.label);
-    const updated = store.editScenario(target.id, edit);
+    const updated = store.editScenario(target.id, edit as ScenarioEdit);
     return reply.code(forked ? 201 : 200).send(updated);
   } catch (e) {
     return reply.code(400).send({ error: (e as Error).message });
@@ -140,7 +161,7 @@ app.post<{ Params: { id: string }; Body: { budgetSec?: number; objective?: strin
   const budget = Math.max(5, Math.min(600, req.body?.budgetSec ?? config.solveTimeSeconds));
   const objective: Objective = req.body?.objective === 'distance' ? 'distance' : 'vehicles';
   const job = store.createJob(scenario.id, scenario.revision);
-  startSolve(job, scenario, budget, objective); // off the event loop (child process)
+  enqueueSolve(job, scenario, budget, objective); // off the event loop (child process)
   return reply.code(202).send({ jobId: job.id, scenarioId: scenario.id, scenarioRevision: scenario.revision, budgetSec: budget, objective });
 });
 

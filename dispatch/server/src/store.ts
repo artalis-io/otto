@@ -1,4 +1,4 @@
-import { mkdirSync, readdirSync, readFileSync, writeFileSync, existsSync } from 'node:fs';
+import { mkdirSync, readdirSync, readFileSync, writeFileSync, existsSync, renameSync, rmSync, statSync } from 'node:fs';
 import { resolve, join } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { config } from './config.js';
@@ -57,6 +57,44 @@ export type ScenarioEdit =
   | { op: 'clearVehicleConstraint'; vehicleId: number }
   | { op: 'clearOverrides' };
 
+/* Validate + bounds-check an untrusted edit from the API. Returns an error
+ * message, or null if the edit is well-formed and in range. */
+const CONSTRAINT_BOUNDS: Record<keyof VehicleConstraintPatch, [number, number]> = {
+  capacityKg: [0, 200_000], capacityPallets: [0, 100],
+  shiftEarlySec: [0, 86_400], shiftLateSec: [0, 86_400],
+  maxTrips: [1, 50], maxDistanceKm: [0, 10_000], maxDurationMin: [0, 1_440],
+};
+export function validateScenarioEdit(edit: unknown): string | null {
+  if (!edit || typeof edit !== 'object') return 'edit object required';
+  const e = edit as Record<string, unknown>;
+  const isVid = (v: unknown): v is number => typeof v === 'number' && Number.isInteger(v) && v >= 0 && v < 1e9;
+  const isOrder = (v: unknown): v is string => typeof v === 'string' && v.length > 0 && v.length <= 64;
+  switch (e.op) {
+    case 'removeVehicle': case 'restoreVehicle': case 'clearVehicleConstraint':
+      return isVid(e.vehicleId) ? null : 'valid vehicleId required';
+    case 'pin': case 'forbid': case 'unforbid':
+      return isOrder(e.orderNo) && isVid(e.vehicleId) ? null : 'valid orderNo and vehicleId required';
+    case 'unpin':
+      return isOrder(e.orderNo) ? null : 'valid orderNo required';
+    case 'clearOverrides':
+      return null;
+    case 'setVehicleConstraint': {
+      if (!isVid(e.vehicleId)) return 'valid vehicleId required';
+      const patch = e.patch;
+      if (!patch || typeof patch !== 'object') return 'patch object required';
+      for (const [k, v] of Object.entries(patch as Record<string, unknown>)) {
+        if (v == null) continue; // clearing a field
+        const bounds = CONSTRAINT_BOUNDS[k as keyof VehicleConstraintPatch];
+        if (!bounds) return `unknown constraint: ${k}`;
+        if (typeof v !== 'number' || !Number.isFinite(v) || v < bounds[0] || v > bounds[1]) return `${k} must be ${bounds[0]}..${bounds[1]}`;
+      }
+      return null;
+    }
+    default:
+      return `unknown edit op: ${String(e.op)}`;
+  }
+}
+
 export type JobStatus = 'pending' | 'running' | 'completed' | 'failed' | 'cancelled';
 export interface Job {
   id: string;
@@ -77,16 +115,30 @@ function dir(sub: string): string {
   mkdirSync(d, { recursive: true });
   return d;
 }
+/* Atomic write: a crash mid-write leaves the old file intact (temp + rename),
+ * never a half-written/corrupt JSON. */
 function writeJson(path: string, obj: unknown): void {
-  writeFileSync(path, JSON.stringify(obj));
+  const tmp = `${path}.${process.pid}.tmp`;
+  writeFileSync(tmp, JSON.stringify(obj));
+  renameSync(tmp, path);
 }
+function isJobRequestFile(f: string): boolean { return f.endsWith('_request.json'); }
 function loadAll<T>(sub: string): Map<string, T> {
   const m = new Map<string, T>();
   const d = dir(sub);
   if (!existsSync(d)) return m;
   for (const f of readdirSync(d)) {
-    if (!f.endsWith('.json')) continue;
-    try { const o = JSON.parse(readFileSync(join(d, f), 'utf8')) as { id?: string }; if (o.id) m.set(o.id, o as T); } catch { /* skip */ }
+    if (f.endsWith('.tmp')) { try { rmSync(join(d, f)); } catch { /* ignore */ } continue; } // stale temp from a crash
+    if (!f.endsWith('.json') || isJobRequestFile(f)) continue;
+    const fp = join(d, f);
+    try {
+      const o = JSON.parse(readFileSync(fp, 'utf8')) as { id?: string };
+      if (o.id) m.set(o.id, o as T);
+    } catch {
+      // Quarantine rather than silently drop, so a corrupt file is visible.
+      try { renameSync(fp, `${fp}.corrupt`); } catch { /* ignore */ }
+      console.warn(`[store] quarantined unreadable ${sub} file: ${f}`);
+    }
   }
   return m;
 }
@@ -104,6 +156,37 @@ export class Store {
       if (!Array.isArray(s.pins)) s.pins = [];
       if (!Array.isArray(s.forbids)) s.forbids = [];
       if (!Array.isArray(s.vehicleOverrides)) s.vehicleOverrides = [];
+    }
+    this.gcPlans(); this.gcJobs(); // prune any backlog left from prior runs
+  }
+
+  /* Retention: keep at most `keep` of the oldest primary files in a dir (by
+   * mtime), returning the removed base names. */
+  private pruneDir(sub: string, keep: number, isPrimary: (f: string) => boolean): string[] {
+    const d = dir(sub);
+    let files: string[];
+    try { files = readdirSync(d).filter((f) => f.endsWith('.json') && !f.endsWith('.corrupt') && isPrimary(f)); } catch { return []; }
+    if (files.length <= keep) return [];
+    const withT = files.map((f) => { let t = 0; try { t = statSync(join(d, f)).mtimeMs; } catch { /* ignore */ } return { f, t }; });
+    withT.sort((a, b) => a.t - b.t); // oldest first
+    const removed: string[] = [];
+    for (const { f } of withT.slice(0, withT.length - keep)) {
+      try { rmSync(join(d, f), { force: true }); removed.push(f); } catch { /* ignore */ }
+    }
+    return removed;
+  }
+
+  gcPlans(): void {
+    for (const f of this.pruneDir('plans', Math.max(1, config.retainPlans), () => true)) {
+      this.plans.delete(f.replace(/\.json$/, ''));
+    }
+  }
+  gcJobs(): void {
+    const d = dir('jobs');
+    for (const f of this.pruneDir('jobs', Math.max(1, config.retainJobs), (x) => !isJobRequestFile(x))) {
+      const id = f.replace(/\.json$/, '');
+      this.jobs.delete(id);
+      try { rmSync(join(d, `${id}_request.json`), { force: true }); } catch { /* ignore */ }
     }
   }
 
@@ -210,7 +293,10 @@ export class Store {
 
   putPlan(plan: Plan, persist = true): void {
     this.plans.set(plan.id, plan);
-    if (persist) writeJson(join(dir('plans'), `${plan.id}.json`), plan);
+    if (persist) {
+      writeJson(join(dir('plans'), `${plan.id}.json`), plan);
+      if (this.plans.size > config.retainPlans + 20) this.gcPlans(); // cheap trigger
+    }
   }
   getPlan(id: string): Plan | undefined { return this.plans.get(id); }
   plansForScenario(scenarioId: string): Plan[] {
@@ -226,6 +312,7 @@ export class Store {
     };
     this.jobs.set(j.id, j);
     this.saveJob(j);
+    if (this.jobs.size > config.retainJobs + 20) this.gcJobs(); // cheap trigger
     return j;
   }
   getJob(id: string): Job | undefined { return this.jobs.get(id); }
