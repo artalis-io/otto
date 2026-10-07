@@ -4,6 +4,7 @@ import { ScrollArea } from '@/components/ui/scroll-area';
 import { Badge } from '@/components/ui/badge';
 import { Separator } from '@/components/ui/separator';
 import { hhmm, km, money, pct, ratio } from '@/lib/format';
+import { setDraggedOrder } from '@/lib/dnd';
 import { NarrationPanel } from '@/components/NarrationPanel';
 import { useT } from '@/i18n';
 import { useState } from 'react';
@@ -58,7 +59,7 @@ function StopDetail({ stop, vehicle }: { stop: Stop; vehicle: Vehicle }) {
   );
 }
 
-function TripDetail({ trip, vehicle, currency, onSelectStop }: { trip: Trip; vehicle: Vehicle; currency: string; onSelectStop: (seq: number) => void }) {
+function TripDetail({ trip, vehicle, currency, onSelectStop, canDrag }: { trip: Trip; vehicle: Vehicle; currency: string; onSelectStop: (seq: number) => void; canDrag?: boolean }) {
   const t = useT();
   const util = Math.max(ratio(trip.loadKg, vehicle.capacityKg), ratio(trip.loadPallets, vehicle.capacityPallets));
   const drive = trip.stops.reduce((n, s) => n + s.travelToSec, 0) + Math.max(0, trip.endSec - (trip.stops.at(-1)?.departureSec ?? trip.endSec));
@@ -75,7 +76,10 @@ function TripDetail({ trip, vehicle, currency, onSelectStop }: { trip: Trip; veh
       <ol className="space-y-0.5">
         {trip.stops.map((s) => (
           <li key={s.seq}>
-            <button type="button" onClick={() => onSelectStop(s.seq)} className="flex w-full items-baseline justify-between gap-2 rounded px-1 py-1 text-left text-xs hover:bg-accent">
+            <button type="button" onClick={() => onSelectStop(s.seq)}
+              draggable={canDrag} onDragStart={canDrag ? (e) => setDraggedOrder(e, s.orderNo) : undefined}
+              title={canDrag ? t('inspector.dragToReassign') : undefined}
+              className={`flex w-full items-baseline justify-between gap-2 rounded px-1 py-1 text-left text-xs hover:bg-accent ${canDrag ? 'cursor-grab active:cursor-grabbing' : ''}`}>
               <span className="min-w-0 truncate"><span className="tnum text-muted-foreground">{s.seq}.</span> {s.customer ?? s.orderNo}
                 <span className="tnum ml-1 text-[10px] text-muted-foreground">+{Math.round(s.travelToSec / 60)}m</span>
               </span>
@@ -364,7 +368,7 @@ export function Inspector({ plan, scenario, selection, onSelect, onBack, onForwa
           <div className="space-y-3 p-3">
             <TabsContent value="details" className="mt-0 space-y-3">
               {stop ? <StopDetail stop={stop} vehicle={vehicle} />
-                : trip ? <TripDetail trip={trip} vehicle={vehicle} currency={currency} onSelectStop={(seq) => onSelect({ kind: 'stop', vehicleId: vehicle.id, tripIndex: trip.index, seq })} />
+                : trip ? <TripDetail trip={trip} vehicle={vehicle} currency={currency} canDrag={!solving} onSelectStop={(seq) => onSelect({ kind: 'stop', vehicleId: vehicle.id, tripIndex: trip.index, seq })} />
                   : <VehicleSummary vehicle={vehicle} plan={plan} onSelectTrip={(i) => onSelect({ kind: 'trip', vehicleId: vehicle.id, tripIndex: i })} />}
               {stop && (
                 <AssignmentSection plan={plan} scenario={scenario} orderNo={stop.orderNo} currentVehicleId={vehicle.id}

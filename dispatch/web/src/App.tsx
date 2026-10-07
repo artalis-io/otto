@@ -332,7 +332,8 @@ export default function App() {
               <FleetPanel plan={plan} scenario={scenario} selection={selection} onSelect={navigate}
                 onMarkUnavailable={(id) => void applyEdit({ op: 'removeVehicle', vehicleId: id })}
                 onRestoreVehicle={(id) => void applyEdit({ op: 'restoreVehicle', vehicleId: id })} solving={!!solving}
-                onFilterChange={setVisibleVehicleIds} />
+                onFilterChange={setVisibleVehicleIds}
+                onAssignOrder={(orderNo, vehicleId) => void applyEdit({ op: 'pin', orderNo, vehicleId })} />
             </aside>
           )}
 

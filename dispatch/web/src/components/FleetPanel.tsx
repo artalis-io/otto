@@ -1,10 +1,11 @@
 import { useEffect, useState } from 'react';
-import { ChevronRight, Search, Ban, RotateCcw } from 'lucide-react';
+import { ChevronRight, Search, Ban, RotateCcw, GripVertical } from 'lucide-react';
 import { Input } from '@/components/ui/input';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { Separator } from '@/components/ui/separator';
 import { Badge } from '@/components/ui/badge';
 import { hhmm, km, ratio, pct } from '@/lib/format';
+import { setDraggedOrder, isOrderDrag, readDraggedOrder } from '@/lib/dnd';
 import { useT } from '@/i18n';
 import type { Plan, Scenario, Vehicle, Selection } from '@/types';
 
@@ -31,17 +32,27 @@ function CapacityBar({ label, used, cap, color }: { label: string; used: number;
 }
 
 function VehicleCard({
-  vehicle, selection, onSelect, onMarkUnavailable, onRestore, removed, expanded, onToggle, solving,
+  vehicle, selection, onSelect, onMarkUnavailable, onRestore, removed, expanded, onToggle, solving, onAssignOrder,
 }: {
   vehicle: Vehicle; selection: Selection; onSelect: (s: Selection) => void;
   onMarkUnavailable: (id: number) => void; onRestore: (id: number) => void; removed: boolean;
   expanded: boolean; onToggle: () => void; solving: boolean;
+  onAssignOrder?: (orderNo: string, vehicleId: number) => void;
 }) {
   const t = useT();
   const selThisVeh = selection && selection.kind !== 'unassigned' && selection.vehicleId === vehicle.id;
   const selTrip = selection && (selection.kind === 'trip' || selection.kind === 'stop') ? selection.tripIndex : null;
+  // Drop target: dragging an order here pins it to this vehicle (applied on Replan).
+  const canDrop = !!onAssignOrder && !solving && !removed;
+  const [dragOver, setDragOver] = useState(false);
+  const dropProps = canDrop ? {
+    onDragOver: (e: React.DragEvent) => { if (isOrderDrag(e)) { e.preventDefault(); e.dataTransfer.dropEffect = 'move'; if (!dragOver) setDragOver(true); } },
+    onDragLeave: () => setDragOver(false),
+    onDrop: (e: React.DragEvent) => { e.preventDefault(); setDragOver(false); const o = readDraggedOrder(e); if (o) onAssignOrder!(o, vehicle.id); },
+  } : {};
   return (
-    <div className={`rounded-md border bg-card transition-colors ${removed ? 'border-warning/40 opacity-60' : selThisVeh ? 'border-ring ring-1 ring-ring' : 'border-divider hover:bg-accent/50'}`}>
+    <div {...dropProps}
+      className={`rounded-md border bg-card transition-colors ${dragOver ? 'border-primary ring-2 ring-primary/40' : removed ? 'border-warning/40 opacity-60' : selThisVeh ? 'border-ring ring-1 ring-ring' : 'border-divider hover:bg-accent/50'}`}>
       <div className="flex cursor-pointer items-center gap-2 p-2.5" onClick={() => onSelect({ kind: 'vehicle', vehicleId: vehicle.id })}>
         <button type="button" aria-label={expanded ? 'Collapse trips' : 'Expand trips'} onClick={(e) => { e.stopPropagation(); onToggle(); }} className="-ml-1 text-muted-foreground hover:text-foreground">
           <ChevronRight className={`h-3.5 w-3.5 transition-transform ${expanded ? 'rotate-90' : ''}`} />
@@ -96,11 +107,12 @@ function VehicleCard({
 /* Left fleet panel: search, vehicle cards (expandable to trips + mark-unavailable),
  * and a collapsible unassigned-orders section. Selection is lifted to App. */
 export function FleetPanel({
-  plan, scenario, selection, onSelect, onMarkUnavailable, onRestoreVehicle, solving, onFilterChange,
+  plan, scenario, selection, onSelect, onMarkUnavailable, onRestoreVehicle, solving, onFilterChange, onAssignOrder,
 }: {
   plan: Plan; scenario: Scenario; selection: Selection; onSelect: (s: Selection) => void;
   onMarkUnavailable: (id: number) => void; onRestoreVehicle: (id: number) => void; solving: boolean;
   onFilterChange?: (visibleVehicleIds: number[] | null) => void;
+  onAssignOrder?: (orderNo: string, vehicleId: number) => void;
 }) {
   const t = useT();
   const [query, setQuery] = useState('');
@@ -157,7 +169,7 @@ export function FleetPanel({
           {vehicles.map((v) => (
             <VehicleCard key={v.id} vehicle={v} selection={selection} onSelect={onSelect}
               onMarkUnavailable={onMarkUnavailable} onRestore={onRestoreVehicle} removed={scenario.removedVehicleIds.includes(v.id)} solving={solving}
-              expanded={expanded.has(v.id)}
+              expanded={expanded.has(v.id)} onAssignOrder={onAssignOrder}
               onToggle={() => setExpanded((prev) => { const n = new Set(prev); n.has(v.id) ? n.delete(v.id) : n.add(v.id); return n; })} />
           ))}
           {vehicles.length === 0 && <p className="px-1 py-6 text-center text-xs text-muted-foreground">{t('fleet.noMatch')}</p>}
@@ -173,13 +185,22 @@ export function FleetPanel({
         </button>
         {unassignedOpen && (
           <div className="max-h-44 overflow-y-auto px-2 pb-2">
-            {plan.unassigned.map((u) => (
-              <button key={u.orderNo} type="button" onClick={() => onSelect({ kind: 'unassigned', orderNo: u.orderNo })}
-                className={`block w-full rounded border-t border-divider px-1.5 py-1.5 text-left text-xs hover:bg-accent ${selUnassigned === u.orderNo ? 'bg-accent' : ''}`}>
-                <div className="font-medium">{u.customer ?? u.orderNo}</div>
-                <div className="tnum text-muted-foreground">#{u.orderNo}{u.city ? ` · ${u.city}` : ''}</div>
-              </button>
-            ))}
+            {plan.unassigned.map((u) => {
+              const canDrag = !!onAssignOrder && !solving;
+              return (
+                <button key={u.orderNo} type="button" onClick={() => onSelect({ kind: 'unassigned', orderNo: u.orderNo })}
+                  draggable={canDrag}
+                  onDragStart={canDrag ? (e) => setDraggedOrder(e, u.orderNo) : undefined}
+                  title={canDrag ? t('fleet.dragToAssign') : undefined}
+                  className={`flex w-full items-center gap-1.5 rounded border-t border-divider px-1.5 py-1.5 text-left text-xs hover:bg-accent ${canDrag ? 'cursor-grab active:cursor-grabbing' : ''} ${selUnassigned === u.orderNo ? 'bg-accent' : ''}`}>
+                  {canDrag && <GripVertical className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />}
+                  <span className="min-w-0 flex-1">
+                    <span className="block truncate font-medium">{u.customer ?? u.orderNo}</span>
+                    <span className="tnum block text-muted-foreground">#{u.orderNo}{u.city ? ` · ${u.city}` : ''}</span>
+                  </span>
+                </button>
+              );
+            })}
             {plan.unassigned.length === 0 && <p className="py-2 pl-2 text-xs text-muted-foreground">{t('fleet.allAssigned')}</p>}
           </div>
         )}

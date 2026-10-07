@@ -41,6 +41,7 @@ const en: Dict = {
   'fleet.noMatch': 'No vehicles match.', 'fleet.tripLabel': 'Trip {n}', 'fleet.stopsN': '{n} stops',
   'fleet.markUnavailable': 'Mark unavailable', 'fleet.staged': 'staged', 'fleet.restore': 'Restore',
   'fleet.unassigned': 'Unassigned orders', 'fleet.allAssigned': 'All orders assigned.',
+  'fleet.dragToAssign': 'Drag onto a vehicle to assign (applied on Replan)',
 
   'timeline.title': 'Timeline', 'timeline.workingDay': '{ref} · working day',
   'timeline.fleetOverview': 'Fleet overview', 'timeline.vehHint': '{n} trips · finish {t}',
@@ -113,6 +114,7 @@ const en: Dict = {
   'inspector.moveTo': 'Move to…', 'inspector.forbidHere': 'Forbid {ref}',
   'inspector.forbiddenN': 'Forbidden: {refs}', 'inspector.clearOverrides': 'Clear overrides',
   'inspector.overrideHint': 'Overrides apply on the next Replan.',
+  'inspector.dragToReassign': 'Drag onto a vehicle to reassign (applied on Replan)',
   'inspector.subcontractor': 'subcontractor',
   'inspector.driveWait': 'Drive · wait', 'inspector.backToVehicle': 'Back to vehicle',
   'inspector.back': 'Back', 'inspector.forward': 'Forward',
@@ -196,6 +198,7 @@ const hu: Dict = {
   'fleet.noMatch': 'Nincs találat.', 'fleet.tripLabel': '{n}. forduló', 'fleet.stopsN': '{n} megálló',
   'fleet.markUnavailable': 'Kivonás', 'fleet.staged': 'előkészítve', 'fleet.restore': 'Visszaállítás',
   'fleet.unassigned': 'Kiosztatlan megrendelések', 'fleet.allAssigned': 'Minden megrendelés kiosztva.',
+  'fleet.dragToAssign': 'Húzd egy járműre a kiosztáshoz (újratervezéskor lép életbe)',
 
   'timeline.title': 'Idővonal', 'timeline.workingDay': '{ref} · munkanapja',
   'timeline.fleetOverview': 'Flotta áttekintés', 'timeline.vehHint': '{n} forduló · vége {t}',
@@ -268,6 +271,7 @@ const hu: Dict = {
   'inspector.moveTo': 'Áthelyezés…', 'inspector.forbidHere': '{ref} tiltása',
   'inspector.forbiddenN': 'Tiltva: {refs}', 'inspector.clearOverrides': 'Módosítások törlése',
   'inspector.overrideHint': 'A módosítások a következő újratervezéskor lépnek életbe.',
+  'inspector.dragToReassign': 'Húzd egy járműre az áthelyezéshez (újratervezéskor lép életbe)',
   'inspector.subcontractor': 'alvállalkozó',
   'inspector.driveWait': 'Vezetés · várakozás', 'inspector.backToVehicle': 'Vissza a járműhöz',
   'inspector.back': 'Vissza', 'inspector.forward': 'Előre',
