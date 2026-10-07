@@ -1,6 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { config } from '../config.js';
+import { datasetForDay, allDatasets, isRoutableOrder, type Dataset, type RegDay } from './registry.js';
 import type { SurgeRequest, SurgeSolution } from '../types.js';
 
 /* The Gyermelyi dataset is immutable and lives outside the repo. the backend reads it
@@ -146,29 +147,76 @@ export function vehicleInfoFor(ref: string, table: Map<string, VehicleInfo>): Ve
 
 export interface LoadedDay {
   def: DayDef;
+  kind: 'builtin' | 'uploaded';
   request: SurgeRequest;
   solution: SurgeSolution;
   scopeTaskIds: Set<number>;   // tasks whose order falls on this day
   depot: { name: string; lon: number; lat: number };
+  enrichment: Map<string, OrderInfo>;   // order_no -> OrderInfo for display
 }
+
+let _enrichment: Map<string, OrderInfo> | null = null;
+function builtinEnrichment(): Map<string, OrderInfo> { return (_enrichment ??= loadEnrichment()); }
 
 export function loadDay(dayId: string): LoadedDay {
   const def = DAYS.find((d) => d.id === dayId);
-  if (!def) throw new Error(`unknown day ${dayId}`);
-  const request = readJson<SurgeRequest>(def.requestFile);
-  const solution = readJson<SurgeSolution>(def.solutionFile);
-  const dates = loadOrderDates();
-  const scopeTaskIds = new Set<number>();
-  for (const t of request.tasks) {
-    const ds = dates.get(String(t.ref));
-    if (ds && ds.size === 1 && ds.has(def.date)) scopeTaskIds.add(t.id);
+  if (def) {
+    const request = readJson<SurgeRequest>(def.requestFile);
+    const solution = readJson<SurgeSolution>(def.solutionFile);
+    const dates = loadOrderDates();
+    const scopeTaskIds = new Set<number>();
+    for (const t of request.tasks) {
+      const ds = dates.get(String(t.ref));
+      if (ds && ds.size === 1 && ds.has(def.date)) scopeTaskIds.add(t.id);
+    }
+    const d0 = request.locations[0]!;
+    return { def, kind: 'builtin', request, solution, scopeTaskIds, depot: { name: 'Gyermely', lon: d0.x, lat: d0.y }, enrichment: builtinEnrichment() };
   }
-  const d0 = request.locations[0]!;
-  return {
-    def,
-    request,
-    solution,
-    scopeTaskIds,
-    depot: { name: 'Gyermely', lon: d0.x, lat: d0.y },
+  const up = datasetForDay(dayId);
+  if (up) return loadUploadedDay(up.dataset, up.day);
+  throw new Error(`unknown day ${dayId}`);
+}
+
+/** Load a day of an admitted (uploaded) dataset: the shared request, an empty
+ * baseline solution scoped to this day's orders, and display enrichment built
+ * from the dataset's geocoded orders. */
+function loadUploadedDay(ds: Dataset, day: RegDay): LoadedDay {
+  const request = JSON.parse(readFileSync(ds.requestPath, 'utf8')) as SurgeRequest;
+  const geo = JSON.parse(readFileSync(ds.geocodedPath, 'utf8')) as { records?: Record<string, unknown>[] };
+  const recs = (Array.isArray(geo) ? geo : geo.records) ?? [];
+  const routable = recs.filter(isRoutableOrder);
+
+  // task id = routable index (0-indexed, as built on admit); scope by delivery_date
+  const scopeTaskIds = new Set<number>();
+  const enrichment = new Map<string, OrderInfo>();
+  routable.forEach((o, i) => {
+    if (String(o.delivery_date ?? '').trim() === day.date) scopeTaskIds.add(i);
+    const no = String(o.order_no ?? i + 1);
+    if (!enrichment.has(no)) enrichment.set(no, {
+      id: (o.id as string) ?? null, orderNo: no,
+      customer: o.customer ? (config.anonymize ? pseudonym(String(o.customer)) : String(o.customer)) : null,
+      city: (o.city as string) ?? null, street: (o.street as string) ?? null, zip: o.zip != null ? String(o.zip) : null,
+      lat: typeof o.lat === 'number' ? o.lat : null, lon: typeof o.lon === 'number' ? o.lon : null,
+      pallets: typeof o.pallets === 'number' ? o.pallets : null, weightKg: typeof o.weight_kg === 'number' ? o.weight_kg : null,
+      twStart: (o.tw_start as string) ?? null, twEnd: (o.tw_end as string) ?? null,
+      serviceMin: typeof o.service_min === 'number' ? o.service_min : null,
+      requiresTailLift: Boolean(o.requires_tail_lift) || hasTailLiftReq(o.special_req as string),
+      maxTonnage: parseTonnage(o.special_req as string),
+    });
+  });
+
+  const scopedReqIds = request.requests.filter((r) => scopeTaskIds.has(r.delivery_task_id)).map((r) => r.id);
+  const solution: SurgeSolution = {
+    status: 'OK', routes: [], unassigned: scopedReqIds,
+    stats: { vehicles_used: 0, trips: 0, total_distance: 0, unassigned: scopedReqIds.length },
   };
+  const def: DayDef = { id: day.dayId, date: day.date, isoDate: day.isoDate, label: day.label, requestFile: '', solutionFile: '' };
+  return { def, kind: 'uploaded', request, solution, scopeTaskIds, depot: ds.depot, enrichment };
+}
+
+/** All selectable days: the built-ins plus every admitted dataset's days. */
+export function allDayIds(): { id: string; isoDate: string; label: string; datasetLabel?: string }[] {
+  const out: { id: string; isoDate: string; label: string; datasetLabel?: string }[] = DAYS.map((d) => ({ id: d.id, isoDate: d.isoDate, label: d.label }));
+  for (const ds of allDatasets()) for (const d of ds.days) out.push({ id: d.dayId, isoDate: d.isoDate, label: d.label, datasetLabel: ds.label });
+  return out;
 }

@@ -142,6 +142,11 @@ const en: Dict = {
   'onboard.fixToAdmit': 'Fix the mapping until reconcile passes.',
   'onboard.geocode': 'Geocode addresses', 'onboard.modeOnline': 'online (keys)', 'onboard.modeOffline': 'offline (cache)',
   'onboard.resolved': '{r}/{n} resolved', 'onboard.unresolved': '{n} unresolved',
+  'onboard.admitTitle': 'Create dataset', 'onboard.datasetName': 'Dataset name (optional)', 'onboard.admit': 'Admit',
+  'onboard.needDate': 'Map the Delivery date column first (days are split by it).',
+  'onboard.admitNote': 'Builds the travel matrix and registers selectable days (routable Hungarian orders).',
+  'onboard.admitWorking': 'Building the travel matrix… (about a minute)',
+  'onboard.admitDone': '{r} routable orders admitted ({x} excluded) as {d} day(s) — now in the day picker.',
 };
 
 const hu: Dict = {
@@ -278,6 +283,11 @@ const hu: Dict = {
   'onboard.fixToAdmit': 'Javítsd a megfeleltetést, amíg az egyeztetés rendben nem lesz.',
   'onboard.geocode': 'Címek geokódolása', 'onboard.modeOnline': 'online (kulcsok)', 'onboard.modeOffline': 'offline (gyorsítótár)',
   'onboard.resolved': '{r}/{n} feloldva', 'onboard.unresolved': '{n} feloldatlan',
+  'onboard.admitTitle': 'Adathalmaz létrehozása', 'onboard.datasetName': 'Adathalmaz neve (opcionális)', 'onboard.admit': 'Átvétel',
+  'onboard.needDate': 'Előbb feleltesd meg a Szállítási dátum oszlopot (ez alapján bomlik napokra).',
+  'onboard.admitNote': 'Felépíti az utazási mátrixot és regisztrálja a választható napokat (útvonalazható magyar rendelések).',
+  'onboard.admitWorking': 'Utazási mátrix építése… (kb. egy perc)',
+  'onboard.admitDone': '{r} útvonalazható rendelés átvéve ({x} kizárva) {d} napként — már a napválasztóban.',
 };
 
 const DICTS: Record<Lang, Dict> = { en, hu };

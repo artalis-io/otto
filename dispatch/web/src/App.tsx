@@ -220,6 +220,17 @@ export default function App() {
   }, [days, dayId, loadDay]);
 
   // Reopen a saved plan faithfully, restoring its scenario context.
+  // A newly-admitted uploaded dataset: refresh the day list and open its first day.
+  const onAdmitted = useCallback(async (dayId: string) => {
+    try {
+      const ds = await api.days();
+      setDays(ds);
+      setImportOpen(false);
+      const d = ds.find((x) => x.id === dayId);
+      if (d) await loadDay(d);
+    } catch (e) { setError(e instanceof Error ? e.message : String(e)); }
+  }, [loadDay]);
+
   const reopenPlan = useCallback(async (planId: string) => {
     pollAbort.current?.abort();
     activeJobId.current = null;
@@ -361,7 +372,7 @@ export default function App() {
         onReplan={() => { setChangesOpen(false); void replan(); }}
       />
       <WeekDialog open={weekOpen} onOpenChange={setWeekOpen} />
-      <ImportDialog open={importOpen} onOpenChange={setImportOpen} />
+      <ImportDialog open={importOpen} onOpenChange={setImportOpen} onAdmitted={(id) => void onAdmitted(id)} />
       <HistoryDialog open={historyOpen} onOpenChange={setHistoryOpen} dayId={dayId} currentPlanId={plan.id} onReopen={(id) => void reopenPlan(id)} />
     </TooltipProvider>
   );

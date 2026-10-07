@@ -191,7 +191,7 @@ function runSolveProcess(job: Job, scenario: Scenario, budgetSec: number, object
 
       const planId = store.newId('pln');
       const plan = mapSolutionToPlan({
-        day: built.day, request: built.request, solution, enrichment, vehicleInfo,
+        day: built.day, request: built.request, solution, enrichment: built.day.enrichment, vehicleInfo,
         scenarioId: scenario.id, scenarioRevision: scenario.revision, planId,
         source: 'live', createdAt: new Date().toISOString(),
       });

@@ -79,6 +79,11 @@ export const config = {
   geocodeEnv: env('GEOCODE_ENV', resolve(env('OTTO_ROOT', '/Users/mark/artalis.io/src/otto'), '.env')),
   geocodeForceOffline: env('DISPATCH_GEOCODE_OFFLINE', '0') === '1', // force cache-only even if keys exist
   geocodeTimeoutSec: Number(env('DISPATCH_GEOCODE_TIMEOUT_SEC', '180')),
+  // Travel matrix (Velo all-pairs) for admitting an uploaded dataset.
+  matrixBuildBin: env('MATRIX_BUILD_BIN', resolve(env('OTTO_ROOT', '/Users/mark/artalis.io/src/otto'), 'velo/matrix_build')),
+  veloGraph: env('VELO_GRAPH', resolve(env('OTTO_ROOT', '/Users/mark/artalis.io/src/otto'), 'data/index/hungary-velo.vlg')),
+  matrixTimeoutSec: Number(env('DISPATCH_MATRIX_TIMEOUT_SEC', '300')),
+  maxMatrixLocations: Number(env('DISPATCH_MAX_MATRIX_LOCATIONS', '1500')),
 } as const;
 
 export type Config = typeof config;

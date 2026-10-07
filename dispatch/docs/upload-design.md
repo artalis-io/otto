@@ -123,8 +123,19 @@ Canonical field catalog (for the mapping UI), from the existing canonical shapes
   MapLibre mini-map coloured by tier. Route `/api/import/geocode`; `runGeocode` in
   onboard.ts. On the real data: 332/332 resolved from cache in ~0.6s. +2 unit, +1
   UI test.
-- **M3 — Matrix + request + admit.** Hybrid matrix (Velo table for new O-D),
-  request build, registry, days become selectable.
+- **M3 — Matrix + request + admit. ✅ DONE.** Admit geocodes, builds the travel
+  matrix (`velo/matrix_build`, all-pairs Dijkstra over routable Hungarian orders),
+  builds a Surge request in Node (locations/tasks/requests/travel + the known
+  fleet, 0-indexed ids, split by delivery_date), and registers the dataset. Days
+  become selectable alongside the built-ins via a dynamic `allDayIds()` + a
+  registry; `loadDay` serves an uploaded day's request with an empty baseline and
+  display enrichment from the geocoded orders. Verified: upload → admit (263
+  routable, 2 days) → select → Optimize → real plan (8 veh, 115/117, 3100 km).
+  `data/admit.ts`, `data/registry.ts`, `geometry/matrix.ts`; route
+  `/api/import/admit`; +3 unit tests. *Deferred to M4:* the time-window regex
+  transform (uploaded days get wide windows for now), hybrid matrix reuse of the
+  known cache (full rebuild for now, ~1 min), solve-on-admit / background admit,
+  and custom-fleet from an uploaded vehicles file (uses the known fleet for now).
 - **M4 — Polish.** Sub-stage progress UI, cancel/resume, re-map + re-run, dataset
   management (list/delete), error recovery.
 

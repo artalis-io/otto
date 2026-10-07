@@ -7,7 +7,8 @@ import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { cartaStyle } from '@/map/cartaStyle';
-import { api, type Entity, type CanonicalField, type UploadResult, type OnboardPreview, type GeocodeResult, type GeoTier } from '@/lib/api';
+import { Input } from '@/components/ui/input';
+import { api, type Entity, type CanonicalField, type UploadResult, type OnboardPreview, type GeocodeResult, type GeoTier, type AdmitResult } from '@/lib/api';
 import { useT } from '@/i18n';
 
 const TIER_COLOR: Record<GeoTier, string> = { GREEN: '#16a34a', YELLOW: '#ca8a04', APPROX: '#ea580c', RED: '#dc2626' };
@@ -15,7 +16,7 @@ const TIER_COLOR: Record<GeoTier, string> = { GREEN: '#16a34a', YELLOW: '#ca8a04
 /* M1 onboarding: upload a raw CSV, map its columns to canonical fields, and run
  * the real Nexus ingest + reconcile gate as a reviewed dry-run. Admit (creating
  * a dataset) arrives in M3. */
-export function OnboardPanel() {
+export function OnboardPanel({ onAdmitted }: { onAdmitted?: (firstDayId: string) => void }) {
   const t = useT();
   const [catalog, setCatalog] = useState<Record<Entity, CanonicalField[]> | null>(null);
   const [entity, setEntity] = useState<Entity>('orders');
@@ -23,7 +24,9 @@ export function OnboardPanel() {
   const [mapping, setMapping] = useState<Record<string, number>>({});
   const [preview, setPreview] = useState<OnboardPreview | null>(null);
   const [geo, setGeo] = useState<GeocodeResult | null>(null);
-  const [busy, setBusy] = useState<'upload' | 'preview' | 'geocode' | null>(null);
+  const [admit, setAdmit] = useState<AdmitResult | null>(null);
+  const [label, setLabel] = useState('');
+  const [busy, setBusy] = useState<'upload' | 'preview' | 'geocode' | 'admit' | null>(null);
   const [err, setErr] = useState<string | null>(null);
 
   useEffect(() => { api.onboardCatalog().then(setCatalog).catch((e) => setErr(String(e))); }, []);
@@ -48,9 +51,19 @@ export function OnboardPanel() {
   }
   async function geocode() {
     if (!upload) return;
-    setErr(null); setBusy('geocode');
+    setErr(null); setAdmit(null); setBusy('geocode');
     try { setGeo(await api.onboardGeocode(upload.uploadId, mapping)); }
     catch (e) { setErr(e instanceof Error ? e.message : String(e)); }
+    finally { setBusy(null); }
+  }
+  async function doAdmit() {
+    if (!upload) return;
+    setErr(null); setBusy('admit');
+    try {
+      const r = await api.onboardAdmit(upload.uploadId, mapping, label || (upload ? `Upload ${new Date().toLocaleDateString()}` : ''));
+      setAdmit(r);
+      if (r.ok && r.days?.length && onAdmitted) onAdmitted(r.days[0]!.dayId);
+    } catch (e) { setErr(e instanceof Error ? e.message : String(e)); }
     finally { setBusy(null); }
   }
 
@@ -135,6 +148,26 @@ export function OnboardPanel() {
               {busy === 'geocode' ? <Loader2 className="h-4 w-4 animate-spin" /> : <MapPin className="h-4 w-4" />} {t('onboard.geocode')}
             </Button>
             {geo && <GeocodePanel geo={geo} />}
+
+            {/* 5. Admit -> dataset becomes selectable days */}
+            {geo?.ok && (
+              <div className="space-y-2 rounded-md border border-divider bg-muted/20 p-3">
+                <div className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">{t('onboard.admitTitle')}</div>
+                <div className="flex items-center gap-2">
+                  <Input value={label} onChange={(e) => setLabel(e.target.value)} placeholder={t('onboard.datasetName')} className="h-8 flex-1" disabled={busy != null} />
+                  <Button size="sm" onClick={() => void doAdmit()} disabled={busy != null || mapping.delivery_date == null}>
+                    {busy === 'admit' ? <Loader2 className="h-4 w-4 animate-spin" /> : <Upload className="h-4 w-4" />} {t('onboard.admit')}
+                  </Button>
+                </div>
+                {mapping.delivery_date == null && <p className="text-[11px] text-destructive">{t('onboard.needDate')}</p>}
+                <p className="text-[10px] text-muted-foreground">{busy === 'admit' ? t('onboard.admitWorking') : t('onboard.admitNote')}</p>
+                {admit?.ok && (
+                  <div className="rounded border border-primary/30 bg-primary/5 px-2 py-1.5 text-[11px] text-primary">
+                    {t('onboard.admitDone', { r: admit.routable ?? 0, x: admit.excluded ?? 0, d: admit.days?.length ?? 0 })}
+                  </div>
+                )}
+              </div>
+            )}
           </div>
         )}
       </div>

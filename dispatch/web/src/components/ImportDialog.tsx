@@ -7,7 +7,7 @@ import { api, type ImportSummary, type RawSample, type CanonicalSample } from '@
 import { OnboardPanel } from '@/components/OnboardPanel';
 import { useT } from '@/i18n';
 
-export function ImportDialog({ open, onOpenChange }: { open: boolean; onOpenChange: (o: boolean) => void }) {
+export function ImportDialog({ open, onOpenChange, onAdmitted }: { open: boolean; onOpenChange: (o: boolean) => void; onAdmitted?: (dayId: string) => void }) {
   const t = useT();
   const [mode, setMode] = useState<'provenance' | 'upload'>('provenance');
   const [summary, setSummary] = useState<ImportSummary | null>(null);
@@ -44,7 +44,7 @@ export function ImportDialog({ open, onOpenChange }: { open: boolean; onOpenChan
           ))}
         </div>
         {err && <p className="text-sm text-destructive">{err}</p>}
-        {mode === 'upload' ? <OnboardPanel /> : !summary ? <p className="py-8 text-center text-sm text-muted-foreground">{t('import.loading')}</p> : (
+        {mode === 'upload' ? <OnboardPanel onAdmitted={onAdmitted} /> : !summary ? <p className="py-8 text-center text-sm text-muted-foreground">{t('import.loading')}</p> : (
           <ScrollArea className="max-h-[72vh]">
             <div className="space-y-4 pr-3">
               {/* Provenance summary */}

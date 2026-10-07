@@ -5,7 +5,8 @@ import { existsSync, createWriteStream, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { pipeline } from 'node:stream/promises';
 import { config } from './config.js';
-import { DAYS, loadDay, loadEnrichment, loadVehicleInfo } from './data/gyermelyi.js';
+import { DAYS, allDayIds, loadDay, loadEnrichment, loadVehicleInfo } from './data/gyermelyi.js';
+import { admitDataset } from './data/admit.js';
 import { mapSolutionToPlan } from './plan/mapper.js';
 import { fillPlanGeometry, veloReachable } from './geometry/velo.js';
 import { store, validateScenarioEdit, type ScenarioEdit } from './store.js';
@@ -55,7 +56,7 @@ function buildBaseline(dayId: string, label: string): Plan {
   const day = loadDay(dayId);
   const plan = mapSolutionToPlan({
     day, request: day.request, solution: day.solution,
-    enrichment, vehicleInfo,
+    enrichment: day.enrichment, vehicleInfo,
     scenarioId: scenario.id, scenarioRevision: 0,
     planId: `${dayId}-baseline`, source: 'saved',
     createdAt: new Date(0).toISOString(),
@@ -63,7 +64,7 @@ function buildBaseline(dayId: string, label: string): Plan {
   store.putPlan(plan, false); // derived at startup; not persisted
   return plan;
 }
-for (const d of DAYS) {
+for (const d of allDayIds()) {
   try { const p = buildBaseline(d.id, d.label); app.log.info(`baseline ${d.id}: ${p.stats.servedOrders}/${p.stats.totalOrders} served`); }
   catch (e) { app.log.error(`baseline ${d.id} failed: ${(e as Error).message}`); }
 }
@@ -93,10 +94,10 @@ app.get('/api/config', async () => {
   };
 });
 
-app.get('/api/days', async () => DAYS.map((d) => {
+app.get('/api/days', async () => allDayIds().map((d) => {
   const plan = store.getPlan(`${d.id}-baseline`);
   return {
-    id: d.id, isoDate: d.isoDate, label: d.label,
+    id: d.id, isoDate: d.isoDate, label: d.label, datasetLabel: d.datasetLabel ?? null,
     orders: plan?.stats.totalOrders ?? null,
     vehicles: plan?.vehicles.length ?? null,
     baseScenarioId: `${d.id}-base`,
@@ -337,6 +338,24 @@ app.post<{ Body: { uploadId?: string; mapping?: Mapping } }>('/api/import/geocod
   const path = uploadPath(uploadId, 'orders');
   if (!existsSync(path)) return reply.code(404).send({ error: 'upload not found (re-upload)' });
   return runGeocode(path, mapping);
+});
+
+// Admit: geocode + build the travel matrix + Surge request, register the days.
+app.post<{ Body: { uploadId?: string; mapping?: Mapping; label?: string } }>('/api/import/admit', async (req, reply) => {
+  const { uploadId, mapping, label } = req.body ?? {};
+  if (!uploadId || !/^up_[a-z0-9-]+$/.test(uploadId)) return reply.code(400).send({ error: 'valid uploadId required' });
+  if (!mapping || typeof mapping !== 'object') return reply.code(400).send({ error: 'mapping required' });
+  if (label != null && (typeof label !== 'string' || label.length > 120)) return reply.code(400).send({ error: 'invalid label' });
+  const path = uploadPath(uploadId, 'orders');
+  if (!existsSync(path)) return reply.code(404).send({ error: 'upload not found (re-upload)' });
+
+  const result = await admitDataset(path, mapping, label ?? 'Uploaded dataset');
+  if (!result.ok) return reply.code(400).send({ error: result.error });
+  // Build an (empty) baseline for each new day so it loads like a built-in day.
+  for (const d of result.days ?? []) {
+    try { buildBaseline(d.dayId, d.label); } catch (e) { app.log.warn(`baseline ${d.dayId}: ${(e as Error).message}`); }
+  }
+  return result;
 });
 
 /* ---- Carta tile proxy (same-origin so the reused style's relative URLs work) ---- */

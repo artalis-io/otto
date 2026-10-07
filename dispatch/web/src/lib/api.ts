@@ -71,7 +71,16 @@ export const api = {
     jsend<OnboardPreview>('/api/import/preview', 'POST', { uploadId, entity, mapping }),
   onboardGeocode: (uploadId: string, mapping: Record<string, number>) =>
     jsend<GeocodeResult>('/api/import/geocode', 'POST', { uploadId, mapping }),
+  onboardAdmit: (uploadId: string, mapping: Record<string, number>, label: string) =>
+    jsend<AdmitResult>('/api/import/admit', 'POST', { uploadId, mapping, label }),
 };
+
+export interface AdmitResult {
+  ok: boolean; error?: string;
+  datasetId?: string; label?: string;
+  days?: { dayId: string; isoDate: string; label: string; orders: number }[];
+  routable?: number; excluded?: number; unresolved?: number; snapWarnings?: number;
+}
 
 export type GeoTier = 'GREEN' | 'YELLOW' | 'APPROX' | 'RED';
 export interface GeoPoint { lon: number; lat: number; tier: GeoTier; city: string; orderNo: string; customer: string }
