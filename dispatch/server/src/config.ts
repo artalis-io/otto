@@ -60,6 +60,9 @@ export const config = {
   // Retention: keep at most this many persisted plans / jobs (oldest pruned).
   retainPlans: Number(env('DISPATCH_RETAIN_PLANS', '200')),
   retainJobs: Number(env('DISPATCH_RETAIN_JOBS', '200')),
+  // Cap the on-disk/in-memory road-geometry leg cache (oldest evicted). Bounds
+  // what was an unbounded, fully-rewritten-per-persist file.
+  geocacheMaxLegs: Number(env('DISPATCH_GEOCACHE_MAX_LEGS', '200000')),
   // Per-IP API rate limit (token bucket): sustained rps and burst.
   rateLimitRps: Number(env('DISPATCH_RATE_RPS', '40')),
   rateLimitBurst: Number(env('DISPATCH_RATE_BURST', '120')),

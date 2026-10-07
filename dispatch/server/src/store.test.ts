@@ -124,3 +124,18 @@ test('createJob records scenarioRevision and persists (stale-job association)', 
   assert.equal(rj!.scenarioRevision, copy.revision);
   assert.equal(rj!.scenarioId, copy.id);
 });
+
+test('reconcileInterruptedJobs: pending/running jobs become failed on restart', () => {
+  const s1 = new StoreCtor();
+  const j = s1.createJob('scn-x', 0);      // persisted as 'pending'
+  j.status = 'running'; s1.saveJob(j);     // simulate an in-flight solve
+  assert.equal(s1.getJob(j.id)!.status, 'running');
+
+  // A fresh Store over the same data dir simulates a process restart: the
+  // in-memory queue and child handles are gone, so the job can never finish.
+  const s2 = new StoreCtor();
+  const rj = s2.getJob(j.id)!;
+  assert.equal(rj.status, 'failed');
+  assert.match(rj.error ?? '', /interrupted/);
+  assert.ok(rj.finishedAt);
+});

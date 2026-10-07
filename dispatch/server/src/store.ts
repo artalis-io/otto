@@ -1,7 +1,8 @@
-import { mkdirSync, readdirSync, readFileSync, writeFileSync, existsSync, renameSync, rmSync, statSync } from 'node:fs';
+import { mkdirSync, readdirSync, readFileSync, existsSync, renameSync, rmSync, statSync } from 'node:fs';
 import { resolve, join } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { config } from './config.js';
+import { writeJsonAtomic } from './util/jsonfile.js';
 import type { Plan } from './types.js';
 
 /* Minimal durable store for scenarios, plans and jobs. JSON files under the
@@ -119,12 +120,8 @@ function dir(sub: string): string {
   return d;
 }
 /* Atomic write: a crash mid-write leaves the old file intact (temp + rename),
- * never a half-written/corrupt JSON. */
-function writeJson(path: string, obj: unknown): void {
-  const tmp = `${path}.${process.pid}.tmp`;
-  writeFileSync(tmp, JSON.stringify(obj));
-  renameSync(tmp, path);
-}
+ * never a half-written/corrupt JSON. Shared with registry/geocache via util. */
+const writeJson = writeJsonAtomic;
 function isJobRequestFile(f: string): boolean { return f.endsWith('_request.json'); }
 function loadAll<T>(sub: string): Map<string, T> {
   const m = new Map<string, T>();
@@ -160,7 +157,24 @@ export class Store {
       if (!Array.isArray(s.forbids)) s.forbids = [];
       if (!Array.isArray(s.vehicleOverrides)) s.vehicleOverrides = [];
     }
+    this.reconcileInterruptedJobs();  // no subprocess survives a restart
     this.gcPlans(); this.gcJobs(); // prune any backlog left from prior runs
+  }
+
+  /* A1: jobs persisted as pending/running have no live subprocess after a
+   * restart (the queue + child handles are in-memory only). Left as-is they
+   * stay "running" forever and clients poll them indefinitely. Mark them
+   * failed on boot so the UI sees a terminal state. */
+  private reconcileInterruptedJobs(): void {
+    const now = new Date().toISOString();
+    for (const j of this.jobs.values()) {
+      if (j.status === 'running' || j.status === 'pending') {
+        j.status = 'failed';
+        j.error = 'interrupted by a server restart';
+        j.finishedAt = now;
+        this.saveJob(j);
+      }
+    }
   }
 
   /* Retention: keep at most `keep` of the oldest primary files in a dir (by

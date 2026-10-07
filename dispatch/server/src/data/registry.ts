@@ -1,6 +1,7 @@
-import { mkdirSync, readdirSync, readFileSync, writeFileSync, existsSync, rmSync } from 'node:fs';
+import { mkdirSync, readdirSync, readFileSync, existsSync, rmSync, statSync } from 'node:fs';
 import { resolve, join } from 'node:path';
 import { config } from '../config.js';
+import { writeJsonAtomic } from '../util/jsonfile.js';
 
 /* Registry of admitted (uploaded) datasets. Each dataset is a folder under the
  * external uploads dir holding its Surge request, geocoded orders, and a
@@ -35,14 +36,26 @@ function load(): void {
   const root = datasetsRoot();
   if (!existsSync(root)) return;
   for (const id of readdirSync(root)) {
-    try { const ds = JSON.parse(readFileSync(join(root, id, 'dataset.json'), 'utf8')) as Dataset; if (ds.id) registry.set(ds.id, ds); } catch { /* skip */ }
+    const dir = join(root, id);
+    try {
+      const ds = JSON.parse(readFileSync(join(dir, 'dataset.json'), 'utf8')) as Dataset;
+      if (ds.id) { registry.set(ds.id, ds); continue; }
+    } catch { /* fall through to orphan handling */ }
+    // A9: a dir without a valid manifest is a crash orphan (admit writes the
+    // request/geocoded files before the manifest). Remove it so it cannot
+    // accumulate invisibly. Only sweep directories, never stray files.
+    try {
+      if (statSync(dir).isDirectory()) { rmSync(dir, { recursive: true, force: true }); console.warn(`[registry] removed orphan dataset dir: ${id}`); }
+    } catch { /* ignore */ }
   }
 }
 load();
 
 export function registerDataset(ds: Dataset): void {
   mkdirSync(datasetDir(ds.id), { recursive: true });
-  writeFileSync(join(datasetDir(ds.id), 'dataset.json'), JSON.stringify(ds));
+  // Written last and atomically: the manifest's presence is what makes the
+  // dataset "committed"; a half-written one can never shadow the old.
+  writeJsonAtomic(join(datasetDir(ds.id), 'dataset.json'), ds);
   registry.set(ds.id, ds);
 }
 export function allDatasets(): Dataset[] { return [...registry.values()]; }

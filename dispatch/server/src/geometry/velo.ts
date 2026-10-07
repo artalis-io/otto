@@ -1,6 +1,7 @@
-import { readFileSync, writeFileSync, mkdirSync, existsSync } from 'node:fs';
+import { readFileSync, mkdirSync, existsSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { config } from '../config.js';
+import { writeJsonAtomic } from '../util/jsonfile.js';
 import type { Plan, GeoJSONLineString } from '../types.js';
 
 /* Road-following geometry for plan routes, fetched from the Velo route server
@@ -30,9 +31,22 @@ function persistCache(): void {
     mkdirSync(config.dataDir, { recursive: true });
     const obj: Record<string, LonLat[]> = {};
     for (const [k, v] of mem) obj[k] = v;
-    writeFileSync(cacheFile, JSON.stringify(obj));
+    writeJsonAtomic(cacheFile, obj);
     dirty = false;
   } catch { /* best-effort */ }
+}
+
+/* Bound the cache: Map preserves insertion order, so deleting from the front
+ * evicts the oldest legs (approx-LRU; good enough for geometry that is cheap to
+ * refetch). Keeps the cache file and heap from growing without limit. */
+function rememberLeg(key: string, coords: LonLat[]): void {
+  mem.set(key, coords);
+  dirty = true;
+  while (mem.size > config.geocacheMaxLegs) {
+    const oldest = mem.keys().next().value as string | undefined;
+    if (oldest === undefined) break;
+    mem.delete(oldest);
+  }
 }
 
 const r5 = (n: number): number => Math.round(n * 1e5) / 1e5;
@@ -110,7 +124,7 @@ async function fetchLeg(from: LonLat, to: LonLat): Promise<LonLat[] | null> {
     }
   }
   if (!coords) return null;
-  mem.set(key, coords); dirty = true;
+  rememberLeg(key, coords);
   return coords;
 }
 
