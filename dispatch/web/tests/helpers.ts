@@ -6,6 +6,9 @@ export async function loadApp(page: Page): Promise<void> {
   page.on('pageerror', (e) => errs.push(`PAGEERROR ${e.message}`));
   page.on('console', (m) => { if (m.type() === 'error') errs.push(m.text()); });
   (page as unknown as { __errs: string[] }).__errs = errs;
+  // Suppress the first-run help overlay (it would block interactions); the
+  // dedicated help test clears this to exercise it.
+  await page.addInitScript(() => { try { localStorage.setItem('otto.helpSeen', '1'); } catch { /* ignore */ } });
   await page.goto('/');
   await expect(page.getByText('Served / Total')).toBeVisible();
   await expect(page.getByText('RIC-124').first()).toBeVisible();

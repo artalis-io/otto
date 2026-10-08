@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Play, RotateCcw, Download, Loader2, Repeat, GitCompareArrows, Database, History, Settings2, X, ChevronDown, FileText, FileSpreadsheet, FileJson, SlidersHorizontal, CalendarRange, AlertTriangle, GitBranch } from 'lucide-react';
+import { Play, RotateCcw, Download, Loader2, Repeat, GitCompareArrows, Database, History, Settings2, X, ChevronDown, FileText, FileSpreadsheet, FileJson, SlidersHorizontal, CalendarRange, AlertTriangle, GitBranch, HelpCircle } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
@@ -33,7 +33,7 @@ function Popover({ open, onClose, align = 'right', children }: { open: boolean; 
 export function TopBar({
   days, dayId, onDayChange, scenario, plan, job, solving,
   objective, onObjectiveChange, budgetSec, onBudgetChange, fullBudget, onFullBudgetChange, changesCount, dirty,
-  onOptimize, onCancel, onReset, onOpenChanges, showCompare, onCompare, onOpenImport, onOpenHistory, onOpenWeek, onOpenIssues, issuesCount, onOpenScenarios,
+  onOptimize, onCancel, onReset, onOpenChanges, showCompare, onCompare, onOpenImport, onOpenHistory, onOpenWeek, onOpenIssues, issuesCount, onOpenScenarios, onOpenHelp,
 }: {
   days: DaySummary[]; dayId: string; onDayChange: (id: string) => void;
   scenario: Scenario; plan: Plan; job: JobView | null; solving: boolean;
@@ -41,7 +41,7 @@ export function TopBar({
   budgetSec: number; onBudgetChange: (n: number) => void; fullBudget: boolean; onFullBudgetChange: (b: boolean) => void; changesCount: number; dirty: boolean;
   onOptimize: () => void; onCancel: () => void; onReset: () => void; onOpenChanges: () => void;
   showCompare: boolean; onCompare: () => void; onOpenImport: () => void; onOpenHistory: () => void; onOpenWeek: () => void;
-  onOpenIssues: () => void; issuesCount: number; onOpenScenarios: () => void;
+  onOpenIssues: () => void; issuesCount: number; onOpenScenarios: () => void; onOpenHelp: () => void;
 }) {
   const { lang, setLang } = useI18n();
   const t = useT();
@@ -122,6 +122,9 @@ export function TopBar({
         </Button>
         <Button variant="graphite" size="sm" className="border border-white/15" onClick={onOpenImport} title={t('import.title')}>
           <Database className="h-4 w-4" /> {t('topbar.data')}
+        </Button>
+        <Button variant="graphite" size="icon" className="h-8 w-8 border border-white/15" onClick={onOpenHelp} title={t('help.title')} aria-label={t('help.title')}>
+          <HelpCircle className="h-4 w-4" />
         </Button>
         {changesCount > 0 && (
           <Button variant="graphite" size="sm" className={`border ${dirty ? 'border-warning/60 text-warning' : 'border-white/15'}`} onClick={onOpenChanges}>

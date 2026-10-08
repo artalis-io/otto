@@ -17,6 +17,19 @@ test.describe('tier-2 features', () => {
     expectNoErrors(page);
   });
 
+  test('help overlay auto-shows on first run and the ? button reopens it', async ({ page }) => {
+    // first run: no 'otto.helpSeen' -> the overlay auto-shows and explains the layout
+    await page.addInitScript(() => { try { localStorage.removeItem('otto.helpSeen'); } catch { /* ignore */ } });
+    await page.goto('/');
+    await expect(page.getByText('Plan controls')).toBeVisible();
+    await expect(page.getByText('Inspector', { exact: true })).toBeVisible();
+    await page.getByRole('button', { name: 'Got it' }).click();
+    await expect(page.getByText('Plan controls')).toHaveCount(0);
+    // reopen from the ? button
+    await page.getByRole('button', { name: 'Help & tour' }).click();
+    await expect(page.getByText('Plan controls')).toBeVisible();
+  });
+
   test('scenarios workspace lists the day and compares selected', async ({ page }) => {
     await loadApp(page);
     await page.getByRole('button', { name: 'Scenarios' }).click();
