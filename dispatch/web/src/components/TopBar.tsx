@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Play, RotateCcw, Download, Loader2, Repeat, GitCompareArrows, Database, History, Settings2, X, ChevronDown, FileText, FileSpreadsheet, FileJson, SlidersHorizontal, CalendarRange } from 'lucide-react';
+import { Play, RotateCcw, Download, Loader2, Repeat, GitCompareArrows, Database, History, Settings2, X, ChevronDown, FileText, FileSpreadsheet, FileJson, SlidersHorizontal, CalendarRange, AlertTriangle } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
@@ -33,7 +33,7 @@ function Popover({ open, onClose, align = 'right', children }: { open: boolean; 
 export function TopBar({
   days, dayId, onDayChange, scenario, plan, job, solving,
   objective, onObjectiveChange, budgetSec, onBudgetChange, fullBudget, onFullBudgetChange, changesCount, dirty,
-  onOptimize, onCancel, onReset, onOpenChanges, showCompare, onCompare, onOpenImport, onOpenHistory, onOpenWeek,
+  onOptimize, onCancel, onReset, onOpenChanges, showCompare, onCompare, onOpenImport, onOpenHistory, onOpenWeek, onOpenIssues, issuesCount,
 }: {
   days: DaySummary[]; dayId: string; onDayChange: (id: string) => void;
   scenario: Scenario; plan: Plan; job: JobView | null; solving: boolean;
@@ -41,6 +41,7 @@ export function TopBar({
   budgetSec: number; onBudgetChange: (n: number) => void; fullBudget: boolean; onFullBudgetChange: (b: boolean) => void; changesCount: number; dirty: boolean;
   onOptimize: () => void; onCancel: () => void; onReset: () => void; onOpenChanges: () => void;
   showCompare: boolean; onCompare: () => void; onOpenImport: () => void; onOpenHistory: () => void; onOpenWeek: () => void;
+  onOpenIssues: () => void; issuesCount: number;
 }) {
   const { lang, setLang } = useI18n();
   const t = useT();
@@ -107,6 +108,9 @@ export function TopBar({
       )}
 
       <div className="ml-auto flex items-center gap-2">
+        <Button variant="graphite" size="sm" className={`border ${issuesCount > 0 ? 'border-warning/60 text-warning' : 'border-white/15'}`} onClick={onOpenIssues} title={t('issues.title')}>
+          <AlertTriangle className="h-4 w-4" /> {t('topbar.issues')}{issuesCount > 0 ? ` · ${issuesCount}` : ''}
+        </Button>
         <Button variant="graphite" size="sm" className="border border-white/15" onClick={onOpenWeek} title={t('week.title')}>
           <CalendarRange className="h-4 w-4" /> {t('topbar.week')}
         </Button>

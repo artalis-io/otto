@@ -62,12 +62,15 @@ only base-vs-revised.
 - **Side-by-side multi-scenario compare** (not just two): KPIs, cost, served/unassigned.
 - Share/export a scenario so a colleague can open the same what-if.
 
-### 3. Explainability / trust  (what converts a skeptical dispatcher)
+### 3. Explainability / trust  (what converts a skeptical dispatcher)  [why-unassigned DONE]
 A cockpit nobody trusts is shelfware. The raw material exists (advisories, Sage
 narration); make the optimizer legible.
-- *Why is this order unassigned?* (capacity, time window, no eligible vehicle, off-graph).
-- *Why this sequence / this vehicle?* a short rationale per route.
-- *Why infeasible?* surface the binding constraint, not just a failure.
+- ✅ *Why is this order unassigned?* Surge emits no reason, so `classifyUnassigned`
+  infers one (pin/sequence lock that failed, needs tail lift, over capacity, access
+  tonnage, else generic time-window/routing). Shown in the Issues panel (below).
+- *Why this sequence / this vehicle?* a short rationale per route. (not yet)
+- *Why infeasible?* surface the binding constraint, not just a failure. (partly: the
+  unassigned reason now names the likely blocker)
 
 ### 4. The outbound handoff  (what makes it deployable)
 The inbound pipeline is excellent; the outbound side is just a print sheet + CSV.
@@ -75,10 +78,12 @@ The inbound pipeline is excellent; the outbound side is just a print sheet + CSV
   or a clean structured export they can re-import into their SoR.
 - Polish the existing route-sheet / CSV exports around that.
 
-### 5. Current-plan "issues" review panel  (light, high-value)
+### 5. Current-plan "issues" review panel  [DONE]
 Not a persistent worklist (that would be SoR-ish): a review aid for *this* plan before
-handoff. Everything wrong right now (unassigned, time-window violations, oversize /
-tail-lift mismatches, over-hours), each click-to-locate. Reuses the advisory data.
+handoff. ✅ Built: an Issues dialog (TopBar "Issues · N" button, N = unassigned + hard
+violations) listing unassigned orders (each with its inferred reason), hard constraint
+violations (late / over-capacity), and soft advisories (tail-lift / oversize), each
+click-to-locate. Reuses the mapper's violations + the new unassigned reasons.
 
 ### Lower priority / polish
 Keyboard shortcuts + bulk actions; a settings/preferences surface (units, default

@@ -96,6 +96,7 @@ export interface Vehicle {
   trips: Trip[];
 }
 
+export type UnassignedReason = 'PINNED_INFEASIBLE' | 'NEEDS_TAIL_LIFT' | 'OVER_CAPACITY' | 'OVERSIZE' | 'CONSTRAINED';
 export interface UnassignedOrder {
   orderId: string | null;
   orderNo: string;
@@ -104,6 +105,7 @@ export interface UnassignedOrder {
   lon: number | null;
   lat: number | null;
   reason: string | null;
+  reasonCode: UnassignedReason | null;
 }
 
 export interface PlanVehicleCost {

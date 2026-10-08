@@ -2,6 +2,21 @@ import { test, expect } from '@playwright/test';
 import { loadApp, expectNoErrors, closePopover, selectVehicle } from './helpers';
 
 test.describe('tier-2 features', () => {
+  test('issues panel surfaces advisories and locates them', async ({ page }) => {
+    await loadApp(page);
+    // the day-1 baseline is fully served (no unassigned/hard), but has access
+    // advisories (oversize / tail-lift), which the panel surfaces.
+    await page.getByRole('button', { name: 'Issues', exact: true }).click();
+    const dialog = page.getByRole('dialog');
+    await expect(dialog.getByText('Plan issues')).toBeVisible();
+    await expect(dialog.getByText('Advisories')).toBeVisible();
+    await expect(dialog.getByText('needs tail lift').first()).toBeVisible();
+    // clicking a row locates it (dialog closes)
+    await dialog.getByRole('button').filter({ hasText: 'needs tail lift' }).first().click();
+    await expect(page.getByRole('dialog')).toHaveCount(0);
+    expectNoErrors(page);
+  });
+
   test('week view shows combined totals and per-vehicle utilization', async ({ page }) => {
     await loadApp(page);
     await page.getByRole('button', { name: 'Week' }).click();

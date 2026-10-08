@@ -137,6 +137,15 @@ const en: Dict = {
   'fleet.filterTailLift': 'Tail lift', 'fleet.filterAdvisories': 'Has advisories',
   // Week view
   'topbar.week': 'Week', 'week.title': 'Week overview', 'week.loading': 'Loading…',
+  'topbar.issues': 'Issues', 'issues.title': 'Plan issues',
+  'issues.none': 'No issues. Every order is assigned and within constraints.',
+  'issues.unassigned': 'Unassigned orders', 'issues.hard': 'Constraint violations', 'issues.advisories': 'Advisories',
+  'issues.lateBy': 'late {n} min', 'issues.overBy': 'over by {n} {dim}', 'issues.tailLift': 'needs tail lift', 'issues.oversize': '{a}t > {b}t',
+  'unassigned.PINNED_INFEASIBLE': 'Locked to a vehicle that could not schedule it',
+  'unassigned.NEEDS_TAIL_LIFT': 'Needs a tail lift; no equipped vehicle',
+  'unassigned.OVER_CAPACITY': 'Load exceeds every vehicle’s capacity',
+  'unassigned.OVERSIZE': 'Access limit; no small-enough vehicle',
+  'unassigned.CONSTRAINED': 'Could not fit within time windows / routing',
   'week.orders': 'Orders', 'week.vehicles': 'Vehicles', 'week.trips': 'Trips', 'week.distance': 'Distance', 'week.cost': 'Est. cost',
   'week.perVehicle': 'Per-vehicle utilization', 'week.vehicle': 'Vehicle', 'week.total': 'Total', 'week.bothDays': 'both days',
   // Timeline playback
@@ -296,6 +305,15 @@ const hu: Dict = {
   'fleet.filterTailLift': 'Emelőhátfal', 'fleet.filterAdvisories': 'Figyelmeztetéssel',
   // Week view
   'topbar.week': 'Hét', 'week.title': 'Heti áttekintés', 'week.loading': 'Betöltés…',
+  'topbar.issues': 'Problémák', 'issues.title': 'Terv problémái',
+  'issues.none': 'Nincs probléma. Minden megrendelés kiosztva, a korlátokon belül.',
+  'issues.unassigned': 'Kiosztatlan megrendelések', 'issues.hard': 'Korlátsértések', 'issues.advisories': 'Figyelmeztetések',
+  'issues.lateBy': '{n} perc késés', 'issues.overBy': 'túllépés {n} {dim}', 'issues.tailLift': 'emelőhátfal kell', 'issues.oversize': '{a}t > {b}t',
+  'unassigned.PINNED_INFEASIBLE': 'Járműhöz rögzítve, de nem volt ütemezhető',
+  'unassigned.NEEDS_TAIL_LIFT': 'Emelőhátfal kell; nincs felszerelt jármű',
+  'unassigned.OVER_CAPACITY': 'A rakomány meghaladja minden jármű kapacitását',
+  'unassigned.OVERSIZE': 'Behajtási korlát; nincs elég kis jármű',
+  'unassigned.CONSTRAINED': 'Nem fért be az időablakokba / útvonalba',
   'week.orders': 'Megrendelés', 'week.vehicles': 'Járművek', 'week.trips': 'Fordulók', 'week.distance': 'Távolság', 'week.cost': 'Becsült költség',
   'week.perVehicle': 'Járművenkénti kihasználtság', 'week.vehicle': 'Jármű', 'week.total': 'Összes', 'week.bothDays': 'mindkét nap',
   // Timeline playback

@@ -13,6 +13,7 @@ import { ImportDialog } from '@/components/ImportDialog';
 import { HistoryDialog } from '@/components/HistoryDialog';
 import { ChangesDialog } from '@/components/ChangesDialog';
 import { WeekDialog } from '@/components/WeekDialog';
+import { IssuesDialog } from '@/components/IssuesDialog';
 import { api, pollJob } from '@/lib/api';
 import { useT, describeApiError } from '@/i18n';
 import type { DaySummary, Job, Objective, Plan, Scenario, ScenarioEdit, Selection } from '@/types';
@@ -72,6 +73,7 @@ export default function App() {
   const [historyOpen, setHistoryOpen] = useState(false);
   const [changesOpen, setChangesOpen] = useState(false);
   const [weekOpen, setWeekOpen] = useState(false);
+  const [issuesOpen, setIssuesOpen] = useState(false);
   const [leftOpen, setLeftOpen] = useState(true);
   const [rightOpen, setRightOpen] = useState(true);
   // Fleet-panel filter (tail-lift / advisories / search) -> the map shows only
@@ -294,6 +296,7 @@ export default function App() {
   const isReplan = scenario.kind === 'copy';
   const solving = job?.status === 'running' || job?.status === 'pending';
   const changesCount = scenario.removedVehicleIds.length + scenario.pins.length + scenario.forbids.length + scenario.vehicleOverrides.length + scenario.sequences.length;
+  const issuesCount = plan.unassigned.length + plan.provenance.validation.violations.filter((v) => !v.soft).length;
   // The plan no longer reflects the scenario once it has been edited since solve.
   const dirty = scenario.revision !== plan.scenarioRevision;
 
@@ -316,6 +319,8 @@ export default function App() {
           onOpenImport={() => setImportOpen(true)}
           onOpenHistory={() => setHistoryOpen(true)}
           onOpenWeek={() => setWeekOpen(true)}
+          onOpenIssues={() => setIssuesOpen(true)}
+          issuesCount={issuesCount}
         />
         <KpiStrip plan={plan} baseline={baseline} compare={isReplan} job={job} />
 
@@ -391,6 +396,7 @@ export default function App() {
         onReplan={() => { setChangesOpen(false); void replan(); }}
       />
       <WeekDialog open={weekOpen} onOpenChange={setWeekOpen} />
+      <IssuesDialog open={issuesOpen} onOpenChange={setIssuesOpen} plan={plan} onSelect={navigate} />
       <ImportDialog open={importOpen} onOpenChange={setImportOpen} onAdmitted={(id) => void onAdmitted(id)} onDatasetsChanged={() => void onDatasetsChanged()} />
       <HistoryDialog open={historyOpen} onOpenChange={setHistoryOpen} dayId={dayId} currentPlanId={plan.id} onReopen={(id) => void reopenPlan(id)} />
     </TooltipProvider>
