@@ -2,6 +2,7 @@ import { AlertTriangle, PackageX, Clock, Weight, CheckCircle2 } from 'lucide-rea
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { useT } from '@/i18n';
+import { violationDetail } from '@/lib/violations';
 import type { Plan, Selection, ValidationViolation } from '@/types';
 
 /* A review of everything wrong with the current plan: unassigned orders (each
@@ -33,13 +34,6 @@ export function IssuesDialog({ open, onOpenChange, plan, onSelect }: {
   const soft = violations.filter((v) => v.soft);
   const actionable = plan.unassigned.length + hard.length;
 
-  const violationDetail = (v: ValidationViolation): string => {
-    if (v.type === 'HARD_TW') return t('issues.lateBy', { n: Math.round(((v.actual ?? 0) - (v.limit ?? 0)) / 60) });
-    if (v.type === 'CAPACITY') return t('issues.overBy', { n: Math.round((v.actual ?? 0) - (v.limit ?? 0)), dim: v.dimension ?? '' });
-    if (v.type === 'TAIL_LIFT') return t('issues.tailLift');
-    if (v.type === 'VEHICLE_SIZE') return t('issues.oversize', { a: v.actual ?? '—', b: v.limit ?? '—' });
-    return v.type;
-  };
   const violationLabel = (v: ValidationViolation): string => (v.orderNo ? custOf(v.orderNo) : refOf(v.vehicle_id));
 
   return (
@@ -63,14 +57,14 @@ export function IssuesDialog({ open, onOpenChange, plan, onSelect }: {
               {hard.length > 0 && (
                 <Group title={t('issues.hard')} count={hard.length} icon={<Clock className="h-3.5 w-3.5" />} warn>
                   {hard.map((v, i) => (
-                    <Row key={i} onClick={() => go(locate(v))} label={violationLabel(v)} detail={violationDetail(v)} />
+                    <Row key={i} onClick={() => go(locate(v))} label={violationLabel(v)} detail={violationDetail(v, t)} />
                   ))}
                 </Group>
               )}
               {soft.length > 0 && (
                 <Group title={t('issues.advisories')} count={soft.length} icon={<Weight className="h-3.5 w-3.5" />}>
                   {soft.map((v, i) => (
-                    <Row key={i} onClick={() => go(locate(v))} label={violationLabel(v)} detail={violationDetail(v)} />
+                    <Row key={i} onClick={() => go(locate(v))} label={violationLabel(v)} detail={violationDetail(v, t)} />
                   ))}
                 </Group>
               )}

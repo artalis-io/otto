@@ -314,6 +314,9 @@ export default function App() {
   const solving = job?.status === 'running' || job?.status === 'pending';
   const changesCount = scenario.removedVehicleIds.length + scenario.pins.length + scenario.forbids.length + scenario.vehicleOverrides.length + scenario.sequences.length;
   const issuesCount = plan.unassigned.length + plan.provenance.validation.violations.filter((v) => !v.soft).length;
+  // Guard switching day/scenario when there are unapplied staged edits (they'd
+  // be silently discarded). Returns true if it's safe to proceed.
+  const okToSwitch = (): boolean => !(scenario.kind === 'copy' && changesCount > 0) || window.confirm(t('app.discardConfirm', { n: changesCount }));
   // The plan no longer reflects the scenario once it has been edited since solve.
   const dirty = scenario.revision !== plan.scenarioRevision;
 
@@ -321,7 +324,7 @@ export default function App() {
     <TooltipProvider delayDuration={200}>
       <div className="flex h-full flex-col overflow-hidden">
         <TopBar
-          days={days} dayId={dayId} onDayChange={(id) => { const d = days.find((x) => x.id === id); if (d) void loadDay(d); }}
+          days={days} dayId={dayId} onDayChange={(id) => { if (!okToSwitch()) return; const d = days.find((x) => x.id === id); if (d) void loadDay(d); }}
           scenario={scenario} plan={plan} job={job} solving={!!solving}
           objective={objective} onObjectiveChange={setObjective}
           budgetSec={budgetSec} onBudgetChange={setBudgetSec}
@@ -417,10 +420,10 @@ export default function App() {
       />
       <WeekDialog open={weekOpen} onOpenChange={setWeekOpen} />
       <IssuesDialog open={issuesOpen} onOpenChange={setIssuesOpen} plan={plan} onSelect={navigate} />
-      <ScenariosDialog open={scenariosOpen} onOpenChange={setScenariosOpen} dayId={dayId} currentScenarioId={scenario.id} onOpen={(id) => void reopenPlan(id)} onImport={(s) => void onImportScenario(s)} />
+      <ScenariosDialog open={scenariosOpen} onOpenChange={setScenariosOpen} dayId={dayId} currentScenarioId={scenario.id} onOpen={(id) => { if (okToSwitch()) void reopenPlan(id); }} onImport={(s) => void onImportScenario(s)} />
       <HelpOverlay open={helpOpen} onClose={closeHelp} />
       <ImportDialog open={importOpen} onOpenChange={setImportOpen} onAdmitted={(id) => void onAdmitted(id)} onDatasetsChanged={() => void onDatasetsChanged()} />
-      <HistoryDialog open={historyOpen} onOpenChange={setHistoryOpen} dayId={dayId} currentPlanId={plan.id} onReopen={(id) => void reopenPlan(id)} />
+      <HistoryDialog open={historyOpen} onOpenChange={setHistoryOpen} dayId={dayId} currentPlanId={plan.id} onReopen={(id) => { if (okToSwitch()) void reopenPlan(id); }} />
     </TooltipProvider>
   );
 }

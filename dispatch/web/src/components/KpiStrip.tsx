@@ -8,9 +8,11 @@ function Delta({ value, goodWhenNegative, unit = '' }: { value: number; goodWhen
   if (value === 0) return <span className="tnum text-[11px] text-muted-foreground">±0{unit}</span>;
   const good = goodWhenNegative ? value < 0 : value > 0;
   const sign = value > 0 ? '+' : '';
+  // A glyph (not just color) carries the better/worse signal: ▲ = improved,
+  // ▼ = worse. Keeps the signal legible for red-green color-deficient users.
   return (
     <span className={`tnum text-[11px] font-medium ${good ? 'text-primary' : 'text-warning'}`}>
-      {sign}{value % 1 === 0 ? value : value.toFixed(0)}{unit} {t('kpi.vsBaseline')}
+      <span aria-hidden>{good ? '▲' : '▼'}</span> {sign}{value % 1 === 0 ? value : value.toFixed(0)}{unit} {t('kpi.vsBaseline')}
     </span>
   );
 }
@@ -59,7 +61,7 @@ export function KpiStrip({ plan, baseline, compare, job }: { plan: Plan; baselin
           sub={costDelta == null ? t(plan.cost.source === 'demo' ? 'kpi.demoTariff' : 'kpi.extTariff') : undefined}
           delta={costDelta != null ? (
             <span className={`tnum text-[11px] font-medium ${costDelta <= 0 ? 'text-primary' : 'text-warning'}`}>
-              {costDelta > 0 ? '+' : costDelta < 0 ? '−' : '±'}{money(Math.abs(costDelta), plan.cost.currency, true)} {t('kpi.vsBaseline')}
+              <span aria-hidden>{costDelta < 0 ? '▲' : costDelta > 0 ? '▼' : ''}</span> {costDelta > 0 ? '+' : costDelta < 0 ? '−' : '±'}{money(Math.abs(costDelta), plan.cost.currency, true)} {t('kpi.vsBaseline')}
             </span>
           ) : undefined}
         />

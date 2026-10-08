@@ -15,6 +15,7 @@ const en: Dict = {
 
   'app.loading': 'Loading planning day…',
   'app.failed': 'Failed to load: {e}',
+  'app.discardConfirm': 'You have {n} unapplied change(s). Switch away and discard them?',
   'err.rate_limited': 'Server busy, please retry in a moment.',
   'err.server': 'Server error. Please try again.',
   'err.not_found': 'Not found (it may have been removed).',
@@ -27,7 +28,7 @@ const en: Dict = {
   'topbar.baseline': 'Baseline', 'topbar.live': 'Live',
   'topbar.optimize': 'Optimize', 'topbar.optimizing': 'Optimizing',
   'topbar.replan': 'Replan', 'topbar.replanning': 'Replanning',
-  'topbar.compare': 'Compare', 'topbar.reset': 'Baseline',
+  'topbar.compare': 'Compare', 'topbar.reset': 'Reset to baseline',
   'topbar.data': 'Data', 'topbar.plans': 'Plans', 'topbar.export': 'Export',
   'scn.unavailable': '{ref} unavailable', 'scn.edited': '{day} (edited)',
 
@@ -204,6 +205,7 @@ const hu: Dict = {
 
   'app.loading': 'Tervezési nap betöltése…',
   'app.failed': 'Betöltés sikertelen: {e}',
+  'app.discardConfirm': '{n} életbe nem léptetett módosításod van. Elnavigálsz és elveted őket?',
   'err.rate_limited': 'A szerver túlterhelt, próbáld újra egy pillanat múlva.',
   'err.server': 'Szerverhiba. Kérlek próbáld újra.',
   'err.not_found': 'Nem található (lehet, hogy törölték).',
@@ -216,7 +218,7 @@ const hu: Dict = {
   'topbar.baseline': 'Alapterv', 'topbar.live': 'Élő',
   'topbar.optimize': 'Optimalizálás', 'topbar.optimizing': 'Optimalizálás',
   'topbar.replan': 'Újratervezés', 'topbar.replanning': 'Újratervezés',
-  'topbar.compare': 'Összehasonlítás', 'topbar.reset': 'Alapterv',
+  'topbar.compare': 'Összehasonlítás', 'topbar.reset': 'Visszaállítás az alaptervre',
   'topbar.data': 'Adatok', 'topbar.plans': 'Tervek', 'topbar.export': 'Exportálás',
   'scn.unavailable': '{ref} nem elérhető', 'scn.edited': '{day} (módosítva)',
 

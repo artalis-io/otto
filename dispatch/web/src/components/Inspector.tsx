@@ -5,6 +5,7 @@ import { Badge } from '@/components/ui/badge';
 import { Separator } from '@/components/ui/separator';
 import { hhmm, km, money, pct, ratio } from '@/lib/format';
 import { setDraggedOrder, isOrderDrag, readDraggedOrder } from '@/lib/dnd';
+import { violationDetail } from '@/lib/violations';
 import { NarrationPanel } from '@/components/NarrationPanel';
 import { useT } from '@/i18n';
 import { useState } from 'react';
@@ -288,7 +289,7 @@ function ValidationRow({ plan, vehicle }: { plan: Plan; vehicle: Vehicle }) {
   return (
     <div className="space-y-1">
       {hard.map((v, i) => (
-        <div key={i} className="flex items-center gap-1.5 text-xs text-destructive"><AlertTriangle className="h-3.5 w-3.5" /> {v.type}{v.dimension ? ` (${v.dimension})` : ''}</div>
+        <div key={i} className="flex items-center gap-1.5 text-xs text-destructive"><AlertTriangle className="h-3.5 w-3.5" /> {violationDetail(v, t)}</div>
       ))}
       {(tailMiss > 0 || sizeMiss > 0) && (
         <div className="space-y-0.5 rounded border border-amber-500/30 bg-amber-500/10 px-2 py-1 text-[11px] text-amber-700">
