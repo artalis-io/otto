@@ -76,11 +76,15 @@ narration); make the optimizer legible.
 - *Why infeasible?* surface the binding constraint, not just a failure. (partly: the
   unassigned reason now names the likely blocker)
 
-### 4. The outbound handoff  (what makes it deployable)
-The inbound pipeline is excellent; the outbound side is just a print sheet + CSV.
-- **Write the tuned plan back** into the customer's format (the inverse of ingest),
-  or a clean structured export they can re-import into their SoR.
-- Polish the existing route-sheet / CSV exports around that.
+### 4. The outbound handoff  (what makes it deployable)  [DONE]
+- ✅ **Write the tuned plan back** in the customer's route schema:
+  `planToRoutesCsv` emits order_no / vehicle / sequence / date (+ planned
+  times), columns aligned to the `routes` canonical so it re-imports through the
+  same onboarding pipeline (verified: a round-tripped routes.csv auto-maps all
+  four fields). `planToHandoffJson` is a clean structured dispatch-plan document.
+  `GET /api/plans/:id/routes.csv` + `/handoff.json`.
+- ✅ Export menu reorganized: "For drivers" (route sheets, stops CSV) vs
+  "Hand back to your system" (routes CSV, dispatch plan JSON).
 
 ### 5. Current-plan "issues" review panel  [DONE]
 Not a persistent worklist (that would be SoR-ish): a review aid for *this* plan before
