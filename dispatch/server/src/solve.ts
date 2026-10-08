@@ -129,9 +129,16 @@ export function applySequences(request: SurgeRequest, scenario: Scenario, availa
     if (!avail.has(seq.vehicleId)) continue; // vehicle removed/out of scope
     // resolve to in-scope request ids, preserving the dispatcher's order
     const ids = seq.orderNos.map((o) => reqIdByOrderNo.get(o)).filter((x): x is number => x != null);
-    if (ids.length < 2) continue;
-    for (const id of ids) { const r = reqById.get(id); if (r) r.allowed_vehicles = [seq.vehicleId]; } // lock to the vehicle
+    if (ids.length < (seq.locked ? 1 : 2)) continue;
+    for (const id of ids) { const r = reqById.get(id); if (r) r.allowed_vehicles = [seq.vehicleId]; } // keep on the vehicle
     for (let i = 0; i + 1 < ids.length; i++) prec.push({ before: ids[i]!, after: ids[i + 1]! });
+    if (seq.locked) {
+      // freeze the route exactly: no other order may be added to this vehicle
+      const inSeq = new Set(ids);
+      for (const r of request.requests) {
+        if (!inSeq.has(r.id)) r.forbidden_vehicles = [...(r.forbidden_vehicles ?? []), seq.vehicleId];
+      }
+    }
   }
   if (prec.length) request.precedences = prec;
 }

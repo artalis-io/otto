@@ -184,8 +184,9 @@ export interface Scenario {
   createdAt: string;
 }
 
-/* A manual stop order for one vehicle (orders locked to it, solved in order). */
-export interface VehicleSequence { vehicleId: number; orderNos: string[] }
+/* A manual stop order for one vehicle (orders kept on it, solved in order);
+ * `locked` freezes the route exactly (no other order may be added). */
+export interface VehicleSequence { vehicleId: number; orderNos: string[]; locked?: boolean }
 
 /* A single dispatcher edit; mirrors the backend ScenarioEdit union. */
 export type ScenarioEdit =
@@ -197,7 +198,7 @@ export type ScenarioEdit =
   | { op: 'unforbid'; orderNo: string; vehicleId: number }
   | { op: 'setVehicleConstraint'; vehicleId: number; patch: VehicleConstraintPatch }
   | { op: 'clearVehicleConstraint'; vehicleId: number }
-  | { op: 'setSequence'; vehicleId: number; orderNos: string[] }
+  | { op: 'setSequence'; vehicleId: number; orderNos: string[]; locked?: boolean }
   | { op: 'clearSequence'; vehicleId: number }
   | { op: 'clearOverrides' };
 

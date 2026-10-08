@@ -31,9 +31,11 @@ export interface VehicleOverride {
 }
 export type VehicleConstraintPatch = Omit<VehicleOverride, 'vehicleId'>;
 
-/* A manual stop order for one vehicle: the listed orders are locked to that
- * vehicle and solved in this sequence (via allowed_vehicles + precedence). */
-export interface VehicleSequence { vehicleId: number; orderNos: string[] }
+/* A manual stop order for one vehicle: the listed orders are kept on that
+ * vehicle and solved in this sequence (via allowed_vehicles + precedence).
+ * `locked` additionally forbids every other order from the vehicle, freezing
+ * its route exactly (lock-and-resolve); the rest re-solves around it. */
+export interface VehicleSequence { vehicleId: number; orderNos: string[]; locked?: boolean }
 export const MAX_SEQUENCE_LEN = 500;
 
 export interface Scenario {
@@ -62,7 +64,7 @@ export type ScenarioEdit =
   | { op: 'unforbid'; orderNo: string; vehicleId: number }
   | { op: 'setVehicleConstraint'; vehicleId: number; patch: VehicleConstraintPatch }
   | { op: 'clearVehicleConstraint'; vehicleId: number }
-  | { op: 'setSequence'; vehicleId: number; orderNos: string[] }
+  | { op: 'setSequence'; vehicleId: number; orderNos: string[]; locked?: boolean }
   | { op: 'clearSequence'; vehicleId: number }
   | { op: 'clearOverrides' };
 
@@ -87,6 +89,7 @@ export function validateScenarioEdit(edit: unknown): string | null {
       if (e.orderNos.length > MAX_SEQUENCE_LEN) return `too many orders (> ${MAX_SEQUENCE_LEN})`;
       if (!e.orderNos.every(isOrder)) return 'orderNos must be valid order numbers';
       if (new Set(e.orderNos).size !== e.orderNos.length) return 'orderNos must be unique';
+      if (e.locked != null && typeof e.locked !== 'boolean') return 'locked must be a boolean';
       return null;
     }
     case 'pin': case 'forbid': case 'unforbid':
@@ -301,8 +304,10 @@ export class Store {
         break;
       case 'setSequence': {
         const rest = s.sequences.filter((q) => q.vehicleId !== edit.vehicleId);
-        // a sequence of <2 orders carries no ordering -> treat as clear
-        s.sequences = edit.orderNos.length >= 2 ? [...rest, { vehicleId: edit.vehicleId, orderNos: [...edit.orderNos] }] : rest;
+        // a sequence of <2 orders carries no ordering -> treat as clear (unless
+        // locked: a 1-stop vehicle can still be frozen)
+        const keep = edit.orderNos.length >= 2 || (edit.locked && edit.orderNos.length >= 1);
+        s.sequences = keep ? [...rest, { vehicleId: edit.vehicleId, orderNos: [...edit.orderNos], ...(edit.locked ? { locked: true } : {}) }] : rest;
         break;
       }
       case 'clearSequence':

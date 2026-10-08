@@ -1,4 +1,4 @@
-import { Ban, CheckCircle2, AlertTriangle, Pin, PinOff, X, RotateCcw, SlidersHorizontal, ChevronRight, ArrowLeft, ArrowRight } from 'lucide-react';
+import { Ban, CheckCircle2, AlertTriangle, Pin, PinOff, X, RotateCcw, SlidersHorizontal, ChevronRight, ArrowLeft, ArrowRight, Lock, LockOpen } from 'lucide-react';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { Badge } from '@/components/ui/badge';
@@ -304,7 +304,7 @@ function LoadTab({ vehicle }: { vehicle: Vehicle }) {
   );
 }
 
-export function Inspector({ plan, scenario, selection, onSelect, onBack, onForward, canGoBack, canGoForward, onMarkUnavailable, onRestoreVehicle, onSetConstraint, onClearConstraint, solving, onPin, onUnpin, onForbid, onClearOverrides, onSetSequence }: {
+export function Inspector({ plan, scenario, selection, onSelect, onBack, onForward, canGoBack, canGoForward, onMarkUnavailable, onRestoreVehicle, onSetConstraint, onClearConstraint, solving, onPin, onUnpin, onForbid, onClearOverrides, onSetSequence, onClearSequence }: {
   plan: Plan; baseline: Plan; scenario: Scenario; selection: Selection; onSelect: (s: Selection) => void; onMarkUnavailable: (id: number) => void; solving: boolean;
   onBack: () => void; onForward: () => void; canGoBack: boolean; canGoForward: boolean;
   onRestoreVehicle: (id: number) => void;
@@ -314,7 +314,8 @@ export function Inspector({ plan, scenario, selection, onSelect, onBack, onForwa
   onUnpin: (orderNo: string) => void;
   onForbid: (orderNo: string, vehicleId: number) => void;
   onClearOverrides: () => void;
-  onSetSequence?: (vehicleId: number, orderNos: string[]) => void;
+  onSetSequence?: (vehicleId: number, orderNos: string[], locked?: boolean) => void;
+  onClearSequence?: (vehicleId: number) => void;
 }) {
   const t = useT();
   const overrideCount = scenario.pins.length + scenario.forbids.length;
@@ -409,6 +410,21 @@ export function Inspector({ plan, scenario, selection, onSelect, onBack, onForwa
                 <ConstraintsEditor vehicle={vehicle}
                   override={scenario.vehicleOverrides.find((o) => o.vehicleId === vehicle.id)}
                   onSet={(patch) => onSetConstraint(vehicle.id, patch)} onClear={() => onClearConstraint(vehicle.id)} disabled={solving} />
+              )}
+              {/* Lock-and-resolve: freeze this vehicle's route; the rest re-solves around it. */}
+              {!stop && !trip && onSetSequence && onClearSequence && vehicle.trips.some((tr) => tr.stops.length > 0) && (
+                scenario.sequences.some((q) => q.vehicleId === vehicle.id && q.locked) ? (
+                  <button type="button" disabled={solving} onClick={() => onClearSequence(vehicle.id)}
+                    className="flex w-full items-center justify-center gap-1.5 rounded border border-primary/50 bg-primary/5 px-2 py-1 text-[11px] font-medium text-primary hover:bg-primary/10 disabled:opacity-40">
+                    <Lock className="h-3 w-3" /> {t('inspector.unlockRoute')}
+                  </button>
+                ) : (
+                  <button type="button" disabled={solving} title={t('inspector.lockRouteHint')}
+                    onClick={() => onSetSequence(vehicle.id, vehicle.trips.flatMap((tr) => tr.stops.map((s) => s.orderNo)), true)}
+                    className="flex w-full items-center justify-center gap-1.5 rounded border border-divider px-2 py-1 text-[11px] text-muted-foreground hover:bg-accent disabled:opacity-40">
+                    <LockOpen className="h-3 w-3" /> {t('inspector.lockRoute')}
+                  </button>
+                )
               )}
               {overrideCount > 0 && (
                 <button type="button" onClick={onClearOverrides}

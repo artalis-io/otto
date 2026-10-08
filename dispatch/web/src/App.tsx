@@ -373,7 +373,8 @@ export default function App() {
                 onUnpin={(orderNo) => void applyEdit({ op: 'unpin', orderNo })}
                 onForbid={(orderNo, vehicleId) => void applyEdit({ op: 'forbid', orderNo, vehicleId })}
                 onClearOverrides={() => void applyEdit({ op: 'clearOverrides' })}
-                onSetSequence={(vehicleId, orderNos) => void applyEdit({ op: 'setSequence', vehicleId, orderNos })} />
+                onSetSequence={(vehicleId, orderNos, locked) => void applyEdit({ op: 'setSequence', vehicleId, orderNos, ...(locked ? { locked: true } : {}) })}
+                onClearSequence={(vehicleId) => void applyEdit({ op: 'clearSequence', vehicleId })} />
             </aside>
           )}
         </div>

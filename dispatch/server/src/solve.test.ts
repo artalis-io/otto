@@ -118,3 +118,11 @@ test('applySequences: a single-order sequence adds no precedence', () => {
   applySequences(req, mkScenario({ sequences: [{ vehicleId: 1, orderNos: ['O1'] }] }));
   assert.equal(req.precedences, undefined);
 });
+
+test('applySequences: a locked sequence forbids the vehicle for all other orders (true freeze)', () => {
+  const req = mkRequest();
+  applySequences(req, mkScenario({ sequences: [{ vehicleId: 1, orderNos: ['O1'], locked: true }] }));
+  const byId = new Map(req.requests.map((r) => [r.id, r]));
+  assert.deepEqual(byId.get(100)!.allowed_vehicles, [1]);   // O1 kept on v1
+  assert.deepEqual(byId.get(101)!.forbidden_vehicles, [1]); // O2 cannot be added to v1
+});

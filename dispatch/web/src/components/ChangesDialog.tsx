@@ -62,7 +62,9 @@ export function ChangesDialog({ open, onOpenChange, plan, scenario, dirty, solvi
               {scenario.sequences.length > 0 && (
                 <Group title={t('changes.sequences')} icon={<ListOrdered className="h-3.5 w-3.5" />}>
                   {scenario.sequences.map((q) => (
-                    <Row key={q.vehicleId} label={refOf(q.vehicleId)} detail={t('changes.sequenceN', { n: q.orderNos.length })} onUndo={() => onUndo({ op: 'clearSequence', vehicleId: q.vehicleId })} />
+                    <Row key={q.vehicleId} label={refOf(q.vehicleId)}
+                      detail={t(q.locked ? 'changes.routeLocked' : 'changes.sequenceN', { n: q.orderNos.length })}
+                      onUndo={() => onUndo({ op: 'clearSequence', vehicleId: q.vehicleId })} />
                   ))}
                 </Group>
               )}

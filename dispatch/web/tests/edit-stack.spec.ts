@@ -88,6 +88,18 @@ test.describe('staged edit stack', () => {
     expectNoErrors(page);
   });
 
+  test('lock-and-resolve: locking a vehicle route stages a sequence', async ({ page }) => {
+    await loadApp(page);
+    await selectVehicle(page, 'RIC-124');
+    const inspector = page.locator('aside').last();
+    await inspector.getByRole('button', { name: 'Lock route' }).click();
+    await expect(inspector.getByRole('button', { name: /Route locked/ })).toBeVisible();
+    await expect(page.getByText(/staged change/)).toBeVisible();
+    await page.getByRole('button', { name: /Changes/ }).click();
+    await expect(page.getByRole('dialog').getByText('Stop order')).toBeVisible();
+    expectNoErrors(page);
+  });
+
   test('vehicle constraint edit stacks', async ({ page }) => {
     await loadApp(page);
     await selectVehicle(page, 'RIX-419');
