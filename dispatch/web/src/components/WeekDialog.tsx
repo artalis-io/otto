@@ -1,7 +1,6 @@
 import { useEffect, useState } from 'react';
 import { CalendarRange } from 'lucide-react';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
-import { ScrollArea } from '@/components/ui/scroll-area';
 import { Badge } from '@/components/ui/badge';
 import { km, money } from '@/lib/format';
 import { api, type WeekSummary } from '@/lib/api';
@@ -55,7 +54,7 @@ export function WeekDialog({ open, onOpenChange }: { open: boolean; onOpenChange
             {/* Per-vehicle utilization */}
             <div>
               <div className="mb-1 text-xs font-semibold uppercase tracking-wide text-muted-foreground">{t('week.perVehicle')}</div>
-              <ScrollArea className="max-h-[42vh] rounded border border-divider">
+              <div className="max-h-[42vh] overflow-y-auto rounded border border-divider">
                 <table className="w-full border-collapse text-[11px]">
                   <thead className="sticky top-0 bg-muted/80 backdrop-blur">
                     <tr className="text-left text-muted-foreground">
@@ -81,7 +80,7 @@ export function WeekDialog({ open, onOpenChange }: { open: boolean; onOpenChange
                     ))}
                   </tbody>
                 </table>
-              </ScrollArea>
+              </div>
             </div>
           </div>
         )}
