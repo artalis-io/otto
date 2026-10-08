@@ -106,31 +106,36 @@ function TripDetail({ trip, vehicle, currency, onSelectStop, canDrag, onResequen
   const util = Math.max(ratio(trip.loadKg, vehicle.capacityKg), ratio(trip.loadPallets, vehicle.capacityPallets));
   const drive = trip.stops.reduce((n, s) => n + s.travelToSec, 0) + Math.max(0, trip.endSec - (trip.stops.at(-1)?.departureSec ?? trip.endSec));
   const wait = trip.stops.reduce((n, s) => n + s.waitSec, 0);
+  // An order-dependent value (times, distance, cost) is stale once the stops are
+  // reordered but not yet re-solved — show a dash so no wrong number is shown.
+  const dash = '–';
   return (
     <div className="space-y-2">
-      <Field label={t('inspector.window')} value={`${hhmm(trip.startSec)}–${hhmm(trip.endSec)}`} />
-      <Field label={t('inspector.distance')} value={km(trip.distanceKm)} />
-      <Field label={t('inspector.load')} value={`${kg(trip.loadKg)} · ${plt(trip.loadPallets)} (${pct(util)})`} warn={util > 0.98} />
-      <Field label={t('inspector.driveWait')} value={`${t('inspector.minN', { n: Math.round(drive / 60) })} · ${t('inspector.minN', { n: Math.round(wait / 60) })}`} />
-      {trip.costFt != null && <Field label={t('inspector.cost')} value={money(trip.costFt, currency, true)} />}
-      {trip.reloadSecAfter > 0 && <Field label={t('inspector.reloadAfter')} value={t('inspector.minN', { n: Math.round(trip.reloadSecAfter / 60) })} />}
-      {/* why this sequence */}
-      <div className="rounded border border-divider bg-muted/30 px-2 py-1.5 text-[11px]">
-        <span className="text-muted-foreground">{t(why.windowDriven ? 'inspector.whyWindows' : 'inspector.whyDistance')}</span>
-        {(why.tight > 0 || why.late > 0 || why.waits > 0) && (
-          <span className="mt-0.5 flex flex-wrap gap-x-2">
-            {why.late > 0 && <span className="text-warning">{t('inspector.whyLate', { n: why.late })}</span>}
-            {why.tight > 0 && <span className="text-muted-foreground">{t('inspector.whyTight', { n: why.tight })}</span>}
-            {why.waits > 0 && <span className="text-muted-foreground">{t('inspector.whyWaits', { n: why.waits })}</span>}
-          </span>
-        )}
-      </div>
-      <Separator />
       {pending && (
         <div className="flex items-center gap-1 rounded border border-primary/40 bg-primary/5 px-2 py-1 text-[10px] text-primary">
           <ListOrdered className="h-3 w-3" /> {t('inspector.reorderPending')}
         </div>
       )}
+      <Field label={t('inspector.window')} value={pending ? dash : `${hhmm(trip.startSec)}–${hhmm(trip.endSec)}`} />
+      <Field label={t('inspector.distance')} value={pending ? dash : km(trip.distanceKm)} />
+      <Field label={t('inspector.load')} value={`${kg(trip.loadKg)} · ${plt(trip.loadPallets)} (${pct(util)})`} warn={!pending && util > 0.98} />
+      <Field label={t('inspector.driveWait')} value={pending ? dash : `${t('inspector.minN', { n: Math.round(drive / 60) })} · ${t('inspector.minN', { n: Math.round(wait / 60) })}`} />
+      {trip.costFt != null && <Field label={t('inspector.cost')} value={pending ? dash : money(trip.costFt, currency, true)} />}
+      {!pending && trip.reloadSecAfter > 0 && <Field label={t('inspector.reloadAfter')} value={t('inspector.minN', { n: Math.round(trip.reloadSecAfter / 60) })} />}
+      {/* why this sequence (describes the solved order; hidden while a reorder is pending) */}
+      {!pending && (
+        <div className="rounded border border-divider bg-muted/30 px-2 py-1.5 text-[11px]">
+          <span className="text-muted-foreground">{t(why.windowDriven ? 'inspector.whyWindows' : 'inspector.whyDistance')}</span>
+          {(why.tight > 0 || why.late > 0 || why.waits > 0) && (
+            <span className="mt-0.5 flex flex-wrap gap-x-2">
+              {why.late > 0 && <span className="text-warning">{t('inspector.whyLate', { n: why.late })}</span>}
+              {why.tight > 0 && <span className="text-muted-foreground">{t('inspector.whyTight', { n: why.tight })}</span>}
+              {why.waits > 0 && <span className="text-muted-foreground">{t('inspector.whyWaits', { n: why.waits })}</span>}
+            </span>
+          )}
+        </div>
+      )}
+      <Separator />
       {canDrag && (
         <div className="flex items-center gap-1 text-[10px] text-muted-foreground">
           <GripVertical className="h-3 w-3" /> {t(onResequence ? 'inspector.dragStop' : 'inspector.dragToReassign')}
@@ -152,9 +157,9 @@ function TripDetail({ trip, vehicle, currency, onSelectStop, canDrag, onResequen
                 <span className="flex min-w-0 items-baseline truncate">
                   {canDrag && <GripVertical className="mr-0.5 h-3 w-3 shrink-0 self-center text-muted-foreground/60" />}
                   <span className="tnum text-muted-foreground">{i + 1}.</span>&nbsp;{s.customer ?? s.orderNo}
-                  <span className="tnum ml-1 text-[10px] text-muted-foreground">+{Math.round(s.travelToSec / 60)}m</span>
+                  {!pending && <span className="tnum ml-1 text-[10px] text-muted-foreground">+{Math.round(s.travelToSec / 60)}m</span>}
                 </span>
-                <span className="tnum shrink-0 text-muted-foreground">{hhmm(s.arrivalSec)}{s.lateBySec > 0 && <span className="ml-1 text-warning">+{Math.round(s.lateBySec / 60)}m</span>}</span>
+                <span className="tnum shrink-0 text-muted-foreground">{pending ? dash : <>{hhmm(s.arrivalSec)}{s.lateBySec > 0 && <span className="ml-1 text-warning">+{Math.round(s.lateBySec / 60)}m</span>}</>}</span>
               </button>
             </li>
           );
