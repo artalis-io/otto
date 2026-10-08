@@ -107,15 +107,21 @@ function VehicleCard({
 /* Left fleet panel: search, vehicle cards (expandable to trips + mark-unavailable),
  * and a collapsible unassigned-orders section. Selection is lifted to App. */
 export function FleetPanel({
-  plan, scenario, selection, onSelect, onMarkUnavailable, onRestoreVehicle, solving, onFilterChange, onAssignOrder,
+  plan, scenario, selection, onSelect, onMarkUnavailable, onRestoreVehicle, solving, onFilterChange, onAssignOrder, onBulkAssign,
 }: {
   plan: Plan; scenario: Scenario; selection: Selection; onSelect: (s: Selection) => void;
   onMarkUnavailable: (id: number) => void; onRestoreVehicle: (id: number) => void; solving: boolean;
   onFilterChange?: (visibleVehicleIds: number[] | null) => void;
   onAssignOrder?: (orderNo: string, vehicleId: number) => void;
+  onBulkAssign?: (orderNos: string[], vehicleId: number) => void;
 }) {
   const t = useT();
   const [query, setQuery] = useState('');
+  // Bulk-select of unassigned orders -> assign many to one vehicle at once.
+  const [bulkSel, setBulkSel] = useState<Set<string>>(new Set());
+  const [bulkVeh, setBulkVeh] = useState('');
+  useEffect(() => { setBulkSel(new Set()); setBulkVeh(''); }, [plan.id]);
+  const toggleBulk = (orderNo: string) => setBulkSel((prev) => { const n = new Set(prev); n.has(orderNo) ? n.delete(orderNo) : n.add(orderNo); return n; });
   const [expanded, setExpanded] = useState<Set<number>>(new Set());
   const [unassignedOpen, setUnassignedOpen] = useState(plan.unassigned.length > 0);
   const [onlyTailLift, setOnlyTailLift] = useState(false);
@@ -184,24 +190,62 @@ export function FleetPanel({
           <span className={`tnum ml-auto rounded px-1.5 ${plan.unassigned.length ? 'bg-warning/15 text-warning' : 'bg-muted text-muted-foreground'}`}>{plan.unassigned.length}</span>
         </button>
         {unassignedOpen && (
-          <div className="max-h-44 overflow-y-auto px-2 pb-2">
-            {plan.unassigned.map((u) => {
-              const canDrag = !!onAssignOrder && !solving;
-              return (
-                <button key={u.orderNo} type="button" onClick={() => onSelect({ kind: 'unassigned', orderNo: u.orderNo })}
-                  draggable={canDrag}
-                  onDragStart={canDrag ? (e) => setDraggedOrder(e, u.orderNo) : undefined}
-                  title={canDrag ? t('fleet.dragToAssign') : undefined}
-                  className={`flex w-full items-center gap-1.5 rounded border-t border-divider px-1.5 py-1.5 text-left text-xs hover:bg-accent ${canDrag ? 'cursor-grab active:cursor-grabbing' : ''} ${selUnassigned === u.orderNo ? 'bg-accent' : ''}`}>
-                  {canDrag && <GripVertical className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />}
-                  <span className="min-w-0 flex-1">
-                    <span className="block truncate font-medium">{u.customer ?? u.orderNo}</span>
-                    <span className="tnum block text-muted-foreground">#{u.orderNo}{u.city ? ` · ${u.city}` : ''}</span>
-                  </span>
+          <div className="px-2 pb-2">
+            {onBulkAssign && plan.unassigned.length > 0 && (
+              <div className="flex items-center gap-2 py-1 text-[10px] text-muted-foreground">
+                <button type="button" onClick={() => setBulkSel((prev) => prev.size === plan.unassigned.length ? new Set() : new Set(plan.unassigned.map((u) => u.orderNo)))}
+                  className="rounded px-1 py-0.5 hover:bg-accent hover:text-foreground">
+                  {bulkSel.size === plan.unassigned.length ? t('bulk.selectNone') : t('bulk.selectAll')}
                 </button>
-              );
-            })}
-            {plan.unassigned.length === 0 && <p className="py-2 pl-2 text-xs text-muted-foreground">{t('fleet.allAssigned')}</p>}
+                {bulkSel.size > 0 && <span className="tnum">{t('bulk.nSelected', { n: bulkSel.size })}</span>}
+              </div>
+            )}
+            <div className="max-h-44 overflow-y-auto">
+              {plan.unassigned.map((u) => {
+                const canDrag = !!onAssignOrder && !solving;
+                return (
+                  <div key={u.orderNo} className="flex items-center gap-1 border-t border-divider">
+                    {onBulkAssign && (
+                      <input type="checkbox" checked={bulkSel.has(u.orderNo)} onChange={() => toggleBulk(u.orderNo)}
+                        aria-label={t('bulk.selectOrder', { o: u.orderNo })}
+                        className="ml-1.5 h-3.5 w-3.5 shrink-0 accent-[var(--primary)]" />
+                    )}
+                    <button type="button" onClick={() => onSelect({ kind: 'unassigned', orderNo: u.orderNo })}
+                      draggable={canDrag}
+                      onDragStart={canDrag ? (e) => setDraggedOrder(e, u.orderNo) : undefined}
+                      title={canDrag ? t('fleet.dragToAssign') : undefined}
+                      className={`flex min-w-0 flex-1 items-center gap-1.5 rounded px-1.5 py-1.5 text-left text-xs hover:bg-accent ${canDrag ? 'cursor-grab active:cursor-grabbing' : ''} ${selUnassigned === u.orderNo ? 'bg-accent' : ''}`}>
+                      {canDrag && <GripVertical className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />}
+                      <span className="min-w-0 flex-1">
+                        <span className="block truncate font-medium">{u.customer ?? u.orderNo}</span>
+                        <span className="tnum block text-muted-foreground">#{u.orderNo}{u.city ? ` · ${u.city}` : ''}</span>
+                      </span>
+                    </button>
+                  </div>
+                );
+              })}
+              {plan.unassigned.length === 0 && <p className="py-2 pl-2 text-xs text-muted-foreground">{t('fleet.allAssigned')}</p>}
+            </div>
+            {onBulkAssign && bulkSel.size > 0 && (
+              <div className="mt-1.5 flex items-center gap-1.5 rounded-md border border-primary/40 bg-primary/5 p-1.5">
+                <select value={bulkVeh} onChange={(e) => setBulkVeh(e.target.value)} disabled={solving}
+                  aria-label={t('bulk.toVehicle')}
+                  className="h-7 min-w-0 flex-1 rounded border border-divider bg-card px-1 text-[11px] disabled:opacity-40">
+                  <option value="">{t('bulk.toVehicle')}</option>
+                  {plan.vehicles.filter((v) => !scenario.removedVehicleIds.includes(v.id)).map((v) => (
+                    <option key={v.id} value={v.id}>{v.ref}{v.vehicleClass ? ` · ${v.vehicleClass.replace(/_/g, ' ')}` : ''}</option>
+                  ))}
+                </select>
+                <button type="button" disabled={!bulkVeh || solving}
+                  onClick={() => { onBulkAssign([...bulkSel], Number(bulkVeh)); setBulkSel(new Set()); setBulkVeh(''); }}
+                  className="shrink-0 rounded bg-primary px-2 py-1 text-[11px] font-medium text-primary-foreground hover:bg-primary/90 disabled:opacity-40">
+                  {t('bulk.assign')}
+                </button>
+                <button type="button" onClick={() => setBulkSel(new Set())} className="shrink-0 rounded px-1.5 py-1 text-[11px] text-muted-foreground hover:bg-accent">
+                  {t('bulk.clear')}
+                </button>
+              </div>
+            )}
           </div>
         )}
       </div>

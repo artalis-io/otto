@@ -66,6 +66,10 @@ export const api = {
   editScenario: (id: string, edit: ScenarioEdit, label?: string) =>
     jsend<Scenario>(`/api/scenarios/${id}/edit`, 'POST', { edit, label }),
 
+  /** Apply several overrides at once (bulk actions); forks + persists once. */
+  editScenarioBatch: (id: string, edits: ScenarioEdit[], label?: string) =>
+    jsend<Scenario>(`/api/scenarios/${id}/edits`, 'POST', { edits, ...(label ? { label } : {}) }),
+
   solve: (scenarioId: string, budgetSec?: number, objective?: Objective, fullBudget?: boolean) =>
     jsend<{ jobId: string; scenarioId: string; scenarioRevision: number; budgetSec: number; objective: Objective }>(
       `/api/scenarios/${scenarioId}/solve`, 'POST', { ...(budgetSec ? { budgetSec } : {}), ...(objective ? { objective } : {}), ...(fullBudget ? { fullBudget: true } : {}) }),

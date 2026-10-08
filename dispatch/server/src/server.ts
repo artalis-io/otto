@@ -180,6 +180,25 @@ app.post<{ Params: { id: string }; Body: { edit?: ScenarioEdit; label?: string }
   }
 });
 
+/* Bulk edit: apply several staged edits in one shot (e.g. assign many unassigned
+ * orders to a vehicle). Forks a copy once and persists once. */
+app.post<{ Params: { id: string }; Body: { edits?: unknown; label?: string } }>('/api/scenarios/:id/edits', async (req, reply) => {
+  const cur = store.getScenario(req.params.id);
+  if (!cur) return reply.code(404).send({ error: 'scenario not found' });
+  const edits = req.body?.edits;
+  if (!Array.isArray(edits) || edits.length === 0 || edits.length > 1000) return reply.code(400).send({ error: 'edits must be a non-empty array (<=1000)' });
+  for (const e of edits) { const invalid = validateScenarioEdit(e); if (invalid) return reply.code(400).send({ error: invalid }); }
+  if (req.body?.label != null && (typeof req.body.label !== 'string' || req.body.label.length > 120)) return reply.code(400).send({ error: 'invalid label' });
+  try {
+    const forked = cur.kind === 'base';
+    const target = store.forkForEdit(cur, req.body?.label);
+    const updated = store.editScenarioBatch(target.id, edits as ScenarioEdit[]);
+    return reply.code(forked ? 201 : 200).send(updated);
+  } catch (e) {
+    return reply.code(400).send({ error: (e as Error).message });
+  }
+});
+
 app.get<{ Params: { id: string } }>('/api/scenarios/:id', async (req, reply) => {
   const s = store.getScenario(req.params.id);
   if (!s) return reply.code(404).send({ error: 'scenario not found' });

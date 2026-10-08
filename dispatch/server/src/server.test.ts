@@ -140,6 +140,24 @@ test('evaluate recomputes a reordered trip without a re-solve', async () => {
   assert.deepEqual(revTrip.stops.map((s) => s.orderNo), [...orders].reverse());
 });
 
+test('bulk edits apply several pins in one forked copy', async () => {
+  const baseR = await inj({ method: 'POST', url: '/api/scenarios', payload: { day: 'day1' } });
+  const base = baseR.json() as { id: string };
+  const edits = [{ op: 'pin', orderNo: 'BULK-1', vehicleId: 0 }, { op: 'pin', orderNo: 'BULK-2', vehicleId: 0 }];
+  const r = await inj({ method: 'POST', url: `/api/scenarios/${base.id}/edits`, payload: { edits } });
+  assert.equal(r.statusCode, 201); // forked a copy from the base
+  const sc = r.json() as { kind: string; pins: { orderNo: string; vehicleId: number }[] };
+  assert.equal(sc.kind, 'copy');
+  assert.ok(sc.pins.some((p) => p.orderNo === 'BULK-1') && sc.pins.some((p) => p.orderNo === 'BULK-2'));
+
+  const empty = await inj({ method: 'POST', url: `/api/scenarios/${base.id}/edits`, payload: { edits: [] } });
+  assert.equal(empty.statusCode, 400);
+  const nf = await inj({ method: 'POST', url: '/api/scenarios/nope/edits', payload: { edits } });
+  assert.equal(nf.statusCode, 404);
+  const badEdit = await inj({ method: 'POST', url: `/api/scenarios/${base.id}/edits`, payload: { edits: [{ op: 'nonsense' }] } });
+  assert.equal(badEdit.statusCode, 400);
+});
+
 test('evaluate validates its body (404 unknown plan, 400 bad order set)', async () => {
   const nf = await inj({ method: 'POST', url: '/api/plans/nope/evaluate', payload: { vehicleId: 1, orderNos: ['x'] } });
   assert.equal(nf.statusCode, 404);

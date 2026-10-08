@@ -50,6 +50,9 @@ const en: Dict = {
   'fleet.markUnavailable': 'Mark unavailable', 'fleet.staged': 'staged', 'fleet.restore': 'Restore',
   'fleet.unassigned': 'Unassigned orders', 'fleet.allAssigned': 'All orders assigned.',
   'fleet.dragToAssign': 'Drag onto a vehicle to assign (applied on Replan)',
+  'bulk.selectAll': 'Select all', 'bulk.selectNone': 'Clear selection', 'bulk.nSelected': '{n} selected',
+  'bulk.selectOrder': 'Select order {o}', 'bulk.toVehicle': 'Assign to vehicle…', 'bulk.assign': 'Assign', 'bulk.clear': 'Clear',
+  'bulk.assignedToast': 'Assigned {n} order(s) to {ref} — applies on Replan',
 
   'timeline.title': 'Timeline', 'timeline.workingDay': '{ref} · working day',
   'timeline.fleetOverview': 'Fleet overview', 'timeline.vehHint': '{n} trips · finish {t}',
@@ -256,6 +259,9 @@ const hu: Dict = {
   'fleet.markUnavailable': 'Kivonás', 'fleet.staged': 'előkészítve', 'fleet.restore': 'Visszaállítás',
   'fleet.unassigned': 'Kiosztatlan megrendelések', 'fleet.allAssigned': 'Minden megrendelés kiosztva.',
   'fleet.dragToAssign': 'Húzd egy járműre a kiosztáshoz (újratervezéskor lép életbe)',
+  'bulk.selectAll': 'Összes kijelölése', 'bulk.selectNone': 'Kijelölés törlése', 'bulk.nSelected': '{n} kijelölve',
+  'bulk.selectOrder': '{o} megrendelés kijelölése', 'bulk.toVehicle': 'Hozzárendelés járműhöz…', 'bulk.assign': 'Hozzárendelés', 'bulk.clear': 'Törlés',
+  'bulk.assignedToast': '{n} megrendelés hozzárendelve: {ref} — újratervezéskor lép életbe',
 
   'timeline.title': 'Idővonal', 'timeline.workingDay': '{ref} · munkanapja',
   'timeline.fleetOverview': 'Flotta áttekintés', 'timeline.vehHint': '{n} forduló · vége {t}',

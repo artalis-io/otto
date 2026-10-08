@@ -346,9 +346,24 @@ export class Store {
   /** Apply a dispatcher edit to an editable scenario, bump its revision, persist.
    * Throws on a base scenario (immutable). Returns the updated scenario. */
   editScenario(id: string, edit: ScenarioEdit): Scenario {
+    return this.editScenarioBatch(id, [edit]);
+  }
+
+  /** Apply several edits to an editable scenario atomically: all mutate the same
+   * scenario, then one revision bump + one persist. Used by bulk actions. */
+  editScenarioBatch(id: string, edits: ScenarioEdit[]): Scenario {
     const s = this.scenarios.get(id);
     if (!s) throw new Error('scenario not found');
     if (s.kind === 'base') throw new Error('base scenario is immutable; fork a copy first');
+    for (const edit of edits) this.applyEditInPlace(s, edit);
+    s.revision += 1;
+    this.scenarios.set(s.id, s);
+    writeJson(join(dir('scenarios'), `${s.id}.json`), s);
+    return s;
+  }
+
+  /** Mutate a scenario object by one edit (no revision bump, no persist). */
+  private applyEditInPlace(s: Scenario, edit: ScenarioEdit): void {
     switch (edit.op) {
       case 'removeVehicle':
         if (!s.removedVehicleIds.includes(edit.vehicleId)) s.removedVehicleIds.push(edit.vehicleId);
@@ -406,10 +421,6 @@ export class Store {
         s.pins = []; s.forbids = []; s.sequences = [];
         break;
     }
-    s.revision += 1;
-    this.scenarios.set(s.id, s);
-    writeJson(join(dir('scenarios'), `${s.id}.json`), s);
-    return s;
   }
 
   getScenario(id: string): Scenario | undefined { return this.scenarios.get(id); }

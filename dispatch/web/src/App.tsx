@@ -248,6 +248,24 @@ export default function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [scenario, t]);
 
+  // Apply several staged edits at once (bulk actions); one fork + one revision.
+  const applyEdits = useCallback(async (edits: ScenarioEdit[], toastMsg?: string) => {
+    if (!scenario || edits.length === 0) return;
+    try {
+      const label = scenario.kind === 'base' ? t('scn.edited', { day: scenario.label }) : undefined;
+      const updated = await api.editScenarioBatch(scenario.id, edits, label);
+      setScenario(updated);
+      if (toastMsg) showToast(toastMsg);
+    } catch (e) { setError(describeApiError(e, t)); }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [scenario, t]);
+
+  // Bulk-assign: pin many orders to one vehicle in a single staged batch.
+  const onBulkAssign = useCallback((orderNos: string[], vehicleId: number) => {
+    const ref = planRef.current?.vehicles.find((v) => v.id === vehicleId)?.ref ?? `#${vehicleId}`;
+    void applyEdits(orderNos.map((orderNo) => ({ op: 'pin', orderNo, vehicleId })), t('bulk.assignedToast', { n: orderNos.length, ref }));
+  }, [applyEdits, t]);
+
   // Replan: solve the current (edited) scenario, then surface the comparison if
   // it is an edited copy. Staged edits are applied together here.
   const replan = useCallback(async () => {
@@ -391,7 +409,8 @@ export default function App() {
                 onMarkUnavailable={(id) => void applyEdit({ op: 'removeVehicle', vehicleId: id })}
                 onRestoreVehicle={(id) => void applyEdit({ op: 'restoreVehicle', vehicleId: id })} solving={!!solving}
                 onFilterChange={setVisibleVehicleIds}
-                onAssignOrder={(orderNo, vehicleId) => void applyEdit({ op: 'pin', orderNo, vehicleId })} />
+                onAssignOrder={(orderNo, vehicleId) => void applyEdit({ op: 'pin', orderNo, vehicleId })}
+                onBulkAssign={onBulkAssign} />
             </aside>
           )}
 
