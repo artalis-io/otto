@@ -39,6 +39,50 @@ function readActiveJob(): ActiveJobRef | null {
   try { const s = localStorage.getItem(ACTIVE_JOB_KEY); return s ? (JSON.parse(s) as ActiveJobRef) : null; } catch { return null; }
 }
 
+/* Preview the plan-wide distance/cost of staged (not-yet-replanned) reorders, so
+ * the top KPI strip can show where the numbers are heading before Replan. Only
+ * reorders are previewable: the stops are unchanged so the backend can recompute
+ * each affected trip exactly (a reassignment would need a full re-solve). Returns
+ * null when nothing is staged / in flight. */
+function usePreviewTotals(plan: Plan | null, scenario: Scenario | null): { distanceKm: number; costTotal: number | null } | null {
+  const [res, setRes] = useState<{ distanceKm: number; costTotal: number | null } | null>(null);
+  const jobs = useMemo(() => {
+    const out: { vehicleId: number; tripIndex: number; startSec: number; reloadSecAfter: number; orderNos: string[]; oldDist: number; oldCost: number }[] = [];
+    if (!plan || !scenario) return out;
+    for (const q of scenario.sequences) {
+      if (q.locked) continue;
+      const v = plan.vehicles.find((x) => x.id === q.vehicleId);
+      if (!v) continue;
+      const pos = new Map(q.orderNos.map((o, i) => [o, i]));
+      for (const trip of v.trips) {
+        const current = trip.stops.map((s) => s.orderNo);
+        const reordered = [...current].sort((a, b) => (pos.get(a) ?? Infinity) - (pos.get(b) ?? Infinity));
+        if (current.length === reordered.length && current.every((o, i) => o === reordered[i])) continue;
+        out.push({ vehicleId: v.id, tripIndex: trip.index, startSec: trip.startSec, reloadSecAfter: trip.reloadSecAfter, orderNos: reordered, oldDist: trip.distanceKm, oldCost: trip.costFt ?? 0 });
+      }
+    }
+    return out;
+  }, [plan, scenario]);
+  const key = plan ? `${plan.id}|${jobs.map((j) => `${j.vehicleId}:${j.tripIndex}:${j.orderNos.join('.')}`).join('|')}` : '';
+  useEffect(() => {
+    if (!plan || jobs.length === 0) { setRes(null); return; }
+    let cancelled = false;
+    Promise.all(jobs.map((j) => api.evaluateTrip(plan.id, { vehicleId: j.vehicleId, tripIndex: j.tripIndex, startSec: j.startSec, reloadSecAfter: j.reloadSecAfter, orderNos: j.orderNos })
+      .then((r) => ({ dDist: r.trip.distanceKm - j.oldDist, dCost: (r.trip.costFt ?? 0) - j.oldCost }))
+      .catch(() => null)))
+      .then((results) => {
+        if (cancelled) return;
+        const ok = results.filter(Boolean) as { dDist: number; dCost: number }[];
+        if (ok.length === 0) { setRes(null); return; }
+        const dDist = ok.reduce((a, r) => a + r.dDist, 0);
+        const dCost = ok.reduce((a, r) => a + r.dCost, 0);
+        setRes({ distanceKm: plan.stats.totalDistanceKm + dDist, costTotal: plan.cost ? plan.cost.total + dCost : null });
+      });
+    return () => { cancelled = true; };
+  }, [key]); // eslint-disable-line react-hooks/exhaustive-deps
+  return res;
+}
+
 /** A short, localized confirmation for a staged edit, for the toast. */
 function editMessage(edit: ScenarioEdit, t: (k: string, p?: Record<string, string | number>) => string, refOf: (id: number) => string): string {
   switch (edit.op) {
@@ -355,6 +399,7 @@ export default function App() {
   const seekClock = useCallback((sec: number) => { setPlaying(false); setClockSec(sec); }, []);
   const stopClock = useCallback(() => { setPlaying(false); setClockSec(null); }, []);
   useEffect(() => { if (plan) planRef.current = plan; }, [plan]);
+  const previewTotals = usePreviewTotals(plan, scenario);
 
   if (error && !plan) return <div className="flex h-full items-center justify-center text-sm text-destructive">{t('app.failed', { e: error })}</div>;
   if (!plan || !baseline || !scenario) return <div className="flex h-full items-center justify-center text-sm text-muted-foreground">{t('app.loading')}</div>;
@@ -393,7 +438,8 @@ export default function App() {
           onOpenScenarios={() => setScenariosOpen(true)}
           onOpenHelp={() => setHelpOpen(true)}
         />
-        <KpiStrip plan={plan} baseline={baseline} compare={isReplan} job={job} />
+        <KpiStrip plan={plan} baseline={baseline} compare={isReplan} job={job}
+          previewDistanceKm={previewTotals?.distanceKm} previewCostTotal={previewTotals?.costTotal} />
 
         {dirty && changesCount > 0 && !solving && (
           <button type="button" onClick={() => setChangesOpen(true)}

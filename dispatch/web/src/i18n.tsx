@@ -42,7 +42,7 @@ const en: Dict = {
   'kpi.servedTotal': 'Served / Total', 'kpi.vehiclesUsed': 'Vehicles used',
   'kpi.totalDistance': 'Total distance', 'kpi.deliveryStops': 'Delivery stops',
   'kpi.solveTime': 'Solve time', 'kpi.unassignedN': '{n} unassigned',
-  'kpi.tripsN': '{n} trips', 'kpi.savedResult': 'saved result', 'kpi.vsBaseline': 'vs baseline',
+  'kpi.tripsN': '{n} trips', 'kpi.savedResult': 'saved result', 'kpi.vsBaseline': 'vs baseline', 'kpi.preview': 'preview · Replan to apply',
 
   'fleet.title': 'Fleet', 'fleet.search': 'Search customer, order, vehicle',
   'fleet.trips': '{n} trips', 'fleet.tripOne': '{n} trip', 'fleet.finish': 'finish {t}',
@@ -253,7 +253,7 @@ const hu: Dict = {
   'kpi.servedTotal': 'Kiszolgált / Összes', 'kpi.vehiclesUsed': 'Használt járművek',
   'kpi.totalDistance': 'Összes távolság', 'kpi.deliveryStops': 'Kiszállítási megállók',
   'kpi.solveTime': 'Megoldási idő', 'kpi.unassignedN': '{n} kiosztatlan',
-  'kpi.tripsN': '{n} forduló', 'kpi.savedResult': 'mentett eredmény', 'kpi.vsBaseline': 'az alaptervhez',
+  'kpi.tripsN': '{n} forduló', 'kpi.savedResult': 'mentett eredmény', 'kpi.vsBaseline': 'az alaptervhez', 'kpi.preview': 'előnézet · újratervezés',
 
   'fleet.title': 'Flotta', 'fleet.search': 'Keresés: ügyfél, megrendelés, jármű',
   'fleet.trips': '{n} forduló', 'fleet.tripOne': '{n} forduló', 'fleet.finish': 'vége {t}',

@@ -133,6 +133,29 @@ test.describe('staged edit stack', () => {
     expectNoErrors(page);
   });
 
+  test('staging a reorder previews the new distance/cost in the top KPIs', async ({ page }) => {
+    await loadApp(page);
+    // a longer trip, so moving a stop several places is not a symmetric no-op
+    const picked = await page.evaluate(async () => {
+      const days = await (await fetch('/api/days')).json();
+      const d1 = days.find((d: { id: string }) => d.id === 'day1') ?? days[0];
+      const plan = await (await fetch(`/api/plans/${d1.baselinePlanId}`)).json();
+      const v = plan.vehicles.find((x: { trips: { stops: unknown[] }[] }) => x.trips[0] && x.trips[0].stops.length >= 6);
+      return { ref: v.ref as string };
+    });
+    await selectVehicle(page, picked.ref);
+    const inspector = page.locator('aside').last();
+    await inspector.getByRole('button', { name: /Trip 1/ }).click();
+    // focus the first stop's move-down arrow and press it several times; focus
+    // follows the moved stop, so it marches down the route (a real distance change).
+    const down = inspector.locator('ol li').first().locator('button[data-move$=":1"]');
+    await down.focus();
+    for (let i = 0; i < 4; i++) await page.keyboard.press('Enter');
+    // the top KPI strip reflects the staged reorder as a preview (not only on Replan)
+    await expect(page.getByText(/preview · Replan to apply/).first()).toBeVisible();
+    expectNoErrors(page);
+  });
+
   test('staging a reorder draws a ghost on the map (legend appears)', async ({ page }) => {
     await loadApp(page);
     const picked = await page.evaluate(async () => {
