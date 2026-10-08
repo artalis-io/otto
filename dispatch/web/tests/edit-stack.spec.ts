@@ -60,6 +60,19 @@ test.describe('staged edit stack', () => {
     expectNoErrors(page);
   });
 
+  test('real HTML5 drag reassigns a stop to another vehicle', async ({ page }) => {
+    await loadApp(page);
+    await selectVehicle(page, 'RIC-124');
+    await page.locator('aside').last().getByRole('button', { name: /Trip 1/ }).click();
+    const stop = page.locator('aside').last().locator('ol li button[draggable="true"]').first();
+    await expect(stop).toBeVisible();
+    const target = page.locator('aside').first().getByText('RIX-419', { exact: true });
+    await stop.dragTo(target); // real HTML5 DnD (dragstart/dragover/drop), not a synthetic event
+    await expect(page.getByText(/Pinned #.*applies on Replan/)).toBeVisible();
+    await expect(page.getByText(/staged change/)).toBeVisible();
+    expectNoErrors(page);
+  });
+
   test('drag-to-reorder within a trip stages a stop-order change', async ({ page }) => {
     await loadApp(page);
     const picked = await page.evaluate(async () => {
