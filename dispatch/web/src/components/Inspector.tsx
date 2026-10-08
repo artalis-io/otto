@@ -1,4 +1,4 @@
-import { Ban, CheckCircle2, AlertTriangle, Pin, PinOff, X, RotateCcw, SlidersHorizontal, ChevronRight, ArrowLeft, ArrowRight, Lock, LockOpen, GripVertical, ListOrdered, Loader2 } from 'lucide-react';
+import { Ban, CheckCircle2, AlertTriangle, Pin, PinOff, X, RotateCcw, SlidersHorizontal, ChevronRight, ChevronUp, ChevronDown, ArrowLeft, ArrowRight, Lock, LockOpen, GripVertical, ListOrdered, Loader2 } from 'lucide-react';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { Badge } from '@/components/ui/badge';
@@ -115,10 +115,24 @@ function TripDetail({ trip, vehicle, currency, onSelectStop, canDrag, onResequen
   const t = useT();
   const why = routeRationale(trip);
   const [overSeq, setOverSeq] = useState<number | null>(null);
+  const order = trip.stops.map((s) => s.orderNo);
+  const orderSig = order.join(',');
+  const listRef = useRef<HTMLOListElement>(null);
+  // After a keyboard move the list re-renders; return focus to the moved stop's
+  // same-direction arrow (or the opposite one if it is now an end) so repeated
+  // presses keep nudging the same stop instead of dumping focus at the top.
+  const focusAfterMove = useRef<{ orderNo: string; dir: -1 | 1 } | null>(null);
+  useEffect(() => {
+    const f = focusAfterMove.current;
+    if (!f || !listRef.current) return;
+    focusAfterMove.current = null;
+    const same = listRef.current.querySelector<HTMLButtonElement>(`[data-move="${f.orderNo}:${f.dir}"]`);
+    const opp = listRef.current.querySelector<HTMLButtonElement>(`[data-move="${f.orderNo}:${-f.dir}"]`);
+    (same && !same.disabled ? same : opp)?.focus();
+  }, [orderSig]);
   // Reorder this trip's stops by dropping one stop onto another (same drag used
   // for drag-to-reassign; here the drop target is a sibling stop, not a vehicle).
   const reorder = (draggedOrderNo: string, targetSeq: number): void => {
-    const order = trip.stops.map((s) => s.orderNo);
     const from = order.indexOf(draggedOrderNo);
     const target = trip.stops.find((s) => s.seq === targetSeq);
     if (from < 0 || !target) return;                 // dragged stop not in this trip (cross-vehicle drag)
@@ -128,6 +142,15 @@ function TripDetail({ trip, vehicle, currency, onSelectStop, canDrag, onResequen
     next.splice(from, 1);
     next.splice(to, 0, draggedOrderNo);
     if (next.some((o, i) => o !== order[i])) onResequence?.(next);
+  };
+  // Keyboard (and click) reorder: swap a stop with its neighbour one step up/down.
+  const moveStop = (i: number, dir: -1 | 1): void => {
+    const j = i + dir;
+    if (j < 0 || j >= order.length) return;
+    const next = [...order];
+    [next[i], next[j]] = [next[j]!, next[i]!];
+    focusAfterMove.current = { orderNo: order[i]!, dir };
+    onResequence?.(next);
   };
   const util = Math.max(ratio(trip.loadKg, vehicle.capacityKg), ratio(trip.loadPallets, vehicle.capacityPallets));
   const drive = trip.stops.reduce((n, s) => n + s.travelToSec, 0) + Math.max(0, trip.endSec - (trip.stops.at(-1)?.departureSec ?? trip.endSec));
@@ -171,26 +194,41 @@ function TripDetail({ trip, vehicle, currency, onSelectStop, canDrag, onResequen
           <GripVertical className="h-3 w-3" /> {t(onResequence ? 'inspector.dragStop' : 'inspector.dragToReassign')}
         </div>
       )}
-      <ol className="space-y-0.5">
+      <ol ref={listRef} className="space-y-0.5">
         {trip.stops.map((s, i) => {
           const reorderable = canDrag && !!onResequence;
+          const name = s.customer ?? s.orderNo;
           return (
             <li key={s.seq}
               onDragOver={reorderable ? (e) => { if (isOrderDrag(e)) { e.preventDefault(); if (overSeq !== s.seq) setOverSeq(s.seq); } } : undefined}
               onDragLeave={reorderable ? () => setOverSeq((v) => (v === s.seq ? null : v)) : undefined}
               onDrop={reorderable ? (e) => { e.preventDefault(); setOverSeq(null); const o = readDraggedOrder(e); if (o) reorder(o, s.seq); } : undefined}
-              className={overSeq === s.seq ? 'rounded ring-2 ring-primary/50' : ''}>
+              className={`group flex items-stretch gap-0.5 ${overSeq === s.seq ? 'rounded ring-2 ring-primary/50' : ''}`}>
               <button type="button" onClick={() => onSelectStop(s.seq)}
                 draggable={canDrag} onDragStart={canDrag ? (e) => setDraggedOrder(e, s.orderNo) : undefined}
                 title={canDrag ? t(reorderable ? 'inspector.dragStop' : 'inspector.dragToReassign') : undefined}
-                className={`flex w-full items-baseline justify-between gap-2 rounded px-1 py-1 text-left text-xs hover:bg-accent ${canDrag ? 'cursor-grab active:cursor-grabbing' : ''}`}>
+                className={`flex min-w-0 flex-1 items-baseline justify-between gap-2 rounded px-1 py-1 text-left text-xs hover:bg-accent ${canDrag ? 'cursor-grab active:cursor-grabbing' : ''}`}>
                 <span className="flex min-w-0 items-baseline truncate">
                   {canDrag && <GripVertical className="mr-0.5 h-3 w-3 shrink-0 self-center text-muted-foreground/60" />}
-                  <span className="tnum text-muted-foreground">{i + 1}.</span>&nbsp;{s.customer ?? s.orderNo}
+                  <span className="tnum text-muted-foreground">{i + 1}.</span>&nbsp;{name}
                   {!pending && <span className="tnum ml-1 text-[10px] text-muted-foreground">+{Math.round(s.travelToSec / 60)}m</span>}
                 </span>
                 <span className="tnum shrink-0 text-muted-foreground">{pending ? dash : <>{hhmm(s.arrivalSec)}{s.lateBySec > 0 && <span className="ml-1 text-warning">+{Math.round(s.lateBySec / 60)}m</span>}</>}</span>
               </button>
+              {reorderable && (
+                <span className="flex shrink-0 flex-col justify-center opacity-40 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100">
+                  <button type="button" data-move={`${s.orderNo}:-1`} disabled={i === 0} onClick={() => moveStop(i, -1)}
+                    aria-label={t('inspector.moveEarlier', { name })} title={t('inspector.moveEarlier', { name })}
+                    className="flex h-3.5 w-5 items-center justify-center rounded text-muted-foreground hover:bg-accent hover:text-foreground disabled:pointer-events-none disabled:opacity-25">
+                    <ChevronUp className="h-3 w-3" />
+                  </button>
+                  <button type="button" data-move={`${s.orderNo}:1`} disabled={i === trip.stops.length - 1} onClick={() => moveStop(i, 1)}
+                    aria-label={t('inspector.moveLater', { name })} title={t('inspector.moveLater', { name })}
+                    className="flex h-3.5 w-5 items-center justify-center rounded text-muted-foreground hover:bg-accent hover:text-foreground disabled:pointer-events-none disabled:opacity-25">
+                    <ChevronDown className="h-3 w-3" />
+                  </button>
+                </span>
+              )}
             </li>
           );
         })}

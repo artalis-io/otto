@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Play, RotateCcw, Download, Loader2, Repeat, GitCompareArrows, Database, History, Settings2, X, ChevronDown, FileText, FileSpreadsheet, FileJson, SlidersHorizontal, CalendarRange, AlertTriangle, GitBranch, HelpCircle } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
@@ -19,11 +19,17 @@ function fmtDay(iso: string, lang: string): string {
 /* A tiny popover: a trigger plus an absolutely-positioned panel with a backdrop
  * that closes on outside click. Avoids pulling in a dropdown primitive. */
 function Popover({ open, onClose, align = 'right', children }: { open: boolean; onClose: () => void; align?: 'left' | 'right'; children: React.ReactNode }) {
+  useEffect(() => {
+    if (!open) return;
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose(); };
+    document.addEventListener('keydown', onKey);
+    return () => document.removeEventListener('keydown', onKey);
+  }, [open, onClose]);
   if (!open) return null;
   return (
     <>
       <div className="fixed inset-0 z-40" onClick={onClose} />
-      <div className={`absolute top-full z-50 mt-1.5 ${align === 'right' ? 'right-0' : 'left-0'} min-w-[220px] rounded-md border border-divider bg-card p-2 text-foreground shadow-lg`}>
+      <div role="menu" className={`absolute top-full z-50 mt-1.5 ${align === 'right' ? 'right-0' : 'left-0'} min-w-[220px] rounded-md border border-divider bg-card p-2 text-foreground shadow-lg`}>
         {children}
       </div>
     </>

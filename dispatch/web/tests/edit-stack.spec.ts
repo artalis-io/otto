@@ -108,6 +108,31 @@ test.describe('staged edit stack', () => {
     expectNoErrors(page);
   });
 
+  test('keyboard reorder: the move-down arrow restages the stop order (no mouse)', async ({ page }) => {
+    await loadApp(page);
+    const picked = await page.evaluate(async () => {
+      const days = await (await fetch('/api/days')).json();
+      const d1 = days.find((d: { id: string }) => d.id === 'day1') ?? days[0];
+      const plan = await (await fetch(`/api/plans/${d1.baselinePlanId}`)).json();
+      const v = plan.vehicles.find((x: { trips: { stops: unknown[] }[] }) => x.trips[0] && x.trips[0].stops.length >= 2);
+      return { ref: v.ref as string };
+    });
+    await selectVehicle(page, picked.ref);
+    const inspector = page.locator('aside').last();
+    await inspector.getByRole('button', { name: /Trip 1/ }).click();
+    // activate the first stop's "move later" arrow via the keyboard
+    const moveDown = inspector.locator('ol li').first().locator('button[data-move$=":1"]');
+    await moveDown.focus();
+    await page.keyboard.press('Enter');
+    // the reorder stages (no auto-solve) and shows in the Changes dialog
+    await expect(page.getByText('Optimizing')).toHaveCount(0);
+    await expect(page.getByText(/staged change/)).toBeVisible();
+    await expect(inspector.getByText(/Reordered|Preview/)).toBeVisible();
+    await page.getByRole('button', { name: /Changes/ }).click();
+    await expect(page.getByRole('dialog').getByText('Stop order')).toBeVisible();
+    expectNoErrors(page);
+  });
+
   test('lock-and-resolve: locking a vehicle route stages a sequence', async ({ page }) => {
     await loadApp(page);
     await selectVehicle(page, 'RIC-124');
