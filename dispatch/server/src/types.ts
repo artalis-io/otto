@@ -151,6 +151,12 @@ export interface PlanVehicle {
   trips: PlanTrip[];
 }
 
+/* A best-effort inferred reason an order went unassigned (Surge emits none).
+ * PINNED_INFEASIBLE: locked to a vehicle (pin/sequence) that couldn't schedule it;
+ * NEEDS_TAIL_LIFT / OVER_CAPACITY / OVERSIZE: no vehicle in the fleet can serve it;
+ * CONSTRAINED: fit failed within time windows/routing across the available fleet. */
+export type UnassignedReason = 'PINNED_INFEASIBLE' | 'NEEDS_TAIL_LIFT' | 'OVER_CAPACITY' | 'OVERSIZE' | 'CONSTRAINED';
+
 export interface PlanUnassigned {
   orderId: string | null;
   orderNo: string;
@@ -159,6 +165,7 @@ export interface PlanUnassigned {
   lon: number | null;
   lat: number | null;
   reason: string | null;
+  reasonCode: UnassignedReason | null;
 }
 
 export interface PlanProvenance {

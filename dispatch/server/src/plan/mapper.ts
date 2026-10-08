@@ -1,13 +1,34 @@
 import { createHash } from 'node:crypto';
 import type {
   Plan, PlanStop, PlanTrip, PlanVehicle, PlanUnassigned, PlanCost, PlanVehicleCost,
-  SurgeRequest, SurgeSolution, SurgeTask,
+  SurgeRequest, SurgeSolution, SurgeTask, SurgeRequestDef, UnassignedReason,
 } from '../types.js';
 import type { LoadedDay, OrderInfo, VehicleInfo } from '../data/gyermelyi.js';
 import { vehicleInfoFor } from '../data/gyermelyi.js';
 import { colorForIndex } from '../colors.js';
 import { metersToKm } from '../units.js';
 import { loadTariff, vehicleCostFor, tripCost, type Tariff } from '../cost.js';
+
+export interface FleetLimits { maxKg: number; maxPallets: number; anyTailLift: boolean; minTonnage: number }
+
+/* Best-effort reason an order went unassigned, inferred from the request + fleet
+ * (Surge gives none). Priority: a pin/sequence lock that failed, then a hard
+ * fleet mismatch (tail lift / capacity / access tonnage), else a generic
+ * constraint (time window / routing). The first three are actionable; the last
+ * tells the dispatcher to relax a window or add capacity. */
+export function classifyUnassigned(
+  reqDef: Pick<SurgeRequestDef, 'allowed_vehicles'> | undefined,
+  task: Pick<SurgeTask, 'demand'> | undefined,
+  info: { requiresTailLift?: boolean; maxTonnage?: number | null } | null,
+  fleet: FleetLimits,
+): UnassignedReason {
+  if (reqDef?.allowed_vehicles && reqDef.allowed_vehicles.length > 0) return 'PINNED_INFEASIBLE';
+  if (info?.requiresTailLift && !fleet.anyTailLift) return 'NEEDS_TAIL_LIFT';
+  const kg = task?.demand?.[0] ?? 0, plt = task?.demand?.[1] ?? 0;
+  if (kg > fleet.maxKg || plt > fleet.maxPallets) return 'OVER_CAPACITY';
+  if (info?.maxTonnage != null && fleet.minTonnage > info.maxTonnage + 0.01) return 'OVERSIZE';
+  return 'CONSTRAINED';
+}
 
 export interface MapInputs {
   day: LoadedDay;
@@ -152,6 +173,16 @@ export function mapSolutionToPlan(inp: MapInputs): Plan {
     };
   });
 
+  // Fleet aggregates for inferring why an order went unassigned (Surge emits no
+  // reason). request.vehicles is the available fleet (removed vehicles already filtered).
+  const fleet = {
+    maxKg: Math.max(0, ...request.vehicles.map((v) => v.capacity[0] ?? 0)),
+    maxPallets: Math.max(0, ...request.vehicles.map((v) => v.capacity[1] ?? 0)),
+    anyTailLift: request.vehicles.some((v) => vehicleInfoFor(v.ref, inp.vehicleInfo)?.hasTailLift),
+    minTonnage: Math.min(Infinity, ...request.vehicles.map((v) => vehicleInfoFor(v.ref, inp.vehicleInfo)?.tonnage ?? Infinity)),
+  };
+  const reqDefById = new Map(request.requests.map((r) => [r.id, r]));
+
   const unassigned: PlanUnassigned[] = solution.unassigned.map((rid) => {
     const taskId = reqById.get(rid);
     const task = taskId != null ? taskById.get(taskId) : undefined;
@@ -166,6 +197,7 @@ export function mapSolutionToPlan(inp: MapInputs): Plan {
       lon: loc?.x ?? info?.lon ?? null,
       lat: loc?.y ?? info?.lat ?? null,
       reason: null, // Surge does not emit per-order reasons; left explicit
+      reasonCode: classifyUnassigned(reqDefById.get(rid), task, info, fleet),
     };
   });
 

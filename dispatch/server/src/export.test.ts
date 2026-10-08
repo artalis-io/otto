@@ -36,7 +36,7 @@ function mkPlan(): Plan {
     },
     depot: { name: 'Gyermely', lon: 18.7, lat: 47.5 },
     vehicles,
-    unassigned: [{ orderId: null, orderNo: 'U9', customer: 'Cust U9', city: 'Elsewhere', lon: 20, lat: 47, reason: null }],
+    unassigned: [{ orderId: null, orderNo: 'U9', customer: 'Cust U9', city: 'Elsewhere', lon: 20, lat: 47, reason: null, reasonCode: null }],
   };
 }
 

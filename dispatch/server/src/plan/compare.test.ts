@@ -93,7 +93,7 @@ function mkPlan(
     depot: { name: 'D', lon: 10, lat: 50 },
     vehicles,
     unassigned: unassignedOrderNos.map((orderNo) => ({
-      orderId: null, orderNo, customer: null, city: null, lon: null, lat: null, reason: null,
+      orderId: null, orderNo, customer: null, city: null, lon: null, lat: null, reason: null, reasonCode: null,
     })),
   };
 }

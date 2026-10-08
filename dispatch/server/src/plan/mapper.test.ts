@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { mapSolutionToPlan, type MapInputs } from './mapper.js';
+import { mapSolutionToPlan, classifyUnassigned, type MapInputs, type FleetLimits } from './mapper.js';
 import type {
   SurgeRequest, SurgeSolution, SurgeTask, SurgeRequestVehicle,
 } from '../types.js';
@@ -302,4 +302,20 @@ test('trip load over capacity produces a CAPACITY violation', () => {
   assert.equal(cap!.actual, 200);
   assert.equal(cap!.limit, 150);
   assert.equal(plan.provenance.validation.valid, false);
+});
+
+test('classifyUnassigned: infers the blocking reason, pin/lock first', () => {
+  const bigFleet: FleetLimits = { maxKg: 24000, maxPallets: 33, anyTailLift: false, minTonnage: 40 };
+  // pin/sequence lock that failed wins over everything
+  assert.equal(classifyUnassigned({ allowed_vehicles: [2] }, { demand: [999999, 999] }, { requiresTailLift: true }, bigFleet), 'PINNED_INFEASIBLE');
+  // needs a tail lift, none in the fleet
+  assert.equal(classifyUnassigned(undefined, { demand: [1, 1] }, { requiresTailLift: true }, bigFleet), 'NEEDS_TAIL_LIFT');
+  // load exceeds every vehicle's capacity
+  assert.equal(classifyUnassigned(undefined, { demand: [30000, 1] }, null, bigFleet), 'OVER_CAPACITY');
+  assert.equal(classifyUnassigned(undefined, { demand: [1, 40] }, null, bigFleet), 'OVER_CAPACITY');
+  // access tonnage: smallest vehicle (40t) exceeds the site's 7.5t limit
+  assert.equal(classifyUnassigned(undefined, { demand: [1, 1] }, { maxTonnage: 7.5 }, bigFleet), 'OVERSIZE');
+  // otherwise generic (time window / routing)
+  assert.equal(classifyUnassigned(undefined, { demand: [1, 1] }, null, bigFleet), 'CONSTRAINED');
+  assert.equal(classifyUnassigned({ allowed_vehicles: [] }, { demand: [1, 1] }, null, bigFleet), 'CONSTRAINED'); // empty lock != pinned
 });
