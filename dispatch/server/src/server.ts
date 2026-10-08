@@ -570,4 +570,9 @@ const start = async () => {
   try { await app.listen({ port: config.port, host: config.host }); }
   catch (err) { app.log.error(err); process.exit(1); }
 };
-start();
+
+// Bind a port only when run as the entry point; tests import `app` and use
+// app.inject() without listening (set DISPATCH_NO_LISTEN=1).
+if (process.env.DISPATCH_NO_LISTEN !== '1') start();
+
+export { app };
