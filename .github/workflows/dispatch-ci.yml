@@ -1,7 +1,7 @@
 name: Dispatch CI
 
 # Typecheck + unit-test the Dispatch TS app (server + web) on any PR or push that
-# touches it. The C engines and the confidential Gyermelyi dataset are NOT needed:
+# touches it. The C engines and the confidential customer dataset are NOT needed:
 # typechecking is fully self-contained, and test:ci runs only the data-independent
 # unit suites. (mapper/solve/admit tests load the external dataset at import time,
 # so they run locally where it is present; the Playwright UI suite needs a live
