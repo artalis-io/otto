@@ -69,6 +69,8 @@ export const api = {
 
   exportCsvUrl: (planId: string) => `/api/plans/${planId}/export.csv`,
   routeSheetUrl: (planId: string) => `/api/plans/${planId}/routesheet.html`,
+  routesCsvUrl: (planId: string) => `/api/plans/${planId}/routes.csv`,
+  handoffJsonUrl: (planId: string) => `/api/plans/${planId}/handoff.json`,
 
   plans: (day?: string) => jget<PlanSummary[]>(`/api/plans${day ? `?day=${day}` : ''}`),
 

@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { planToCsv, planToRouteSheetHtml } from './export.js';
+import { planToCsv, planToRouteSheetHtml, planToRoutesCsv, planToHandoffJson } from './export.js';
 import type { Plan, PlanStop, PlanTrip, PlanVehicle } from './types.js';
 
 function mkStop(orderNo: string, over: Partial<PlanStop> = {}): PlanStop {
@@ -71,4 +71,28 @@ test('planToRouteSheetHtml: escapes HTML in customer names', () => {
   const html = planToRouteSheetHtml(plan, 'Day');
   assert.ok(html.includes('A &amp; &lt;script&gt;'));
   assert.ok(!html.includes('<script>B'));
+});
+
+test('planToRoutesCsv: routes_fact shape with cumulative sequence + unassigned', () => {
+  const csv = planToRoutesCsv(mkPlan(), '2026-05-06');
+  const lines = csv.trim().split('\n');
+  assert.ok(lines[0]!.startsWith('order_no,vehicle,sequence,date,vehicle_class,trip'));
+  // O1 seq 1, O2 seq 2 on the same vehicle; date present; assigned
+  assert.ok(lines[1]!.startsWith('O1,TRK-1,1,2026-05-06,'));
+  assert.ok(lines[2]!.startsWith('O2,TRK-1,2,2026-05-06,'));
+  assert.ok(lines[1]!.endsWith(',assigned'));
+  assert.ok(lines.at(-1)!.startsWith('U9,,,2026-05-06,') && lines.at(-1)!.endsWith(',unassigned'));
+});
+
+test('planToHandoffJson: clean structured dispatch plan', () => {
+  const h = planToHandoffJson(mkPlan(), '2026-05-06');
+  assert.equal(h.otto_dispatch_plan, 1);
+  assert.equal(h.date, '2026-05-06');
+  assert.equal(h.objective, 'least_distance');
+  assert.equal(h.summary.servedOrders, 2);
+  assert.equal(h.routes.length, 1);
+  assert.equal(h.routes[0]!.vehicle, 'TRK-1');
+  assert.deepEqual(h.routes[0]!.stops.map((s) => s.sequence), [1, 2]); // cumulative
+  assert.equal(h.routes[0]!.stops[1]!.lateMin, 15);
+  assert.equal(h.unassigned[0]!.orderNo, 'U9');
 });

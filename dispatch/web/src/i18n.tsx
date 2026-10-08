@@ -100,6 +100,8 @@ const en: Dict = {
   'topbar.resumed': 'Resumed running solve',
   // Export menu
   'export.json': 'Plan (JSON)', 'export.csv': 'Stops (CSV)', 'export.routesheet': 'Driver route sheets',
+  'export.forDrivers': 'For drivers', 'export.handoffGroup': 'Hand back to your system',
+  'export.routes': 'Routes (CSV, re-importable)', 'export.handoff': 'Dispatch plan (JSON)',
   // Overrides
   'topbar.editsN': '{n} edits', 'topbar.changes': 'Changes',
   'edits.pending': '{n} staged change(s) — review & Replan to apply.',
@@ -287,6 +289,8 @@ const hu: Dict = {
   'topbar.resumed': 'Futó megoldás folytatva',
   // Export menu
   'export.json': 'Terv (JSON)', 'export.csv': 'Megállók (CSV)', 'export.routesheet': 'Sofőr útvonallapok',
+  'export.forDrivers': 'Sofőröknek', 'export.handoffGroup': 'Visszaadás a rendszerednek',
+  'export.routes': 'Útvonalak (CSV, visszaimportálható)', 'export.handoff': 'Diszpécser terv (JSON)',
   // Overrides
   'topbar.editsN': '{n} módosítás', 'topbar.changes': 'Módosítások',
   'edits.pending': '{n} előkészített módosítás — nézd át és Újratervezés az érvényesítéshez.',

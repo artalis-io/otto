@@ -50,16 +50,9 @@ export function TopBar({
   const isReplan = scenario.kind === 'copy';
   const termOk = plan.provenance.termination === 'OK';
 
-  function exportPlanJson() {
-    const blob = new Blob([JSON.stringify(plan, null, 2)], { type: 'application/json' });
-    const url = URL.createObjectURL(blob);
+  function downloadUrl(url: string) {
     const a = document.createElement('a');
-    a.href = url; a.download = `otto-plan-${plan.day}-${plan.id}.json`; a.click();
-    URL.revokeObjectURL(url);
-  }
-  function downloadCsv() {
-    const a = document.createElement('a');
-    a.href = api.exportCsvUrl(plan.id); a.download = ''; a.click();
+    a.href = url; a.download = ''; a.click();
   }
   function openRouteSheets() { window.open(api.routeSheetUrl(plan.id), '_blank', 'noopener'); }
 
@@ -202,9 +195,12 @@ export function TopBar({
           </Button>
           <Popover open={exportOpen} onClose={() => setExportOpen(false)}>
             <div className="space-y-0.5">
+              <div className="px-2 pb-0.5 pt-1 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">{t('export.forDrivers')}</div>
               <MenuItem icon={<FileText className="h-4 w-4" />} label={t('export.routesheet')} onClick={() => { setExportOpen(false); openRouteSheets(); }} />
-              <MenuItem icon={<FileSpreadsheet className="h-4 w-4" />} label={t('export.csv')} onClick={() => { setExportOpen(false); downloadCsv(); }} />
-              <MenuItem icon={<FileJson className="h-4 w-4" />} label={t('export.json')} onClick={() => { setExportOpen(false); exportPlanJson(); }} />
+              <MenuItem icon={<FileSpreadsheet className="h-4 w-4" />} label={t('export.csv')} onClick={() => { setExportOpen(false); downloadUrl(api.exportCsvUrl(plan.id)); }} />
+              <div className="px-2 pb-0.5 pt-1.5 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">{t('export.handoffGroup')}</div>
+              <MenuItem icon={<FileSpreadsheet className="h-4 w-4" />} label={t('export.routes')} onClick={() => { setExportOpen(false); downloadUrl(api.routesCsvUrl(plan.id)); }} />
+              <MenuItem icon={<FileJson className="h-4 w-4" />} label={t('export.handoff')} onClick={() => { setExportOpen(false); downloadUrl(api.handoffJsonUrl(plan.id)); }} />
             </div>
           </Popover>
         </div>

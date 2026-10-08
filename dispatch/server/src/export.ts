@@ -51,6 +51,72 @@ export function planToCsv(plan: Plan): string {
 }
 
 function round1(n: number): number { return Math.round(n * 10) / 10; }
+function lateMin(sec: number): number { return sec > 0 ? Math.round(sec / 60) : 0; }
+
+/* Outbound handoff: write the tuned plan back in the customer's route schema
+ * (the inverse of ingest). The columns mirror the `routes` canonical
+ * (order_no, vehicle, sequence, date) so this CSV re-imports through the same
+ * onboarding pipeline, with the planned times/trip as value-add. `sequence` is
+ * the 1-based visit order on the vehicle across all its trips. */
+const ROUTES_HEADER = [
+  'order_no', 'vehicle', 'sequence', 'date', 'vehicle_class', 'trip',
+  'planned_arrival', 'planned_departure', 'service_min', 'late_min', 'status',
+];
+export function planToRoutesCsv(plan: Plan, isoDate: string): string {
+  const rows: string[] = [ROUTES_HEADER.join(',')];
+  for (const v of plan.vehicles) {
+    let seq = 0;
+    for (const trip of v.trips) {
+      for (const s of trip.stops) {
+        seq++;
+        rows.push([
+          s.orderNo, v.ref, seq, isoDate, v.vehicleClass ?? '', trip.index + 1,
+          hhmm(s.arrivalSec), hhmm(s.departureSec), s.serviceMin, lateMin(s.lateBySec), 'assigned',
+        ].map(csvCell).join(','));
+      }
+    }
+  }
+  for (const u of plan.unassigned) {
+    rows.push([u.orderNo, '', '', isoDate, '', '', '', '', '', '', 'unassigned'].map(csvCell).join(','));
+  }
+  return rows.join('\n') + '\n';
+}
+
+/* A clean, documented dispatch-plan document for programmatic handoff (not the
+ * raw internal Plan, which carries geometry + provenance). */
+export interface HandoffPlan {
+  otto_dispatch_plan: 1;
+  day: string; date: string; generatedAt: string; objective: string;
+  summary: { vehiclesUsed: number; servedOrders: number; totalOrders: number; totalDistanceKm: number; cost: { currency: string; total: number; source: string } | null };
+  routes: { vehicle: string; vehicleClass: string | null; isSubcontractor: boolean; distanceKm: number; finishTime: string;
+    stops: { sequence: number; trip: number; orderNo: string; customer: string | null; city: string | null; plannedArrival: string; plannedDeparture: string; serviceMin: number; lateMin: number; weightKg: number; pallets: number }[] }[];
+  unassigned: { orderNo: string; customer: string | null; city: string | null; reason: string | null }[];
+}
+export function planToHandoffJson(plan: Plan, isoDate: string): HandoffPlan {
+  return {
+    otto_dispatch_plan: 1,
+    day: plan.day, date: isoDate, generatedAt: plan.createdAt,
+    objective: plan.objective === 'distance' ? 'least_distance' : 'fewest_vehicles',
+    summary: {
+      vehiclesUsed: plan.stats.vehiclesUsed, servedOrders: plan.stats.servedOrders, totalOrders: plan.stats.totalOrders,
+      totalDistanceKm: round1(plan.stats.totalDistanceKm),
+      cost: plan.cost ? { currency: plan.cost.currency, total: Math.round(plan.cost.total), source: plan.cost.source } : null,
+    },
+    routes: plan.vehicles.map((v) => {
+      let seq = 0;
+      return {
+        vehicle: v.ref, vehicleClass: v.vehicleClass, isSubcontractor: v.isSubcontractor,
+        distanceKm: round1(v.distanceKm), finishTime: hhmm(v.finishTimeSec),
+        stops: v.trips.flatMap((tr) => tr.stops.map((s) => ({
+          sequence: ++seq, trip: tr.index + 1, orderNo: s.orderNo, customer: s.customer, city: s.city,
+          plannedArrival: hhmm(s.arrivalSec), plannedDeparture: hhmm(s.departureSec),
+          serviceMin: s.serviceMin, lateMin: lateMin(s.lateBySec), weightKg: Math.round(s.weightKg), pallets: round1(s.pallets),
+        }))),
+      };
+    }),
+    unassigned: plan.unassigned.map((u) => ({ orderNo: u.orderNo, customer: u.customer, city: u.city, reason: u.reasonCode })),
+  };
+}
 
 /* Google Maps directions URL: depot -> stops -> depot (capped to the URL's
  * practical waypoint limit). Lets a driver open turn-by-turn navigation. */

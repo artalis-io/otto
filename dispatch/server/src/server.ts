@@ -23,7 +23,7 @@ import { weekSummary } from './plan/week.js';
 import { importSummary, rawSample, canonicalSample } from './data/import.js';
 import { sageReachable, narratePlan, narrateComparison, type Lang } from './sage.js';
 import { loadTariff } from './cost.js';
-import { planToCsv, planToRouteSheetHtml } from './export.js';
+import { planToCsv, planToRouteSheetHtml, planToRoutesCsv, planToHandoffJson } from './export.js';
 import { RateLimiter } from './ratelimit.js';
 import { CATALOG, suggestMapping, type Entity } from './data/catalog.js';
 import { newUploadPath, uploadPath, sampleUpload, runIngestPreview, runGeocode, extFromName, type Mapping } from './data/onboard.js';
@@ -324,6 +324,21 @@ app.get<{ Params: { id: string } }>('/api/plans/:id/routesheet.html', async (req
   if (!plan) return reply.code(404).send({ error: 'plan not found' });
   reply.header('content-type', 'text/html; charset=utf-8');
   return reply.send(planToRouteSheetHtml(plan, dayLabelForPlan(plan)));
+});
+// Outbound handoff: the tuned plan in the customer's route schema (re-importable)
+// + a clean structured dispatch-plan document. plan.day is the ISO date.
+app.get<{ Params: { id: string } }>('/api/plans/:id/routes.csv', async (req, reply) => {
+  const plan = store.getPlan(req.params.id);
+  if (!plan) return reply.code(404).send({ error: 'plan not found' });
+  reply.header('content-type', 'text/csv; charset=utf-8');
+  reply.header('content-disposition', `attachment; filename="otto-routes-${plan.day}.csv"`);
+  return reply.send(planToRoutesCsv(plan, plan.day));
+});
+app.get<{ Params: { id: string } }>('/api/plans/:id/handoff.json', async (req, reply) => {
+  const plan = store.getPlan(req.params.id);
+  if (!plan) return reply.code(404).send({ error: 'plan not found' });
+  reply.header('content-disposition', `attachment; filename="otto-dispatch-plan-${plan.day}.json"`);
+  return planToHandoffJson(plan, plan.day);
 });
 
 app.get<{ Querystring: { base?: string; revised?: string } }>('/api/compare', async (req, reply) => {

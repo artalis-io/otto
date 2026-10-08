@@ -46,6 +46,16 @@ test.describe('tier-2 features', () => {
     expectNoErrors(page);
   });
 
+  test('export menu offers driver sheets and a re-importable handoff', async ({ page }) => {
+    await loadApp(page);
+    await page.getByRole('button', { name: 'Export' }).click();
+    await expect(page.getByText('Hand back to your system')).toBeVisible();
+    await expect(page.getByText('Routes (CSV, re-importable)')).toBeVisible();
+    await expect(page.getByText('Dispatch plan (JSON)')).toBeVisible();
+    await closePopover(page);
+    expectNoErrors(page);
+  });
+
   test('week view shows combined totals and per-vehicle utilization', async ({ page }) => {
     await loadApp(page);
     await page.getByRole('button', { name: 'Week' }).click();
