@@ -7,7 +7,8 @@ import type { FeatureCollection, LineString } from 'geojson';
 import { Minus, Plus, Maximize2 } from 'lucide-react';
 import 'maplibre-gl/dist/maplibre-gl.css';
 import { cartaStyle } from './cartaStyle';
-import type { Plan, Selection } from '@/types';
+import { useT } from '@/i18n';
+import type { Plan, Scenario, Selection, Vehicle } from '@/types';
 
 /*
  * The dispatch map. Basemap is the reused "Carta Quiet" style; routes, stops and
@@ -48,6 +49,59 @@ function stopsFC(plan: Plan): FeatureCollection {
 }
 function pointFC(lon: number, lat: number, props: Record<string, unknown> = {}): FeatureCollection {
   return { type: 'FeatureCollection', features: [{ type: 'Feature', properties: props, geometry: { type: 'Point', coordinates: [lon, lat] } }] };
+}
+
+function centroid(v: Vehicle): [number, number] | null {
+  const pts: [number, number][] = [];
+  for (const t of v.trips) for (const s of t.stops) pts.push([s.lon, s.lat]);
+  if (!pts.length) return null;
+  return [pts.reduce((a, p) => a + p[0], 0) / pts.length, pts.reduce((a, p) => a + p[1], 0) / pts.length];
+}
+
+/* "Ghost" overlay for the staged (not-yet-replanned) edits so the dispatcher can
+ * see a pending change spatially before committing it:
+ *  - a reassignment (a pin moving an order to a different vehicle) draws a dashed
+ *    line from the order's current location to the target vehicle's cluster, plus
+ *    a ghost ring at the order in the target vehicle's colour;
+ *  - a reorder (a non-locked staged sequence) draws a dashed straight-line path
+ *    through the new stop order (depot -> stops -> depot) in the vehicle's colour.
+ * Straight lines, not road geometry: the real roads only exist once Surge solves. */
+function ghostFCs(plan: Plan, scenario: Scenario | null | undefined): { lines: FeatureCollection; points: FeatureCollection } {
+  const lineFeats: FeatureCollection['features'] = [];
+  const pointFeats: FeatureCollection['features'] = [];
+  if (scenario) {
+    // NB: the default `Map` import here is react-map-gl's component, so the
+    // collection type must be reached via globalThis.
+    const vehById = new globalThis.Map(plan.vehicles.map((v) => [v.id, v] as const));
+    const stopLoc = new globalThis.Map<string, [number, number]>();
+    const orderVeh = new globalThis.Map<string, number>();
+    for (const v of plan.vehicles) for (const t of v.trips) for (const s of t.stops) { stopLoc.set(s.orderNo, [s.lon, s.lat]); orderVeh.set(s.orderNo, v.id); }
+    const unLoc = new globalThis.Map<string, [number, number]>();
+    for (const u of plan.unassigned) if (typeof u.lon === 'number' && typeof u.lat === 'number') unLoc.set(u.orderNo, [u.lon, u.lat]);
+
+    for (const p of scenario.pins) {
+      if (orderVeh.get(p.orderNo) === p.vehicleId) continue;              // already on the target vehicle
+      const from = stopLoc.get(p.orderNo) ?? unLoc.get(p.orderNo);
+      const target = vehById.get(p.vehicleId);
+      const to = target ? centroid(target) : null;
+      if (!from || !target || !to) continue;
+      lineFeats.push({ type: 'Feature', properties: { color: target.color, kind: 'move' }, geometry: { type: 'LineString', coordinates: [from, to] } });
+      pointFeats.push({ type: 'Feature', properties: { color: target.color }, geometry: { type: 'Point', coordinates: from } });
+    }
+
+    for (const q of scenario.sequences) {
+      if (q.locked) continue;
+      const v = vehById.get(q.vehicleId);
+      if (!v) continue;
+      const current = v.trips.flatMap((t) => t.stops.map((s) => s.orderNo));
+      if (current.length === q.orderNos.length && current.every((o, i) => o === q.orderNos[i])) continue; // unchanged
+      const coords = q.orderNos.map((o) => stopLoc.get(o)).filter(Boolean) as [number, number][];
+      if (coords.length < 2) continue;
+      const path: [number, number][] = [[plan.depot.lon, plan.depot.lat], ...coords, [plan.depot.lon, plan.depot.lat]];
+      lineFeats.push({ type: 'Feature', properties: { color: v.color, kind: 'reorder' }, geometry: { type: 'LineString', coordinates: path } });
+    }
+  }
+  return { lines: { type: 'FeatureCollection', features: lineFeats }, points: { type: 'FeatureCollection', features: pointFeats } };
 }
 
 function selVehicle(sel: Selection): number | null {
@@ -134,7 +188,7 @@ function playheadFC(plan: Plan, clockSec: number | null, selVId: number | null, 
   return { type: 'FeatureCollection', features };
 }
 
-export function MapView({ plan, selection, onSelect, clockSec, visibleVehicleIds }: { plan: Plan; selection: Selection; onSelect: (s: Selection) => void; clockSec: number | null; visibleVehicleIds?: number[] | null }) {
+export function MapView({ plan, scenario, selection, onSelect, clockSec, visibleVehicleIds }: { plan: Plan; scenario?: Scenario | null; selection: Selection; onSelect: (s: Selection) => void; clockSec: number | null; visibleVehicleIds?: number[] | null }) {
   const mapRef = useRef<MapRef | null>(null);
   // Respect reduced-motion: snap the camera instead of animating.
   const reduced = useRef(typeof window !== 'undefined' && window.matchMedia('(prefers-reduced-motion: reduce)').matches);
@@ -145,7 +199,9 @@ export function MapView({ plan, selection, onSelect, clockSec, visibleVehicleIds
   const depot = useMemo(() => pointFC(plan.depot.lon, plan.depot.lat), [plan.depot.lon, plan.depot.lat]);
   const schedules = useMemo(() => buildSchedules(plan), [plan]);
   const playhead = useMemo(() => playheadFC(plan, clockSec, selVehicle(selection), selTripIndex(selection), schedules), [plan, clockSec, selection, schedules]);
+  const ghost = useMemo(() => ghostFCs(plan, scenario), [plan, scenario]);
   const [hovering, setHovering] = useState(false);
+  const t = useT();
 
   const vId = selVehicle(selection);
   const tIdx = selTripIndex(selection);
@@ -289,6 +345,18 @@ export function MapView({ plan, selection, onSelect, clockSec, visibleVehicleIds
           <Layer {...routeCasing} />
           <Layer {...routeLine} />
         </Source>
+        {ghost.lines.features.length > 0 && (
+          <Source id="ghost-lines" type="geojson" data={ghost.lines}>
+            <Layer id="ghost-line" type="line" layout={{ 'line-cap': 'round', 'line-join': 'round' }}
+              paint={{ 'line-color': ['get', 'color'], 'line-width': 2.5, 'line-opacity': 0.9, 'line-dasharray': [1.6, 1.4] }} />
+          </Source>
+        )}
+        {ghost.points.features.length > 0 && (
+          <Source id="ghost-points" type="geojson" data={ghost.points}>
+            <Layer id="ghost-point" type="circle"
+              paint={{ 'circle-radius': 7, 'circle-color': 'rgba(0,0,0,0)', 'circle-stroke-color': ['get', 'color'], 'circle-stroke-width': 2.5, 'circle-stroke-opacity': 0.95 }} />
+          </Source>
+        )}
         {unassignedFC.features.length > 0 && (
           <Source id="unassigned" type="geojson" data={unassignedFC}>
             <Layer id="unassigned" type="circle" paint={{ 'circle-radius': 5, 'circle-color': '#b4572a', 'circle-opacity': 0.25, 'circle-stroke-color': '#b4572a', 'circle-stroke-width': 1.5, 'circle-stroke-opacity': 0.8 }} />
@@ -318,6 +386,13 @@ export function MapView({ plan, selection, onSelect, clockSec, visibleVehicleIds
         <button type="button" aria-label="Zoom out" onClick={() => zoomBy(-1)} className="flex h-8 w-8 items-center justify-center border-t border-white/10 hover:bg-white/10"><Minus className="h-4 w-4" /></button>
         <button type="button" aria-label="Fit plan" onClick={() => { onSelect(null); fitAll(); }} className="flex h-8 w-8 items-center justify-center border-t border-white/10 hover:bg-white/10"><Maximize2 className="h-4 w-4" /></button>
       </div>
+
+      {ghost.lines.features.length > 0 && (
+        <div className="absolute bottom-3 left-3 flex items-center gap-2 rounded-md bg-graphite/80 px-2.5 py-1 text-[11px] text-graphite-foreground shadow-lg backdrop-blur-sm">
+          <svg width="20" height="2" aria-hidden className="shrink-0"><line x1="0" y1="1" x2="20" y2="1" stroke="currentColor" strokeWidth="2" strokeDasharray="3 2" /></svg>
+          {t('map.ghostLegend')}
+        </div>
+      )}
     </div>
   );
 }

@@ -405,7 +405,7 @@ export default function App() {
                   {rightOpen ? <PanelRightClose className="h-4 w-4" /> : <PanelRightOpen className="h-4 w-4" />}
                 </Button>
               </div>
-              <MapView plan={plan} selection={selection} onSelect={navigate} clockSec={clockSec} visibleVehicleIds={visibleVehicleIds} />
+              <MapView plan={plan} scenario={scenario} selection={selection} onSelect={navigate} clockSec={clockSec} visibleVehicleIds={visibleVehicleIds} />
             </div>
             <div className="h-48 shrink-0 border-t border-divider">
               <Timeline plan={plan} selection={selection} onSelect={navigate}

@@ -10,7 +10,7 @@ test.describe('staged edit stack', () => {
     // it must NOT have started a solve
     await expect(page.getByText('Optimizing')).toHaveCount(0);
     // staged indicators
-    await expect(page.getByText(/staged change/)).toBeVisible();
+    await expect(page.getByText(/staged change\(s\)/)).toBeVisible();
     await expect(page.getByRole('button', { name: /Changes/ })).toBeVisible();
 
     // open the Changes dialog -> RIC-124 under Removed vehicles
@@ -53,7 +53,7 @@ test.describe('staged edit stack', () => {
     await expect(page.getByText(/Pinned #.*applies on Replan/)).toBeVisible();
     // The pin must stage (not auto-solve) and show the target vehicle.
     await expect(page.getByText('Optimizing')).toHaveCount(0);
-    await expect(page.getByText(/staged change/)).toBeVisible();
+    await expect(page.getByText(/staged change\(s\)/)).toBeVisible();
     await page.getByRole('button', { name: /Changes/ }).click();
     const dialog = page.getByRole('dialog');
     await expect(dialog.getByText(picked.target)).toBeVisible();
@@ -69,7 +69,7 @@ test.describe('staged edit stack', () => {
     const target = page.locator('aside').first().getByText('RIX-419', { exact: true });
     await stop.dragTo(target); // real HTML5 DnD (dragstart/dragover/drop), not a synthetic event
     await expect(page.getByText(/Pinned #.*applies on Replan/)).toBeVisible();
-    await expect(page.getByText(/staged change/)).toBeVisible();
+    await expect(page.getByText(/staged change\(s\)/)).toBeVisible();
     expectNoErrors(page);
   });
 
@@ -97,7 +97,7 @@ test.describe('staged edit stack', () => {
     expect(reordered).toBe(true);
 
     await expect(page.getByText('Optimizing')).toHaveCount(0);
-    await expect(page.getByText(/staged change/)).toBeVisible();
+    await expect(page.getByText(/staged change\(s\)/)).toBeVisible();
     // the reorder is reflected in the list immediately + a hint shows: first the
     // "Reordered" pending note, then (once the backend recomputes) a "Preview".
     await expect(page.locator('aside').last().getByText(/Reordered|Preview/)).toBeVisible();
@@ -126,10 +126,28 @@ test.describe('staged edit stack', () => {
     await page.keyboard.press('Enter');
     // the reorder stages (no auto-solve) and shows in the Changes dialog
     await expect(page.getByText('Optimizing')).toHaveCount(0);
-    await expect(page.getByText(/staged change/)).toBeVisible();
+    await expect(page.getByText(/staged change\(s\)/)).toBeVisible();
     await expect(inspector.getByText(/Reordered|Preview/)).toBeVisible();
     await page.getByRole('button', { name: /Changes/ }).click();
     await expect(page.getByRole('dialog').getByText('Stop order')).toBeVisible();
+    expectNoErrors(page);
+  });
+
+  test('staging a reorder draws a ghost on the map (legend appears)', async ({ page }) => {
+    await loadApp(page);
+    const picked = await page.evaluate(async () => {
+      const days = await (await fetch('/api/days')).json();
+      const d1 = days.find((d: { id: string }) => d.id === 'day1') ?? days[0];
+      const plan = await (await fetch(`/api/plans/${d1.baselinePlanId}`)).json();
+      const v = plan.vehicles.find((x: { trips: { stops: unknown[] }[] }) => x.trips[0] && x.trips[0].stops.length >= 2);
+      return { ref: v.ref as string };
+    });
+    await selectVehicle(page, picked.ref);
+    const inspector = page.locator('aside').last();
+    await inspector.getByRole('button', { name: /Trip 1/ }).click();
+    await inspector.locator('ol li').first().locator('button[data-move$=":1"]').click();
+    // the map shows the staged change as a ghost; its legend chip is plain DOM
+    await expect(page.getByText(/Dashed = staged change/)).toBeVisible();
     expectNoErrors(page);
   });
 
@@ -139,7 +157,7 @@ test.describe('staged edit stack', () => {
     const inspector = page.locator('aside').last();
     await inspector.getByRole('button', { name: 'Lock route' }).click();
     await expect(inspector.getByRole('button', { name: /Route locked/ })).toBeVisible();
-    await expect(page.getByText(/staged change/)).toBeVisible();
+    await expect(page.getByText(/staged change\(s\)/)).toBeVisible();
     await page.getByRole('button', { name: /Changes/ }).click();
     await expect(page.getByRole('dialog').getByText('Stop order')).toBeVisible();
     expectNoErrors(page);
