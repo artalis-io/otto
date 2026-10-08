@@ -1,4 +1,4 @@
-import { Ban, CheckCircle2, AlertTriangle, Pin, PinOff, X, RotateCcw, SlidersHorizontal, ChevronRight, ArrowLeft, ArrowRight, Lock, LockOpen, GripVertical, ListOrdered } from 'lucide-react';
+import { Ban, CheckCircle2, AlertTriangle, Pin, PinOff, X, RotateCcw, SlidersHorizontal, ChevronRight, ArrowLeft, ArrowRight, Lock, LockOpen, GripVertical, ListOrdered, Loader2 } from 'lucide-react';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { Badge } from '@/components/ui/badge';
@@ -92,25 +92,26 @@ function reorderTripStops(trip: Trip, orderNos: string[]): Trip {
  * request is keyed by the proposed order; a stale response is dropped. */
 function useReorderPreview(
   planId: string, vehicleId: number, base: Trip | undefined, orderNos: string[], enabled: boolean,
-): { trip: Trip | null; loading: boolean } {
+): { trip: Trip | null; loading: boolean; error: boolean } {
   const [trip, setTrip] = useState<Trip | null>(null);
   const [loading, setLoading] = useState(false);
+  const [error, setError] = useState(false);
   const key = enabled && base ? `${planId}|${vehicleId}|${base.index}|${orderNos.join(',')}` : '';
   const latest = useRef('');
   useEffect(() => {
     latest.current = key;
-    if (!key || !base) { setTrip(null); setLoading(false); return; }
-    setLoading(true);
+    if (!key || !base) { setTrip(null); setLoading(false); setError(false); return; }
+    setLoading(true); setError(false);
     let cancelled = false;
     api.evaluateTrip(planId, { vehicleId, tripIndex: base.index, startSec: base.startSec, reloadSecAfter: base.reloadSecAfter, orderNos })
       .then((r) => { if (!cancelled && latest.current === key) { setTrip(r.trip); setLoading(false); } })
-      .catch(() => { if (!cancelled && latest.current === key) { setTrip(null); setLoading(false); } });
+      .catch(() => { if (!cancelled && latest.current === key) { setTrip(null); setLoading(false); setError(true); } });
     return () => { cancelled = true; };
   }, [key]); // eslint-disable-line react-hooks/exhaustive-deps
-  return { trip, loading };
+  return { trip, loading, error };
 }
 
-function TripDetail({ trip, vehicle, currency, onSelectStop, canDrag, onResequence, pending, preview }: { trip: Trip; vehicle: Vehicle; currency: string; onSelectStop: (seq: number) => void; canDrag?: boolean; onResequence?: (newOrderNos: string[]) => void; pending?: boolean; preview?: boolean }) {
+function TripDetail({ trip, vehicle, currency, onSelectStop, canDrag, onResequence, pending, preview, phase }: { trip: Trip; vehicle: Vehicle; currency: string; onSelectStop: (seq: number) => void; canDrag?: boolean; onResequence?: (newOrderNos: string[]) => void; pending?: boolean; preview?: boolean; phase?: 'none' | 'pending' | 'loading' | 'preview' | 'error' }) {
   const t = useT();
   const why = routeRationale(trip);
   const [overSeq, setOverSeq] = useState<number | null>(null);
@@ -137,8 +138,12 @@ function TripDetail({ trip, vehicle, currency, onSelectStop, canDrag, onResequen
   return (
     <div className="space-y-2">
       {(pending || preview) && (
-        <div className="flex items-center gap-1 rounded border border-primary/40 bg-primary/5 px-2 py-1 text-[10px] text-primary">
-          <ListOrdered className="h-3 w-3" /> {t(preview ? 'inspector.reorderPreview' : 'inspector.reorderPending')}
+        <div className={`flex items-center gap-1 rounded border px-2 py-1 text-[10px] ${phase === 'error' ? 'border-warning/50 bg-warning/5 text-warning' : 'border-primary/40 bg-primary/5 text-primary'}`}>
+          {phase === 'loading'
+            ? <><Loader2 className="h-3 w-3 animate-spin" /> {t('inspector.reorderCalculating')}</>
+            : phase === 'error'
+            ? <><AlertTriangle className="h-3 w-3" /> {t('inspector.reorderCalcFailed')}</>
+            : <><ListOrdered className="h-3 w-3" /> {t(preview ? 'inspector.reorderPreview' : 'inspector.reorderPending')}</>}
         </div>
       )}
       <Field label={t('inspector.window')} value={pending ? dash : `${hhmm(trip.startSec)}–${hhmm(trip.endSec)}`} />
@@ -204,17 +209,19 @@ function TripView({ planId, vehicle, trip, displayTrip, reorderPending, currency
   currency: string; canDrag?: boolean; onSelectStop: (seq: number) => void; onResequence?: (newOrderNos: string[]) => void;
 }) {
   const orderNos = displayTrip.stops.map((s) => s.orderNo);
-  const { trip: previewTrip } = useReorderPreview(planId, vehicle.id, trip, orderNos, reorderPending);
+  const { trip: previewTrip, loading, error } = useReorderPreview(planId, vehicle.id, trip, orderNos, reorderPending);
   const ready = reorderPending && !!previewTrip;
   let show = displayTrip;
   if (ready && previewTrip) {
     const seqByOrder = new Map(trip.stops.map((s) => [s.orderNo, s.seq]));
     show = { ...previewTrip, stops: previewTrip.stops.map((s) => ({ ...s, seq: seqByOrder.get(s.orderNo) ?? s.seq })) };
   }
+  // Hint state: nothing while idle; recomputing / preview-ready / failed otherwise.
+  const phase = !reorderPending ? 'none' : ready ? 'preview' : loading ? 'loading' : error ? 'error' : 'pending';
   return (
     <TripDetail trip={show} vehicle={vehicle} currency={currency} canDrag={canDrag}
       onSelectStop={onSelectStop} onResequence={onResequence}
-      pending={reorderPending && !ready} preview={ready} />
+      pending={reorderPending && !ready} preview={ready} phase={phase} />
   );
 }
 
@@ -480,8 +487,8 @@ export function Inspector({ plan, scenario, selection, onSelect, onBack, onForwa
     <Panel nav={nav}>
       <Tabs defaultValue="details" className="flex min-h-0 flex-1 flex-col">
         <div className="px-3 pt-3">
-          <div className="mb-2 flex items-center gap-2">
-            <span className="h-3 w-3 rounded-sm" style={{ backgroundColor: vehicle.color }} />
+          <div className="mb-2 flex flex-wrap items-center gap-x-2 gap-y-1">
+            <span className="h-3 w-3 shrink-0 rounded-sm" style={{ backgroundColor: vehicle.color }} />
             <button type="button" onClick={() => onSelect({ kind: 'vehicle', vehicleId: vehicle.id })}
               className={`font-semibold ${trip ? 'hover:underline' : ''}`} title={trip ? t('inspector.backToVehicle') : undefined}>{vehicle.ref}</button>
             {vehicle.vehicleClass && <Badge variant="outline">{vehicle.vehicleClass.replace(/_/g, ' ')}</Badge>}
