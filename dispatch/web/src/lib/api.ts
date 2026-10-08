@@ -77,6 +77,11 @@ export const api = {
 
   compare: (base: string, revised: string) => jget<Comparison>(`/api/compare?base=${base}&revised=${revised}`),
 
+  // ---- What-if scenario workspace ----
+  scenariosForDay: (day: string) => jget<ScenarioSummary[]>(`/api/scenarios?day=${day}`),
+  renameScenario: (id: string, label: string) => jsend<Scenario>(`/api/scenarios/${id}/rename`, 'POST', { label }),
+  deleteScenario: (id: string) => jsend<{ deleted: boolean }>(`/api/scenarios/${id}`, 'DELETE'),
+
   week: () => jget<WeekSummary>('/api/week'),
 
   sageStatus: () => jget<{ reachable: boolean; model: string }>('/api/sage/status'),
@@ -106,6 +111,15 @@ export const api = {
   onboardDatasets: () => jget<DatasetSummary[]>('/api/import/datasets'),
   onboardDeleteDataset: (id: string) => jsend<{ deleted: boolean; days: number }>(`/api/import/datasets/${id}`, 'DELETE'),
 };
+
+export interface ScenarioSummary {
+  id: string; label: string; kind: 'base' | 'copy'; revision: number; changesCount: number;
+  latest: {
+    planId: string; createdAt: string;
+    servedOrders: number; totalOrders: number; vehiclesUsed: number; totalDistanceKm: number;
+    unassigned: number; cost: number | null; currency: string | null;
+  } | null;
+}
 
 export interface DatasetSummary {
   id: string; label: string; createdAt: string;

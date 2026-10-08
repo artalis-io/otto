@@ -17,6 +17,22 @@ test.describe('tier-2 features', () => {
     expectNoErrors(page);
   });
 
+  test('scenarios workspace lists the day and compares selected', async ({ page }) => {
+    await loadApp(page);
+    await page.getByRole('button', { name: 'Scenarios' }).click();
+    const dialog = page.getByRole('dialog');
+    await expect(dialog.getByText('What-if scenarios')).toBeVisible();
+    await expect(dialog.getByText(/served/).first()).toBeVisible();   // base KPI row
+    const checks = dialog.locator('input[type=checkbox]:not([disabled])');
+    if (await checks.count() >= 2) {
+      await checks.nth(0).check();
+      await checks.nth(1).check();
+      await expect(dialog.getByText(/Compare \(2\)/)).toBeVisible();
+      await expect(dialog.getByText('Vehicles')).toBeVisible();
+    }
+    expectNoErrors(page);
+  });
+
   test('week view shows combined totals and per-vehicle utilization', async ({ page }) => {
     await loadApp(page);
     await page.getByRole('button', { name: 'Week' }).click();

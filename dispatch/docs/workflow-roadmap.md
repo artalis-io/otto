@@ -54,13 +54,15 @@ accepting or rejecting its output.
   sequence), let the solver fill the rest. Falls out of the two above plus the
   existing pin/forbid model.
 
-### 2. What-if depth  (the actual differentiator)
-A decision tool exists to *defend a choice between options*, and today's compare is
-only base-vs-revised.
-- Named, saved scenarios ("drop the subcontractor", "allow overtime", "fewest
-  vehicles"); the scenario model already supports the edits, it needs naming + a list.
-- **Side-by-side multi-scenario compare** (not just two): KPIs, cost, served/unassigned.
-- Share/export a scenario so a colleague can open the same what-if.
+### 2. What-if depth  (the actual differentiator)  [DONE]
+A decision tool exists to *defend a choice between options*.
+- ✅ Scenario workspace (TopBar "Scenarios"): lists the day's scenarios (base +
+  what-if copies) with each one's latest result; rename (to tell them apart), open
+  (switch to it), delete copies. Backend `GET /api/scenarios?day`, rename, delete +
+  scenario GC (copies were previously unbounded).
+- ✅ **Side-by-side multi-scenario compare** (2-3): Served / Vehicles / Distance /
+  Cost / Unassigned, best value per row highlighted.
+- Share/export a scenario so a colleague can open the same what-if. (not yet)
 
 ### 3. Explainability / trust  (what converts a skeptical dispatcher)  [why-unassigned DONE]
 A cockpit nobody trusts is shelfware. The raw material exists (advisories, Sage
