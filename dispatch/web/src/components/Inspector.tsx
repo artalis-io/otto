@@ -59,8 +59,25 @@ function StopDetail({ stop, vehicle }: { stop: Stop; vehicle: Vehicle }) {
   );
 }
 
+/* A best-effort explanation of why the trip is ordered as it is: whether the
+ * sequence is driven by delivery time windows (most stops windowed) or by
+ * distance, plus how many stops are tight / late / waiting. Computed from the
+ * stop timings the solver produced (Surge emits no rationale). */
+function routeRationale(trip: Trip): { windowDriven: boolean; tight: number; late: number; waits: number } {
+  let windowed = 0, tight = 0, late = 0, waits = 0;
+  for (const s of trip.stops) {
+    const hasWindow = s.twEndSec < 86_400 || s.twStartSec > 0;
+    if (hasWindow) windowed++;
+    if (s.lateBySec > 1) late++;
+    else if (hasWindow && s.twEndSec - s.arrivalSec < 1800) tight++; // <30 min slack
+    if (s.waitSec > 60) waits++;
+  }
+  return { windowDriven: windowed >= Math.ceil(trip.stops.length / 2), tight, late, waits };
+}
+
 function TripDetail({ trip, vehicle, currency, onSelectStop, canDrag, onResequence }: { trip: Trip; vehicle: Vehicle; currency: string; onSelectStop: (seq: number) => void; canDrag?: boolean; onResequence?: (newOrderNos: string[]) => void }) {
   const t = useT();
+  const why = routeRationale(trip);
   const [overSeq, setOverSeq] = useState<number | null>(null);
   // Reorder this trip's stops by dropping one stop onto another (same drag used
   // for drag-to-reassign; here the drop target is a sibling stop, not a vehicle).
@@ -87,6 +104,17 @@ function TripDetail({ trip, vehicle, currency, onSelectStop, canDrag, onResequen
       <Field label={t('inspector.driveWait')} value={`${t('inspector.minN', { n: Math.round(drive / 60) })} · ${t('inspector.minN', { n: Math.round(wait / 60) })}`} />
       {trip.costFt != null && <Field label={t('inspector.cost')} value={money(trip.costFt, currency, true)} />}
       {trip.reloadSecAfter > 0 && <Field label={t('inspector.reloadAfter')} value={t('inspector.minN', { n: Math.round(trip.reloadSecAfter / 60) })} />}
+      {/* why this sequence */}
+      <div className="rounded border border-divider bg-muted/30 px-2 py-1.5 text-[11px]">
+        <span className="text-muted-foreground">{t(why.windowDriven ? 'inspector.whyWindows' : 'inspector.whyDistance')}</span>
+        {(why.tight > 0 || why.late > 0 || why.waits > 0) && (
+          <span className="mt-0.5 flex flex-wrap gap-x-2">
+            {why.late > 0 && <span className="text-warning">{t('inspector.whyLate', { n: why.late })}</span>}
+            {why.tight > 0 && <span className="text-muted-foreground">{t('inspector.whyTight', { n: why.tight })}</span>}
+            {why.waits > 0 && <span className="text-muted-foreground">{t('inspector.whyWaits', { n: why.waits })}</span>}
+          </span>
+        )}
+      </div>
       <Separator />
       <ol className="space-y-0.5">
         {trip.stops.map((s) => {
