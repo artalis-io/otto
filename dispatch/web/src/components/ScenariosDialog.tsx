@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react';
-import { GitBranch, Trash2, Pencil, Check, FolderOpen } from 'lucide-react';
+import { GitBranch, Trash2, Pencil, FolderOpen, Download, Upload } from 'lucide-react';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { Button } from '@/components/ui/button';
@@ -8,13 +8,14 @@ import { Badge } from '@/components/ui/badge';
 import { km, money } from '@/lib/format';
 import { api, type ScenarioSummary } from '@/lib/api';
 import { useT, describeApiError } from '@/i18n';
+import type { Scenario } from '@/types';
 
 /* The what-if workspace: the day's scenarios (base + edited copies) with their
  * latest result. Rename to tell them apart, open to switch to one, delete
  * copies, and select 2-3 to compare their KPIs side by side. */
-export function ScenariosDialog({ open, onOpenChange, dayId, currentScenarioId, onOpen }: {
+export function ScenariosDialog({ open, onOpenChange, dayId, currentScenarioId, onOpen, onImport }: {
   open: boolean; onOpenChange: (o: boolean) => void; dayId: string; currentScenarioId: string;
-  onOpen: (planId: string) => void;
+  onOpen: (planId: string) => void; onImport: (s: Scenario) => void;
 }) {
   const t = useT();
   const [list, setList] = useState<ScenarioSummary[] | null>(null);
@@ -45,6 +46,22 @@ export function ScenariosDialog({ open, onOpenChange, dayId, currentScenarioId, 
     try { await api.deleteScenario(id); setSel((p) => { const n = new Set(p); n.delete(id); return n; }); refresh(); }
     catch (e) { setErr(describeApiError(e, t)); }
   };
+  const exportOne = async (id: string, label: string) => {
+    try {
+      const bundle = await api.exportScenario(id);
+      const url = URL.createObjectURL(new Blob([JSON.stringify(bundle, null, 2)], { type: 'application/json' }));
+      const a = document.createElement('a');
+      a.href = url; a.download = `scenario-${label.replace(/[^a-z0-9]+/gi, '-').toLowerCase().slice(0, 40) || id}.json`;
+      a.click(); URL.revokeObjectURL(url);
+    } catch (e) { setErr(describeApiError(e, t)); }
+  };
+  const importFile = async (file: File) => {
+    try {
+      const bundle = JSON.parse(await file.text());
+      const s = await api.importScenario(bundle);
+      onImport(s); onOpenChange(false);
+    } catch (e) { setErr(e instanceof SyntaxError ? t('scenarios.importBad') : describeApiError(e, t)); }
+  };
 
   const selected = (list ?? []).filter((s) => sel.has(s.id) && s.latest);
   const currency = selected.find((s) => s.latest?.currency)?.latest?.currency ?? 'HUF';
@@ -52,7 +69,15 @@ export function ScenariosDialog({ open, onOpenChange, dayId, currentScenarioId, 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="max-w-2xl">
-        <DialogHeader><DialogTitle className="flex items-center gap-2"><GitBranch className="h-4 w-4" /> {t('scenarios.title')}</DialogTitle></DialogHeader>
+        <DialogHeader>
+          <DialogTitle className="flex items-center gap-2">
+            <GitBranch className="h-4 w-4" /> {t('scenarios.title')}
+            <label className="ml-auto mr-6 inline-flex cursor-pointer items-center gap-1 rounded border border-divider px-2 py-0.5 text-[11px] font-normal text-muted-foreground hover:bg-accent">
+              <Upload className="h-3 w-3" /> {t('scenarios.import')}
+              <input type="file" accept="application/json,.json" className="hidden" onChange={(e) => { const f = e.target.files?.[0]; if (f) void importFile(f); e.target.value = ''; }} />
+            </label>
+          </DialogTitle>
+        </DialogHeader>
         {err && <p className="rounded border border-destructive/40 bg-destructive/10 px-2 py-1 text-xs text-destructive">{err}</p>}
 
         {selected.length >= 2 && <CompareTable selected={selected} currency={currency} t={t} />}
@@ -83,6 +108,7 @@ export function ScenariosDialog({ open, onOpenChange, dayId, currentScenarioId, 
                       {L && !isCurrent && (
                         <button type="button" onClick={() => { onOpen(L.planId); onOpenChange(false); }} aria-label={t('scenarios.open')} title={t('scenarios.open')} className="shrink-0 rounded p-0.5 text-muted-foreground hover:bg-accent hover:text-foreground"><FolderOpen className="h-3.5 w-3.5" /></button>
                       )}
+                      <button type="button" onClick={() => void exportOne(s.id, s.label)} aria-label={t('scenarios.export')} title={t('scenarios.export')} className="shrink-0 rounded p-0.5 text-muted-foreground hover:bg-accent hover:text-foreground"><Download className="h-3.5 w-3.5" /></button>
                       {s.kind === 'copy' && (
                         <button type="button" onClick={() => void del(s.id)} aria-label={t('scenarios.delete')} className="shrink-0 rounded p-0.5 text-muted-foreground hover:bg-destructive/10 hover:text-destructive"><Trash2 className="h-3.5 w-3.5" /></button>
                       )}

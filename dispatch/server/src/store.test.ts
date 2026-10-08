@@ -152,3 +152,21 @@ test('scenario workspace: list by day, rename, delete copies (base protected)', 
   assert.equal(store.getScenario(copy.id), undefined);
   assert.throws(() => store.deleteScenario(base.id), /base scenario/);
 });
+
+test('parseScenarioImport: validates + cleans an untrusted bundle', async () => {
+  const { parseScenarioImport } = await import('./store.js');
+  const r = parseScenarioImport({ otto_scenario: 1, day: 'day1', label: 'Shared',
+    edits: { removedVehicleIds: [3, 'x'], pins: [{ orderNo: 'O1', vehicleId: 2 }, { bad: 1 }],
+      forbids: [], vehicleOverrides: [{ vehicleId: 1, maxTrips: 3, capacityKg: 999999999 }],
+      sequences: [{ vehicleId: 0, orderNos: ['A', 'B'], locked: true }] } });
+  assert.ok(!('error' in r));
+  if (!('error' in r)) {
+    assert.deepEqual(r.edits.removedVehicleIds, [3]);            // non-int dropped
+    assert.equal(r.edits.pins.length, 1);                       // malformed pin dropped
+    assert.equal(r.edits.vehicleOverrides[0]!.maxTrips, 3);
+    assert.equal(r.edits.vehicleOverrides[0]!.capacityKg, undefined); // out of bounds dropped
+    assert.equal(r.edits.sequences[0]!.locked, true);
+  }
+  assert.ok('error' in parseScenarioImport({ day: 'day1' }));   // missing otto_scenario marker
+  assert.ok('error' in parseScenarioImport({ otto_scenario: 1 })); // missing day
+});

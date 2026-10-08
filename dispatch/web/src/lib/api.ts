@@ -81,6 +81,8 @@ export const api = {
   scenariosForDay: (day: string) => jget<ScenarioSummary[]>(`/api/scenarios?day=${day}`),
   renameScenario: (id: string, label: string) => jsend<Scenario>(`/api/scenarios/${id}/rename`, 'POST', { label }),
   deleteScenario: (id: string) => jsend<{ deleted: boolean }>(`/api/scenarios/${id}`, 'DELETE'),
+  exportScenario: (id: string) => jget<ScenarioExport>(`/api/scenarios/${id}/export`),
+  importScenario: (bundle: unknown) => jsend<Scenario>('/api/scenarios/import', 'POST', bundle),
 
   week: () => jget<WeekSummary>('/api/week'),
 
@@ -111,6 +113,11 @@ export const api = {
   onboardDatasets: () => jget<DatasetSummary[]>('/api/import/datasets'),
   onboardDeleteDataset: (id: string) => jsend<{ deleted: boolean; days: number }>(`/api/import/datasets/${id}`, 'DELETE'),
 };
+
+export interface ScenarioExport {
+  otto_scenario: 1; day: string; label: string;
+  edits: { removedVehicleIds: number[]; pins: unknown[]; forbids: unknown[]; vehicleOverrides: unknown[]; sequences: unknown[] };
+}
 
 export interface ScenarioSummary {
   id: string; label: string; kind: 'base' | 'copy'; revision: number; changesCount: number;

@@ -248,6 +248,16 @@ export default function App() {
     } catch (e) { setError(describeApiError(e, t)); }
   }, [dayId, loadDay, t]);
 
+  // Adopt an imported scenario: switch to its day if needed, show the clean
+  // baseline, and stage its edits (Replan solves it). It has no result yet.
+  const onImportScenario = useCallback(async (s: Scenario) => {
+    try {
+      if (s.day !== dayId) { const d = days.find((x) => x.id === s.day); if (d) await loadDay(d); }
+      setScenario(s);
+      resetSelection();
+    } catch (e) { setError(describeApiError(e, t)); }
+  }, [dayId, days, loadDay, resetSelection, t]);
+
   const reopenPlan = useCallback(async (planId: string) => {
     pollAbort.current?.abort();
     activeJobId.current = null;
@@ -401,7 +411,7 @@ export default function App() {
       />
       <WeekDialog open={weekOpen} onOpenChange={setWeekOpen} />
       <IssuesDialog open={issuesOpen} onOpenChange={setIssuesOpen} plan={plan} onSelect={navigate} />
-      <ScenariosDialog open={scenariosOpen} onOpenChange={setScenariosOpen} dayId={dayId} currentScenarioId={scenario.id} onOpen={(id) => void reopenPlan(id)} />
+      <ScenariosDialog open={scenariosOpen} onOpenChange={setScenariosOpen} dayId={dayId} currentScenarioId={scenario.id} onOpen={(id) => void reopenPlan(id)} onImport={(s) => void onImportScenario(s)} />
       <ImportDialog open={importOpen} onOpenChange={setImportOpen} onAdmitted={(id) => void onAdmitted(id)} onDatasetsChanged={() => void onDatasetsChanged()} />
       <HistoryDialog open={historyOpen} onOpenChange={setHistoryOpen} dayId={dayId} currentPlanId={plan.id} onReopen={(id) => void reopenPlan(id)} />
     </TooltipProvider>

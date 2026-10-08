@@ -115,6 +115,68 @@ export function validateScenarioEdit(edit: unknown): string | null {
   }
 }
 
+/* A portable scenario: its edits + day + label, shareable as JSON so a colleague
+ * can import it to recreate the same what-if (there is no multi-user store). */
+export interface ScenarioEditsBundle {
+  removedVehicleIds: number[];
+  pins: Pin[];
+  forbids: Forbid[];
+  vehicleOverrides: VehicleOverride[];
+  sequences: VehicleSequence[];
+}
+export interface ScenarioExport { otto_scenario: 1; day: string; label: string; edits: ScenarioEditsBundle }
+
+export function exportScenario(s: Scenario): ScenarioExport {
+  return {
+    otto_scenario: 1, day: s.day, label: s.label,
+    edits: {
+      removedVehicleIds: [...s.removedVehicleIds],
+      pins: s.pins.map((p) => ({ ...p })),
+      forbids: s.forbids.map((f) => ({ ...f })),
+      vehicleOverrides: s.vehicleOverrides.map((o) => ({ ...o })),
+      sequences: s.sequences.map((q) => ({ vehicleId: q.vehicleId, orderNos: [...q.orderNos], ...(q.locked ? { locked: true } : {}) })),
+    },
+  };
+}
+
+/* Validate an untrusted imported scenario bundle. Returns an error message or
+ * a cleaned edits bundle. */
+export function parseScenarioImport(body: unknown): { error: string } | { day: string; label: string; edits: ScenarioEditsBundle } {
+  const b = body as Record<string, unknown> | null;
+  if (!b || typeof b !== 'object') return { error: 'scenario object required' };
+  if (b.otto_scenario !== 1) return { error: 'not an OTTO scenario export' };
+  const day = b.day;
+  if (typeof day !== 'string' || day.length === 0 || day.length > 64) return { error: 'valid day required' };
+  const label = typeof b.label === 'string' && b.label.length <= 120 ? b.label : 'Imported scenario';
+  const e = (b.edits ?? {}) as Record<string, unknown>;
+  const isVid = (v: unknown): v is number => typeof v === 'number' && Number.isInteger(v) && v >= 0 && v < 1e9;
+  const isOrder = (v: unknown): v is string => typeof v === 'string' && v.length > 0 && v.length <= 64;
+  const arr = (v: unknown): unknown[] => (Array.isArray(v) ? v : []);
+  const removedVehicleIds = arr(e.removedVehicleIds).filter(isVid);
+  const pins: Pin[] = arr(e.pins).filter((p): p is Pin => !!p && isOrder((p as Pin).orderNo) && isVid((p as Pin).vehicleId)).map((p) => ({ orderNo: p.orderNo, vehicleId: p.vehicleId }));
+  const forbids: Forbid[] = arr(e.forbids).filter((f): f is Forbid => !!f && isOrder((f as Forbid).orderNo) && isVid((f as Forbid).vehicleId)).map((f) => ({ orderNo: f.orderNo, vehicleId: f.vehicleId }));
+  const vehicleOverrides: VehicleOverride[] = [];
+  for (const o of arr(e.vehicleOverrides)) {
+    const ov = o as VehicleOverride;
+    if (!ov || !isVid(ov.vehicleId)) continue;
+    const clean: VehicleOverride = { vehicleId: ov.vehicleId };
+    for (const [k, bounds] of Object.entries(CONSTRAINT_BOUNDS)) {
+      const val = (ov as unknown as Record<string, unknown>)[k];
+      if (typeof val === 'number' && Number.isFinite(val) && val >= bounds[0] && val <= bounds[1]) (clean as unknown as Record<string, unknown>)[k] = val;
+    }
+    if (Object.keys(clean).length > 1) vehicleOverrides.push(clean);
+  }
+  const sequences: VehicleSequence[] = [];
+  for (const q of arr(e.sequences)) {
+    const sq = q as VehicleSequence;
+    if (!sq || !isVid(sq.vehicleId) || !Array.isArray(sq.orderNos)) continue;
+    const orderNos = sq.orderNos.filter(isOrder).slice(0, MAX_SEQUENCE_LEN);
+    if (new Set(orderNos).size !== orderNos.length) continue;
+    if (orderNos.length >= 2 || (sq.locked && orderNos.length >= 1)) sequences.push({ vehicleId: sq.vehicleId, orderNos, ...(sq.locked ? { locked: true } : {}) });
+  }
+  return { day, label, edits: { removedVehicleIds, pins, forbids, vehicleOverrides, sequences } };
+}
+
 export type JobStatus = 'pending' | 'running' | 'completed' | 'failed' | 'cancelled';
 export interface Job {
   id: string;
@@ -377,6 +439,20 @@ export class Store {
     writeJson(join(dir('scenarios'), `${s.id}.json`), s);
     return s;
   }
+  /** Recreate a scenario from an imported edits bundle as a new copy of the day's base. */
+  importScenario(base: Scenario, label: string, edits: ScenarioEditsBundle): Scenario {
+    const s = this.createCopy(base, {}, label);
+    s.removedVehicleIds = [...edits.removedVehicleIds];
+    s.pins = edits.pins.map((p) => ({ ...p }));
+    s.forbids = edits.forbids.map((f) => ({ ...f }));
+    s.vehicleOverrides = edits.vehicleOverrides.map((o) => ({ ...o }));
+    s.sequences = edits.sequences.map((q) => ({ vehicleId: q.vehicleId, orderNos: [...q.orderNos], ...(q.locked ? { locked: true } : {}) }));
+    s.revision += 1;
+    this.scenarios.set(s.id, s);
+    writeJson(join(dir('scenarios'), `${s.id}.json`), s);
+    return s;
+  }
+
   /** Delete a what-if copy (base scenarios are kept; their plans GC naturally). */
   deleteScenario(id: string): boolean {
     const s = this.scenarios.get(id);

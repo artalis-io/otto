@@ -10,7 +10,7 @@ import { admitDataset } from './data/admit.js';
 import { allDatasets, unregisterDataset } from './data/registry.js';
 import { mapSolutionToPlan } from './plan/mapper.js';
 import { fillPlanGeometry, veloReachable } from './geometry/velo.js';
-import { store, validateScenarioEdit, type ScenarioEdit } from './store.js';
+import { store, validateScenarioEdit, exportScenario, parseScenarioImport, type ScenarioEdit } from './store.js';
 import { enqueueSolve, cancelJob, hasSolveCapacity, type Objective } from './solve.js';
 import { Semaphore } from './util/semaphore.js';
 
@@ -236,6 +236,20 @@ app.delete<{ Params: { id: string } }>('/api/scenarios/:id', async (req, reply) 
   if (!s) return reply.code(404).send({ error: 'scenario not found' });
   if (s.kind === 'base') return reply.code(400).send({ error: 'base scenario cannot be deleted' });
   return { deleted: store.deleteScenario(req.params.id) };
+});
+
+// Export a scenario as a portable bundle; import recreates it on the same day's base.
+app.get<{ Params: { id: string } }>('/api/scenarios/:id/export', async (req, reply) => {
+  const s = store.getScenario(req.params.id);
+  if (!s) return reply.code(404).send({ error: 'scenario not found' });
+  return exportScenario(s);
+});
+app.post('/api/scenarios/import', async (req, reply) => {
+  const parsed = parseScenarioImport(req.body);
+  if ('error' in parsed) return reply.code(400).send({ error: parsed.error });
+  if (!allDayIds().some((d) => d.id === parsed.day)) return reply.code(400).send({ error: `unknown day '${parsed.day}' (admit its dataset first)` });
+  const base = store.ensureBaseScenario(parsed.day, loadDay(parsed.day).def.label);
+  return store.importScenario(base, parsed.label, parsed.edits);
 });
 
 /* ---- Solve jobs ---- */
