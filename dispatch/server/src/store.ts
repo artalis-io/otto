@@ -178,7 +178,7 @@ export class Store {
       if (!Array.isArray(s.sequences)) s.sequences = [];
     }
     this.reconcileInterruptedJobs();  // no subprocess survives a restart
-    this.gcPlans(); this.gcJobs(); // prune any backlog left from prior runs
+    this.gcPlans(); this.gcJobs(); this.gcScenarios(); // prune any backlog left from prior runs
   }
 
   /* A1: jobs persisted as pending/running have no live subprocess after a
@@ -226,6 +226,13 @@ export class Store {
       try { rmSync(join(d, `${id}_request.json`), { force: true }); } catch { /* ignore */ }
     }
   }
+  /* Prune old what-if copies (ids start with 'scn_'); base scenarios (<day>-base)
+   * are never counted or pruned. Without this, every forked edit accumulates forever. */
+  gcScenarios(): void {
+    for (const f of this.pruneDir('scenarios', Math.max(1, config.retainScenarios), (x) => x.startsWith('scn_'))) {
+      this.scenarios.delete(f.replace(/\.json$/, ''));
+    }
+  }
 
   newId(prefix: string): string { return `${prefix}_${randomUUID().slice(0, 8)}`; }
 
@@ -260,6 +267,7 @@ export class Store {
     };
     this.scenarios.set(s.id, s);
     writeJson(join(dir('scenarios'), `${s.id}.json`), s);
+    if (this.scenarios.size > config.retainScenarios + 20) this.gcScenarios(); // cheap trigger
     return s;
   }
 
@@ -351,6 +359,32 @@ export class Store {
   getPlan(id: string): Plan | undefined { return this.plans.get(id); }
   plansForScenario(scenarioId: string): Plan[] {
     return [...this.plans.values()].filter((p) => p.scenarioId === scenarioId);
+  }
+  /** The most recent plan for a scenario (its current "result"), if any. */
+  latestPlanForScenario(scenarioId: string): Plan | undefined {
+    const ps = this.plansForScenario(scenarioId);
+    return ps.length ? ps.reduce((a, b) => (a.createdAt >= b.createdAt ? a : b)) : undefined;
+  }
+  /** Scenarios for a day (base + the dispatcher's what-if copies). */
+  scenariosForDay(day: string): Scenario[] {
+    return [...this.scenarios.values()].filter((s) => s.day === day);
+  }
+  /** Rename a scenario (for telling what-ifs apart). */
+  renameScenario(id: string, label: string): Scenario {
+    const s = this.scenarios.get(id);
+    if (!s) throw new Error('scenario not found');
+    s.label = label;
+    writeJson(join(dir('scenarios'), `${s.id}.json`), s);
+    return s;
+  }
+  /** Delete a what-if copy (base scenarios are kept; their plans GC naturally). */
+  deleteScenario(id: string): boolean {
+    const s = this.scenarios.get(id);
+    if (!s) return false;
+    if (s.kind === 'base') throw new Error('base scenario cannot be deleted');
+    this.scenarios.delete(id);
+    try { rmSync(join(dir('scenarios'), `${id}.json`), { force: true }); } catch { /* ignore */ }
+    return true;
   }
 
   createJob(scenarioId: string, scenarioRevision: number): Job {

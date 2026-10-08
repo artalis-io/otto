@@ -139,3 +139,16 @@ test('reconcileInterruptedJobs: pending/running jobs become failed on restart', 
   assert.match(rj.error ?? '', /interrupted/);
   assert.ok(rj.finishedAt);
 });
+
+test('scenario workspace: list by day, rename, delete copies (base protected)', () => {
+  const store = new StoreCtor();
+  const base = store.ensureBaseScenario('day1', 'Base Day 1');
+  const copy = store.forkForEdit(base, 'What-if A');
+  assert.ok(store.scenariosForDay('day1').some((s) => s.id === copy.id));
+  assert.ok(store.scenariosForDay('day1').some((s) => s.id === base.id));
+  store.renameScenario(copy.id, 'Drop subcontractor');
+  assert.equal(store.getScenario(copy.id)!.label, 'Drop subcontractor');
+  assert.equal(store.deleteScenario(copy.id), true);
+  assert.equal(store.getScenario(copy.id), undefined);
+  assert.throws(() => store.deleteScenario(base.id), /base scenario/);
+});

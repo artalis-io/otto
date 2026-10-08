@@ -81,9 +81,11 @@ export const config = {
   solveWatchdogGraceSec: Number(env('DISPATCH_SOLVE_GRACE_SEC', '20')),
   // Cap captured solver stdout; beyond this the job fails instead of OOMing.
   maxSolveOutputMB: Number(env('DISPATCH_MAX_SOLVE_OUTPUT_MB', '128')),
-  // Retention: keep at most this many persisted plans / jobs (oldest pruned).
+  // Retention: keep at most this many persisted plans / jobs / scenario copies
+  // (oldest pruned; base scenarios are always kept).
   retainPlans: Number(env('DISPATCH_RETAIN_PLANS', '200')),
   retainJobs: Number(env('DISPATCH_RETAIN_JOBS', '200')),
+  retainScenarios: Number(env('DISPATCH_RETAIN_SCENARIOS', '50')),
   // Cap the on-disk/in-memory road-geometry leg cache (oldest evicted). Bounds
   // what was an unbounded, fully-rewritten-per-persist file.
   geocacheMaxLegs: Number(env('DISPATCH_GEOCACHE_MAX_LEGS', '200000')),

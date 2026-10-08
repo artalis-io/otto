@@ -201,6 +201,43 @@ app.get<{ Params: { id: string } }>('/api/scenarios/:id/plans', async (req, repl
   }));
 });
 
+/* ---- Scenario workspace (what-if): list a day's scenarios with their latest
+ * result, rename, and delete copies. ---- */
+app.get<{ Querystring: { day?: string } }>('/api/scenarios', async (req, reply) => {
+  const day = req.query.day;
+  if (!day) return reply.code(400).send({ error: 'day query param required' });
+  // A what-if is worth listing once it has a result to compare (or it's the
+  // base reference); unsolved abandoned forks are noise.
+  return store.scenariosForDay(day).filter((s) => s.kind === 'base' || store.latestPlanForScenario(s.id)).map((s) => {
+    const latest = store.latestPlanForScenario(s.id);
+    const changesCount = s.removedVehicleIds.length + s.pins.length + s.forbids.length + s.vehicleOverrides.length + s.sequences.length;
+    return {
+      id: s.id, label: s.label, kind: s.kind, revision: s.revision, changesCount,
+      latest: latest ? {
+        planId: latest.id, createdAt: latest.createdAt,
+        servedOrders: latest.stats.servedOrders, totalOrders: latest.stats.totalOrders,
+        vehiclesUsed: latest.stats.vehiclesUsed, totalDistanceKm: latest.stats.totalDistanceKm,
+        unassigned: latest.unassigned.length,
+        cost: latest.cost?.total ?? null, currency: latest.cost?.currency ?? null,
+      } : null,
+    };
+  }).sort((a, b) => (a.kind === 'base' ? -1 : b.kind === 'base' ? 1 : a.id.localeCompare(b.id)));
+});
+
+app.post<{ Params: { id: string }; Body: { label?: string } }>('/api/scenarios/:id/rename', async (req, reply) => {
+  const label = (req.body?.label ?? '').trim();
+  if (!label || label.length > 120) return reply.code(400).send({ error: 'label required (<=120 chars)' });
+  if (!store.getScenario(req.params.id)) return reply.code(404).send({ error: 'scenario not found' });
+  return store.renameScenario(req.params.id, label);
+});
+
+app.delete<{ Params: { id: string } }>('/api/scenarios/:id', async (req, reply) => {
+  const s = store.getScenario(req.params.id);
+  if (!s) return reply.code(404).send({ error: 'scenario not found' });
+  if (s.kind === 'base') return reply.code(400).send({ error: 'base scenario cannot be deleted' });
+  return { deleted: store.deleteScenario(req.params.id) };
+});
+
 /* ---- Solve jobs ---- */
 app.post<{ Params: { id: string }; Body: { budgetSec?: number; objective?: string; fullBudget?: boolean } }>('/api/scenarios/:id/solve', async (req, reply) => {
   const scenario = store.getScenario(req.params.id);
