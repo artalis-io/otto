@@ -39,6 +39,22 @@ function readActiveJob(): ActiveJobRef | null {
   try { const s = localStorage.getItem(ACTIVE_JOB_KEY); return s ? (JSON.parse(s) as ActiveJobRef) : null; } catch { return null; }
 }
 
+/** A short, localized confirmation for a staged edit, for the toast. */
+function editMessage(edit: ScenarioEdit, t: (k: string, p?: Record<string, string | number>) => string, refOf: (id: number) => string): string {
+  switch (edit.op) {
+    case 'pin': return t('toast.pin', { o: edit.orderNo, v: refOf(edit.vehicleId) });
+    case 'unpin': return t('toast.unpin', { o: edit.orderNo });
+    case 'forbid': return t('toast.forbid', { o: edit.orderNo, v: refOf(edit.vehicleId) });
+    case 'removeVehicle': return t('toast.removed', { v: refOf(edit.vehicleId) });
+    case 'restoreVehicle': return t('toast.restored', { v: refOf(edit.vehicleId) });
+    case 'setVehicleConstraint': return t('toast.constraint', { v: refOf(edit.vehicleId) });
+    case 'setSequence': return t(edit.locked ? 'toast.locked' : 'toast.resequenced', { v: refOf(edit.vehicleId) });
+    case 'clearSequence': return t('toast.unlocked', { v: refOf(edit.vehicleId) });
+    case 'clearOverrides': return t('toast.cleared');
+    default: return t('toast.staged');
+  }
+}
+
 /** Structural equality for selection history de-duplication. */
 function sameSel(a: Selection, b: Selection): boolean {
   if (a === b) return true;
@@ -96,6 +112,16 @@ export default function App() {
 
   const activeJobId = useRef<string | null>(null);
   const pollAbort = useRef<AbortController | null>(null);
+  // Transient toast for staged-edit feedback.
+  const [toast, setToast] = useState<string | null>(null);
+  const toastTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const showToast = useCallback((msg: string) => {
+    setToast(msg);
+    if (toastTimer.current) clearTimeout(toastTimer.current);
+    toastTimer.current = setTimeout(() => setToast(null), 2800);
+  }, []);
+  // Latest non-null plan, for edit-toast vehicle-ref lookups without dep churn.
+  const planRef = useRef<Plan | null>(null);
 
   // Initial load: days, then reconnect to a running solve if one survives a
   // reload, else load the day-1 baseline.
@@ -208,14 +234,18 @@ export default function App() {
   }, [followJob]);
 
   // Apply a manual override (forks an editable copy from a base scenario). Does
-  // not solve; overrides take effect on the next Replan.
+  // not solve; overrides take effect on the next Replan. A toast confirms the
+  // staged edit so the tune loop has positive feedback (nothing else changes
+  // on the map until Replan).
   const applyEdit = useCallback(async (edit: ScenarioEdit) => {
     if (!scenario) return;
     try {
       const label = scenario.kind === 'base' ? t('scn.edited', { day: scenario.label }) : undefined;
       const updated = await api.editScenario(scenario.id, edit, label);
       setScenario(updated);
+      showToast(editMessage(edit, t, (id) => planRef.current?.vehicles.find((v) => v.id === id)?.ref ?? `#${id}`));
     } catch (e) { setError(describeApiError(e, t)); }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [scenario, t]);
 
   // Replan: solve the current (edited) scenario, then surface the comparison if
@@ -306,6 +336,7 @@ export default function App() {
   }, [dayRange.lo, dayRange.hi]);
   const seekClock = useCallback((sec: number) => { setPlaying(false); setClockSec(sec); }, []);
   const stopClock = useCallback(() => { setPlaying(false); setClockSec(null); }, []);
+  useEffect(() => { if (plan) planRef.current = plan; }, [plan]);
 
   if (error && !plan) return <div className="flex h-full items-center justify-center text-sm text-destructive">{t('app.failed', { e: error })}</div>;
   if (!plan || !baseline || !scenario) return <div className="flex h-full items-center justify-center text-sm text-muted-foreground">{t('app.loading')}</div>;
@@ -422,6 +453,11 @@ export default function App() {
       <IssuesDialog open={issuesOpen} onOpenChange={setIssuesOpen} plan={plan} onSelect={navigate} />
       <ScenariosDialog open={scenariosOpen} onOpenChange={setScenariosOpen} dayId={dayId} currentScenarioId={scenario.id} onOpen={(id) => { if (okToSwitch()) void reopenPlan(id); }} onImport={(s) => void onImportScenario(s)} />
       <HelpOverlay open={helpOpen} onClose={closeHelp} />
+      {toast && (
+        <div role="status" className="pointer-events-none fixed bottom-6 left-1/2 z-40 -translate-x-1/2 rounded-md bg-graphite px-3.5 py-2 text-xs font-medium text-graphite-foreground shadow-lg">
+          {toast}
+        </div>
+      )}
       <ImportDialog open={importOpen} onOpenChange={setImportOpen} onAdmitted={(id) => void onAdmitted(id)} onDatasetsChanged={() => void onDatasetsChanged()} />
       <HistoryDialog open={historyOpen} onOpenChange={setHistoryOpen} dayId={dayId} currentPlanId={plan.id} onReopen={(id) => { if (okToSwitch()) void reopenPlan(id); }} />
     </TooltipProvider>

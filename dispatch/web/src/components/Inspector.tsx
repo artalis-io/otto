@@ -1,4 +1,4 @@
-import { Ban, CheckCircle2, AlertTriangle, Pin, PinOff, X, RotateCcw, SlidersHorizontal, ChevronRight, ArrowLeft, ArrowRight, Lock, LockOpen } from 'lucide-react';
+import { Ban, CheckCircle2, AlertTriangle, Pin, PinOff, X, RotateCcw, SlidersHorizontal, ChevronRight, ArrowLeft, ArrowRight, Lock, LockOpen, GripVertical } from 'lucide-react';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { Badge } from '@/components/ui/badge';
@@ -117,6 +117,11 @@ function TripDetail({ trip, vehicle, currency, onSelectStop, canDrag, onResequen
         )}
       </div>
       <Separator />
+      {canDrag && (
+        <div className="flex items-center gap-1 text-[10px] text-muted-foreground">
+          <GripVertical className="h-3 w-3" /> {t(onResequence ? 'inspector.dragStop' : 'inspector.dragToReassign')}
+        </div>
+      )}
       <ol className="space-y-0.5">
         {trip.stops.map((s) => {
           const reorderable = canDrag && !!onResequence;
@@ -130,7 +135,9 @@ function TripDetail({ trip, vehicle, currency, onSelectStop, canDrag, onResequen
                 draggable={canDrag} onDragStart={canDrag ? (e) => setDraggedOrder(e, s.orderNo) : undefined}
                 title={canDrag ? t(reorderable ? 'inspector.dragStop' : 'inspector.dragToReassign') : undefined}
                 className={`flex w-full items-baseline justify-between gap-2 rounded px-1 py-1 text-left text-xs hover:bg-accent ${canDrag ? 'cursor-grab active:cursor-grabbing' : ''}`}>
-                <span className="min-w-0 truncate"><span className="tnum text-muted-foreground">{s.seq}.</span> {s.customer ?? s.orderNo}
+                <span className="flex min-w-0 items-baseline truncate">
+                  {canDrag && <GripVertical className="mr-0.5 h-3 w-3 shrink-0 self-center text-muted-foreground/60" />}
+                  <span className="tnum text-muted-foreground">{s.seq}.</span>&nbsp;{s.customer ?? s.orderNo}
                   <span className="tnum ml-1 text-[10px] text-muted-foreground">+{Math.round(s.travelToSec / 60)}m</span>
                 </span>
                 <span className="tnum shrink-0 text-muted-foreground">{hhmm(s.arrivalSec)}{s.lateBySec > 0 && <span className="ml-1 text-warning">+{Math.round(s.lateBySec / 60)}m</span>}</span>

@@ -49,6 +49,8 @@ test.describe('staged edit stack', () => {
     }, { ...picked, MIME: 'application/x-otto-order' });
     expect(dropped).toBe(true);
 
+    // A toast confirms the staged edit (feedback for the tune loop).
+    await expect(page.getByText(/Pinned #.*applies on Replan/)).toBeVisible();
     // The pin must stage (not auto-solve) and show the target vehicle.
     await expect(page.getByText('Optimizing')).toHaveCount(0);
     await expect(page.getByText(/staged change/)).toBeVisible();
