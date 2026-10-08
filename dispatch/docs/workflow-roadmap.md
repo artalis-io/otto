@@ -62,7 +62,8 @@ A decision tool exists to *defend a choice between options*.
   scenario GC (copies were previously unbounded).
 - ✅ **Side-by-side multi-scenario compare** (2-3): Served / Vehicles / Distance /
   Cost / Unassigned, best value per row highlighted.
-- Share/export a scenario so a colleague can open the same what-if. (not yet)
+- ✅ Share/export a scenario: export its edit stack as a portable JSON; import
+  recreates the same what-if and adopts it as the current scenario.
 
 ### 3. Explainability / trust  (what converts a skeptical dispatcher)  [why-unassigned DONE]
 A cockpit nobody trusts is shelfware. The raw material exists (advisories, Sage
@@ -70,7 +71,8 @@ narration); make the optimizer legible.
 - ✅ *Why is this order unassigned?* Surge emits no reason, so `classifyUnassigned`
   infers one (pin/sequence lock that failed, needs tail lift, over capacity, access
   tonnage, else generic time-window/routing). Shown in the Issues panel (below).
-- *Why this sequence / this vehicle?* a short rationale per route. (not yet)
+- ✅ *Why this sequence?* a per-route rationale in the trip view (window-driven vs
+  distance-driven + counts of late / tight / early-waiting stops).
 - *Why infeasible?* surface the binding constraint, not just a failure. (partly: the
   unassigned reason now names the likely blocker)
 
@@ -88,9 +90,10 @@ violations (late / over-capacity), and soft advisories (tail-lift / oversize), e
 click-to-locate. Reuses the mapper's violations + the new unassigned reasons.
 
 ### Lower priority / polish
-Keyboard shortcuts + bulk actions; a settings/preferences surface (units, default
-objective/budget, depot, cost params); 3L load visualization (the checker is
-design-only); first-run/empty states + inline help.
+✅ First-run/contextual help: a guided overlay (HelpOverlay, TopBar '?') annotating
+each region on first run. Remaining: keyboard shortcuts + bulk actions; a
+settings/preferences surface (units, default objective/budget, depot, cost params);
+3L load visualization (the checker is design-only).
 
 ## Sequencing
 
