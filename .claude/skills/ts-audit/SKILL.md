@@ -61,7 +61,7 @@ const plan = await (await fetch(url)).json() as Plan;
 function parsePlan(x: unknown): Plan { /* check required fields, throw on mismatch */ }
 const plan = parsePlan(await (await fetch(url)).json());
 
-// BAD: `0` is a real vehicleId here (Gyermelyi veh id 0) -> this skips it
+// BAD: `0` is a real vehicleId here (id 0 is valid in the data) -> this skips it
 if (vehicleId) assign(vehicleId);
 // GOOD
 if (vehicleId != null) assign(vehicleId);
@@ -343,4 +343,4 @@ const freshIp = () => `10.${(ipn >> 8) & 255}.0.${ipn++ & 255}`;
 - `Map` is shadowed by react-map-gl's default import in `map/MapView.tsx` — use `globalThis.Map`.
 - Radix `ScrollArea` with only `max-h-[..]` does not scroll (no definite height for the `h-full` viewport); prefer a native `max-h-[..] overflow-y-auto` div.
 - The displayed plan reflects the committed solve; staged edits preview via `/api/plans/:id/evaluate` (reorders only — stops unchanged) and otherwise apply on Replan.
-- Keep customer data out of the repo; datasets live under `GYERMELYI_ROOT`, never committed.
+- Keep customer data out of the repo; datasets live under `DATASET_ROOT`, never committed.
