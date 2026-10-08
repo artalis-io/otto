@@ -28,7 +28,12 @@ export function isRoutableOrder(o: Record<string, unknown>): boolean {
 }
 
 export function datasetsRoot(): string { const d = resolve(config.uploadsDir, 'datasets'); mkdirSync(d, { recursive: true }); return d; }
-export function datasetDir(id: string): string { return resolve(datasetsRoot(), id); }
+export function datasetDir(id: string): string {
+  // Defense-in-depth: reject path traversal here so the safety does not rely on
+  // every caller validating the id (public callers already match ds_<token>).
+  if (!/^[A-Za-z0-9_-]+$/.test(id)) throw new Error(`invalid dataset id: ${id}`);
+  return resolve(datasetsRoot(), id);
+}
 
 const registry = new Map<string, Dataset>();
 function load(): void {

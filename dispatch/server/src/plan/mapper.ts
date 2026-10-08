@@ -7,6 +7,7 @@ import type { LoadedDay, OrderInfo, VehicleInfo } from '../data/gyermelyi.js';
 import { vehicleInfoFor } from '../data/gyermelyi.js';
 import { colorForIndex } from '../colors.js';
 import { metersToKm } from '../units.js';
+import { makeLeg, waitSec, lateSec } from './schedule.js';
 import { loadTariff, vehicleCostFor, tripCost, type Tariff } from '../cost.js';
 
 export interface FleetLimits { maxKg: number; maxPallets: number; anyTailLift: boolean; minTonnage: number }
@@ -50,11 +51,7 @@ export function sha256(s: string): string {
 
 export function mapSolutionToPlan(inp: MapInputs): Plan {
   const { request, solution } = inp;
-  const N = request.travel.location_count;
-  const dur = request.travel.durations;
-  const dist = request.travel.distances;
-  const legDur = (a: number, b: number): number => dur[a * N + b] ?? 0;
-  const legDist = (a: number, b: number): number => dist[a * N + b] ?? 0;
+  const leg = makeLeg(request.travel);
 
   const taskById = new Map<number, SurgeTask>(request.tasks.map((t) => [t.id, t]));
   const vehById = new Map(request.vehicles.map((v) => [v.id, v]));
@@ -95,12 +92,12 @@ export function mapSolutionToPlan(inp: MapInputs): Plan {
         const weightKg = task?.demand[0] ?? 0;
         const pallets = task?.demand[1] ?? 0;
         loadKg += weightKg; loadPallets += pallets;
-        const travelToSec = task ? legDur(prevLoc, task.location_id) : 0;
-        tripMeters += task ? legDist(prevLoc, task.location_id) : 0;
+        const travelToSec = task ? leg.durSec(prevLoc, task.location_id) : 0;
+        tripMeters += task ? leg.distM(prevLoc, task.location_id) : 0;
         if (task) prevLoc = task.location_id;
         servedOrderNos.add(orderNo);
         const twLate = task?.tw_late ?? 0;
-        const lateBySec = Math.max(0, s.arrival - twLate);
+        const lateBySec = lateSec(s.arrival, twLate);
         if (lateBySec > 1) violations.push({ type: 'HARD_TW', vehicle_id: route.vehicle_id, request_id: s.request_id, actual: s.arrival, limit: twLate });
         // Soft advisories: physical access constraints the current solve does not model.
         if (info?.requiresTailLift && !vinfo?.hasTailLift) violations.push({ type: 'TAIL_LIFT', soft: true, vehicle_id: route.vehicle_id, request_id: s.request_id, orderNo });
@@ -120,7 +117,7 @@ export function mapSolutionToPlan(inp: MapInputs): Plan {
           twEndSec: twLate,
           pallets, weightKg,
           serviceMin: task ? Math.round(task.service_seconds / 60) : 0,
-          waitSec: Math.max(0, s.service_start - s.arrival),
+          waitSec: waitSec(s.arrival, s.service_start),
           travelToSec,
           lateBySec,
           requiresTailLift: Boolean(info?.requiresTailLift),
@@ -128,11 +125,11 @@ export function mapSolutionToPlan(inp: MapInputs): Plan {
         };
       });
       // close the trip back to depot
-      tripMeters += prevLoc !== depotLoc ? legDist(prevLoc, depotLoc) : 0;
+      tripMeters += prevLoc !== depotLoc ? leg.distM(prevLoc, depotLoc) : 0;
       const first = stops[0];
       const last = stops[stops.length - 1];
       const startSec = first ? first.arrivalSec - first.travelToSec : 0;
-      const endSec = last ? last.departureSec + legDur(prevLoc, depotLoc) : startSec;
+      const endSec = last ? last.departureSec + leg.durSec(prevLoc, depotLoc) : startSec;
       if (loadKg > capKg + 1) violations.push({ type: 'CAPACITY', dimension: 'kg', vehicle_id: route.vehicle_id, trip: ti, actual: loadKg, limit: capKg });
       if (loadPallets > capPal + 1e-6) violations.push({ type: 'CAPACITY', dimension: 'pallets', vehicle_id: route.vehicle_id, trip: ti, actual: loadPallets, limit: capPal });
       const tripKm = metersToKm(tripMeters);

@@ -42,7 +42,12 @@ export async function buildMatrix(locs: MatrixLoc[], profile = config.veloProfil
     const f = line.split(/\s+/);
     if (f[0] === 'M') {
       const a = Number(f[1]), b = Number(f[2]);
-      if (a >= 0 && a < N && b >= 0 && b < N) { durations[a * N + b] = Math.round(Number(f[3])); distances[a * N + b] = Math.round(Number(f[4])); }
+      const d = Number(f[3]), m = Number(f[4]);
+      // Guard NaN explicitly: a malformed field would otherwise poison the cell
+      // (the `?? 0` leg getters catch undefined/null, not NaN).
+      if (a >= 0 && a < N && b >= 0 && b < N && Number.isFinite(d) && Number.isFinite(m)) {
+        durations[a * N + b] = Math.round(d); distances[a * N + b] = Math.round(m);
+      }
     } else if (f[0] === 'S') {
       const m = Number(f[3]);
       if (Number.isFinite(m) && m > 500) snapWarnings.push({ index: Number(f[1]), meters: Math.round(m) });

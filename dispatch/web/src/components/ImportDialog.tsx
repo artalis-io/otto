@@ -21,7 +21,7 @@ export function ImportDialog({ open, onOpenChange, onAdmitted, onDatasetsChanged
     let alive = true;
     setErr(null);
     api.importSummary().then((s) => { if (alive) setSummary(s); }).catch((e) => { if (alive) setErr(describeApiError(e, t)); });
-    api.importCanonical().then((c) => { if (alive) setCanon(c); }).catch(() => {});
+    api.importCanonical().then((c) => { if (alive) setCanon(c); }).catch((e) => { if (alive) setErr(describeApiError(e, t)); });
     return () => { alive = false; };
   }, [open, t]);
   useEffect(() => {

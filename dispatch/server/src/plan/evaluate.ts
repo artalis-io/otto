@@ -2,6 +2,7 @@ import type { PlanStop, PlanTrip, SurgeRequest } from '../types.js';
 import type { LoadedDay, VehicleInfo } from '../data/gyermelyi.js';
 import { vehicleInfoFor } from '../data/gyermelyi.js';
 import { metersToKm } from '../units.js';
+import { makeLeg, waitSec, lateSec } from './schedule.js';
 import { loadTariff, tripCost, type Tariff } from '../cost.js';
 
 /* Re-evaluate one vehicle trip for a proposed stop order WITHOUT re-solving.
@@ -31,11 +32,7 @@ export interface EvaluateTripInput {
 
 export function evaluateTrip(inp: EvaluateTripInput): PlanTrip {
   const { request, day } = inp;
-  const N = request.travel.location_count;
-  const dur = request.travel.durations;
-  const dist = request.travel.distances;
-  const legDur = (a: number, b: number): number => dur[a * N + b] ?? 0;
-  const legDist = (a: number, b: number): number => dist[a * N + b] ?? 0;
+  const leg = makeLeg(request.travel);
   const depotLoc = 0;
   const tariff = inp.tariff ?? loadTariff();
 
@@ -53,8 +50,8 @@ export function evaluateTrip(inp: EvaluateTripInput): PlanTrip {
     const weightKg = task?.demand[0] ?? 0;
     const pallets = task?.demand[1] ?? 0;
     loadKg += weightKg; loadPallets += pallets;
-    const travelToSec = task ? legDur(prevLoc, task.location_id) : 0;
-    meters += task ? legDist(prevLoc, task.location_id) : 0;
+    const travelToSec = task ? leg.durSec(prevLoc, task.location_id) : 0;
+    meters += task ? leg.distM(prevLoc, task.location_id) : 0;
     const arrival = t + travelToSec;
     const twEarly = task?.tw_early ?? 0;
     const twLate = task?.tw_late ?? 0;
@@ -76,15 +73,15 @@ export function evaluateTrip(inp: EvaluateTripInput): PlanTrip {
       twEndSec: twLate,
       pallets, weightKg,
       serviceMin: Math.round(serviceSec / 60),
-      waitSec: Math.max(0, serviceStart - arrival),
+      waitSec: waitSec(arrival, serviceStart),
       travelToSec,
-      lateBySec: Math.max(0, arrival - twLate),
+      lateBySec: lateSec(arrival, twLate),
       requiresTailLift: Boolean(info?.requiresTailLift),
       maxTonnage: info?.maxTonnage ?? null,
     };
   });
-  meters += prevLoc !== depotLoc ? legDist(prevLoc, depotLoc) : 0;
-  const endSec = prevLoc !== depotLoc ? t + legDur(prevLoc, depotLoc) : inp.startSec;
+  meters += prevLoc !== depotLoc ? leg.distM(prevLoc, depotLoc) : 0;
+  const endSec = prevLoc !== depotLoc ? t + leg.durSec(prevLoc, depotLoc) : inp.startSec;
   const distanceKm = metersToKm(meters);
   return {
     index: inp.tripIndex,
