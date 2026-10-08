@@ -189,6 +189,8 @@ const en: Dict = {
   // Onboarding (upload a dataset)
   'import.tabProvenance': 'Provenance', 'import.tabUpload': 'Upload',
   'onboard.entity.orders': 'Orders', 'onboard.entity.vehicles': 'Vehicles', 'onboard.entity.routes': 'Routes',
+  'onboard.progress': 'Onboarding progress',
+  'onboard.step.upload': 'Upload', 'onboard.step.map': 'Map', 'onboard.step.validate': 'Validate', 'onboard.step.geocode': 'Geocode', 'onboard.step.admit': 'Admit',
   'onboard.choose': 'Choose file', 'onboard.rows': '{n} rows', 'onboard.map': 'Map columns',
   'onboard.field': 'Canonical field', 'onboard.column': 'Source column', 'onboard.sample': 'Sample', 'onboard.none': '— none —',
   'onboard.validate': 'Validate', 'onboard.mapRequired': 'Map required: {f}',
@@ -393,6 +395,8 @@ const hu: Dict = {
   // Onboarding (upload a dataset)
   'import.tabProvenance': 'Adateredet', 'import.tabUpload': 'Feltöltés',
   'onboard.entity.orders': 'Megrendelések', 'onboard.entity.vehicles': 'Járművek', 'onboard.entity.routes': 'Útvonalak',
+  'onboard.progress': 'Betöltés folyamata',
+  'onboard.step.upload': 'Feltöltés', 'onboard.step.map': 'Megfeleltetés', 'onboard.step.validate': 'Ellenőrzés', 'onboard.step.geocode': 'Geokódolás', 'onboard.step.admit': 'Átvétel',
   'onboard.choose': 'Fájl kiválasztása', 'onboard.rows': '{n} sor', 'onboard.map': 'Oszlopok megfeleltetése',
   'onboard.field': 'Kanonikus mező', 'onboard.column': 'Forrásoszlop', 'onboard.sample': 'Minta', 'onboard.none': '— nincs —',
   'onboard.validate': 'Ellenőrzés', 'onboard.mapRequired': 'Kötelező: {f}',

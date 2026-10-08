@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Upload, CheckCircle2, XCircle, AlertTriangle, Loader2, FileUp, MapPin, Trash2, Database } from 'lucide-react';
+import { Upload, CheckCircle2, XCircle, AlertTriangle, Loader2, FileUp, MapPin, Trash2, Database, Check } from 'lucide-react';
 import Map, { Layer, Source } from 'react-map-gl/maplibre';
 import type { FeatureCollection } from 'geojson';
 import maplibregl from 'maplibre-gl';
@@ -48,6 +48,14 @@ export function OnboardPanel({ onAdmitted, onDatasetsChanged }: { onAdmitted?: (
 
   const fields = catalog?.[entity] ?? [];
   const missing = fields.filter((f) => f.required && mapping[f.field] == null).map((f) => f.label);
+
+  // Progress stepper: derive each step's state from what the flow has produced so
+  // far. Orders go the full distance (geocode + admit); vehicles/routes stop at
+  // the reconcile gate (they are attached to an orders admit, not admitted alone).
+  const stepKeys = entity === 'orders' ? (['upload', 'map', 'validate', 'geocode', 'admit'] as const) : (['upload', 'map', 'validate'] as const);
+  const stepDone: Record<string, boolean> = { upload: !!upload, map: !!preview, validate: !!preview?.ok, geocode: !!geo?.ok, admit: !!admit?.ok };
+  const stepErr: Record<string, boolean> = { validate: !!preview && !preview.ok, geocode: !!(geo && geo.error) };
+  const currentStep = stepKeys.find((k) => !stepDone[k]) ?? null;
 
   async function onFile(file: File) {
     setErr(null); setPreview(null); setGeo(null); setBusy('upload');
@@ -128,6 +136,9 @@ export function OnboardPanel({ onAdmitted, onDatasetsChanged }: { onAdmitted?: (
             </div>
           </div>
         )}
+
+        {/* Progress stepper for the add-a-dataset flow */}
+        <Stepper steps={stepKeys} done={stepDone} errored={stepErr} current={currentStep} />
 
         {/* 1. Entity + file */}
         <div className="flex flex-wrap items-center gap-2">
@@ -273,6 +284,43 @@ export function OnboardPanel({ onAdmitted, onDatasetsChanged }: { onAdmitted?: (
         )}
       </div>
     </ScrollArea>
+  );
+}
+
+/* Horizontal progress stepper. State per step is derived upstream from the flow
+ * (done / current / error / todo); current carries aria-current for assistive
+ * tech. Connectors fill the space between markers so the steps spread evenly. */
+function Stepper({ steps, done, errored, current }: {
+  steps: readonly string[]; done: Record<string, boolean>; errored: Record<string, boolean>; current: string | null;
+}) {
+  const t = useT();
+  return (
+    <nav aria-label={t('onboard.progress')}>
+      <ol className="flex items-center">
+        {steps.map((key, i) => {
+          const state = errored[key] ? 'error' : done[key] ? 'done' : current === key ? 'current' : 'todo';
+          const circle = {
+            done: 'bg-primary text-primary-foreground',
+            current: 'border-2 border-primary text-primary',
+            error: 'bg-destructive text-destructive-foreground',
+            todo: 'border border-divider text-muted-foreground',
+          }[state];
+          const text = state === 'error' ? 'text-destructive font-medium'
+            : state === 'todo' ? 'text-muted-foreground' : 'text-foreground font-medium';
+          return (
+            <li key={key} className={`flex items-center ${i < steps.length - 1 ? 'flex-1' : ''}`}>
+              <span className="flex shrink-0 items-center gap-1.5" aria-current={current === key ? 'step' : undefined}>
+                <span className={`flex h-5 w-5 shrink-0 items-center justify-center rounded-full text-[10px] font-semibold ${circle}`}>
+                  {state === 'done' ? <Check className="h-3 w-3" /> : i + 1}
+                </span>
+                <span className={`text-[11px] ${text}`}>{t(`onboard.step.${key}`)}</span>
+              </span>
+              {i < steps.length - 1 && <span className={`mx-1.5 h-px flex-1 ${done[key] ? 'bg-primary/40' : 'bg-divider'}`} aria-hidden />}
+            </li>
+          );
+        })}
+      </ol>
+    </nav>
   );
 }
 

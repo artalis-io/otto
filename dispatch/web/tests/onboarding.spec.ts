@@ -7,6 +7,19 @@ import { loadApp, expectNoErrors } from './helpers';
 const RAW = join(homedir(), 'artalis.io/data/gyermelyi/raw/gyermelyi_orders_raw.csv');
 const VEH = join(homedir(), 'artalis.io/data/gyermelyi/raw/gyermelyi_vehicles_raw.csv');
 
+test('onboarding shows a progress stepper (upload -> admit)', async ({ page }) => {
+  await loadApp(page);
+  await page.getByRole('button', { name: 'Data' }).click();
+  await page.getByRole('tab', { name: 'Upload' }).click();
+  const steps = page.getByRole('navigation', { name: 'Onboarding progress' });
+  await expect(steps).toBeVisible();
+  await expect(steps.getByText('Geocode')).toBeVisible();
+  await expect(steps.getByText('Admit')).toBeVisible();
+  // the first step is "current" until a file is uploaded
+  await expect(steps.locator('[aria-current="step"]')).toContainText('Upload');
+  expectNoErrors(page);
+});
+
 test.describe('data onboarding (M1)', () => {
   test.skip(!existsSync(RAW), 'raw dataset not present');
 
