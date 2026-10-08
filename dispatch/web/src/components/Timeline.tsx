@@ -24,6 +24,11 @@ function useWidth<T extends HTMLElement>() {
 const GRID = 'hsl(42 14% 82%)';
 const AXIS_TXT = 'hsl(40 8% 42%)';
 
+/* Activate a focusable SVG element (role=button) from the keyboard. */
+function onKeyActivate(e: React.KeyboardEvent, fn: () => void): void {
+  if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); fn(); }
+}
+
 function hourTicks(lo: number, hi: number): number[] {
   const t: number[] = [];
   for (let s = Math.floor(lo / 3600) * 3600; s <= Math.ceil(hi / 3600) * 3600; s += 3600) t.push(s);
@@ -44,6 +49,7 @@ function Header({ title, hint, controls }: { title: string; hint: string; contro
 
 function VehicleTimeline({ vehicle, selection, onSelect, clockSec, onSeek }: { vehicle: Vehicle; selection: Selection; onSelect: (s: Selection) => void; clockSec: number | null; onSeek: (sec: number) => void }) {
   const t = useT();
+  const translate = t; // `t` is shadowed by the trip loop variable below; alias for i18n inside it
   const [ref, width] = useWidth<HTMLDivElement>();
   const padL = 12, padR = 16, laneY = 46, laneH = 22;
   const { lo, hi } = useMemo(() => {
@@ -63,7 +69,7 @@ function VehicleTimeline({ vehicle, selection, onSelect, clockSec, onSeek }: { v
 
   return (
     <div ref={ref} className="h-full w-full px-2">
-      <svg width={width} height={H} role="img" aria-label={`Timeline for ${vehicle.ref}`} style={{ cursor: 'crosshair' }}
+      <svg width={width} height={H} role="group" aria-label={t('timeline.workingDay', { ref: vehicle.ref })} style={{ cursor: 'crosshair' }}
         onClick={(e) => onSeek(secOf(e.clientX, e.currentTarget.getBoundingClientRect()))}>
         {hourTicks(lo, hi).map((s) => (
           <g key={s}>
@@ -81,8 +87,12 @@ function VehicleTimeline({ vehicle, selection, onSelect, clockSec, onSeek }: { v
         {vehicle.trips.map((t) => {
           const dim = selTrip != null && selTrip !== t.index;
           const op = dim ? 0.25 : 1;
+          const selectTrip = () => onSelect({ kind: 'trip', vehicleId: vehicle.id, tripIndex: t.index });
           return (
-            <g key={t.index} opacity={op} onClick={(e) => { e.stopPropagation(); onSelect({ kind: 'trip', vehicleId: vehicle.id, tripIndex: t.index }); }} style={{ cursor: 'pointer' }}>
+            <g key={t.index} opacity={op} role="button" tabIndex={0}
+              aria-label={translate('timeline.tripAria', { n: t.index + 1, from: hhmm(t.startSec), to: hhmm(t.endSec) })}
+              onClick={(e) => { e.stopPropagation(); selectTrip(); }}
+              onKeyDown={(e) => onKeyActivate(e, selectTrip)} style={{ cursor: 'pointer' }}>
               {/* travel baseline across the whole trip */}
               <rect x={xOf(t.startSec)} y={laneY + laneH / 2 - 2} width={Math.max(1, xOf(t.endSec) - xOf(t.startSec))} height={4} rx={2} fill={vehicle.color} fillOpacity={0.28} />
               {/* depot start/end markers */}
@@ -133,6 +143,7 @@ function Legend({ color, label }: { color: string; label: string }) {
 }
 
 function FleetOverview({ plan, onSelect, clockSec, onSeek }: { plan: Plan; onSelect: (s: Selection) => void; clockSec: number | null; onSeek: (sec: number) => void }) {
+  const t = useT();
   const [ref, width] = useWidth<HTMLDivElement>();
   const rowH = 16, labelW = 56, padR = 12, axisH = 16;
   const { lo, hi } = useMemo(() => {
@@ -150,7 +161,7 @@ function FleetOverview({ plan, onSelect, clockSec, onSeek }: { plan: Plan; onSel
 
   return (
     <div ref={ref} className="h-full w-full overflow-y-auto px-2">
-      <svg width={width} height={H} role="img" aria-label="Fleet timeline overview" style={{ cursor: 'crosshair' }}
+      <svg width={width} height={H} role="group" aria-label={t('timeline.fleetOverview')} style={{ cursor: 'crosshair' }}
         onClick={(e) => onSeek(secOf(e.clientX, e.currentTarget.getBoundingClientRect()))}>
         {hourTicks(lo, hi).map((s) => (
           <g key={s}>
@@ -160,8 +171,12 @@ function FleetOverview({ plan, onSelect, clockSec, onSeek }: { plan: Plan; onSel
         ))}
         {plan.vehicles.map((v, i) => {
           const y = axisH + i * rowH + 2;
+          const selectVeh = () => onSelect({ kind: 'vehicle', vehicleId: v.id });
           return (
-            <g key={v.id} onClick={(e) => { e.stopPropagation(); onSelect({ kind: 'vehicle', vehicleId: v.id }); }} style={{ cursor: 'pointer' }}>
+            <g key={v.id} role="button" tabIndex={0}
+              aria-label={t('timeline.vehicleAria', { ref: v.ref, n: v.tripCount, t: hhmm(v.finishTimeSec) })}
+              onClick={(e) => { e.stopPropagation(); selectVeh(); }}
+              onKeyDown={(e) => onKeyActivate(e, selectVeh)} style={{ cursor: 'pointer' }}>
               <text x={4} y={y + rowH - 6} fontSize={10} fill="hsl(40 10% 18%)" style={{ fontVariantNumeric: 'tabular-nums' }}>{v.ref}</text>
               {v.trips.map((t) => {
                 const active = clockSec != null && clockSec >= t.startSec && clockSec <= t.endSec;
@@ -185,7 +200,7 @@ export function Timeline({ plan, selection, onSelect, clockSec, playing, speed, 
   const vehId = selection && selection.kind !== 'unassigned' ? selection.vehicleId : null;
   const vehicle = vehId != null ? plan.vehicles.find((v) => v.id === vehId) : null;
   return (
-    <div className="flex h-full flex-col bg-card">
+    <div className="flex h-full flex-col bg-card" role="region" aria-label={t('timeline.title')}>
       <Header
         title={vehicle ? t('timeline.workingDay', { ref: vehicle.ref }) : t('timeline.fleetOverview')}
         hint={vehicle ? t('timeline.vehHint', { n: vehicle.tripCount, t: hhmm(vehicle.finishTimeSec) }) : t('timeline.selectHint')}
@@ -211,14 +226,12 @@ function PlaybackControls({ clockSec, playing, speed, onTogglePlay, onStop, onSp
         className="flex h-6 w-6 items-center justify-center rounded border border-divider hover:bg-accent">
         {playing ? <Pause className="h-3.5 w-3.5" /> : <Play className="h-3.5 w-3.5" />}
       </button>
-      {active && (
-        <>
-          <button type="button" onClick={onStop} aria-label={t('play.stop')} className="flex h-6 w-6 items-center justify-center rounded border border-divider hover:bg-accent"><Square className="h-3 w-3" /></button>
-          <input type="range" min={dayRange.lo} max={dayRange.hi} step={60} value={clockSec ?? dayRange.lo}
-            onChange={(e) => onSeek(Number(e.target.value))} className="h-1 w-28 accent-[var(--primary)]" aria-label={t('play.seek')} />
-          <span className="tnum w-10 text-[11px] text-foreground">{hhmm(clockSec!)}</span>
-        </>
-      )}
+      <button type="button" onClick={onStop} disabled={!active} aria-label={t('play.stop')}
+        className="flex h-6 w-6 items-center justify-center rounded border border-divider hover:bg-accent disabled:opacity-40"><Square className="h-3 w-3" /></button>
+      {/* Always-available scrubber so keyboard users can seek without first pressing play. */}
+      <input type="range" min={dayRange.lo} max={dayRange.hi} step={60} value={clockSec ?? dayRange.lo}
+        onChange={(e) => onSeek(Number(e.target.value))} className="h-1 w-28 accent-[var(--primary)]" aria-label={t('play.seek')} />
+      <span className={`tnum w-10 text-[11px] ${active ? 'text-foreground' : 'text-muted-foreground'}`}>{hhmm(clockSec ?? dayRange.lo)}</span>
       <select value={speed} onChange={(e) => onSpeed(Number(e.target.value))} className="h-6 rounded border border-divider bg-card px-1 text-[10px]" aria-label={t('play.speed')}>
         {SPEEDS.map((s) => <option key={s} value={s}>{s / 60}×</option>)}
       </select>

@@ -56,6 +56,8 @@ const en: Dict = {
 
   'timeline.title': 'Timeline', 'timeline.workingDay': '{ref} · working day',
   'timeline.fleetOverview': 'Fleet overview', 'timeline.vehHint': '{n} trips · finish {t}',
+  'timeline.vehicleAria': '{ref}: {n} trips, finishes {t}. Activate to view this vehicle.',
+  'timeline.tripAria': 'Trip {n}, {from} to {to}. Activate to select.',
   'timeline.selectHint': 'select a vehicle for its day',
   'timeline.service': 'service', 'timeline.wait': 'wait', 'timeline.reload': 'reload', 'timeline.depot': 'depot',
 
@@ -265,6 +267,8 @@ const hu: Dict = {
 
   'timeline.title': 'Idővonal', 'timeline.workingDay': '{ref} · munkanapja',
   'timeline.fleetOverview': 'Flotta áttekintés', 'timeline.vehHint': '{n} forduló · vége {t}',
+  'timeline.vehicleAria': '{ref}: {n} forduló, vége {t}. Aktiválja a jármű megtekintéséhez.',
+  'timeline.tripAria': '{n}. forduló, {from}–{to}. Aktiválja a kijelöléshez.',
   'timeline.selectHint': 'válassz járművet a napjához',
   'timeline.service': 'kiszolgálás', 'timeline.wait': 'várakozás', 'timeline.reload': 'újrarakodás', 'timeline.depot': 'telephely',
 

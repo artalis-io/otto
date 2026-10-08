@@ -89,6 +89,18 @@ test.describe('tier-2 features', () => {
     expectNoErrors(page);
   });
 
+  test('timeline is keyboard-operable: scrubber always present, fleet rows activate', async ({ page }) => {
+    await loadApp(page);
+    // the scrubber is available before pressing play (keyboard users can seek)
+    await expect(page.getByRole('slider', { name: 'Seek' })).toBeVisible();
+    // a fleet-overview row is a button; focus RIC-124 and activate it by keyboard
+    const row = page.getByRole('button', { name: /^RIC-124:/ });
+    await row.focus();
+    await page.keyboard.press('Enter');
+    await expect(page.getByText(/RIC-124 · working day/)).toBeVisible();
+    expectNoErrors(page);
+  });
+
   test('solve settings offer objective and budget', async ({ page }) => {
     await loadApp(page);
     await page.getByRole('button', { name: 'Solve settings' }).click();
