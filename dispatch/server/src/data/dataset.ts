@@ -4,7 +4,7 @@ import { config } from '../config.js';
 import { datasetForDay, allDatasets, isRoutableOrder, type Dataset, type RegDay } from './registry.js';
 import type { SurgeRequest, SurgeSolution } from '../types.js';
 
-/* The Gyermelyi dataset is immutable and lives outside the repo. the backend reads it
+/* The configured dataset is immutable and lives outside the repo. the backend reads it
  * read-only. Each planning day is a separate VRP; the per-day request file
  * carries ALL in-scope locations + the full travel matrix but we scope the
  * served order set to that day's delivery date (verified exact: 117 tasks on
@@ -64,7 +64,7 @@ function hasTailLiftReq(specialReq: string | null | undefined): boolean {
 }
 
 function readJson<T>(rel: string): T {
-  return JSON.parse(readFileSync(resolve(config.gyermelyiRoot, rel), 'utf8')) as T;
+  return JSON.parse(readFileSync(resolve(config.datasetRoot, rel), 'utf8')) as T;
 }
 
 type RawRow = Record<string, unknown>;
@@ -184,7 +184,7 @@ export function loadDay(dayId: string): LoadedDay {
       if (ds && ds.size === 1 && ds.has(def.date)) scopeTaskIds.add(t.id);
     }
     const d0 = request.locations[0]!;
-    return { def, kind: 'builtin', request, solution, scopeTaskIds, depot: { name: 'Gyermely', lon: d0.x, lat: d0.y }, enrichment: builtinEnrichment() };
+    return { def, kind: 'builtin', request, solution, scopeTaskIds, depot: { name: 'Depot', lon: d0.x, lat: d0.y }, enrichment: builtinEnrichment() };
   }
   const up = datasetForDay(dayId);
   if (up) return loadUploadedDay(up.dataset, up.day);

@@ -26,7 +26,7 @@ No raw bytes are parsed in Node; the Python pipeline subprocess does that
 
 Generic engines (repo, dataset-agnostic, arg-driven): `nexus/scripts/`
 `ingest.sh`, `reconcile.py`, `semantic_checks.py`, `normalize_address.py`,
-`geocode_verify.py`. See `GYERMELYI_ROOT/PIPELINE.md`. The geocoder caches
+`geocode_verify.py`. See `DATASET_ROOT/PIPELINE.md`. The geocoder caches
 Google/HERE and supports `GEOCODE_OFFLINE=1` (cache-only, no billing). Matrix +
 request builders: `build_surge_perday.py`, `matrices/`. The dispatch backend
 drives these as subprocesses, exactly as it shells `surge_solve`.
@@ -46,7 +46,7 @@ Upload files ─▶ Map columns ─▶ Validate (dry-run) ─▶ Geocode ─▶ 
 2. **Map columns**: backend returns detected headers + sample rows per file; the
    UI shows a mapping table (header → canonical-field dropdown) with auto-suggested
    matches and required/type hints. Saved as a per-dataset schema (equivalent to
-   `schemas/gyermelyi-*-v1.json`).
+   `schemas/<entity>-v1.json`).
 3. **Validate (dry-run)**: `ingest.sh` per entity → `reconcile.py` (HARD: every
    canonical field must trace to the raw bytes) + `semantic_checks.py` (advisory).
    Preview shows canonical records, reconcile pass/fail, semantic warnings,
@@ -77,7 +77,7 @@ Shared:
 - `Job` gains `kind: 'solve' | 'import'` and a `stage` string so the existing job
   polling / cancel / progress UI works unchanged.
 - `@fastify/multipart` (or raw) for upload.
-- Persistence: `${DISPATCH_UPLOADS_DIR}` (default `${GYERMELYI_ROOT}/uploads`),
+- Persistence: `${DISPATCH_UPLOADS_DIR}` (default `${DATASET_ROOT}/uploads`),
   one folder per dataset: `raw/ schema.json canonical/ orders.geocoded.json
   matrices/ requests/`. **Never committed** (customer data). A `registry.json`
   lists datasets + their days.

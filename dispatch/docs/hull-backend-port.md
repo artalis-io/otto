@@ -100,7 +100,7 @@ already are). This matches OTTO's transport-agnostic manifesto.
 | Routes + transport (`server.ts`) | 634 | Medium | 40 handlers → `app.*`; CORS/CSP/ratelimit/**auth** become Hull middleware |
 | Store → SQLite (`hull/db`) | 516 | Medium | CRUD/GC → SQL + migrations (upgrade over JSON-file store) |
 | Jobs (`solve.ts`) → `hull/jobs` | 280 | Medium | durable job calling Surge-svc over HTTP + mapping result |
-| Ingest/geocode cluster (`onboard`,`admit`,`gyermelyi`,`import`,`fleet`,`catalog`,`matrix`) | ~970 | **Medium–High** | geocode reimpl (libpostal-free, §5.2); Nexus→service; matrix→Velo HTTP |
+| Ingest/geocode cluster (`onboard`,`admit`,`dataset`,`import`,`fleet`,`catalog`,`matrix`) | ~970 | **Medium–High** | geocode reimpl (libpostal-free, §5.2); Nexus→service; matrix→Velo HTTP |
 | External clients (`velo`,`sage`) | 270 | Low | fetch → Hull `net` + timeout |
 | Stand up **Surge-svc** + **Nexus-svc** + Velo matrix ep | — | Medium | thin Keel/HTTP wrappers around existing binaries |
 | Frontend | — | Low (~1–2 d) | build `dist/` → Hull `static/` + `/*` fallback + `/tiles` proxy; **no app-code changes** |
@@ -165,7 +165,7 @@ Proposed Hull-internal geocode (QuickJS), no libpostal:
 Accuracy note: dropping libpostal loses robust multilingual POI parsing, but for
 HU-only addresses leaning on Google's own parsing + a targeted HU normalizer
 matches the existing non-libpostal path. **De-risk by diffing tiers** on the
-Gyermelyi set: run libpostal-on vs libpostal-off today and confirm the tier
+dataset: run libpostal-on vs libpostal-off today and confirm the tier
 distribution is acceptable before committing (§7).
 
 ### 5.3 Bonus: Nexus is C, not Python
@@ -272,7 +272,7 @@ independently shippable and reversible (flip the base back).
 | Risk | Severity | De-risk before committing |
 |------|----------|---------------------------|
 | **QuickJS stdlib gaps** — `Intl`/`toLocaleString` (HU currency/number fmt in `export.ts`), `structuredClone` (`solve.ts`), `Date` nuances | Medium | In a scratch Hull app, format one HUF value + deep-clone a request; if `Intl` is stubbed, write a tiny HU `format.js` (trivial) |
-| **Geocode accuracy without libpostal** | Medium | Diff GREEN/YELLOW/APPROX/RED tier counts libpostal-on vs -off on the Gyermelyi set today |
+| **Geocode accuracy without libpostal** | Medium | Diff GREEN/YELLOW/APPROX/RED tier counts libpostal-on vs -off on the dataset today |
 | **Solve/matrix over HTTP** — latency + payload size (N² matrix for ~260 locations is MBs) + long solves | Medium | Prototype Surge-svc + Velo `/matrix`; time an end-to-end solve and a 260-loc matrix round-trip |
 | **Operational**: 4–5 services vs 1 process; health/supervision | Low–Med | `hull deploy` + systemd/compose; Velo/Carta already run as services |
 | **XLSX parsing** in QuickJS | Low | Route XLSX through Nexus-svc `/sample`, don't parse in Hull |
@@ -383,7 +383,7 @@ therefore:
 
 > For the product's solve budget T (≈15–30 s) and K = cores, is the **solution
 > quality** of *K concurrent single-threaded WASM Surge runs* within an
-> acceptable gap of *native `sg_solve_parallel(K)`* on real Gyermelyi days?
+> acceptable gap of *native `sg_solve_parallel(K)`* on real dataset days?
 
 Quality = lexicographic (unassigned, vehicles_used, total_distance_km) vs the
 committed baselines (day1 = 0 unassigned / known vehicles+km).

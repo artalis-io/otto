@@ -4,8 +4,8 @@ import { join } from 'node:path';
 import { existsSync } from 'node:fs';
 import { loadApp, expectNoErrors } from './helpers';
 
-const RAW = join(homedir(), 'artalis.io/data/gyermelyi/raw/gyermelyi_orders_raw.csv');
-const VEH = join(homedir(), 'artalis.io/data/gyermelyi/raw/gyermelyi_vehicles_raw.csv');
+const RAW = process.env.DISPATCH_SAMPLE_ORDERS ?? join(homedir(), 'artalis.io/data/dataset/raw/orders_raw.csv');
+const VEH = process.env.DISPATCH_SAMPLE_VEHICLES ?? join(homedir(), 'artalis.io/data/dataset/raw/vehicles_raw.csv');
 
 test('onboarding shows a progress stepper (upload -> admit)', async ({ page }) => {
   await loadApp(page);

@@ -5,9 +5,9 @@ import { config } from './config.js';
 /*
  * Plan cost estimation under a carrier tariff.
  *
- * Real Gyermelyi rate cards are confidential and live outside the repo (per
+ * Real carrier rate cards are confidential and live outside the repo (per
  * provider, zone-based). If a resolved tariff is present at
- * `${GYERMELYI_ROOT}/rates/tariff.json` we use it (source 'external'); otherwise
+ * `${DATASET_ROOT}/rates/tariff.json` we use it (source 'external'); otherwise
  * we fall back to an illustrative in-repo demo tariff (source 'demo') so the
  * economics view is always populated without committing anything confidential.
  *
@@ -63,7 +63,7 @@ let cached: Tariff | null = null;
 /** Load the tariff once: external rate card if resolved, else the demo tariff. */
 export function loadTariff(): Tariff {
   if (cached) return cached;
-  const path = resolve(config.gyermelyiRoot, 'rates/tariff.json');
+  const path = resolve(config.datasetRoot, 'rates/tariff.json');
   if (existsSync(path)) {
     try {
       const ext = JSON.parse(readFileSync(path, 'utf8')) as Partial<Tariff>;

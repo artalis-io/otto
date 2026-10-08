@@ -9,7 +9,7 @@ import { buildSchema, sampleUpload, type Mapping } from './onboard.js';
 import { buildFleetFromUpload } from './fleet.js';
 import { minimalEnv } from '../util/childenv.js';
 import { buildMatrix, type MatrixLoc } from '../geometry/matrix.js';
-import { loadDay } from './gyermelyi.js';
+import { loadDay } from './dataset.js';
 import { registerDataset, datasetDir, isRoutableOrder, type Dataset, type RegDay } from './registry.js';
 import type { SurgeRequest, SurgeTask, SurgeRequestDef } from '../types.js';
 

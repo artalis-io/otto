@@ -27,7 +27,7 @@ architectural lifts), phased.
 
 ## Part A: Hardening punch-list (in-scope now)
 
-> Status: **all of A1-A15 shipped** on `dispatch/gyermelyi-workspace` as six
+> Status: **all of A1-A15 shipped** on `the dispatch feature branch` as six
 > focused commits (durability; admission control + backpressure; security quick
 > wins; config validation; frontend robustness; CI gate). A13 needed no change
 > (bounded by nx_xlsx's existing 50 MB/entry cap).
@@ -113,7 +113,7 @@ this. Fix: stream `matrix_build` output to a temp file / parse incrementally, an
 lower the solve default. Pairs with A2.
 
 ### A11. Config fail-fast (remove developer path defaults)  [Medium]
-`config.ts:25,28` default `ottoRoot`/`gyermelyiRoot` to `/Users/mark/...`, fanned
+`config.ts:25,28` default `ottoRoot`/`datasetRoot` to `/Users/mark/...`, fanned
 out across ~10 derived paths. On any other machine every default is wrong, and
 it fails late and cryptically. Fix: no absolute-path defaults; fail fast on
 unset required config with a message that names the variable (matches the
@@ -156,7 +156,7 @@ A4, A11, A15 in particular are prerequisites for taking any of this live.
   scenarios, jobs, datasets). Today any caller can read/delete any resource.
 - **Tenant model**: a `tenant` (org) threaded through every store key, the
   uploads dir, the registry, the geocode cache, and all ids. Retire the
-  hardcoded `DAYS` and `Gyermely` depot (`gyermelyi.ts:22,173`) in favour of
+  hardcoded `DAYS` and the hard-coded depot (`dataset.ts:22,173`) in favour of
   per-tenant datasets; the upload/admit path already proves the pattern, the
   built-ins are the anomaly. Depot comes from dataset config, not a literal.
 - **Secrets**: inject geocoding keys as env/vault values, not by regex-grepping

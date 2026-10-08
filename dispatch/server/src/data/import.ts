@@ -8,7 +8,7 @@ import { config } from '../config.js';
  * the importer enforces. Everything is sourced from the dataset; nothing is
  * invented. Customer-identifying columns are pseudonymized when anonymize is on. */
 
-function ds(rel: string): string { return resolve(config.gyermelyiRoot, rel); }
+function ds(rel: string): string { return resolve(config.datasetRoot, rel); }
 function sha256File(path: string): string | null {
   try { return createHash('sha256').update(readFileSync(path)).digest('hex'); } catch { return null; }
 }
@@ -35,11 +35,14 @@ function parseCsv(text: string): { headers: string[]; rows: string[][] } {
   return { headers, rows: rows.filter((r) => r.some((c) => c.trim() !== '')) };
 }
 
+/* Raw source filenames are dataset-specific (the actual files live under
+ * ${DATASET_ROOT}/raw and may carry a client prefix), so they are env-driven —
+ * no client-named literal in the repo. Point these at your dataset's files. */
 const RAW_FILES: Record<string, { file: string; kind: string; label: string; redactCols: string[] }> = {
-  orders: { file: 'raw/gyermelyi_orders_raw.csv', kind: 'orders', label: 'Orders (Excel export)',
+  orders: { file: process.env.DISPATCH_RAW_ORDERS ?? 'raw/orders_raw.csv', kind: 'orders', label: 'Orders (Excel export)',
     redactCols: ['Szállítási cím megnevezés', 'Kiszállítási cím: utca, házszám'] },
-  vehicles: { file: 'raw/gyermelyi_vehicles_raw.csv', kind: 'vehicles', label: 'Vehicles', redactCols: [] },
-  routes: { file: 'raw/gyermelyi_routes_fact_raw.csv', kind: 'routes', label: 'Historical routes (baseline)', redactCols: [] },
+  vehicles: { file: process.env.DISPATCH_RAW_VEHICLES ?? 'raw/vehicles_raw.csv', kind: 'vehicles', label: 'Vehicles', redactCols: [] },
+  routes: { file: process.env.DISPATCH_RAW_ROUTES ?? 'raw/routes_fact_raw.csv', kind: 'routes', label: 'Historical routes (baseline)', redactCols: [] },
 };
 
 function stablePseudo(s: string): string {
@@ -73,8 +76,10 @@ export function canonicalSample(limit = 8): { fields: string[]; rows: Record<str
   return { fields: show, rows, count: doc.record_count ?? doc.records.length, sha256: doc.source_sha256 ?? null, audit: doc.audit ?? null };
 }
 
-  // The client name appears in raw file paths; strip it when anonymizing.
-  const displayFile = (f: string): string => (config.anonymize ? f.replace(/gyermelyi[_-]?/gi, '') : f);
+// Show a neutral, kind-based filename when anonymizing so no client-specific raw
+// filename leaks to the UI; otherwise show the basename.
+const displayFile = (d: { file: string; kind: string }): string =>
+  config.anonymize ? `${d.kind}.csv` : d.file.replace(/^raw\//, '');
 
 export function importSummary() {
   const sources = Object.values(RAW_FILES).map((d) => {
@@ -82,7 +87,7 @@ export function importSummary() {
     const present = existsSync(path);
     let rawRows = 0;
     if (present) rawRows = parseCsv(readFileSync(path, 'utf8')).rows.length;
-    return { kind: d.kind, label: d.label, file: displayFile(d.file), present, sha256: sha256File(path)?.slice(0, 16) ?? null, rawRows };
+    return { kind: d.kind, label: d.label, file: displayFile(d), present, sha256: sha256File(path)?.slice(0, 16) ?? null, rawRows };
   });
   const canon = canonicalSample(0);
 

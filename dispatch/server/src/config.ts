@@ -16,7 +16,7 @@ function env(name: string, fallback: string): string {
  * - OTTO_ROOT holds the built C binaries (surge_solve) and dataset indexes.
  *   The dispatch worktree reuses the main checkout's artifacts by default, so we
  *   don't rebuild them here.
- * - GYERMELYI_ROOT is the immutable client dataset (never committed).
+ * - DATASET_ROOT is the immutable client dataset (never committed).
  * - CARTA/VELO/SAGE origins are reached over HTTP.
  */
 export const config = {
@@ -44,7 +44,7 @@ export const config = {
   ottoRoot: env('OTTO_ROOT', '/Users/mark/artalis.io/src/otto'),
   surgeBin: env('SURGE_BIN', resolve(env('OTTO_ROOT', '/Users/mark/artalis.io/src/otto'), 'surge/surge_solve')),
 
-  gyermelyiRoot: env('GYERMELYI_ROOT', '/Users/mark/artalis.io/data/gyermelyi'),
+  datasetRoot: env('DATASET_ROOT', '/Users/mark/artalis.io/data/dataset'),
 
   cartaOrigin: env('CARTA_ORIGIN', 'http://127.0.0.1:8097'),
   veloOrigin: env('VELO_ORIGIN', 'http://127.0.0.1:8082'),
@@ -98,7 +98,7 @@ export const config = {
 
   // ---- Data onboarding (upload) ----
   // Where uploaded datasets live (external, never committed).
-  uploadsDir: env('DISPATCH_UPLOADS_DIR', resolve(env('GYERMELYI_ROOT', '/Users/mark/artalis.io/data/gyermelyi'), 'uploads')),
+  uploadsDir: env('DISPATCH_UPLOADS_DIR', resolve(env('DATASET_ROOT', '/Users/mark/artalis.io/data/dataset'), 'uploads')),
   // Nexus engines (ingest.sh, reconcile.py, nx_pipeline) in the main checkout.
   nexusDir: env('NEXUS_DIR', resolve(env('OTTO_ROOT', '/Users/mark/artalis.io/src/otto'), 'nexus')),
   // Upload limits.
@@ -106,7 +106,7 @@ export const config = {
   maxUploadRows: Number(env('DISPATCH_MAX_UPLOAD_ROWS', '50000')),
   ingestTimeoutSec: Number(env('DISPATCH_INGEST_TIMEOUT_SEC', '90')),
   // Geocoding (reuse the dataset cache; keys-if-present else offline).
-  geocodeCacheDir: env('GEOCODE_CACHE_DIR', resolve(env('GYERMELYI_ROOT', '/Users/mark/artalis.io/data/gyermelyi'), '.geocode_cache')),
+  geocodeCacheDir: env('GEOCODE_CACHE_DIR', resolve(env('DATASET_ROOT', '/Users/mark/artalis.io/data/dataset'), '.geocode_cache')),
   geocodePbf: env('GEOCODE_PBF', resolve(env('OTTO_ROOT', '/Users/mark/artalis.io/src/otto'), 'data/hungary-latest.osm.pbf')),
   geocodeEnv: env('GEOCODE_ENV', resolve(env('OTTO_ROOT', '/Users/mark/artalis.io/src/otto'), '.env')),
   geocodeForceOffline: env('DISPATCH_GEOCODE_OFFLINE', '0') === '1', // force cache-only even if keys exist
@@ -136,7 +136,7 @@ export function missingConfigPaths(): MissingPath[] {
     { variable: 'VELO_GRAPH', path: config.veloGraph, feature: 'travel matrix / dataset admit' },
     { variable: 'MATRIX_BUILD_BIN', path: config.matrixBuildBin, feature: 'dataset admit' },
     { variable: 'NEXUS_DIR/nx_pipeline', path: resolve(config.nexusDir, 'nx_pipeline'), feature: 'data onboarding' },
-    { variable: 'GYERMELYI_ROOT', path: config.gyermelyiRoot, feature: 'built-in days + tariff' },
+    { variable: 'DATASET_ROOT', path: config.datasetRoot, feature: 'built-in days + tariff' },
   ];
   return checks.filter((c) => !existsSync(c.path));
 }

@@ -33,7 +33,7 @@ test('Optimize the base day: the live plan is saved, listed in Plans, and reopen
   expectNoErrors(page);
 });
 
-const RAW = join(homedir(), 'artalis.io/data/gyermelyi/raw/gyermelyi_orders_raw.csv');
+const RAW = process.env.DISPATCH_SAMPLE_ORDERS ?? join(homedir(), 'artalis.io/data/dataset/raw/orders_raw.csv');
 
 test('Bring-your-own-data: upload -> admit -> solve the new day', async ({ page }) => {
   test.setTimeout(300_000);

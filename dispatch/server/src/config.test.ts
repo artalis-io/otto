@@ -15,6 +15,6 @@ test('missingConfigPaths: reports dependency paths that do not exist, naming var
     assert.ok(m.feature.length > 0);
   }
   // Every reported var is one of the known external dependencies.
-  const known = new Set(['SURGE_BIN', 'VELO_GRAPH', 'MATRIX_BUILD_BIN', 'NEXUS_DIR/nx_pipeline', 'GYERMELYI_ROOT']);
+  const known = new Set(['SURGE_BIN', 'VELO_GRAPH', 'MATRIX_BUILD_BIN', 'NEXUS_DIR/nx_pipeline', 'DATASET_ROOT']);
   for (const m of missing) assert.ok(known.has(m.variable), `unexpected var ${m.variable}`);
 });

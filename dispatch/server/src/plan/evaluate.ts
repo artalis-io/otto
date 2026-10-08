@@ -1,6 +1,6 @@
 import type { PlanStop, PlanTrip, SurgeRequest } from '../types.js';
-import type { LoadedDay, VehicleInfo } from '../data/gyermelyi.js';
-import { vehicleInfoFor } from '../data/gyermelyi.js';
+import type { LoadedDay, VehicleInfo } from '../data/dataset.js';
+import { vehicleInfoFor } from '../data/dataset.js';
 import { metersToKm } from '../units.js';
 import { makeLeg, waitSec, lateSec } from './schedule.js';
 import { loadTariff, tripCost, type Tariff } from '../cost.js';

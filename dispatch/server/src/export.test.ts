@@ -34,7 +34,7 @@ function mkPlan(): Plan {
       currency: 'HUF', source: 'demo', total: 70000, fixed: 52000, variable: 18000,
       perVehicle: [{ vehicleId: 1, ref: 'TRK-1', vehicleClass: 'SEMI_TRAILER', distanceKm: 42.5, fixedCost: 52000, variableCost: 18000, totalCost: 70000 }],
     },
-    depot: { name: 'Gyermely', lon: 18.7, lat: 47.5 },
+    depot: { name: 'Depot', lon: 18.7, lat: 47.5 },
     vehicles,
     unassigned: [{ orderId: null, orderNo: 'U9', customer: 'Cust U9', city: 'Elsewhere', lon: 20, lat: 47, reason: null, reasonCode: null }],
   };

@@ -83,7 +83,7 @@ Left and right panels collapse via the floating toggles over the map.
 `public/sample-plan.json` is a hand-authored `Plan` (see
 `dispatch/docs/data-api-mapping.md` and `src/types.ts`). Clearly marked as sample
 in-app. Its route geometries are faked with a few coordinates near
-Gyermely/Budapest and do **not** follow real roads — real geometry comes from
+the depot area/Budapest and do **not** follow real roads — real geometry comes from
 Velo via the backend, cached per plan.
 ```
 ```

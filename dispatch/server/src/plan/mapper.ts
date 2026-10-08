@@ -3,8 +3,8 @@ import type {
   Plan, PlanStop, PlanTrip, PlanVehicle, PlanUnassigned, PlanCost, PlanVehicleCost,
   SurgeRequest, SurgeSolution, SurgeTask, SurgeRequestDef, UnassignedReason,
 } from '../types.js';
-import type { LoadedDay, OrderInfo, VehicleInfo } from '../data/gyermelyi.js';
-import { vehicleInfoFor } from '../data/gyermelyi.js';
+import type { LoadedDay, OrderInfo, VehicleInfo } from '../data/dataset.js';
+import { vehicleInfoFor } from '../data/dataset.js';
 import { colorForIndex } from '../colors.js';
 import { metersToKm } from '../units.js';
 import { makeLeg, waitSec, lateSec } from './schedule.js';

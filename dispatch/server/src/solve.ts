@@ -2,7 +2,7 @@ import { spawn, type ChildProcess } from 'node:child_process';
 import { mkdirSync, writeFileSync, rmSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { config } from './config.js';
-import { loadDay, loadEnrichment, loadVehicleInfo, DAYS } from './data/gyermelyi.js';
+import { loadDay, loadEnrichment, loadVehicleInfo, DAYS } from './data/dataset.js';
 import { mapSolutionToPlan } from './plan/mapper.js';
 import { fillPlanGeometry } from './geometry/velo.js';
 import { store, type Job, type Scenario } from './store.js';

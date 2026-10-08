@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 
 import { evaluateTrip } from './evaluate.js';
 import type { SurgeRequest, SurgeTask } from '../types.js';
-import type { LoadedDay, OrderInfo, VehicleInfo } from '../data/gyermelyi.js';
+import type { LoadedDay, OrderInfo, VehicleInfo } from '../data/dataset.js';
 import type { Tariff } from '../cost.js';
 
 /* 4 locations: 0 = depot, 1/2/3 = customers. Asymmetric matrix with known legs

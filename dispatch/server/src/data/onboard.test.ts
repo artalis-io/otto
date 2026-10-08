@@ -81,7 +81,7 @@ test('suggestMapping: auto-maps Hungarian headers to canonical fields', () => {
 });
 
 const RECONCILE_OK = `--- reconciliation gate ---
-=== gyermelyi_orders_raw.csv  (schema onboard-orders) ===
+=== orders_raw.csv  (schema onboard-orders) ===
   provenance sha256 : OK
   rows reconciled   : 332  (Stage B rejects skipped: 0)
   fields verified   : 3  ['city', 'customer', 'order_no']

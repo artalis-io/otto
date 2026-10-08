@@ -1,5 +1,5 @@
 {
-  "_comment": "SAMPLE PLAN — hand-authored, NOT a real solve. Matches the the backend->frontend Plan contract in dispatch/docs/data-api-mapping.md so the scaffold renders with no backend. Geometry LineStrings are faked with a handful of coordinates near Gyermely/Budapest (~47.6, 18.6); they do not follow real roads. Replace by fetching GET /api/plans/:id once the backend is wired.",
+  "_comment": "SAMPLE PLAN — hand-authored, NOT a real solve. Matches the the backend->frontend Plan contract in dispatch/docs/data-api-mapping.md so the scaffold renders with no backend. Geometry LineStrings are faked with a handful of coordinates near the depot/Budapest (~47.6, 18.6); they do not follow real roads. Replace by fetching GET /api/plans/:id once the backend is wired.",
   "id": "pln_sample",
   "scenarioId": "scn_sample",
   "scenarioRevision": 1,
@@ -29,7 +29,7 @@
     "totalDistanceKm": 486,
     "solveElapsedSeconds": 3.7
   },
-  "depot": { "name": "Gyermely", "lon": 18.6441461, "lat": 47.6039649 },
+  "depot": { "name": "Depot", "lon": 18.6441461, "lat": 47.6039649 },
   "vehicles": [
     {
       "id": 1,
@@ -52,7 +52,7 @@
           "reloadSecAfter": 1800,
           "stops": [
             {
-              "orderId": "gyermelyi-258486-40758",
+              "orderId": "sample-258486-40758",
               "orderNo": "258486",
               "customer": "Tesco Budaors",
               "city": "Budaors",
@@ -71,7 +71,7 @@
               "lateBySec": 0
             },
             {
-              "orderId": "gyermelyi-258490-40761",
+              "orderId": "sample-258490-40761",
               "orderNo": "258490",
               "customer": "Auchan Budaors",
               "city": "Budaors",
@@ -110,7 +110,7 @@
           "reloadSecAfter": 0,
           "stops": [
             {
-              "orderId": "gyermelyi-258501-40770",
+              "orderId": "sample-258501-40770",
               "orderNo": "258501",
               "customer": "Spar Tatabanya",
               "city": "Tatabanya",
@@ -164,7 +164,7 @@
           "reloadSecAfter": 0,
           "stops": [
             {
-              "orderId": "gyermelyi-258512-40781",
+              "orderId": "sample-258512-40781",
               "orderNo": "258512",
               "customer": "CBA Esztergom",
               "city": "Esztergom",
@@ -183,7 +183,7 @@
               "lateBySec": 0
             },
             {
-              "orderId": "gyermelyi-258520-40788",
+              "orderId": "sample-258520-40788",
               "orderNo": "258520",
               "customer": "Coop Dorog",
               "city": "Dorog",
@@ -202,7 +202,7 @@
               "lateBySec": 0
             },
             {
-              "orderId": "gyermelyi-258533-40795",
+              "orderId": "sample-258533-40795",
               "orderNo": "258533",
               "customer": "Penny Tat",
               "city": "Tat",
@@ -257,7 +257,7 @@
           "reloadSecAfter": 0,
           "stops": [
             {
-              "orderId": "gyermelyi-258544-40802",
+              "orderId": "sample-258544-40802",
               "orderNo": "258544",
               "customer": "Lidl Bicske",
               "city": "Bicske",
@@ -276,7 +276,7 @@
               "lateBySec": 0
             },
             {
-              "orderId": "gyermelyi-258559-40811",
+              "orderId": "sample-258559-40811",
               "orderNo": "258559",
               "customer": "Aldi Tatabanya",
               "city": "Tatabanya",
@@ -313,7 +313,7 @@
   ],
   "unassigned": [
     {
-      "orderId": "gyermelyi-258571-40820",
+      "orderId": "sample-258571-40820",
       "orderNo": "258571",
       "customer": "Metro Budapest XI",
       "reason": "no feasible vehicle within time window"

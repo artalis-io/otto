@@ -5,7 +5,7 @@ import { existsSync, createWriteStream, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { pipeline } from 'node:stream/promises';
 import { config, missingConfigPaths } from './config.js';
-import { DAYS, allDayIds, loadDay, loadEnrichment, loadVehicleInfo } from './data/gyermelyi.js';
+import { DAYS, allDayIds, loadDay, loadEnrichment, loadVehicleInfo } from './data/dataset.js';
 import { admitDataset } from './data/admit.js';
 import { allDatasets, unregisterDataset } from './data/registry.js';
 import { mapSolutionToPlan } from './plan/mapper.js';

@@ -1,6 +1,6 @@
 # OTTO Dispatch — Data & API mapping
 
-This slice is a dispatch-planning workspace over the **Gyermelyi** dataset, with
+This slice is a dispatch-planning workspace over a sample logistics dataset, with
 **Surge** as the optimization backend, **Carta** for tiles, **Velo** for road
 geometry, and a thin app backend (`dispatch/server`). This document is the contract
 the frontend codes against and the mapping from source data + Surge output into
@@ -22,7 +22,7 @@ work runs off the backend's event loop by construction). Geometry is fetched fro
 
 ## Source data (immutable; NOT in repo)
 
-Root: `/Users/mark/artalis.io/data/gyermelyi/` (client data, deliberately
+Root: `/Users/mark/artalis.io/data/dataset/` (client data, deliberately
 uncommitted). the backend reads it read-only; scenario edits never touch it.
 
 - **Planning days**: `2026-05-06` (Day 1: 117 orders, 11 vehicles) and
@@ -31,8 +31,8 @@ uncommitted). the backend reads it read-only; scenario edits never touch it.
   that day's vehicles): `results/perday/day{1,2}_request.json`.
 - **Per-day saved real solution** (baseline plan): `results/perday/day{1,2}_solution.json`.
 - **Human order table**: `deliverables/inputs/orders_in_scope.csv`.
-- **Raw Excel-origin CSVs** (for the import view): `raw/gyermelyi_orders_raw.csv`,
-  `raw/gyermelyi_vehicles_raw.csv`, `raw/gyermelyi_routes_fact_raw.csv`.
+- **Raw Excel-origin CSVs** (for the import view): `raw/orders_raw.csv`,
+  `raw/vehicles_raw.csv`, `raw/routes_fact_raw.csv`.
 - **Canonical (Nexus output)**: `input/orders.json`, `input/vehicles.json`,
   `input/orders.geojson`. Provenance via `source_sha256` + audit (Nexus).
 
@@ -46,7 +46,7 @@ uncommitted). the backend reads it read-only; scenario edits never touch it.
 - **Time**: Surge JSON is **seconds-from-midnight** (e.g. 18000 = 05:00). CSVs are
   `HH:MM` local (Hungary). Display as `HH:MM`.
 - **Distance/duration**: Surge + matrix are **meters / seconds**. Show km / min.
-- **Join key**: order `id` (e.g. `gyermelyi-258486-40758`, with `#n` suffix for
+- **Join key**: order `id` (e.g. `sample-258486-40758`, with `#n` suffix for
   repeats). Never join on `order_no` alone (not unique).
 
 ## Surge solution → Plan mapping
@@ -81,7 +81,7 @@ Plan {
     "trips": 17, "vehiclesUsed": 11,
     "totalDistanceKm": 3860, "solveElapsedSeconds": 12.3
   },
-  "depot": { "name": "Gyermely", "lon": 18.6441461, "lat": 47.6039649 },
+  "depot": { "name": "Depot", "lon": 18.6441461, "lat": 47.6039649 },
   "vehicles": [ {
     "id": 1, "ref": "RIC-124", "class": "tractor_trailer", "color": "#2e7d5b",
     "capacityKg": 24000, "capacityPallets": 50,
@@ -91,7 +91,7 @@ Plan {
     "trips": [ {
       "index": 0, "startSec": 18000, "endSec": 29000, "distanceKm": 150, "reloadSecAfter": 1800,
       "stops": [ {
-        "orderId": "gyermelyi-…", "orderNo": "258486", "customer": "…", "city": "…",
+        "orderId": "sample-…", "orderNo": "258486", "customer": "…", "city": "…",
         "lon": 18.9, "lat": 47.4, "seq": 1,
         "type": "delivery", "arrivalSec": 18650, "serviceStartSec": 18650, "departureSec": 20450,
         "twStartSec": 18000, "twEndSec": 30600, "pallets": 12.5, "weightKg": 8400, "serviceMin": 30,
