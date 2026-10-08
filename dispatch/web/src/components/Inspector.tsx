@@ -7,8 +7,9 @@ import { hhmm, km, money, pct, ratio } from '@/lib/format';
 import { setDraggedOrder, isOrderDrag, readDraggedOrder } from '@/lib/dnd';
 import { violationDetail } from '@/lib/violations';
 import { NarrationPanel } from '@/components/NarrationPanel';
+import { api } from '@/lib/api';
 import { useT } from '@/i18n';
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import type { Plan, Scenario, Selection, Vehicle, Trip, Stop, ValidationViolation, VehicleConstraintPatch } from '@/types';
 
 function Field({ label, value, warn }: { label: string; value: string; warn?: boolean }) {
@@ -85,7 +86,31 @@ function reorderTripStops(trip: Trip, orderNos: string[]): Trip {
   return { ...trip, stops };
 }
 
-function TripDetail({ trip, vehicle, currency, onSelectStop, canDrag, onResequence, pending }: { trip: Trip; vehicle: Vehicle; currency: string; onSelectStop: (seq: number) => void; canDrag?: boolean; onResequence?: (newOrderNos: string[]) => void; pending?: boolean }) {
+/* Recompute a reordered trip's schedule/distance/cost on the backend (which holds
+ * the travel matrix + tariff), without a re-solve. Returns the recomputed trip
+ * once ready, so the Inspector shows real preview numbers instead of blanks. The
+ * request is keyed by the proposed order; a stale response is dropped. */
+function useReorderPreview(
+  planId: string, vehicleId: number, base: Trip | undefined, orderNos: string[], enabled: boolean,
+): { trip: Trip | null; loading: boolean } {
+  const [trip, setTrip] = useState<Trip | null>(null);
+  const [loading, setLoading] = useState(false);
+  const key = enabled && base ? `${planId}|${vehicleId}|${base.index}|${orderNos.join(',')}` : '';
+  const latest = useRef('');
+  useEffect(() => {
+    latest.current = key;
+    if (!key || !base) { setTrip(null); setLoading(false); return; }
+    setLoading(true);
+    let cancelled = false;
+    api.evaluateTrip(planId, { vehicleId, tripIndex: base.index, startSec: base.startSec, reloadSecAfter: base.reloadSecAfter, orderNos })
+      .then((r) => { if (!cancelled && latest.current === key) { setTrip(r.trip); setLoading(false); } })
+      .catch(() => { if (!cancelled && latest.current === key) { setTrip(null); setLoading(false); } });
+    return () => { cancelled = true; };
+  }, [key]); // eslint-disable-line react-hooks/exhaustive-deps
+  return { trip, loading };
+}
+
+function TripDetail({ trip, vehicle, currency, onSelectStop, canDrag, onResequence, pending, preview }: { trip: Trip; vehicle: Vehicle; currency: string; onSelectStop: (seq: number) => void; canDrag?: boolean; onResequence?: (newOrderNos: string[]) => void; pending?: boolean; preview?: boolean }) {
   const t = useT();
   const why = routeRationale(trip);
   const [overSeq, setOverSeq] = useState<number | null>(null);
@@ -111,9 +136,9 @@ function TripDetail({ trip, vehicle, currency, onSelectStop, canDrag, onResequen
   const dash = '–';
   return (
     <div className="space-y-2">
-      {pending && (
+      {(pending || preview) && (
         <div className="flex items-center gap-1 rounded border border-primary/40 bg-primary/5 px-2 py-1 text-[10px] text-primary">
-          <ListOrdered className="h-3 w-3" /> {t('inspector.reorderPending')}
+          <ListOrdered className="h-3 w-3" /> {t(preview ? 'inspector.reorderPreview' : 'inspector.reorderPending')}
         </div>
       )}
       <Field label={t('inspector.window')} value={pending ? dash : `${hhmm(trip.startSec)}–${hhmm(trip.endSec)}`} />
@@ -166,6 +191,30 @@ function TripDetail({ trip, vehicle, currency, onSelectStop, canDrag, onResequen
         })}
       </ol>
     </div>
+  );
+}
+
+/* Trip view = TripDetail plus the live reorder-preview fetch. While a reorder is
+ * pending we ask the backend to recompute the trip (it has the matrix + tariff);
+ * until it answers we blank the order-dependent numbers (pending), then show the
+ * recomputed ones (preview). The preview trip's stop `seq` is realigned to the
+ * solved trip by order number so stop selection stays stable. */
+function TripView({ planId, vehicle, trip, displayTrip, reorderPending, currency, canDrag, onSelectStop, onResequence }: {
+  planId: string; vehicle: Vehicle; trip: Trip; displayTrip: Trip; reorderPending: boolean;
+  currency: string; canDrag?: boolean; onSelectStop: (seq: number) => void; onResequence?: (newOrderNos: string[]) => void;
+}) {
+  const orderNos = displayTrip.stops.map((s) => s.orderNo);
+  const { trip: previewTrip } = useReorderPreview(planId, vehicle.id, trip, orderNos, reorderPending);
+  const ready = reorderPending && !!previewTrip;
+  let show = displayTrip;
+  if (ready && previewTrip) {
+    const seqByOrder = new Map(trip.stops.map((s) => [s.orderNo, s.seq]));
+    show = { ...previewTrip, stops: previewTrip.stops.map((s) => ({ ...s, seq: seqByOrder.get(s.orderNo) ?? s.seq })) };
+  }
+  return (
+    <TripDetail trip={show} vehicle={vehicle} currency={currency} canDrag={canDrag}
+      onSelectStop={onSelectStop} onResequence={onResequence}
+      pending={reorderPending && !ready} preview={ready} />
   );
 }
 
@@ -453,7 +502,7 @@ export function Inspector({ plan, scenario, selection, onSelect, onBack, onForwa
           <div className="space-y-3 p-3">
             <TabsContent value="details" className="mt-0 space-y-3">
               {stop ? <StopDetail stop={stop} vehicle={vehicle} />
-                : trip && displayTrip ? <TripDetail trip={displayTrip} vehicle={vehicle} currency={currency} canDrag={!solving} pending={reorderPending}
+                : trip && displayTrip ? <TripView planId={plan.id} trip={trip} displayTrip={displayTrip} reorderPending={reorderPending} vehicle={vehicle} currency={currency} canDrag={!solving}
                     onSelectStop={(seq) => onSelect({ kind: 'stop', vehicleId: vehicle.id, tripIndex: trip.index, seq })}
                     onResequence={onSetSequence ? (newOrderNos) => {
                       // the vehicle's full manual order = each trip's stops (in their

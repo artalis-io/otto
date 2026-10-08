@@ -113,3 +113,41 @@ test('handoff.json serves a structured dispatch plan', async () => {
   assert.equal(h.otto_dispatch_plan, 1);
   assert.ok(Array.isArray(h.routes) && h.routes.length > 0);
 });
+
+test('evaluate recomputes a reordered trip without a re-solve', async () => {
+  type Stop = { orderNo: string };
+  type Trip = { index: number; stops: Stop[]; distanceKm: number };
+  type Veh = { id: number; trips: Trip[] };
+  const planR = await inj({ method: 'GET', url: '/api/plans/day1-baseline' });
+  assert.equal(planR.statusCode, 200);
+  const plan = planR.json() as { vehicles: Veh[] };
+  // find a vehicle whose first trip has >= 2 stops (so a reorder is meaningful)
+  const veh = plan.vehicles.find((v) => v.trips[0] && v.trips[0].stops.length >= 2);
+  assert.ok(veh, 'expected a multi-stop trip in the baseline');
+  const trip = veh!.trips[0]!;
+  const orders = trip.stops.map((s) => s.orderNo);
+
+  // same order reproduces the stop set; reversed order is accepted and recomputed
+  const same = await inj({ method: 'POST', url: '/api/plans/day1-baseline/evaluate', payload: { vehicleId: veh!.id, tripIndex: trip.index, orderNos: orders } });
+  assert.equal(same.statusCode, 200);
+  const sameTrip = (same.json() as { trip: Trip }).trip;
+  assert.equal(sameTrip.stops.length, orders.length);
+  assert.deepEqual(sameTrip.stops.map((s) => s.orderNo), orders);
+
+  const rev = await inj({ method: 'POST', url: '/api/plans/day1-baseline/evaluate', payload: { vehicleId: veh!.id, tripIndex: trip.index, orderNos: [...orders].reverse() } });
+  assert.equal(rev.statusCode, 200);
+  const revTrip = (rev.json() as { trip: Trip }).trip;
+  assert.deepEqual(revTrip.stops.map((s) => s.orderNo), [...orders].reverse());
+});
+
+test('evaluate validates its body (404 unknown plan, 400 bad order set)', async () => {
+  const nf = await inj({ method: 'POST', url: '/api/plans/nope/evaluate', payload: { vehicleId: 1, orderNos: ['x'] } });
+  assert.equal(nf.statusCode, 404);
+  const noVeh = await inj({ method: 'POST', url: '/api/plans/day1-baseline/evaluate', payload: { orderNos: ['x'] } });
+  assert.equal(noVeh.statusCode, 400);
+  const planR = await inj({ method: 'GET', url: '/api/plans/day1-baseline' });
+  const plan = planR.json() as { vehicles: { id: number }[] };
+  // real vehicle but orders that are not a permutation of the trip -> 400
+  const badOrders = await inj({ method: 'POST', url: '/api/plans/day1-baseline/evaluate', payload: { vehicleId: plan.vehicles[0]!.id, tripIndex: 0, orderNos: ['definitely-not-an-order'] } });
+  assert.equal(badOrders.statusCode, 400);
+});

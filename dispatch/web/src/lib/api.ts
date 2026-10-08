@@ -1,4 +1,4 @@
-import type { Comparison, DaySummary, Job, Objective, Plan, Scenario, ScenarioEdit } from '@/types';
+import type { Comparison, DaySummary, Job, Objective, Plan, Scenario, ScenarioEdit, Trip } from '@/types';
 
 /* Same-origin API client. In dev, Vite proxies /api and /tiles to the backend
  * (VITE_API_ORIGIN); in production the backend serves the SPA and these paths. */
@@ -51,6 +51,9 @@ async function jsend<T>(url: string, method: string, body?: unknown): Promise<T>
 export const api = {
   days: () => jget<DaySummary[]>('/api/days'),
   plan: (id: string) => jget<Plan>(`/api/plans/${id}`),
+  /** Recompute one vehicle trip under a proposed stop order (no re-solve). */
+  evaluateTrip: (planId: string, body: { vehicleId: number; tripIndex: number; startSec: number; reloadSecAfter: number; orderNos: string[] }) =>
+    jsend<{ trip: Trip }>(`/api/plans/${planId}/evaluate`, 'POST', body),
   scenario: (id: string) => jget<Scenario & { ordersInScope: number; vehicleCount: number; isoDate: string }>(`/api/scenarios/${id}`),
 
   config: () => jget<{ carta: string; velo: string; solveTimeSeconds: number; cost: { available: boolean; currency: string; source: 'demo' | 'external' } }>('/api/config'),

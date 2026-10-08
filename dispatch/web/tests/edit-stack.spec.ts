@@ -98,8 +98,9 @@ test.describe('staged edit stack', () => {
 
     await expect(page.getByText('Optimizing')).toHaveCount(0);
     await expect(page.getByText(/staged change/)).toBeVisible();
-    // the reorder is reflected in the list immediately + a pending hint shows
-    await expect(page.locator('aside').last().getByText(/Reordered/)).toBeVisible();
+    // the reorder is reflected in the list immediately + a hint shows: first the
+    // "Reordered" pending note, then (once the backend recomputes) a "Preview".
+    await expect(page.locator('aside').last().getByText(/Reordered|Preview/)).toBeVisible();
     const firstStop = page.locator('aside').last().locator('ol li').first();
     await expect(firstStop).toContainText(/^1\./); // renumbered to the new position
     await page.getByRole('button', { name: /Changes/ }).click();

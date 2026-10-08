@@ -9,6 +9,7 @@ import { DAYS, allDayIds, loadDay, loadEnrichment, loadVehicleInfo } from './dat
 import { admitDataset } from './data/admit.js';
 import { allDatasets, unregisterDataset } from './data/registry.js';
 import { mapSolutionToPlan } from './plan/mapper.js';
+import { evaluateTrip } from './plan/evaluate.js';
 import { fillPlanGeometry, veloReachable } from './geometry/velo.js';
 import { store, validateScenarioEdit, exportScenario, parseScenarioImport, type ScenarioEdit } from './store.js';
 import { enqueueSolve, cancelJob, hasSolveCapacity, type Objective } from './solve.js';
@@ -340,6 +341,42 @@ app.get<{ Params: { id: string } }>('/api/plans/:id/handoff.json', async (req, r
   reply.header('content-disposition', `attachment; filename="otto-dispatch-plan-${plan.day}.json"`);
   return planToHandoffJson(plan, plan.day);
 });
+
+/* Live re-evaluation of one vehicle trip under a proposed stop order, WITHOUT a
+ * re-solve. The browser lacks the N^2 travel matrix and the (confidential) tariff,
+ * so it posts the proposed order here and gets back the recomputed trip (times,
+ * distance, cost) for an honest reorder preview. See plan/evaluate.ts. */
+app.post<{ Params: { id: string }; Body: { vehicleId?: number; tripIndex?: number; startSec?: number; reloadSecAfter?: number; orderNos?: unknown } }>(
+  '/api/plans/:id/evaluate', async (req, reply) => {
+    const plan = store.getPlan(req.params.id);
+    if (!plan) return reply.code(404).send({ error: 'plan not found' });
+    const b = req.body ?? {};
+    if (typeof b.vehicleId !== 'number') return reply.code(400).send({ error: 'vehicleId required' });
+    if (!Array.isArray(b.orderNos) || b.orderNos.length === 0 || b.orderNos.length > 500 || !b.orderNos.every((o) => typeof o === 'string'))
+      return reply.code(400).send({ error: 'orderNos must be a non-empty string[] (<=500)' });
+    const vehicle = plan.vehicles.find((v) => v.id === b.vehicleId);
+    if (!vehicle) return reply.code(404).send({ error: 'vehicle not in plan' });
+    const tripIndex = typeof b.tripIndex === 'number' ? b.tripIndex : 0;
+    const srcTrip = vehicle.trips.find((tr) => tr.index === tripIndex) ?? vehicle.trips[0];
+    // the proposed order must be a permutation of the trip's existing orders
+    const have = new Set((srcTrip?.stops ?? []).map((s) => s.orderNo));
+    const want = b.orderNos as string[];
+    if (!srcTrip || want.length !== have.size || !want.every((o) => have.has(o)))
+      return reply.code(400).send({ error: 'orderNos must be a permutation of the trip stops' });
+    // plan.day is the ISO date; loadDay wants the day id (builtin or uploaded).
+    const dayId = allDayIds().find((d) => d.isoDate === plan.day)?.id;
+    if (!dayId) return reply.code(404).send({ error: 'day not found for plan' });
+    const day = loadDay(dayId);
+    const trip = evaluateTrip({
+      day, request: day.request, vehicleId: b.vehicleId, tripIndex: srcTrip.index,
+      startSec: typeof b.startSec === 'number' ? b.startSec : srcTrip.startSec,
+      tripCountOnVehicle: vehicle.trips.length,
+      reloadSecAfter: typeof b.reloadSecAfter === 'number' ? b.reloadSecAfter : srcTrip.reloadSecAfter,
+      orderNos: want, vehicleInfo,
+    });
+    return { trip };
+  },
+);
 
 app.get<{ Querystring: { base?: string; revised?: string } }>('/api/compare', async (req, reply) => {
   const base = req.query.base ? store.getPlan(req.query.base) : undefined;
