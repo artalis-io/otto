@@ -98,6 +98,10 @@ test.describe('staged edit stack', () => {
 
     await expect(page.getByText('Optimizing')).toHaveCount(0);
     await expect(page.getByText(/staged change/)).toBeVisible();
+    // the reorder is reflected in the list immediately + a pending hint shows
+    await expect(page.locator('aside').last().getByText(/Reordered/)).toBeVisible();
+    const firstStop = page.locator('aside').last().locator('ol li').first();
+    await expect(firstStop).toContainText(/^1\./); // renumbered to the new position
     await page.getByRole('button', { name: /Changes/ }).click();
     await expect(page.getByRole('dialog').getByText('Stop order')).toBeVisible();
     expectNoErrors(page);

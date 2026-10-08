@@ -1,4 +1,4 @@
-import { Ban, CheckCircle2, AlertTriangle, Pin, PinOff, X, RotateCcw, SlidersHorizontal, ChevronRight, ArrowLeft, ArrowRight, Lock, LockOpen, GripVertical } from 'lucide-react';
+import { Ban, CheckCircle2, AlertTriangle, Pin, PinOff, X, RotateCcw, SlidersHorizontal, ChevronRight, ArrowLeft, ArrowRight, Lock, LockOpen, GripVertical, ListOrdered } from 'lucide-react';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { Badge } from '@/components/ui/badge';
@@ -76,7 +76,16 @@ function routeRationale(trip: Trip): { windowDriven: boolean; tight: number; lat
   return { windowDriven: windowed >= Math.ceil(trip.stops.length / 2), tight, late, waits };
 }
 
-function TripDetail({ trip, vehicle, currency, onSelectStop, canDrag, onResequence }: { trip: Trip; vehicle: Vehicle; currency: string; onSelectStop: (seq: number) => void; canDrag?: boolean; onResequence?: (newOrderNos: string[]) => void }) {
+/* Reorder a trip's stops to match a staged sequence (order numbers), stable for
+ * any stop not named in it. Used to reflect a drag-reorder in the list before
+ * Replan (the plan itself only changes on Replan). */
+function reorderTripStops(trip: Trip, orderNos: string[]): Trip {
+  const pos = new Map(orderNos.map((o, i) => [o, i]));
+  const stops = [...trip.stops].sort((a, b) => (pos.get(a.orderNo) ?? Infinity) - (pos.get(b.orderNo) ?? Infinity));
+  return { ...trip, stops };
+}
+
+function TripDetail({ trip, vehicle, currency, onSelectStop, canDrag, onResequence, pending }: { trip: Trip; vehicle: Vehicle; currency: string; onSelectStop: (seq: number) => void; canDrag?: boolean; onResequence?: (newOrderNos: string[]) => void; pending?: boolean }) {
   const t = useT();
   const why = routeRationale(trip);
   const [overSeq, setOverSeq] = useState<number | null>(null);
@@ -117,13 +126,18 @@ function TripDetail({ trip, vehicle, currency, onSelectStop, canDrag, onResequen
         )}
       </div>
       <Separator />
+      {pending && (
+        <div className="flex items-center gap-1 rounded border border-primary/40 bg-primary/5 px-2 py-1 text-[10px] text-primary">
+          <ListOrdered className="h-3 w-3" /> {t('inspector.reorderPending')}
+        </div>
+      )}
       {canDrag && (
         <div className="flex items-center gap-1 text-[10px] text-muted-foreground">
           <GripVertical className="h-3 w-3" /> {t(onResequence ? 'inspector.dragStop' : 'inspector.dragToReassign')}
         </div>
       )}
       <ol className="space-y-0.5">
-        {trip.stops.map((s) => {
+        {trip.stops.map((s, i) => {
           const reorderable = canDrag && !!onResequence;
           return (
             <li key={s.seq}
@@ -137,7 +151,7 @@ function TripDetail({ trip, vehicle, currency, onSelectStop, canDrag, onResequen
                 className={`flex w-full items-baseline justify-between gap-2 rounded px-1 py-1 text-left text-xs hover:bg-accent ${canDrag ? 'cursor-grab active:cursor-grabbing' : ''}`}>
                 <span className="flex min-w-0 items-baseline truncate">
                   {canDrag && <GripVertical className="mr-0.5 h-3 w-3 shrink-0 self-center text-muted-foreground/60" />}
-                  <span className="tnum text-muted-foreground">{s.seq}.</span>&nbsp;{s.customer ?? s.orderNo}
+                  <span className="tnum text-muted-foreground">{i + 1}.</span>&nbsp;{s.customer ?? s.orderNo}
                   <span className="tnum ml-1 text-[10px] text-muted-foreground">+{Math.round(s.travelToSec / 60)}m</span>
                 </span>
                 <span className="tnum shrink-0 text-muted-foreground">{hhmm(s.arrivalSec)}{s.lateBySec > 0 && <span className="ml-1 text-warning">+{Math.round(s.lateBySec / 60)}m</span>}</span>
@@ -401,6 +415,12 @@ export function Inspector({ plan, scenario, selection, onSelect, onBack, onForwa
   const trip = selection && (selection.kind === 'trip' || selection.kind === 'stop')
     ? vehicle.trips.find((t) => t.index === selection.tripIndex) : undefined;
   const stop = selection?.kind === 'stop' && trip ? trip.stops.find((s) => s.seq === selection.seq) : undefined;
+  // Reflect a staged reorder/lock in the stop list (the plan only updates on Replan).
+  const stagedSeq = scenario.sequences.find((q) => q.vehicleId === vehicle.id);
+  const displayTrip = trip && stagedSeq ? reorderTripStops(trip, stagedSeq.orderNos) : trip;
+  // This trip is "pending" if a reorder (not a lock) changed its displayed order.
+  const reorderPending = !!displayTrip && !!trip && !stagedSeq?.locked
+    && displayTrip.stops.some((s, i) => s.orderNo !== trip.stops[i]?.orderNo);
 
   return (
     <Panel nav={nav}>
@@ -428,11 +448,14 @@ export function Inspector({ plan, scenario, selection, onSelect, onBack, onForwa
           <div className="space-y-3 p-3">
             <TabsContent value="details" className="mt-0 space-y-3">
               {stop ? <StopDetail stop={stop} vehicle={vehicle} />
-                : trip ? <TripDetail trip={trip} vehicle={vehicle} currency={currency} canDrag={!solving}
+                : trip && displayTrip ? <TripDetail trip={displayTrip} vehicle={vehicle} currency={currency} canDrag={!solving} pending={reorderPending}
                     onSelectStop={(seq) => onSelect({ kind: 'stop', vehicleId: vehicle.id, tripIndex: trip.index, seq })}
                     onResequence={onSetSequence ? (newOrderNos) => {
-                      // the vehicle's full manual order = each trip's stops, with THIS trip reordered
-                      const full = vehicle.trips.flatMap((tr) => (tr.index === trip.index ? newOrderNos : tr.stops.map((s) => s.orderNo)));
+                      // the vehicle's full manual order = each trip's stops (in their
+                      // displayed/staged order), with THIS trip set to the new order
+                      const full = vehicle.trips.flatMap((tr) => (tr.index === trip.index
+                        ? newOrderNos
+                        : (stagedSeq ? reorderTripStops(tr, stagedSeq.orderNos) : tr).stops.map((s) => s.orderNo)));
                       onSetSequence(vehicle.id, full);
                     } : undefined} />
                   : <VehicleSummary vehicle={vehicle} plan={plan} onSelectTrip={(i) => onSelect({ kind: 'trip', vehicleId: vehicle.id, tripIndex: i })} />}
