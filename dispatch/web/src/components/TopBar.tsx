@@ -100,39 +100,29 @@ export function TopBar({
         </Badge>
       )}
 
-      <div className="ml-auto flex items-center gap-2">
-        <Button variant="graphite" size="sm" className={`border ${issuesCount > 0 ? 'border-warning/60 text-warning' : 'border-white/15'}`} onClick={onOpenIssues} title={t('issues.title')}>
-          <AlertTriangle className="h-4 w-4" /> {t('topbar.issues')}{issuesCount > 0 ? ` · ${issuesCount}` : ''}
-        </Button>
-        <Button variant="graphite" size="sm" className="border border-white/15" onClick={onOpenScenarios} title={t('scenarios.title')}>
-          <GitBranch className="h-4 w-4" /> {t('topbar.scenarios')}
-        </Button>
-        <Button variant="graphite" size="sm" className="border border-white/15" onClick={onOpenWeek} title={t('week.title')}>
-          <CalendarRange className="h-4 w-4" /> {t('topbar.week')}
-        </Button>
-        <Button variant="graphite" size="sm" className="border border-white/15" onClick={onOpenHistory} title={t('history.title')}>
-          <History className="h-4 w-4" /> {t('topbar.plans')}
-        </Button>
-        <Button variant="graphite" size="sm" className="border border-white/15" onClick={onOpenImport} title={t('import.title')}>
-          <Database className="h-4 w-4" /> {t('topbar.data')}
-        </Button>
-        <Button variant="graphite" size="icon" className="h-8 w-8 border border-white/15" onClick={onOpenHelp} title={t('help.title')} aria-label={t('help.title')}>
-          <HelpCircle className="h-4 w-4" />
-        </Button>
+      <div className="ml-auto flex items-center gap-1.5">
+        {/* Navigation / panels: icon-only toolbar (labels via tooltip + aria-label) */}
+        <div className="flex items-center gap-1">
+          <IconButton onClick={onOpenIssues} label={t('topbar.issues')} warn={issuesCount > 0} count={issuesCount}><AlertTriangle className="h-4 w-4" /></IconButton>
+          <IconButton onClick={onOpenScenarios} label={t('topbar.scenarios')}><GitBranch className="h-4 w-4" /></IconButton>
+          <IconButton onClick={onOpenWeek} label={t('topbar.week')}><CalendarRange className="h-4 w-4" /></IconButton>
+          <IconButton onClick={onOpenHistory} label={t('topbar.plans')}><History className="h-4 w-4" /></IconButton>
+          <IconButton onClick={onOpenImport} label={t('topbar.data')}><Database className="h-4 w-4" /></IconButton>
+          <IconButton onClick={onOpenHelp} label={t('help.title')}><HelpCircle className="h-4 w-4" /></IconButton>
+        </div>
+
+        <div className="h-6 w-px bg-white/10" />
+
         {changesCount > 0 && (
           <Button variant="graphite" size="sm" className={`border ${dirty ? 'border-warning/60 text-warning' : 'border-white/15'}`} onClick={onOpenChanges}>
             <SlidersHorizontal className="h-4 w-4" /> {t('topbar.changes')} <span className="tnum rounded bg-white/15 px-1 text-[10px]">{changesCount}</span>
           </Button>
         )}
         {showCompare && (
-          <Button variant="graphite" size="sm" className="border border-white/15" onClick={onCompare} disabled={solving}>
-            <GitCompareArrows className="h-4 w-4" /> {t('topbar.compare')}
-          </Button>
+          <IconButton onClick={onCompare} disabled={solving} label={t('topbar.compare')}><GitCompareArrows className="h-4 w-4" /></IconButton>
         )}
         {isReplan && (
-          <Button variant="graphite" size="sm" className="border border-white/15" onClick={onReset} disabled={solving}>
-            <RotateCcw className="h-4 w-4" /> {t('topbar.reset')}
-          </Button>
+          <IconButton onClick={onReset} disabled={solving} label={t('topbar.reset')}><RotateCcw className="h-4 w-4" /></IconButton>
         )}
 
         {/* Solve settings (objective + time budget) */}
@@ -190,8 +180,8 @@ export function TopBar({
 
         {/* Export menu */}
         <div className="relative">
-          <Button variant="graphite" size="sm" className="border border-white/15" onClick={() => setExportOpen((o) => !o)} title={t('topbar.export')}>
-            <Download className="h-4 w-4" /> {t('topbar.export')} <ChevronDown className="h-3 w-3 opacity-70" />
+          <Button variant="graphite" size="sm" className="border border-white/15" onClick={() => setExportOpen((o) => !o)} title={t('topbar.export')} aria-label={t('topbar.export')}>
+            <Download className="h-4 w-4" /> <ChevronDown className="h-3 w-3 opacity-70" />
           </Button>
           <Popover open={exportOpen} onClose={() => setExportOpen(false)}>
             <div className="space-y-0.5">
@@ -206,6 +196,25 @@ export function TopBar({
         </div>
       </div>
     </header>
+  );
+}
+
+/* Compact icon-only toolbar button. The label is the accessible name (aria-label
+ * + tooltip) so the control stays discoverable and keeps its test/SR identity;
+ * an optional count renders as a small corner badge (e.g. open issues). */
+function IconButton({ onClick, label, warn, count, disabled, children }: {
+  onClick: () => void; label: string; warn?: boolean; count?: number; disabled?: boolean; children: React.ReactNode;
+}) {
+  return (
+    <Button variant="graphite" size="icon" onClick={onClick} disabled={disabled} title={label} aria-label={label}
+      className={`relative h-8 w-8 border ${warn ? 'border-warning/60 text-warning' : 'border-white/15'}`}>
+      {children}
+      {count != null && count > 0 && (
+        <span className="absolute -right-1 -top-1 min-w-[15px] rounded-full bg-warning px-0.5 text-center text-[9px] font-semibold leading-[15px] text-graphite">
+          {count > 99 ? '99+' : count}
+        </span>
+      )}
+    </Button>
   );
 }
 

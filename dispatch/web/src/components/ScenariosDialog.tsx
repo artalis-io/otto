@@ -2,7 +2,6 @@ import { useCallback, useEffect, useState } from 'react';
 import { GitBranch, Trash2, Pencil, FolderOpen, Download, Upload } from 'lucide-react';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { ScrollArea } from '@/components/ui/scroll-area';
-import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Badge } from '@/components/ui/badge';
 import { km, money } from '@/lib/format';
