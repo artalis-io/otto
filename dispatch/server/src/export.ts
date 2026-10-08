@@ -13,7 +13,12 @@ function hhmm(sec: number): string {
   return `${String(Math.floor(m / 60)).padStart(2, '0')}:${String(m % 60).padStart(2, '0')}`;
 }
 function csvCell(v: string | number | null | undefined): string {
-  const s = v == null ? '' : String(v);
+  let s = v == null ? '' : String(v);
+  // Neutralize spreadsheet formula injection: a cell starting with = + - @ tab
+  // or CR is evaluated by Excel/Sheets, and customer/city/order fields come from
+  // untrusted uploaded data. Prefix a quote so it's treated as text. Genuine
+  // numbers (incl. negative coordinates) are left alone.
+  if (!/^-?\d+(\.\d+)?$/.test(s) && /^[=+\-@\t\r]/.test(s)) s = `'${s}`;
   return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
 }
 function esc(s: string | null | undefined): string {

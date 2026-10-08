@@ -289,9 +289,12 @@ export class Store {
     }
   }
   /* Prune old what-if copies (ids start with 'scn_'); base scenarios (<day>-base)
-   * are never counted or pruned. Without this, every forked edit accumulates forever. */
+   * are never counted or pruned. Scenarios referenced by a non-terminal job (a
+   * queued/running solve holds the job + a reference) are also skipped, so GC
+   * can't orphan an in-flight result. Without this, every forked edit accumulates. */
   gcScenarios(): void {
-    for (const f of this.pruneDir('scenarios', Math.max(1, config.retainScenarios), (x) => x.startsWith('scn_'))) {
+    const live = new Set([...this.jobs.values()].filter((j) => j.status === 'pending' || j.status === 'running').map((j) => j.scenarioId));
+    for (const f of this.pruneDir('scenarios', Math.max(1, config.retainScenarios), (x) => x.startsWith('scn_') && !live.has(x.replace(/\.json$/, '')))) {
       this.scenarios.delete(f.replace(/\.json$/, ''));
     }
   }

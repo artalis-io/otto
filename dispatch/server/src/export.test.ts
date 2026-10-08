@@ -96,3 +96,14 @@ test('planToHandoffJson: clean structured dispatch plan', () => {
   assert.equal(h.routes[0]!.stops[1]!.lateMin, 15);
   assert.equal(h.unassigned[0]!.orderNo, 'U9');
 });
+
+test('csvCell: neutralizes spreadsheet formula injection, preserves numbers', () => {
+  const plan = mkPlan();
+  plan.vehicles[0]!.trips[0]!.stops[0]!.customer = '=HYPERLINK("http://evil","x")';
+  plan.vehicles[0]!.trips[0]!.stops[0]!.city = '-2+3';          // text starting with '-' (not a number)
+  plan.vehicles[0]!.trips[0]!.stops[0]!.lon = -19.123456;      // genuine negative number
+  const csv = planToCsv(plan);
+  assert.ok(csv.includes("'=HYPERLINK"), 'formula-leading customer prefixed with a quote');
+  assert.ok(csv.includes("'-2+3"), 'non-numeric text starting with - is prefixed');
+  assert.ok(csv.includes('-19.123456') && !csv.includes("'-19.123456"), 'negative coordinate left as a number');
+});
