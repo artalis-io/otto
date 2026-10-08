@@ -292,7 +292,6 @@ export function MapView({ plan, scenario, selection, onSelect, clockSec, visible
 
   // Camera: fit to the selection on deliberate selection change; fit all when a
   // new plan is loaded. Not re-run on background geometry fills (dep on plan.id).
-  // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(() => {
     const map = mapRef.current; if (!map) return;
     if (!selection || selection.kind === 'unassigned') { fitAll(); return; }
@@ -308,6 +307,8 @@ export function MapView({ plan, scenario, selection, onSelect, clockSec, visible
       const s = t?.stops.find((x) => x.seq === selection.seq);
       if (s) map.easeTo({ center: [s.lon, s.lat], zoom: Math.max(map.getZoom(), 13), duration: dur(500) });
     }
+    // Intentionally keyed on selection identity + plan.id only (see comment above).
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectionKey(selection), plan.id]);
 
   const onClick = useCallback((e: MapLayerMouseEvent) => {

@@ -121,7 +121,7 @@ export function FleetPanel({
   const [bulkSel, setBulkSel] = useState<Set<string>>(new Set());
   const [bulkVeh, setBulkVeh] = useState('');
   useEffect(() => { setBulkSel(new Set()); setBulkVeh(''); }, [plan.id]);
-  const toggleBulk = (orderNo: string) => setBulkSel((prev) => { const n = new Set(prev); n.has(orderNo) ? n.delete(orderNo) : n.add(orderNo); return n; });
+  const toggleBulk = (orderNo: string) => setBulkSel((prev) => { const n = new Set(prev); if (n.has(orderNo)) n.delete(orderNo); else n.add(orderNo); return n; });
   const [expanded, setExpanded] = useState<Set<number>>(new Set());
   const [unassignedOpen, setUnassignedOpen] = useState(plan.unassigned.length > 0);
   const [onlyTailLift, setOnlyTailLift] = useState(false);
@@ -176,7 +176,7 @@ export function FleetPanel({
             <VehicleCard key={v.id} vehicle={v} selection={selection} onSelect={onSelect}
               onMarkUnavailable={onMarkUnavailable} onRestore={onRestoreVehicle} removed={scenario.removedVehicleIds.includes(v.id)} solving={solving}
               expanded={expanded.has(v.id)} onAssignOrder={onAssignOrder}
-              onToggle={() => setExpanded((prev) => { const n = new Set(prev); n.has(v.id) ? n.delete(v.id) : n.add(v.id); return n; })} />
+              onToggle={() => setExpanded((prev) => { const n = new Set(prev); if (n.has(v.id)) n.delete(v.id); else n.add(v.id); return n; })} />
           ))}
           {vehicles.length === 0 && <p className="px-1 py-6 text-center text-xs text-muted-foreground">{t('fleet.noMatch')}</p>}
         </div>

@@ -33,7 +33,7 @@ export interface JobView { id: string; status: Job['status']; elapsedSec: number
 const ACTIVE_JOB_KEY = 'otto.activeJob';
 interface ActiveJobRef { jobId: string; scenarioId: string; dayId: string }
 function persistActiveJob(v: ActiveJobRef | null): void {
-  try { v ? localStorage.setItem(ACTIVE_JOB_KEY, JSON.stringify(v)) : localStorage.removeItem(ACTIVE_JOB_KEY); } catch { /* ignore */ }
+  try { if (v) localStorage.setItem(ACTIVE_JOB_KEY, JSON.stringify(v)); else localStorage.removeItem(ACTIVE_JOB_KEY); } catch { /* ignore */ }
 }
 function readActiveJob(): ActiveJobRef | null {
   try { const s = localStorage.getItem(ACTIVE_JOB_KEY); return s ? (JSON.parse(s) as ActiveJobRef) : null; } catch { return null; }
