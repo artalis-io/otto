@@ -67,13 +67,27 @@ function readJson<T>(rel: string): T {
   return JSON.parse(readFileSync(resolve(config.gyermelyiRoot, rel), 'utf8')) as T;
 }
 
-function records(obj: any): any[] {
-  return Array.isArray(obj) ? obj : (obj?.records ?? []);
+type RawRow = Record<string, unknown>;
+
+/* Canonical dataset rows: either a JSON array or an object with a `records`
+ * array. One asserted boundary (trusted reconcile-pipeline output) so callers
+ * read typed `RawRow`s instead of `any`. */
+function records(obj: unknown): RawRow[] {
+  const arr = Array.isArray(obj) ? obj : (obj as { records?: unknown } | null)?.records;
+  return Array.isArray(arr) ? (arr as RawRow[]) : [];
+}
+
+/* Read an optional string field from an untrusted row: pass strings through,
+ * coerce finite scalars, and null out anything missing/object-shaped. */
+function asStr(v: unknown): string | null {
+  if (typeof v === 'string') return v;
+  if (v == null || typeof v === 'object') return null;
+  return String(v);
 }
 
 /** order_no -> set of canonical delivery_date tokens (for day scoping). */
 export function loadOrderDates(): Map<string, Set<string>> {
-  const recs = records(readJson<any>('input/orders.json'));
+  const recs = records(readJson<unknown>('input/orders.json'));
   const m = new Map<string, Set<string>>();
   for (const r of recs) {
     const no = String(r.order_no);
@@ -93,27 +107,27 @@ function pseudonym(name: string): string {
 
 /** order_no -> OrderInfo (customer/city/coords/tw/pallets), from geocoded canonical. */
 export function loadEnrichment(): Map<string, OrderInfo> {
-  const recs = records(readJson<any>('input/orders.geocoded.json'));
+  const recs = records(readJson<unknown>('input/orders.geocoded.json'));
   const m = new Map<string, OrderInfo>();
   for (const r of recs) {
     const no = String(r.order_no);
     if (m.has(no)) continue; // same-date duplicates are identical enough; keep first
     m.set(no, {
-      id: r.id ?? null,
+      id: asStr(r.id),
       orderNo: no,
       customer: r.customer ? (config.anonymize ? pseudonym(String(r.customer)) : String(r.customer)) : null,
-      city: r.city ?? null,
-      street: r.street ?? null,
+      city: asStr(r.city),
+      street: asStr(r.street),
       zip: r.zip != null ? String(r.zip) : null,
       lat: typeof r.lat === 'number' ? r.lat : null,
       lon: typeof r.lon === 'number' ? r.lon : null,
       pallets: typeof r.pallets === 'number' ? r.pallets : null,
       weightKg: typeof r.weight_kg === 'number' ? r.weight_kg : null,
-      twStart: r.tw_start ?? null,
-      twEnd: r.tw_end ?? null,
+      twStart: asStr(r.tw_start),
+      twEnd: asStr(r.tw_end),
       serviceMin: typeof r.service_min === 'number' ? r.service_min : null,
-      requiresTailLift: Boolean(r.requires_tail_lift) || hasTailLiftReq(r.special_req),
-      maxTonnage: parseTonnage(r.special_req),
+      requiresTailLift: Boolean(r.requires_tail_lift) || hasTailLiftReq(asStr(r.special_req)),
+      maxTonnage: parseTonnage(asStr(r.special_req)),
     });
   }
   return m;
@@ -123,15 +137,15 @@ const normKey = (s: string): string => s.replace(/[^a-z0-9]/gi, '').toUpperCase(
 
 /** request-vehicle ref -> VehicleInfo (class/plate/subcontractor), best-effort join. */
 export function loadVehicleInfo(): Map<string, VehicleInfo> {
-  const recs = records(readJson<any>('input/vehicles.json'));
+  const recs = records(readJson<unknown>('input/vehicles.json'));
   const m = new Map<string, VehicleInfo>();
   for (const r of recs) {
     const info: VehicleInfo = {
-      vehicleClass: r.vehicle_class ?? null,
-      plate: r.plate ?? null,
+      vehicleClass: asStr(r.vehicle_class),
+      plate: asStr(r.plate),
       isSubcontractor: Boolean(r.is_subcontractor),
       tonnage: typeof r.gross_weight_kg === 'number' && r.gross_weight_kg > 0 ? r.gross_weight_kg / 1000 : null,
-      hasTailLift: Boolean(r.requires_tail_lift) || hasTailLiftReq(r.special_req),
+      hasTailLift: Boolean(r.requires_tail_lift) || hasTailLiftReq(asStr(r.special_req)),
     };
     for (const k of [r.id, r.plate, r.ref].filter(Boolean)) m.set(normKey(String(k)), info);
   }
