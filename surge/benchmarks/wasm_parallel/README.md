@@ -100,28 +100,59 @@ the same plateau band (little to lose).
 | lr101 | **5** / 25 / 1748 | **3** / 25 / 1906 | ×1.33 | **better** (unassigned is the primary key) |
 | lr201 | 0 / 4 / 1253 | 0 / 4 / 1253 | ×1.94 | tie |
 
-## Verdict: GO (promising; validate at larger sizes)
-- **Speed:** WASM is **~1.3–2.0× slower per iteration** — comfortably inside the
-  ≤3× bar. Under K-way host fan-out (cores available) the batch wall ≈ one run.
-- **Quality:** WASM best-of-K is **equal-or-better than native best-of-K on all
-  three** instances. The per-seed FP divergence (clang vs emcc, pitfall #7)
-  washes out in the portfolio — it is noise, not loss.
-- **Conclusion:** running Surge as an in-process WASM worker, parallelized by
-  `compute.async.call × K` (seeds), is viable — no quality penalty, modest speed
-  cost. This supports "Surge as a first-class Hull worker".
+## IMPORTANT: portfolio ≠ Surge's best mode (population shares)
+The fan-out above models `sg_solve_parallel` = **portfolio** (independent seeds,
+best-of, NO sharing). Surge's stronger mode is `sg_solve_population` — a
+PyVRP-style **memetic GA with cross-population sharing**: an elite pool
+(`population_size`), **SREX crossover** (`crossover_fraction`, half the workers
+each generation recombine two pool parents), biased-fitness survivor selection
+with broken-pairs **diversity**, and each generation warm-started from prior
+elites. It is Surge's `--population` mode and it **beats the portfolio**:
 
-**Caveats (honest):** only size-100 instances were available (no 200/400 in
-`li_lim_extended`); the dispatch workload is ~100–260 stops, so **re-run on
-200–400-stop instances before fully committing**. `lr101`'s 3–6 unassigned is a
-Surge PDPTW solver-quality matter, not a WASM one (native leaves even more).
-This is Node+emscripten, not a Hull WAMR worker — it measures the *wasm compute*;
-the Hull-ABI port (`hull_compute.h` + spans) is a separate step.
+| instance | portfolio best-of-4 (no sharing) | **population** K=4/gen3 (SREX+elite) |
+|----------|----------------------------------|--------------------------------------|
+| lc101 | 16 / 1458 | **15 / 1433** |
+| lr101 | 25 / **5 unassigned** / 1748 | 25 / **0 unassigned** / 1928 |
+| lr201 | 4 / 1253 | 4 / 1253 (tie) |
+
+Population wins decisively where it's hard (lr101: serves **all** requests vs 5
+dropped). So the portfolio fan-out is Surge's *weaker* mode.
+
+## Verdict
+- **Portfolio-in-WASM: GO** — ~1.3–2.0× slower per iteration, and WASM best-of-K
+  ≈ native best-of-K (FP divergence washes out). Trivially maps to Hull
+  `compute.async.call × K`, no sharing. A viable **fallback**.
+- **But the quality mode is population (sharing), which the fan-out does NOT
+  replicate.** Getting population quality as an in-process Hull worker needs ONE
+  of:
+  - **(A) in-WASM threads** — build Surge `-pthread` + `SG_HAS_THREADS` and run
+    `sg_solve_population` inside one worker. Needs the **WASM threads proposal**
+    (shared memory + atomics) in Hull's WAMR — **unconfirmed, likely absent**
+    (works under Node/emscripten pthreads, but that's not Hull). Resolve via
+    `docs/wamr_architecture.md` / a WAMR thread probe.
+  - **(B) host-orchestrated generations** — the Hull app runs G generations of K
+    single-threaded WASM solves, warm-started from an elite pool it maintains,
+    doing SREX crossover + biased-fitness selection host-side. Needs `surge_run`
+    to **accept a warm-start in and emit its solution out**, and SREX/selection
+    exposed from Surge or reimplemented. A real build-out, not fire-and-forget.
+- **Recommendation:** for quality-critical solves, prefer population → first
+  resolve the Hull wasm-threads question (A); if absent, scope (B). The portfolio
+  fan-out is proven and cheap but will drop orders on hard instances.
+
+**Caveats:** only size-100 instances available (no 200/400 in `li_lim_extended`);
+dispatch is ~100–260 stops, so re-run larger before committing. This is
+Node+emscripten (measures the *wasm compute*); the Hull WAMR-ABI port
+(`hull_compute.h` + spans) is a separate step.
 
 ## Status
 - [x] Toolchain gate; native reference harness; `surge_run.c` native + WASM builds.
 - [x] K-fan-out runner (`run.sh`) + iterations↔quality curve → `results.csv`.
-- [x] Results table + **go/no-go call: GO** (above), with larger-size caveat.
-- [ ] (optional) Re-run on 200–400-stop instances; port `surge_run` to the Hull compute ABI.
+- [x] Results + call: **portfolio-in-WASM = GO**; population (Surge's stronger,
+  sharing mode) beats it and is NOT replicated by the fan-out.
+- [ ] Resolve the population path: (A) probe Hull/WAMR for WASM-threads so
+  `sg_solve_population` can run in one worker, or (B) scope host-orchestrated
+  generations (surge_run warm-start in/out + host SREX/selection).
+- [ ] Re-run on 200–400-stop instances; port `surge_run` to the Hull compute ABI.
 - [ ] `surge_run.c` single-run WASI CLI + standalone-WASM build.
 - [ ] `run.sh` K-fan-out runner + compare.
 - [ ] Results table + go/no-go call.
