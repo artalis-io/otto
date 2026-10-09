@@ -1,0 +1,5 @@
+# build + run artifacts (reproducible from surge_run.c)
+surge_run.js
+surge_run.wasm
+surge_run_native
+*.csv
