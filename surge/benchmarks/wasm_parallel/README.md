@@ -57,11 +57,34 @@ parallel `--population --threads 4` = 15 veh / 1433.3 dist (2.9 s). Parallel win
 reproduce. NB set a high `--iterations` so `--time-limit` is the binding
 constraint (lc101 single converged before 5 s here).
 
+## Preliminary WASM result (single run, native vs emcc/Node)
+`surge_run.c` = one-shot single-threaded `sg_solve`; built native and via
+`emcc -sNODERAWFS -sEXIT_RUNTIME` (no `SG_HAS_THREADS` ⇒ single-threaded).
+Same instance / seed / `--iterations`:
+
+| instance | iters | native veh / dist / s | wasm veh / dist / s | WASM slowdown |
+|----------|-------|-----------------------|---------------------|---------------|
+| lc101    | 12000 | 16 / 1514.99 / 1.15   | 15 / 1474.21 / 2.42 | **2.1×** |
+| lr201    | 12000 | 4 / 1257.37 / 5.12    | 4 / 1253.23 / 10.18 | **2.0×** |
+
+**Two findings:**
+1. **WASM ≈ 2× slower per iteration** — inside the ≤3× GO bar.
+2. **Per-seed quality differs native vs WASM** (lc101: 16v vs 15v) — genuine FP
+   divergence across compilers (clang vs emcc), the documented OTTO pitfall #7
+   (solvers compare near-equal values for pivots; reassociation changes the
+   path). It is **noise, not loss** — WASM matched or *beat* native here. So the
+   portfolio comparison must be empirical (best-of-K native vs best-of-K WASM),
+   not "assume identical". Runs are reproducible within a build (same binary +
+   seed). Also note: `max_iterations` SIZES the SA schedule (not just a cap), so
+   fix iterations per run; don't set it huge and rely on `--time-limit`.
+
 ## Status
-- [x] Toolchain gate: `wasmtime` + `wasmer` + `emcc` present; clang targets wasm32.
-- [x] Native reference harness exists (`bench_li_lim`, 60 Li & Lim instances, BKS).
-- [x] Pipeline validated + a preliminary native datapoint captured (above).
-- [ ] Full native baseline (parallel K vs single, several T, all sizes) → CSV.
+- [x] Toolchain gate: `wasmtime` + `wasmer` + `emcc`; clang targets wasm32.
+- [x] Native reference harness (`bench_li_lim`, 60 Li & Lim instances, BKS).
+- [x] `surge_run.c` single-run CLI; native + emcc/Node WASM builds working.
+- [x] First native-vs-WASM datapoints: ~2× slowdown, no quality penalty (above).
+- [ ] K-fan-out runner (best-of-K native vs WASM) + iterations↔quality curve, several sizes → CSV.
+- [ ] Final results table + go/no-go call.
 - [ ] `surge_run.c` single-run WASI CLI + standalone-WASM build.
 - [ ] `run.sh` K-fan-out runner + compare.
 - [ ] Results table + go/no-go call.
