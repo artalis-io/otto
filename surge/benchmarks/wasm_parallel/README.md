@@ -125,19 +125,25 @@ dropped). So the portfolio fan-out is Surge's *weaker* mode.
 - **But the quality mode is population (sharing), which the fan-out does NOT
   replicate.** Getting population quality as an in-process Hull worker needs ONE
   of:
-  - **(A) in-WASM threads** — build Surge `-pthread` + `SG_HAS_THREADS` and run
-    `sg_solve_population` inside one worker. Needs the **WASM threads proposal**
-    (shared memory + atomics) in Hull's WAMR — **unconfirmed, likely absent**
-    (works under Node/emscripten pthreads, but that's not Hull). Resolve via
-    `docs/wamr_architecture.md` / a WAMR thread probe.
-  - **(B) host-orchestrated generations** — the Hull app runs G generations of K
-    single-threaded WASM solves, warm-started from an elite pool it maintains,
-    doing SREX crossover + biased-fitness selection host-side. Needs `surge_run`
-    to **accept a warm-start in and emit its solution out**, and SREX/selection
-    exposed from Surge or reimplemented. A real build-out, not fire-and-forget.
-- **Recommendation:** for quality-critical solves, prefer population → first
-  resolve the Hull wasm-threads question (A); if absent, scope (B). The portfolio
-  fan-out is proven and cheap but will drop orders on hard instances.
+  - **(A) in-WASM threads — ❌ RULED OUT (probed 2026-10-09).** Hull's WAMR is
+    built `-DWASM_ENABLE_THREAD_MGR=0` + `-DWASM_ENABLE_SHARED_MEMORY=0`
+    (`hull/mk/vendor/wamr.mk`); `docs/wamr_architecture.md` lists "Spawn threads
+    or processes" under *what a plugin CANNOT do* ("no threads" build flag;
+    single-threaded interpreter + host-level async dispatch). A multi-threaded
+    `sg_solve_population` module cannot load/run in a Hull worker. (It would run
+    under wasmtime's wasi-threads, but that's irrelevant to Hull.)
+  - **(B) host-orchestrated generations — the only in-process path.** The Hull
+    app runs G generations of K single-threaded `compute.async.call` worker
+    solves (Hull's host thread pool, `--workers`, is exactly this), warm-started
+    from an elite pool the HOST maintains, doing SREX crossover + biased-fitness
+    survivor selection host-side. Needs `surge_run` to **accept a warm-start in
+    and emit its solution out**, and SREX/selection **exposed from Surge or
+    reimplemented** host-side. A real build-out, but it fits Hull's model.
+- **Recommendation:** Path A is closed. For population quality in-process, scope
+  Path B (host-side GA loop over single-threaded workers). Otherwise ship the
+  portfolio fan-out as the cheap fallback (proven GO, but drops orders on hard
+  instances like lr101) — or keep the population solve in an out-of-process
+  Surge **service** (threads allowed) and have Hull call it over `net`.
 
 **Caveats:** only size-100 instances available (no 200/400 in `li_lim_extended`);
 dispatch is ~100–260 stops, so re-run larger before committing. This is
@@ -149,9 +155,11 @@ Node+emscripten (measures the *wasm compute*); the Hull WAMR-ABI port
 - [x] K-fan-out runner (`run.sh`) + iterations↔quality curve → `results.csv`.
 - [x] Results + call: **portfolio-in-WASM = GO**; population (Surge's stronger,
   sharing mode) beats it and is NOT replicated by the fan-out.
-- [ ] Resolve the population path: (A) probe Hull/WAMR for WASM-threads so
-  `sg_solve_population` can run in one worker, or (B) scope host-orchestrated
-  generations (surge_run warm-start in/out + host SREX/selection).
+- [x] Population path (A) probed: **Hull/WAMR has threads OFF** (THREAD_MGR=0,
+  SHARED_MEMORY=0) → A ruled out; in-process population must go via (B) host-
+  orchestrated generations, else keep population as an out-of-process service.
+- [ ] (if pursuing in-process population) scope (B): surge_run warm-start in/out
+  + host-side SREX + biased-fitness selection.
 - [ ] Re-run on 200–400-stop instances; port `surge_run` to the Hull compute ABI.
 - [ ] `surge_run.c` single-run WASI CLI + standalone-WASM build.
 - [ ] `run.sh` K-fan-out runner + compare.
