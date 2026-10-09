@@ -130,8 +130,15 @@ dropped). So the portfolio fan-out is Surge's *weaker* mode.
     (`hull/mk/vendor/wamr.mk`); `docs/wamr_architecture.md` lists "Spawn threads
     or processes" under *what a plugin CANNOT do* ("no threads" build flag;
     single-threaded interpreter + host-level async dispatch). A multi-threaded
-    `sg_solve_population` module cannot load/run in a Hull worker. (It would run
-    under wasmtime's wasi-threads, but that's irrelevant to Hull.)
+    `sg_solve_population` module cannot load/run in a Hull worker **as shipped**.
+    NB WAMR itself *supports* threads — `vendor/wamr/.../lib-pthread` +
+    `wasm_shared_memory.c` are present, the `WASM_ENABLE_THREAD_MGR` /
+    `_SHARED_MEMORY` / `_LIB_PTHREAD` flags in `core/config.h` are just set to 0.
+    Enabling = a **custom Hull build** (flip the flags) **+ worker-host
+    integration** (register pthread host funcs, reconcile gas metering + the
+    capability sandbox that deliberately forbids threads). That is forking Hull,
+    not an app toggle — so still "ruled out" for Hull-as-a-platform, but it is a
+    build choice, not a hard WAMR wall.
   - **(B) host-orchestrated generations — the only in-process path.** The Hull
     app runs G generations of K single-threaded `compute.async.call` worker
     solves (Hull's host thread pool, `--workers`, is exactly this), warm-started
