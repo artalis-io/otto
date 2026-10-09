@@ -78,13 +78,50 @@ Same instance / seed / `--iterations`:
    seed). Also note: `max_iterations` SIZES the SA schedule (not just a cap), so
    fix iterations per run; don't set it huge and rely on `--time-limit`.
 
+## Results — K=4 fan-out portfolio + iterations curve (`run.sh`)
+Li & Lim size-100, seed base 0, `--iterations 10000` for the fan-out. Full CSV
+is `results.csv` (git-ignored; reproduce with `./run.sh`).
+
+**A. iterations → quality (native single, seed 42)** — quality is *noisy and
+plateaus early*; past the plateau more iterations is just per-seed noise:
+| instance | 2.5k | 5k | 10k | 20k |
+|----------|------|----|-----|-----|
+| lc101 (dist) | 1641 | 1762 | **1515** | 1641 |
+| lr201 (dist) | 1273 | 1253 | 1257 | 1253 |
+
+⇒ single-seed runs are high-variance ⇒ the **portfolio (best-of-K) is what
+delivers stable quality**, and WASM doing fewer iters in a wall-budget lands in
+the same plateau band (little to lose).
+
+**B. best-of-K=4, native vs WASM @10k iters** — lexicographic `(unassigned, veh, dist)`:
+| instance | native best | WASM best | WASM/run slowdown | WASM vs native |
+|----------|-------------|-----------|-------------------|----------------|
+| lc101 | 0 / 16 / 1458 | 0 / **15** / **1342** | ×2.03 | **better** |
+| lr101 | **5** / 25 / 1748 | **3** / 25 / 1906 | ×1.33 | **better** (unassigned is the primary key) |
+| lr201 | 0 / 4 / 1253 | 0 / 4 / 1253 | ×1.94 | tie |
+
+## Verdict: GO (promising; validate at larger sizes)
+- **Speed:** WASM is **~1.3–2.0× slower per iteration** — comfortably inside the
+  ≤3× bar. Under K-way host fan-out (cores available) the batch wall ≈ one run.
+- **Quality:** WASM best-of-K is **equal-or-better than native best-of-K on all
+  three** instances. The per-seed FP divergence (clang vs emcc, pitfall #7)
+  washes out in the portfolio — it is noise, not loss.
+- **Conclusion:** running Surge as an in-process WASM worker, parallelized by
+  `compute.async.call × K` (seeds), is viable — no quality penalty, modest speed
+  cost. This supports "Surge as a first-class Hull worker".
+
+**Caveats (honest):** only size-100 instances were available (no 200/400 in
+`li_lim_extended`); the dispatch workload is ~100–260 stops, so **re-run on
+200–400-stop instances before fully committing**. `lr101`'s 3–6 unassigned is a
+Surge PDPTW solver-quality matter, not a WASM one (native leaves even more).
+This is Node+emscripten, not a Hull WAMR worker — it measures the *wasm compute*;
+the Hull-ABI port (`hull_compute.h` + spans) is a separate step.
+
 ## Status
-- [x] Toolchain gate: `wasmtime` + `wasmer` + `emcc`; clang targets wasm32.
-- [x] Native reference harness (`bench_li_lim`, 60 Li & Lim instances, BKS).
-- [x] `surge_run.c` single-run CLI; native + emcc/Node WASM builds working.
-- [x] First native-vs-WASM datapoints: ~2× slowdown, no quality penalty (above).
-- [ ] K-fan-out runner (best-of-K native vs WASM) + iterations↔quality curve, several sizes → CSV.
-- [ ] Final results table + go/no-go call.
+- [x] Toolchain gate; native reference harness; `surge_run.c` native + WASM builds.
+- [x] K-fan-out runner (`run.sh`) + iterations↔quality curve → `results.csv`.
+- [x] Results table + **go/no-go call: GO** (above), with larger-size caveat.
+- [ ] (optional) Re-run on 200–400-stop instances; port `surge_run` to the Hull compute ABI.
 - [ ] `surge_run.c` single-run WASI CLI + standalone-WASM build.
 - [ ] `run.sh` K-fan-out runner + compare.
 - [ ] Results table + go/no-go call.
