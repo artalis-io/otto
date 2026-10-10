@@ -59,6 +59,12 @@ OBJS = $(BUILD_DIR)/main.o $(HTTPSERVER_OBJ)
 # Target
 TARGET = carta-tile-server
 
+BUILD_STAMP = $(BUILD_DIR)/.build-flags
+STAMP_ARTIFACTS = $(OBJS) $(TARGET)
+STAMP_FLAGS_EXTRA = keel=$(strip $(shell cat $(KEEL_DIR)/VERSION 2>/dev/null))
+DEBUG_GOALS = debug test-asan build-asan
+include ../../mk/flagstamp.mk
+
 .PHONY: all clean debug deps run test test-threading test-threading-quick install docker test-asan FORCE build-asan
 
 all: deps $(TARGET)

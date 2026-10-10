@@ -49,6 +49,8 @@
 #
 # STAMP_ARTIFACTS defaults to the objects and the archive. A module with other
 # outputs that embed the flags can extend it before including.
+# STAMP_FLAGS_EXTRA can add non-compiler ABI inputs, such as a vendored
+# library version whose public struct layouts are embedded in those objects.
 
 BUILD_STAMP ?= .build-flags
 DEBUG_GOALS ?=
@@ -57,7 +59,8 @@ STAMP_ARTIFACTS ?= $(OBJS) $(LIB_FILE)
 # The flags this invocation will actually compile with. `make` with no goal
 # builds the default one, which is never a debug goal.
 STAMP_FLAGS := $(strip $(CC) \
-    $(if $(filter $(DEBUG_GOALS),$(MAKECMDGOALS)),$(DEBUG_CFLAGS),$(CFLAGS)))
+    $(if $(filter $(DEBUG_GOALS),$(MAKECMDGOALS)),$(DEBUG_CFLAGS),$(CFLAGS)) \
+    $(STAMP_FLAGS_EXTRA))
 
 # Discard anything built with different flags, before make looks at the tree.
 # Printed to stderr rather than stdout so it cannot be mistaken for build
@@ -71,6 +74,7 @@ $(shell \
           echo "build flags changed; discarding objects built the old way" >&2; \
       fi; \
       rm -f $(STAMP_ARTIFACTS); \
+      mkdir -p $(dir $(BUILD_STAMP)); \
       printf '%s' '$(STAMP_FLAGS)' > $(BUILD_STAMP); \
   fi)
 
