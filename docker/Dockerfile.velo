@@ -27,6 +27,7 @@ WORKDIR /build
 
 COPY velo/ velo/
 COPY shared/ shared/
+COPY mk/ mk/
 COPY vendor/ vendor/
 COPY Makefile .
 
