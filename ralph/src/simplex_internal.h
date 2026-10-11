@@ -20,6 +20,7 @@
 #include "simplex_scaling.h"
 #include "simplex_crash.h"
 #include "simplex_refactor_schedule.h"
+#include "lp_telemetry.h"
 
 /* Variable eligibility check (accounts for GLPK-compat exclusion rules) */
 int simplex_smcp_excl_skip_var(const SimplexTableau *tab, int j);

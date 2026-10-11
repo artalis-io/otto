@@ -20,6 +20,7 @@
 #include "lp_glpk_strict.h"
 #include "lu_update_backend.h"
 #include "lu_supernode.h"
+#include "lp_telemetry.h"
 
 /* ============================================================================
  * AMD (Approximate Minimum Degree) Ordering

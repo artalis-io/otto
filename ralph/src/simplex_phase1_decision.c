@@ -13,6 +13,7 @@
 #include "lp_refactor_policy.h"
 #include "lp_glpk_strict.h"
 #include "lp_log.h"
+#include "lp_telemetry.h"
 
 #include <math.h>
 

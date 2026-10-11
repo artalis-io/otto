@@ -5,6 +5,7 @@
  */
 
 #include "lp.h"
+#include "lp_telemetry.h"
 
 static int lu_telemetry_enabled(const LUFactorization *lu) {
     return lu && lu->telemetry_enabled;

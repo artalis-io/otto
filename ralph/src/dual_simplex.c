@@ -19,6 +19,7 @@
 #include "lu_update_backend.h"
 #include "lp_log.h"
 #include "lp_policy_glpk_compat.h"
+#include "lp_telemetry.h"
 
 /* Forward declarations */
 SimplexTableau* tableau_create(LPModel *model);

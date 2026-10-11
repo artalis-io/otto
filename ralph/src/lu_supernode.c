@@ -14,6 +14,7 @@
 #include <math.h>
 #include "lu_supernode.h"
 #include "lp.h"
+#include "lp_telemetry.h"
 
 /* ============================================================================
  * Phase 1: Elimination Tree + Supernode Detection

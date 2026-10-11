@@ -32,6 +32,7 @@
 #include "simplex_phase1_decision.h"
 #include "simplex_phase2_zones.h"
 #include "tuning_policy.h"
+#include "lp_telemetry.h"
 
 /* Forward declarations */
 int lp_model_finalize(LPModel *model);

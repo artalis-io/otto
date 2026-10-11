@@ -20,6 +20,7 @@
 
 #include "ralph_test_mod_api.h"
 #include "lp.h"
+#include "lp_telemetry.h"
 
 extern SimplexTableau *tableau_create(LPModel *model);
 extern void tableau_free(SimplexTableau *tab);

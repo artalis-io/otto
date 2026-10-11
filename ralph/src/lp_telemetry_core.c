@@ -5,6 +5,7 @@
  */
 
 #include "lp.h"
+#include "lp_telemetry.h"
 
 double lp_telemetry_now_ms(void) {
     return sh_perf_now_ms();

@@ -7,6 +7,7 @@
 #include <math.h>
 #include "lp.h"
 #include "simplex_ratio.h"
+#include "lp_telemetry.h"
 
 static double entering_bound_flip_distance(const SimplexTableau *tab, int entering) {
     double dist;
