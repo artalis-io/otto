@@ -2,3 +2,7 @@
 *.osm.pbf
 *.vlg
 *.lcx
+
+# Compose-managed, versioned OSM preparation output and its concurrency lock.
+cursus/
+.cursus-osm-prepare.lock
