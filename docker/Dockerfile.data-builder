@@ -1,3 +1,4 @@
+# syntax=docker/dockerfile:1.7
 # OTTO Data Builder
 #
 # Builds pre-computed indexes (.vlg, .lcx, .idx) from OSM PBF files.
@@ -51,7 +52,7 @@ COPY Makefile .
 # Note: velo is intentionally not pre-built here. velo-api builds libvelo with
 # NOMP=1 (see velo/api/Makefile); a plain `make velo` yields the OpenMP variant
 # and the api link then fails on GOMP_*.
-RUN make shared && make ralph && make carta && make locus
+RUN make -C shared lib && make ralph && make carta && make locus
 RUN make velo-api && make carta-api && make locus-api
 
 # =============================================================================

@@ -31,7 +31,7 @@ COPY mk/ mk/
 COPY vendor/ vendor/
 COPY Makefile .
 
-RUN make shared && make carta && make carta-api
+RUN make -C shared lib && make carta && make carta-api
 
 # Verify the binary works
 RUN ./carta/api/carta-tile-server --help || true

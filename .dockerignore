@@ -7,6 +7,11 @@
 *.a
 *.so
 *.dylib
+**/*.o
+**/*.a
+**/*.so
+**/*.dylib
+**/.build-flags
 
 # Test binaries
 test_ralph
