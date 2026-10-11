@@ -43,6 +43,7 @@ COPY ralph/ ralph/
 COPY velo/ velo/
 COPY carta/ carta/
 COPY locus/ locus/
+COPY mk/ mk/
 COPY vendor/ vendor/
 COPY Makefile .
 
@@ -62,6 +63,13 @@ LABEL org.opencontainers.image.title="OTTO Data Builder"
 LABEL org.opencontainers.image.description="Build pre-computed indexes from OSM PBF files"
 
 WORKDIR /app
+
+# Runtime tooling is deliberately limited to preparation concerns.  curl is
+# used for fail-safe source downloads, coreutils for checksums/atomic publish,
+# and flock (util-linux) serializes concurrent preparation jobs.
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    ca-certificates curl coreutils util-linux \
+    && rm -rf /var/lib/apt/lists/*
 
 # Copy the API servers (used for building indexes)
 COPY --from=builder /build/velo/api/velo-route-server /app/
@@ -102,7 +110,7 @@ echo ""
 
 # Build Carta tile index
 echo "=== Building Carta index (${PREFIX}.idx) ==="
-/app/carta-tile-server --save-index "${PREFIX}.idx" "$PBF" --build-only
+/app/carta-tile-server --build-only --save-index "${PREFIX}.idx" "$PBF"
 echo ""
 
 echo "=== Done ==="

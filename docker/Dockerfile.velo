@@ -27,6 +27,7 @@ WORKDIR /build
 
 COPY velo/ velo/
 COPY shared/ shared/
+COPY mk/ mk/
 COPY vendor/ vendor/
 COPY Makefile .
 
@@ -36,6 +37,8 @@ RUN make shared && make velo-api
 
 # Verify the binary works
 RUN ./velo/api/velo-route-server --help || true
+
+FROM busybox:1.36.1-musl AS healthcheck
 
 # =============================================================================
 # Runtime stage (distroless)
@@ -50,10 +53,14 @@ LABEL org.opencontainers.image.documentation="https://github.com/ottofleet/otto/
 WORKDIR /app
 
 COPY --from=builder --chown=nonroot:nonroot /build/velo/api/velo-route-server /app/velo-route-server
+COPY --from=healthcheck /bin/busybox /app/busybox
 
 EXPOSE 8082
 
 USER nonroot
+
+HEALTHCHECK --interval=15s --timeout=5s --start-period=30s --retries=5 \
+    CMD ["/app/busybox", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:8082/api/v1/health"]
 
 ENTRYPOINT ["/app/velo-route-server", "-p", "8082"]
 CMD ["/data/map.osm.pbf"]
