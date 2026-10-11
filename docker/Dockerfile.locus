@@ -38,6 +38,8 @@ RUN make shared && make locus && make locus-api
 # Verify the binary works
 RUN ./locus/api/locus-geocoder --help || true
 
+FROM busybox:1.36.1-musl AS healthcheck
+
 # =============================================================================
 # Runtime stage (distroless)
 # =============================================================================
@@ -51,10 +53,14 @@ LABEL org.opencontainers.image.documentation="https://github.com/ottofleet/otto/
 WORKDIR /app
 
 COPY --from=builder --chown=nonroot:nonroot /build/locus/api/locus-geocoder /app/locus-geocoder
+COPY --from=healthcheck /bin/busybox /app/healthcheck
 
 EXPOSE 8083
 
 USER nonroot
+
+HEALTHCHECK --interval=15s --timeout=5s --start-period=30s --retries=5 \
+    CMD ["/app/healthcheck", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:8083/api/v1/health"]
 
 ENTRYPOINT ["/app/locus-geocoder", "-p", "8083"]
 CMD ["/data/map.osm.pbf"]

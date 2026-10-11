@@ -63,6 +63,13 @@ LABEL org.opencontainers.image.description="Build pre-computed indexes from OSM 
 
 WORKDIR /app
 
+# Runtime tooling is deliberately limited to preparation concerns.  curl is
+# used for fail-safe source downloads, coreutils for checksums/atomic publish,
+# and flock (util-linux) serializes concurrent preparation jobs.
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    ca-certificates curl coreutils util-linux \
+    && rm -rf /var/lib/apt/lists/*
+
 # Copy the API servers (used for building indexes)
 COPY --from=builder /build/velo/api/velo-route-server /app/
 COPY --from=builder /build/carta/api/carta-tile-server /app/
