@@ -110,7 +110,7 @@ echo ""
 
 # Build Carta tile index
 echo "=== Building Carta index (${PREFIX}.idx) ==="
-/app/carta-tile-server --save-index "${PREFIX}.idx" "$PBF" --build-only
+/app/carta-tile-server --build-only --save-index "${PREFIX}.idx" "$PBF"
 echo ""
 
 echo "=== Done ==="
