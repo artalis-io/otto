@@ -19,7 +19,7 @@
 # =============================================================================
 # Build stage
 # =============================================================================
-FROM debian:bookworm-slim AS builder
+FROM debian:bookworm-slim@sha256:7c7b2c966bc9ee8cedfeef67e0e279108992c77681fa595db4a9d65c06ccc587 AS builder
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential \
@@ -39,12 +39,12 @@ RUN make -C shared lib && make locus && make locus-api
 # Verify the binary works
 RUN ./locus/api/locus-geocoder --help || true
 
-FROM busybox:1.36.1-musl AS healthcheck
+FROM busybox:1.36.1-musl@sha256:3c6ae8008e2c2eedd141725c30b20d9c36b026eb796688f88205845ef17aa213 AS healthcheck
 
 # =============================================================================
 # Runtime stage (distroless)
 # =============================================================================
-FROM gcr.io/distroless/cc-debian12:nonroot
+FROM gcr.io/distroless/cc-debian12:nonroot@sha256:9dac0a79194e45a7da0158a9c6da57b217585af0786db3845d1f0ec1a0dd182f
 
 LABEL org.opencontainers.image.title="OTTO Locus Geocoder"
 LABEL org.opencontainers.image.description="OSM geocoding with forward search, autocomplete, and reverse lookup"
