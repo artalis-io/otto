@@ -428,8 +428,12 @@ char *vl_api_route(VLAPIContext *ctx,
 
     if (ctx->landmarks) {
         /* Use landmarks for faster routing */
-        uint32_t from_node = vl_graph_nearest_node_grid(g, from);
-        uint32_t to_node = vl_graph_nearest_node_grid(g, to);
+        /* Keep landmark routing on the same profile-specific routable core as
+         * the non-landmark path. Plain nearest-node snapping can select a
+         * disconnected driveway/stub and incorrectly report NO_ROUTE even
+         * though the surrounding road network is connected. */
+        uint32_t from_node = vl_graph_nearest_node_routable(g, from, params->profile);
+        uint32_t to_node = vl_graph_nearest_node_routable(g, to, params->profile);
 
         if (from_node == VL_INVALID_NODE) {
             if (status_code) *status_code = 400;
