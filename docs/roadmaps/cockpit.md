@@ -1,6 +1,6 @@
 # Decision Cockpit (codename: Sage)
 
-**Status:** Concept / pre-prototype (2026-10). Driving use case: the Gyermelyi
+**Status:** Concept / pre-prototype (2026-10). Driving use case: the customer
 demo for the deputy CEO (deadline 2026-10-20). Codename *Sage* is provisional.
 
 ## One-liner
@@ -9,8 +9,8 @@ Not a routing screen: a **decision lab**. You ask a question in plain Hungarian,
 and in seconds it re-plans the whole distribution for that question, shows the new
 plan on the map against today's, and tells you what it costs and how risky it is.
 
-The buyer (Gyermelyi's deputy CEO) is a paradigm-changer who wants to **close
-depots** and rethink how they sell. Levente's brief frames OTTO as a *flexible
+The buyer (the customer's deputy CEO) is a paradigm-changer who wants to **close
+depots** and rethink how they sell. The buyer's brief frames OTTO as a *flexible
 modelling tool we develop modules around*. The cockpit is exactly that: the seat
 where he runs paradigm experiments himself.
 
@@ -19,7 +19,7 @@ where he runs paradigm experiments himself.
 - He decides, and he thinks in paradigm shifts, not route tweaks. A "what-if"
   cockpit lets him test his own ideas (close Polgár, change the sales cadence)
   live, with numbers to defend the decision upward.
-- Their business "will keep changing" (his words via Levente). A fixed optimizer
+- Their business "will keep changing" (his words, relayed). A fixed optimizer
   rots; a modeller you talk to adapts. That is the product, not a one-off plan.
 - It extends, does not replace, our existing positioning: TMS = admin,
   **Surge = the brain**, and now **Sage = the analyst seat** on top.
@@ -52,7 +52,7 @@ keeps the demo defensible.
   modelling quality. Small is enough because the model emits a *structured spec*,
   not prose math; the heavy lifting is the solver.
 - **The local box is an argument, not a cost saving.** We physically bring the
-  DGX Spark to Gyermely:
+  DGX Spark to the customer site:
   - **Private:** confidential FMCG order/pricing data never leaves the room.
   - **Offline:** the demo works with no wifi on site.
   - **Edge-native:** matches the OTTO manifesto ("if it runs in WASM/on a box,
@@ -121,7 +121,7 @@ before/after geojson.
 ## Scope & phases
 
 **Oct 20 MVP (must be genuinely live, yet stable):**
-- Cockpit over the Gyermelyi data; **3-4 what-if scenarios with real re-solves**
+- Cockpit over the customer data; **3-4 what-if scenarios with real re-solves**
   (not canned numbers), animated map + KPI deltas.
 - **2-3 driven by live NL parsing** (Sage on the DGX Spark -> scenario spec); the
   rest on buttons so the demo never hinges on model whim.
@@ -148,7 +148,7 @@ before/after geojson.
 - Re-solve latency per scenario on the demo instance (budget the iteration count
   so a live click returns in a few seconds; precompute the heavy Monte-Carlo).
 - Scenario-spec schema freeze (so Sage's function signature is stable).
-- Gyermelyi-specific wiring lives in the dataset, not this repo (see the dataset's
+- Customer-specific wiring lives in the dataset, not this repo (see the dataset's
   `DEMO_SCOPE.md`); this doc stays generic/product-level.
 
 ## cuOpt Phase-2 spike (2026-10, done)

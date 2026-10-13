@@ -475,6 +475,7 @@ jobs:
           install: >-
             make
             mingw-w64-ucrt-x86_64-gcc
+            mingw-w64-ucrt-x86_64-libgomp
             mingw-w64-ucrt-x86_64-curl
             mingw-w64-ucrt-x86_64-python
             jq
@@ -733,6 +734,7 @@ jobs:
           install: >-
             make
             mingw-w64-ucrt-x86_64-gcc
+            mingw-w64-ucrt-x86_64-libgomp
             mingw-w64-ucrt-x86_64-glpk
             mingw-w64-ucrt-x86_64-python
             jq

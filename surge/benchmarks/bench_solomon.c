@@ -54,7 +54,7 @@ static int sg_bench_force_multitrip(SGContext *ctx, int cap_div, int reload_seco
     uint32_t v;
     if (cap_div < 1) cap_div = 1;
     /* Capacity is genuinely hard once we've halved it to force reload trips
-       (matches real multi-trip usage, e.g. the Gyermelyi fleet). */
+       (matches real multi-trip usage, e.g. a real customer fleet). */
     if (sg_set_hard_capacity(ctx, true) != SG_STATUS_OK) return 1;
     for (v = 0; v < nv; v++) {
         double cap[1];

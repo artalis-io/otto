@@ -45,6 +45,12 @@ HTTPSERVER_OBJ = build/sh_httpserver.o build/sh_httpasync.o
 
 TARGET = velo-route-server
 
+BUILD_STAMP = build/.build-flags
+STAMP_ARTIFACTS = $(OBJS) $(HTTPSERVER_OBJ) $(TARGET)
+STAMP_FLAGS_EXTRA = keel=$(strip $(shell cat $(KEEL_DIR)/VERSION 2>/dev/null))
+DEBUG_GOALS = debug test-asan build-asan
+include ../../mk/flagstamp.mk
+
 .PHONY: all clean deps run debug build test test-asan FORCE build-asan
 
 all: deps $(TARGET)

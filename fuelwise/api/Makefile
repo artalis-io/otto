@@ -43,6 +43,12 @@ OBJS = $(SRCS:.c=.o)
 # Shared Keel HTTP helpers (need Keel headers, so not in libshared)
 HTTPSERVER_OBJ = $(BUILD_DIR)/sh_httpserver.o $(BUILD_DIR)/sh_httpasync.o
 
+BUILD_STAMP = $(BUILD_DIR)/.build-flags
+STAMP_ARTIFACTS = $(OBJS) $(HTTPSERVER_OBJ) $(TARGET)
+STAMP_FLAGS_EXTRA = keel=$(strip $(shell cat $(KEEL_DIR)/VERSION 2>/dev/null))
+DEBUG_GOALS = test-asan build-asan
+include ../../mk/flagstamp.mk
+
 # Default target
 all: $(BUILD_DIR) $(TARGET)
 

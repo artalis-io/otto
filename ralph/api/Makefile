@@ -47,6 +47,16 @@ KEEL_LIB = $(KEEL_DIR)/libkeel.a
 
 TARGET = ralph-solver-server
 
+# Keel guarantees source compatibility across 3.x, not ABI compatibility.
+# Include its version in the build stamp so a submodule bump recompiles every
+# object that embeds Keel structs instead of linking stale layouts to a new
+# libkeel.a.
+BUILD_STAMP = build/.build-flags
+STAMP_ARTIFACTS = $(OBJS) $(HTTPSERVER_OBJ) $(TARGET)
+STAMP_FLAGS_EXTRA = keel=$(strip $(shell cat $(KEEL_DIR)/VERSION 2>/dev/null))
+DEBUG_GOALS = debug test-asan build-asan
+include ../../mk/flagstamp.mk
+
 .PHONY: all clean deps run debug test build test-asan FORCE build-asan
 
 all: deps $(TARGET)
