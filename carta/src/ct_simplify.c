@@ -8,6 +8,54 @@
 #include <string.h>
 
 /* ============================================================================
+ * Ring validity (self-intersection) guard
+ *
+ * Douglas-Peucker simplifies each ring independently and is not
+ * topology-preserving: a valid (simple) ring can become self-intersecting after
+ * simplification. Self-intersecting polygon rings are invalid MVT geometry -
+ * Carta's own scanline rasterizer tolerates them, but a GPU tessellator
+ * (earcut, as in MapLibre) renders them as stray triangle fans. So after
+ * simplifying a ring we check whether it became self-intersecting and, if so,
+ * revert that ring to its original (simple) points.
+ * ============================================================================ */
+
+/* Orientation sign of (b-a) x (c-a); long long avoids overflow on int32 tile
+ * coords (which can run slightly outside [0,4096] due to the clip buffer). */
+static long long cross3(CTTilePoint a, CTTilePoint b, CTTilePoint c)
+{
+    return (long long)(b.x - a.x) * (c.y - a.y) - (long long)(b.y - a.y) * (c.x - a.x);
+}
+
+/* Do open segments ab and cd properly cross? (Shared endpoints / collinear
+ * touching are not counted - adjacent ring edges legitimately share a vertex.) */
+static int segments_cross(CTTilePoint a, CTTilePoint b, CTTilePoint c, CTTilePoint d)
+{
+    long long d1 = cross3(c, d, a), d2 = cross3(c, d, b);
+    long long d3 = cross3(a, b, c), d4 = cross3(a, b, d);
+    return ((d1 > 0) != (d2 > 0)) && (d1 != 0) && (d2 != 0)
+        && ((d3 > 0) != (d4 > 0)) && (d3 != 0) && (d4 != 0);
+}
+
+/* Does the closed ring points[0..n-1] (implicit closing edge n-1 -> 0)
+ * self-intersect? O(n^2); n is small after simplification. Public so it can be
+ * unit-tested and reused as a ring-validity check. */
+int ct_ring_self_intersects(const CTTilePoint *points, int n)
+{
+    if (n < 4) return 0;
+    for (int i = 0; i < n; i++) {
+        CTTilePoint a = points[i], b = points[(i + 1) % n];
+        for (int j = i + 1; j < n; j++) {
+            /* Skip edges that share a vertex with edge i (adjacent, incl. wrap). */
+            if (j == i) continue;
+            if ((j + 1) % n == i || (i + 1) % n == j) continue;
+            CTTilePoint c = points[j], d = points[(j + 1) % n];
+            if (segments_cross(a, b, c, d)) return 1;
+        }
+    }
+    return 0;
+}
+
+/* ============================================================================
  * Douglas-Peucker Implementation
  * ============================================================================ */
 
@@ -243,6 +291,14 @@ void ct_simplify_poly_inplace(CTTilePoint *points, int *num_points, float tolera
         }
     }
 
+    /* Snapshot the original ring before compaction so we can revert if the
+     * simplified result is degenerate or self-intersecting. DP is not
+     * topology-preserving: it can turn a simple ring into a self-intersecting
+     * one, which renders as triangle-fan artifacts in a GPU tessellator
+     * (MapLibre/earcut). The original ring is simple, so reverting is safe. */
+    CTTilePoint *orig_ring = malloc((size_t)n * sizeof(CTTilePoint));
+    if (orig_ring) memcpy(orig_ring, points, (size_t)n * sizeof(CTTilePoint));
+
     /* Compact the array */
     int write_idx = 0;
     for (int i = 0; i < n; i++) {
@@ -250,20 +306,19 @@ void ct_simplify_poly_inplace(CTTilePoint *points, int *num_points, float tolera
             points[write_idx++] = points[i];
         }
     }
+    free(keep);
 
-    /* If simplified to fewer than 3 points, polygon is degenerate.
-     * Keep the original polygon instead of returning garbage data.
-     * Note: We cannot just set write_idx=3 because we only wrote
-     * write_idx points during compaction - points[write_idx..n-1]
-     * contain old data that would corrupt the polygon. */
-    if (write_idx < 3) {
-        /* Degenerate result - keep original unchanged */
-        free(keep);
-        return;
+    /* Revert to the original ring on a degenerate or self-intersecting result.
+     * (On OOM we could not snapshot; fall back to the prior behaviour.) */
+    if (orig_ring && (write_idx < 3 || ct_ring_self_intersects(points, write_idx))) {
+        memcpy(points, orig_ring, (size_t)n * sizeof(CTTilePoint));
+        free(orig_ring);
+        return;  /* *num_points unchanged */
     }
+    free(orig_ring);
+    if (write_idx < 3) return;  /* degenerate and could not snapshot */
 
     *num_points = write_idx;
-    free(keep);
 }
 
 void ct_simplify_multipolygon_inplace(CTTilePoint *points, int *num_points,
