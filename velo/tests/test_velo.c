@@ -3,6 +3,7 @@
  */
 
 #include "velo.h"
+#include "vl_api.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -1654,6 +1655,8 @@ static VLGraph *create_core_stub_graph(void)
     g->nodes[6].osm_id = 7;
     g->nodes[6].edge_start = g->num_edges;   /* no outgoing edges */
     g->nodes[6].edge_count = 0;
+    g->bbox_min.lat = 40.0; g->bbox_min.lon = 10.0;
+    g->bbox_max.lat = 50.0; g->bbox_max.lon = 25.0;
     vl_graph_build_reverse_index(g);          /* needed for SCC computation */
     return g;
 }
@@ -1685,6 +1688,35 @@ TEST(component_aware_snap)
     ASSERT_EQ(vl_route_coords(g, origin, near_stub, &opts, &route), VL_OK);
     vl_free_route(&route);
 
+    vl_graph_free(g);
+}
+
+TEST(api_landmarks_use_component_aware_snap)
+{
+    VLGraph *g = create_core_stub_graph();
+    ASSERT_NE(g, NULL);
+    VLLandmarks *lm = vl_landmarks_create(g, 2);
+    ASSERT_NE(lm, NULL);
+    VLAPIContext *ctx = vl_api_create(g, lm, NULL);
+    ASSERT_NE(ctx, NULL);
+
+    VLCoord origin = VL_FIXED_TO_COORD(g->nodes[0].coord);
+    VLAPIRouteParams params = {
+        .from_lat = origin.lat, .from_lon = origin.lon,
+        .to_lat = 47.3001, .to_lon = 19.4001,
+        .profile = VL_PROFILE_CAR,
+        .weight = VL_WEIGHT_DURATION,
+        .include_geometry = 1,
+    };
+    int status = 0; size_t len = 0;
+    char *json = vl_api_route(ctx, &params, &status, &len);
+    ASSERT_NE(json, NULL);
+    ASSERT_EQ(status, 200);
+    ASSERT(strstr(json, "\"status\":\"ok\"") != NULL);
+    free(json);
+
+    vl_api_free(ctx);
+    vl_landmarks_free(lm);
     vl_graph_free(g);
 }
 
@@ -1728,6 +1760,7 @@ int main(void)
     RUN_TEST(graph_create);
     RUN_TEST(graph_nearest_node);
     RUN_TEST(component_aware_snap);
+    RUN_TEST(api_landmarks_use_component_aware_snap);
     printf("\n");
 
     printf("Routing Tests:\n");
