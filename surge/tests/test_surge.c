@@ -8279,7 +8279,7 @@ static void test_json_api_write_solution(void) {
     add_depot_with_location(ctx, &depot, 0, 0);
     assert(sg_depot_set_time_window(ctx, depot, 0, 10000) == SG_STATUS_OK);
     add_vehicle_with_depot(ctx, depot, 0, 10000, 100);
-    add_delivery_request(ctx, 10, 0, 0, 10000, 60, -10.0);
+    add_delivery_request(ctx, 1234.567, 0, 0, 10000, 60, -10.0);
 
     assert(sg_validate_model(ctx) == SG_STATUS_OK);
     SGStatus s = sg_solve(ctx);
@@ -8297,6 +8297,28 @@ static void test_json_api_write_solution(void) {
     assert(strstr(jb.buf, "\"stops\"") != NULL);
     assert(strstr(jb.buf, "\"unassigned\"") != NULL);
     assert(strstr(jb.buf, "\"error\"") != NULL);
+
+    /* JSON precision is significant digits, not decimal places. Two digits
+     * can round a feasible 07:58 arrival past an 08:00 deadline downstream. */
+    {
+        SHArena *arena = sh_arena_create(65536);
+        ShJsonValue *root = NULL;
+        SGStats stats;
+        SGSolutionStop stop;
+        ShJsonValue *route, *serialized_stop;
+        assert(arena != NULL);
+        assert(sh_json_parse(jb.buf, jb.len, arena, &root) == SH_JSON_OK);
+        sg_get_stats(ctx, &stats);
+        assert(sh_json_as_double(sh_json_get(sh_json_get(root, "stats"), "total_distance"), -1) == stats.total_distance);
+        route = sh_json_array_get(sh_json_get(root, "routes"), 0);
+        assert(sh_json_as_double(sh_json_get(route, "distance"), -1) == sg_solution_get_route_distance(ctx, 0));
+        assert(sg_solution_get_route_stop(ctx, 0, 0, &stop) == SG_STATUS_OK);
+        serialized_stop = sh_json_array_get(sh_json_get(route, "stops"), 0);
+        assert(sh_json_as_double(sh_json_get(serialized_stop, "arrival"), -1) == stop.arrival);
+        assert(sh_json_as_double(sh_json_get(serialized_stop, "service_start"), -1) == stop.service_start);
+        assert(sh_json_as_double(sh_json_get(serialized_stop, "departure"), -1) == stop.departure);
+        sh_arena_free(arena);
+    }
 
     sh_json_buf_free(&jb);
     sg_free(ctx);
