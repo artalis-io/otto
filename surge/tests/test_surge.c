@@ -8858,6 +8858,52 @@ static void test_multi_trip_no_change_default(void) {
     sg_free(ctx);
 }
 
+static void test_multi_trip_new_trip_vehicle_eligibility(void) {
+    /* A used vehicle can offer a cheap new trip, but neither cache misses nor
+       cached infeasibility may bypass its per-request eligibility. Exercise
+       whitelist, blacklist and qualification checks, including no eligible
+       vehicle, without relying on heuristic construction order. */
+    int mode;
+    for (mode = 0; mode < 3; mode++) {
+        SGContext *ctx = make_config(1, 42);
+        SGRouteSolution sol;
+        uint32_t depot, best_vehicle, pos, pp, dp;
+        double score, kth, distance;
+        int repeat;
+        add_depot_with_location(ctx, &depot, 0, 0);
+        sg_depot_set_time_window(ctx, depot, 0, 86400);
+        add_vehicle_with_depot(ctx, depot, 0, 86400, 5.0);
+        sg_vehicle_set_max_trips(ctx, 0, 0);
+        sg_vehicle_set_trip_reload_seconds(ctx, 0, 0);
+        add_vehicle_with_depot(ctx, depot, 0, 86400, 5.0);
+        add_delivery_request(ctx, 10, 0, 0, 86400, 0, -5.0);
+        add_delivery_request(ctx, 20, 0, 0, 86400, 0, -5.0);
+        if (mode == 0) assert(sg_request_add_allowed_vehicle(ctx, 1, 1) == SG_STATUS_OK);
+        if (mode == 1) assert(sg_request_add_forbidden_vehicle(ctx, 1, 0) == SG_STATUS_OK);
+        if (mode == 2) {
+            assert(sg_request_set_required_qualifications(ctx, 1, 1) == SG_STATUS_OK);
+            assert(sg_vehicle_set_qualifications(ctx, 1, 1) == SG_STATUS_OK);
+        }
+        assert(sg_route_solution_init(ctx, &sol) == AR_STATUS_OK);
+        sg_scratch_init(ctx);
+        assert(sg_route_apply_insertion(ctx, &sol, 0, 0, 0, 0.0) == AR_STATUS_OK);
+        for (repeat = 0; repeat < 2; repeat++) {
+            assert(sg_route_rank_insertions_for_request(ctx, &sol, 1, 1, 0.0,
+                &score, &kth, &best_vehicle, &pos, &pp, &dp, &distance));
+            assert(best_vehicle == 1);
+        }
+        /* Now every vehicle is forbidden; an empty eligibility set must not
+           be replaced by the used vehicle's new-trip shortcut. */
+        assert(sg_request_add_forbidden_vehicle(ctx, 1, 1) == SG_STATUS_OK);
+        if (mode == 1) assert(sg_request_add_forbidden_vehicle(ctx, 1, 0) == SG_STATUS_OK);
+        assert(!sg_route_rank_insertions_for_request(ctx, &sol, 1, 1, 0.0,
+            &score, &kth, &best_vehicle, &pos, &pp, &dp, &distance));
+        sg_scratch_free(ctx);
+        sg_route_solution_reset(&sol);
+        sg_free(ctx);
+    }
+}
+
 static void test_multi_trip_max_duration_new_trip(void) {
     /* Regression for #182: the new-trip fast path in sg_repair.c must honor
        max_duration. Before the fix, max_trips=0 (unlimited) or >=3 combined with
@@ -18638,6 +18684,7 @@ int main(void) {
     RUN_TEST(test_multi_trip_no_change_default);
     RUN_TEST(test_multi_trip_capacity_reset);
     RUN_TEST(test_multi_trip_max_duration_new_trip);
+    RUN_TEST(test_multi_trip_new_trip_vehicle_eligibility);
     RUN_TEST(test_validate_multitrip_distance_penalty);
     RUN_TEST(test_multitrip_capacity_insertion_no_overload);
     RUN_TEST(test_multitrip_concat_capacity_boundary_insert);
@@ -18964,9 +19011,9 @@ int main(void) {
     printf("================\n");
     printf("%d/%d tests passed\n", tests_passed, tests_run);
 #ifdef SG_HAS_THREADS
-    assert(tests_run == 482);
+    assert(tests_run == 483);
 #else
-    assert(tests_run == 458);
+    assert(tests_run == 459);
 #endif
     return tests_passed == tests_run ? 0 : 1;
 }

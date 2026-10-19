@@ -356,6 +356,12 @@ sg_rank_retry:
         SGInsertionCache *ic = ctx->scratch.insertion_cache;
         SGInsertionCacheEntry *ce = NULL;
 
+        /* Eligibility applies to cached candidates AND the new-trip fast path.
+         * The insertion evaluator checks it too, but an infeasible cache entry
+         * still jumps to sg_rank_new_trip. Ranking a forbidden new trip makes
+         * the apply chokepoint reject it and can abort all construction. */
+        if (!sg_vehicle_can_serve(ctx, v, request_id)) continue;
+
         if (frozen_designated != SG_NO_VEHICLE && v != frozen_designated) continue;
         if (ctx->avoid_new_vehicles && sol->route_lengths[v] == 0) {
             continue;
