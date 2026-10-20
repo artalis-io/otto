@@ -135,7 +135,9 @@ $(LIB_FILE): $(OBJS) ../arbor/libarbor.a ../shared/libshared.a
 src/%.o: src/%.c
 	$(CC) $(CFLAGS) $(INCLUDES) -c $< $(OBJ_OUT)$@
 
-$(TEST_BIN): tests/test_surge.c $(LIB_FILE) ../arbor/libarbor.a ../shared/libshared.a
+src/sg_api.o: src/sg_api_counts.h
+
+$(TEST_BIN): tests/test_surge.c $(LIB_FILE) ../arbor/libarbor.a ../shared/libshared.a src/sg_api_counts.h
 	$(CC) $(CFLAGS) $(INCLUDES) $< $(call link_lib,.,surge) $(call link_lib,../arbor,arbor) $(call link_lib,../shared,shared) $(LDFLAGS) $(EXE_OUT)$@
 
 # CLI tools. surge_solve: request JSON -> solution JSON (the CLI companion to the
@@ -265,7 +267,7 @@ bench-validate: $(BENCH_SOL_BIN) $(BENCH_PD_BIN)
 
 shared-lib: $(SHARED_LIB)
 
-$(SHARED_LIB): $(SRCS) $(ARBOR_SRCS) $(SHARED_BINDING_SRCS)
+$(SHARED_LIB): $(SRCS) $(ARBOR_SRCS) $(SHARED_BINDING_SRCS) src/sg_api_counts.h
 	$(CC) -Wall -Wextra -O3 -std=c11 -D_GNU_SOURCE -DSG_HAS_THREADS -fPIC \
 	  -fstack-protector-strong -D_FORTIFY_SOURCE=2 -fno-common \
 	  $(INCLUDES) $(SHARED_LIB_FLAGS) \
@@ -308,7 +310,7 @@ cppcheck-all:
 
 # --- Fuzz Testing (requires clang with libFuzzer) ---
 
-$(FUZZ_BIN): fuzz/fuzz_json_api.c $(SRCS) $(ARBOR_SRCS) $(SHARED_BINDING_SRCS)
+$(FUZZ_BIN): fuzz/fuzz_json_api.c $(SRCS) $(ARBOR_SRCS) $(SHARED_BINDING_SRCS) src/sg_api_counts.h
 	clang -Wall -Wextra -g -O1 -std=c11 -D_GNU_SOURCE -DSG_HAS_THREADS \
 	  -fsanitize=fuzzer,address,undefined -fno-omit-frame-pointer \
 	  $(INCLUDES) \
@@ -384,7 +386,7 @@ fuzz-api-smoke: fuzz-api
 
 # --- Thread Sanitizer ---
 
-$(TSAN_TEST_BIN): tests/test_surge.c $(SRCS) $(ARBOR_SRCS) ../shared/libshared.a
+$(TSAN_TEST_BIN): tests/test_surge.c $(SRCS) $(ARBOR_SRCS) ../shared/libshared.a src/sg_api_counts.h
 	$(CC) $(TSAN_CFLAGS) $(INCLUDES) \
 	  $< $(SRCS) $(ARBOR_SRCS) \
 	  $(call link_lib,../shared,shared) -lm -lpthread $(TSAN_LDFLAGS) $(EXE_OUT)$@

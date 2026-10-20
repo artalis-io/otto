@@ -5,6 +5,7 @@
  */
 
 #include "sg_api.h"
+#include "sg_api_counts.h"
 #include "surge.h"
 #include "sh_json.h"
 
@@ -1217,7 +1218,7 @@ static int build_initial_routes(SGContext *ctx, const ShJsonValue *ir_arr) {
     uint32_t *vehicle_ids = NULL;
     uint32_t *route_lengths = NULL;
     uint32_t *request_ids = NULL;
-    uint32_t total_requests = 0;
+    size_t total_requests = 0, checked_routes = 0;
     SGStatus status;
 
     if (!ir_arr || sh_json_type(ir_arr) != SH_JSON_ARRAY) {
@@ -1226,6 +1227,7 @@ static int build_initial_routes(SGContext *ctx, const ShJsonValue *ir_arr) {
 
     count = sh_json_array_len(ir_arr);
     if (count == 0) return 0;
+    if (sg_api_count_add(&checked_routes, count, sizeof(*vehicle_ids)) != 0) return -1;
 
     /* First pass: count total request IDs */
     for (i = 0; i < count; i++) {
@@ -1234,12 +1236,13 @@ static int build_initial_routes(SGContext *ctx, const ShJsonValue *ir_arr) {
         if (!route || sh_json_type(route) != SH_JSON_OBJECT) return -1;
         rids = sh_json_get(route, "request_ids");
         if (!rids || sh_json_type(rids) != SH_JSON_ARRAY) return -1;
-        total_requests += (uint32_t)sh_json_array_len(rids);
+        if (sg_api_count_add(&total_requests, sh_json_array_len(rids),
+                             sizeof(*request_ids)) != 0) return -1;
     }
 
-    vehicle_ids = (uint32_t *)malloc(count * sizeof(uint32_t));
-    route_lengths = (uint32_t *)malloc(count * sizeof(uint32_t));
-    request_ids = total_requests > 0 ? (uint32_t *)malloc(total_requests * sizeof(uint32_t)) : NULL;
+    vehicle_ids = (uint32_t *)calloc(count, sizeof(*vehicle_ids));
+    route_lengths = (uint32_t *)calloc(count, sizeof(*route_lengths));
+    request_ids = total_requests > 0 ? (uint32_t *)calloc(total_requests, sizeof(*request_ids)) : NULL;
     if (!vehicle_ids || !route_lengths || (total_requests > 0 && !request_ids)) {
         free(vehicle_ids);
         free(route_lengths);
@@ -1249,12 +1252,19 @@ static int build_initial_routes(SGContext *ctx, const ShJsonValue *ir_arr) {
 
     /* Second pass: fill arrays */
     {
-        uint32_t ri = 0;
+        size_t ri = 0;
         for (i = 0; i < count; i++) {
             ShJsonValue *route = sh_json_array_get(ir_arr, i);
             ShJsonValue *rids = sh_json_get(route, "request_ids");
             size_t rlen = sh_json_array_len(rids);
             size_t j;
+
+            if (rlen > total_requests - ri || (rlen > 0 && !request_ids)) {
+                free(vehicle_ids);
+                free(route_lengths);
+                free(request_ids);
+                return -1;
+            }
 
             vehicle_ids[i] = (uint32_t)sh_json_as_int(sh_json_get(route, "vehicle_id"), 0);
             route_lengths[i] = (uint32_t)rlen;
@@ -1547,9 +1557,9 @@ static int parse_plan_routes(const ShJsonValue *plan_arr,
                              uint32_t **task_buf_out) {
     size_t count, i;
     SGPlanRoute *routes;
-    uint32_t total_tasks = 0;
+    size_t total_tasks = 0, checked_routes = 0;
     uint32_t *task_buf;
-    uint32_t offset;
+    size_t offset;
 
     if (!plan_arr || sh_json_type(plan_arr) != SH_JSON_ARRAY) {
         return -1;
@@ -1562,6 +1572,7 @@ static int parse_plan_routes(const ShJsonValue *plan_arr,
         *task_buf_out = NULL;
         return 0;
     }
+    if (sg_api_count_add(&checked_routes, count, sizeof(*routes)) != 0) return -1;
 
     /* First pass: count total tasks */
     for (i = 0; i < count; i++) {
@@ -1570,12 +1581,13 @@ static int parse_plan_routes(const ShJsonValue *plan_arr,
         if (!route || sh_json_type(route) != SH_JSON_OBJECT) return -1;
         tids = sh_json_get(route, "task_ids");
         if (!tids || sh_json_type(tids) != SH_JSON_ARRAY) return -1;
-        total_tasks += (uint32_t)sh_json_array_len(tids);
+        if (sg_api_count_add(&total_tasks, sh_json_array_len(tids),
+                             sizeof(*task_buf)) != 0) return -1;
     }
 
-    routes = (SGPlanRoute *)malloc(count * sizeof(SGPlanRoute));
+    routes = (SGPlanRoute *)calloc(count, sizeof(*routes));
     task_buf = total_tasks > 0
-               ? (uint32_t *)malloc((size_t)total_tasks * sizeof(uint32_t))
+               ? (uint32_t *)calloc(total_tasks, sizeof(*task_buf))
                : NULL;
     if (!routes || (total_tasks > 0 && !task_buf)) {
         free(routes);
@@ -1591,9 +1603,15 @@ static int parse_plan_routes(const ShJsonValue *plan_arr,
         size_t tlen = sh_json_array_len(tids);
         size_t j;
 
+        if (tlen > total_tasks - offset || (tlen > 0 && !task_buf)) {
+            free(routes);
+            free(task_buf);
+            return -1;
+        }
+
         routes[i].vehicle_id = (uint32_t)sh_json_as_int(
             sh_json_get(route, "vehicle_id"), 0);
-        routes[i].task_ids = task_buf + offset;
+        routes[i].task_ids = tlen > 0 ? task_buf + offset : NULL;
         routes[i].task_count = (uint32_t)tlen;
 
         for (j = 0; j < tlen; j++) {
