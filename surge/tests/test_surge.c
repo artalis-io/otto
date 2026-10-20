@@ -7,6 +7,7 @@
 #include "sg_internal.h"
 #include "sh_json.h"
 #include "sg_api.h"
+#include "../src/sg_api_counts.h"
 
 static int tests_run = 0;
 static int tests_passed = 0;
@@ -11825,6 +11826,57 @@ static void test_validate_plan_multiple_violations(void) {
     sg_free(ctx);
 }
 
+static void test_api_count_bounds(void) {
+    size_t total = 0;
+    assert(sg_api_count_add(&total, 0, sizeof(uint32_t)) == 0);
+    assert(sg_api_count_add(&total, 3, sizeof(uint32_t)) == 0);
+    assert(total == 3);
+    assert(sg_api_count_add(&total, UINT32_MAX, sizeof(uint32_t)) == -1);
+    assert(total == 3); /* Failed additions must not corrupt the accumulator. */
+    total = UINT32_MAX;
+    assert(sg_api_count_add(&total, 1, 1) == -1);
+    assert(total == UINT32_MAX);
+    total = 0;
+    assert(sg_api_count_add(&total, 2, SIZE_MAX) == -1);
+    assert(total == 0);
+    assert(sg_api_count_add(&total, 1, 0) == -1);
+    assert(sg_api_count_add(NULL, 1, 1) == -1);
+#if SIZE_MAX > UINT32_MAX
+    assert(sg_api_count_add(&total, (size_t)UINT32_MAX + 1, 1) == -1);
+#endif
+    assert(total == 0);
+    assert(sg_api_count_add(&total, UINT32_MAX, 1) == 0);
+    assert(total == UINT32_MAX);
+
+    /* Synthetic DOM lengths hit the real ingestion guards without allocating
+     * billions of items. They must be rejected before any array item is read. */
+    {
+        const char *json = "{\"initial_routes\":[{\"request_ids\":[]},{\"request_ids\":[]}]}";
+        int mode;
+        for (mode = 0; mode < 3; mode++) {
+            SHArena *arena = sh_arena_create(4096);
+            SGContext *ctx = sg_create();
+            ShJsonValue *root = NULL, *routes, *first, *second;
+            assert(arena && ctx);
+            assert(sh_json_parse(json, strlen(json), arena, &root) == SH_JSON_OK);
+            routes = sh_json_get(root, "initial_routes");
+            first = sh_json_get(sh_json_array_get(routes, 0), "request_ids");
+            second = sh_json_get(sh_json_array_get(routes, 1), "request_ids");
+            if (mode == 0) {
+                routes->u.array_val.count = SIZE_MAX;
+            } else if (mode == 1) {
+                first->u.array_val.count = SIZE_MAX;
+            } else {
+                first->u.array_val.count = (size_t)UINT32_MAX / 2 + 1;
+                second->u.array_val.count = (size_t)UINT32_MAX / 2 + 1;
+            }
+            assert(sg_api_build_model(ctx, root) == SG_STATUS_ERROR);
+            sg_free(ctx);
+            sh_arena_free(arena);
+        }
+    }
+}
+
 static void test_validate_plan_json(void) {
     const char *json =
         "{"
@@ -11833,10 +11885,10 @@ static void test_validate_plan_json(void) {
         "  \"vehicles\": [{\"start_depot_id\": 0, \"end_depot_id\": 0,"
         "    \"shift_early\": 0, \"shift_late\": 10000, \"capacity\": [100]}],"
         "  \"tasks\": ["
-        "    {\"type\": \"delivery\", \"x\": 10, \"y\": 0,"
+        "    {\"type\": \"delivery\", \"x\": 1234.567, \"y\": 0,"
         "     \"tw_early\": 0, \"tw_late\": 5000, \"service_seconds\": 60,"
         "     \"demand\": [-10]},"
-        "    {\"type\": \"delivery\", \"x\": 20, \"y\": 0,"
+        "    {\"type\": \"delivery\", \"x\": 2345.678, \"y\": 0,"
         "     \"tw_early\": 0, \"tw_late\": 5000, \"service_seconds\": 60,"
         "     \"demand\": [-10]}"
         "  ],"
@@ -11862,7 +11914,60 @@ static void test_validate_plan_json(void) {
     assert(strstr(resp, "\"status\":\"OK\"") != NULL ||
            strstr(resp, "\"status\": \"OK\"") != NULL);
 
+    /* Exercise the separate validation response writer, comparing JSON values
+     * to native validation getters rather than rounded display expectations. */
+    {
+        SHArena *arena = sh_arena_create(65536);
+        ShJsonValue *input = NULL, *output = NULL, *route, *stops, *stats_json;
+        SGContext *ctx = sg_create();
+        SGStats stats;
+        uint32_t tasks[] = {0, 1};
+        SGPlanRoute plan = {0};
+        uint32_t i;
+        assert(arena && ctx);
+        assert(sh_json_parse(json, strlen(json), arena, &input) == SH_JSON_OK);
+        assert(sg_api_build_model(ctx, input) == SG_STATUS_OK);
+        plan.vehicle_id = 0;
+        plan.task_ids = tasks;
+        plan.task_count = 2;
+        assert(sg_validate_plan(ctx, 1, &plan) == SG_STATUS_OK);
+        assert(sh_json_parse(resp, out_len, arena, &output) == SH_JSON_OK);
+        sg_get_stats(ctx, &stats);
+        stats_json = sh_json_get(output, "stats");
+        assert(sh_json_as_double(sh_json_get(stats_json, "total_distance"), -1) == stats.total_distance);
+        assert(sh_json_as_double(sh_json_get(stats_json, "total_cost"), -1) == stats.total_cost);
+        route = sh_json_array_get(sh_json_get(output, "routes"), 0);
+        assert(sh_json_as_double(sh_json_get(route, "distance"), -1) == sg_solution_get_route_distance(ctx, 0));
+        assert(sh_json_as_double(sh_json_get(route, "duration"), -1) == sg_solution_get_route_duration(ctx, 0));
+        stops = sh_json_get(route, "stops");
+        assert(sh_json_array_len(stops) == 2);
+        for (i = 0; i < 2; i++) {
+            SGSolutionStop stop;
+            ShJsonValue *serialized = sh_json_array_get(stops, i);
+            assert(sg_solution_get_route_stop(ctx, 0, i, &stop) == SG_STATUS_OK);
+            assert(sh_json_as_double(sh_json_get(serialized, "arrival"), -1) == stop.arrival);
+            assert(sh_json_as_double(sh_json_get(serialized, "service_start"), -1) == stop.service_start);
+            assert(sh_json_as_double(sh_json_get(serialized, "departure"), -1) == stop.departure);
+        }
+        sg_free(ctx);
+        sh_arena_free(arena);
+    }
+
     free(resp);
+
+    /* An empty route has no backing task buffer: it must not form NULL + 0. */
+    {
+        const char *ids = strstr(json, "[0, 1]");
+        char empty_route[4096];
+        int n;
+        assert(ids != NULL);
+        n = snprintf(empty_route, sizeof(empty_route), "%.*s[]%s",
+                     (int)(ids - json), json, ids + strlen("[0, 1]"));
+        assert(n > 0 && (size_t)n < sizeof(empty_route));
+        resp = sg_api_solve(empty_route, (size_t)n, &code, &out_len);
+        assert(resp != NULL && code == 200);
+        free(resp);
+    }
 }
 
 /* ===== Span Balancing Tests ===== */
@@ -18781,6 +18886,7 @@ int main(void) {
     RUN_TEST(test_validate_plan_unassigned);
     RUN_TEST(test_validate_plan_multiple_violations);
     RUN_TEST(test_validate_plan_json);
+    RUN_TEST(test_api_count_bounds);
 
     /* Initial vehicle load */
     RUN_TEST(test_initial_load_api);
@@ -19033,9 +19139,9 @@ int main(void) {
     printf("================\n");
     printf("%d/%d tests passed\n", tests_passed, tests_run);
 #ifdef SG_HAS_THREADS
-    assert(tests_run == 483);
+    assert(tests_run == 484);
 #else
-    assert(tests_run == 459);
+    assert(tests_run == 460);
 #endif
     return tests_passed == tests_run ? 0 : 1;
 }
