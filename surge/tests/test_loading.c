@@ -3,7 +3,9 @@
 #include <stdio.h>
 #include <string.h>
 #include <limits.h>
+#ifndef _WIN32
 #include <pthread.h>
+#endif
 static SGLoadingVehicle vehicle(unsigned slots) {
     SGLoadingVehicle v = {0};
     v.slot_count=slots; v.max_layers=2; v.clearance_mm=2400;
@@ -104,6 +106,7 @@ static void varied_geometry(void) {
     }
     puts("loading: 512 varied geometry/weight oracle comparisons passed");
 }
+#ifndef _WIN32
 static void *thread_check(void *unused) {
     (void)unused;
     SGLoadingVehicle v=vehicle(2);SGLoadingUnit u[3]={unit(2,0),unit(1,1),unit(1,0)};
@@ -115,6 +118,9 @@ static void concurrent(void) {
     for(unsigned i=0;i<8;i++)assert(pthread_create(&threads[i],NULL,thread_check,NULL)==0);
     for(unsigned i=0;i<8;i++)assert(pthread_join(threads[i],NULL)==0);
 }
+#else
+static void concurrent(void) { /* POSIX concurrency exercised on Linux/macOS. */ }
+#endif
 static void full_load(void) {
     SGLoadingVehicle v=vehicle(33);v.payload_g=100000;
     SGLoadingUnit u[66];for(unsigned i=0;i<66;i++)u[i]=unit(1,0);
