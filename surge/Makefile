@@ -186,7 +186,7 @@ $(BENCH_TUNE_BIN): benchmarks/bench_tune.c benchmarks/sg_bench_utils.h $(LIB_FIL
 
 src/sg_loading.o: include/sg_loading.h
 
-test_loading: tests/test_loading.c src/sg_loading.c include/sg_loading.h include/sg_types.h
+test_loading: tests/test_loading.c tests/loading_oracle.h src/sg_loading.c include/sg_loading.h include/sg_types.h
 	$(CC) $(CFLAGS) $(INCLUDES) tests/test_loading.c src/sg_loading.c $(LDFLAGS) $(EXE_OUT)$@
 
 test: test_loading $(TEST_BIN) $(TEST_TB_BIN) $(TEST_NB_BIN) $(TEST_PM_BIN) $(TRANSPORT_TEST_BIN)

@@ -129,4 +129,6 @@ static void full_load(void) {
     damaged[0].layer=7;assert(sg_loading_validate(&v,u,66,damaged)==SG_STATUS_INFEASIBLE);
     v.clearance_mm=1900;assert(run(&v,u,66,200).outcome!=SG_LOADING_FEASIBLE);
 }
-int main(void) { examples();exhaustive();varied_geometry();full_load();concurrent();puts("loading: examples passed");return 0; }
+#include "loading_oracle.h"
+
+int main(void) { examples();exhaustive();varied_geometry();randomized_loading_oracle();full_load();concurrent();puts("loading: examples passed");return 0; }

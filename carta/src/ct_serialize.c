@@ -64,6 +64,7 @@
 
 #include "sh_attr.h"
 #include "ct_serialize.h"
+#include "ct_pbf.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -780,6 +781,10 @@ CTPBFContext *ct_index_mmap(const char *path) {
     /* Reconstruct R-Tree - just point to mmap'd data */
     if (header->rtree_num_nodes > 0) {
         ctx->rtree = calloc(1, sizeof(CTRTree));
+        if (!ctx->rtree) {
+            ct_pbf_context_free(ctx);
+            return NULL;
+        }
         ctx->rtree->num_nodes = header->rtree_num_nodes;
         ctx->rtree->num_entries = header->rtree_num_entries;
         ctx->rtree->root_idx = header->rtree_root_idx;
@@ -924,6 +929,10 @@ CTPBFContext *ct_index_mmap(const char *path) {
                     /* Reconstruct multipolygon R-Tree */
                     if (header->mp_rtree_num_nodes > 0) {
                         ctx->mp_rtree = calloc(1, sizeof(CTRTree));
+                        if (!ctx->mp_rtree) {
+                            ct_pbf_context_free(ctx);
+                            return NULL;
+                        }
                         ctx->mp_rtree->num_nodes = header->mp_rtree_num_nodes;
                         ctx->mp_rtree->num_entries = header->mp_rtree_num_entries;
                         ctx->mp_rtree->root_idx = header->mp_rtree_root_idx;
@@ -1005,6 +1014,10 @@ CTPBFContext *ct_index_mmap(const char *path) {
                 /* Reconstruct boundary R-Tree */
                 if (header->boundary_rtree_num_nodes > 0) {
                     ctx->boundary_rtree = calloc(1, sizeof(CTRTree));
+                    if (!ctx->boundary_rtree) {
+                        ct_pbf_context_free(ctx);
+                        return NULL;
+                    }
                     ctx->boundary_rtree->num_nodes = header->boundary_rtree_num_nodes;
                     ctx->boundary_rtree->num_entries = header->boundary_rtree_num_entries;
                     ctx->boundary_rtree->root_idx = header->boundary_rtree_root_idx;

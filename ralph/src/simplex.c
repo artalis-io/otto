@@ -1863,15 +1863,12 @@ fail:
 }
 
 int tableau_refactorize(SimplexTableau *tab) {
-    /* The three expressions below already treat tab as optional
-     * (`tab ? tab->owner : NULL`, `(tab && tab->lu)`), and then the phase
-     * check dereferences it bare. Guard once, at the top, so the function
-     * has one answer to whether tab can be null. */
+    /* A tableau is required before reading its basis or telemetry fields. */
     if (!tab) return -1;
     double t_refactor_ms = lp_telemetry_timer_start();
-    SimplexSolver *owner = tab ? tab->owner : NULL;
+    SimplexSolver *owner = tab->owner;
     int reason = RALPH_REFACTOR_REASON_OTHER;
-    int updates_before = (tab && tab->lu) ? lu_get_num_updates(tab->lu) : 0;
+    int updates_before = tab->lu ? lu_get_num_updates(tab->lu) : 0;
     lp_telemetry_begin_refactor(owner, &reason);
 
     /* Legacy zeroed-row Phase 2 bases need artificial identity columns first.
@@ -1948,7 +1945,7 @@ int tableau_refactorize(SimplexTableau *tab) {
                     : (int)LU_SPARSE_NUMERIC_FAIL_NONE;
         status = repair_singular_basis(tab);
         lp_telemetry_record_refactor_repair_outcome(owner,
-                                                    tab ? tab->phase : 0,
+                                                    tab->phase,
                                                     original_lu_failure_reason,
                                                     original_sparse_numeric_failure_reason,
                                                     status);
@@ -1956,12 +1953,12 @@ int tableau_refactorize(SimplexTableau *tab) {
 
     if (owner) {
         lp_telemetry_record_refactor_with_lu_timed(owner,
-                                                   tab ? tab->phase : 0,
+                                                   tab->phase,
                                                    reason,
                                                    t_refactor_ms,
-                                                   tab ? tab->m : 0,
-                                                   tab ? tab->lu : NULL);
-        periodic_feedback_record_refactor(owner, tab ? tab->phase : 0, reason, updates_before, status);
+                                                   tab->m,
+                                                   tab->lu);
+        periodic_feedback_record_refactor(owner, tab->phase, reason, updates_before, status);
     }
 
     return status;
