@@ -1805,7 +1805,7 @@ These are real-world features that require larger architectural changes:
 | **Driver breaks / HoSE** | ✅ Complete. Abstract break model — generic `(max_work, break_duration, max_total_work)` maps to both EU EC 561 and US FMCSA rules. |
 | **Multiple trips** | ✅ Complete. Multi-route-per-vehicle state with depot reload modeling. `sg_vehicle_set_max_trips()`. |
 | **Time-dependent travel** | ✅ Complete. Speed profiles (step-function multipliers), per-vehicle travel profiles, and time-indexed travel brackets (multiple complete matrices by departure time). `sg_set_travel_time_bracket()` + `sg_travel_profile_add_time_bracket()`. |
-| **Load stacking / 3D loading constraints** | 🔲 Design approved (3L checker, 2026-10); not started. Per-order stack compatibility, max stack height, weight-on-top limits, non-stackable/orientation flags, and LIFO unload order (2L/3L-CVRP). Bounded Tier-2 loading-feasibility check in the insertion evaluator. See "3L loading checker (design)" below. |
+| **Load stacking / 3D loading constraints** | 🔲 P1 standalone checker implemented (2026-11); solver integration and real-data validation pending. Per-order stack compatibility, max stack height, weight-on-top limits, non-stackable/orientation flags, and LIFO unload order (2L/3L-CVRP). Bounded Tier-2 loading-feasibility check in the insertion evaluator. See "3L loading checker (design)" below. |
 
 #### Load stacking / 3D loading constraints
 
@@ -1842,7 +1842,15 @@ unload order matters. Without these it cannot be modeled.
 
 #### 3L loading checker (design, 2026-10)
 
-**Status:** design approved; not started. A bounded Tier-2 loading-feasibility
+**Implementation clarification (2026-11):** see
+[`design-surge-loading.md`](../design-surge-loading.md). P1 uses explicit physical
+units, not inferred half-height fractions. UNKNOWN is not hard feasibility;
+search exhaustion is not a proof of infeasibility. Missing customer data remains
+a prerequisite for real-world validation. Solver coupling is a separate P2 step.
+
+
+**Status:** P1 standalone C checker implemented; P2 solver coupling and historical
+physical-data validation pending. A bounded Tier-2 loading-feasibility
 module, scoped to one real distribution fleet, prioritized over further
 speculative multi-trip perf work (direct operational value). Grounded in that
 deployment's data: "pallets" are a FRACTIONAL footprint quantity (partial/half-height
@@ -1868,8 +1876,9 @@ load3l_check(vehicle_geom, ordered_stops, pallets_per_stop)
        | INFEASIBLE + a reason (which stop/stack/limit)
        | UNKNOWN    (outside the narrow rules / search budget exceeded)
 ```
-`UNKNOWN` lets the solver fall back to today's scalar pallet capacity, so a solve
-never blocks on a checker gap.
+`UNKNOWN` is not a loading-feasibility certificate. Legacy scalar-only mode may
+continue explicitly unverified; hard loading must reject incomplete or unknown
+verification (clarified 2026-11; see the implementation contract).
 
 **Inputs:** vehicle geometry (ordered floor slots indexed by depth from the rear
 door for LIFO columns, clearance height, `access_model`, reshuffle policy, max
@@ -1899,7 +1908,7 @@ generation counter). An exact packer in the inner loop would dwarf the solve.
 **Surge integration:** insertion eval runs the prefilter after capacity/time;
 final validation runs the exact checker per committed trip and folds a rejection
 into M1's repair-or-reject discipline (never commit a load the checker rejects;
-UNKNOWN falls back to scalar capacity). Gated like `hard_capacity`.
+UNKNOWN cannot satisfy hard loading). Gated like `hard_capacity`.
 
 **v1 boundaries (narrow):** standard EUR footprint + half-height stacking,
 per-vehicle access model, per-product stack classes (max layers / max stack

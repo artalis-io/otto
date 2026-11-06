@@ -359,9 +359,9 @@ void ct_rtree_stats(const CTRTree *tree, size_t *num_nodes, size_t *height,
 /* For legacy code that checks tree->root */
 CTRTreeNode *ct_rtree_get_root(const CTRTree *tree)
 {
-    (void)tree;
-    /* Return non-NULL to indicate tree is valid */
-    return (CTRTreeNode *)(tree ? (void *)1 : NULL);
+    /* Opaque compatibility marker, not a traversable packed-tree root. */
+    static CTRTreeNode marker;
+    return tree ? &marker : NULL;
 }
 
 /* ============================================================================
