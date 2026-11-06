@@ -1842,6 +1842,13 @@ unload order matters. Without these it cannot be modeled.
 
 #### 3L loading checker (design, 2026-10)
 
+**Implementation clarification (2026-11):** see
+[`design-surge-loading.md`](../design-surge-loading.md). P1 uses explicit physical
+units, not inferred half-height fractions. UNKNOWN is not hard feasibility;
+search exhaustion is not a proof of infeasibility. Missing customer data remains
+a prerequisite for real-world validation. Solver coupling is a separate P2 step.
+
+
 **Status:** design approved; not started. A bounded Tier-2 loading-feasibility
 module, scoped to one real distribution fleet, prioritized over further
 speculative multi-trip perf work (direct operational value). Grounded in that
