@@ -165,3 +165,31 @@ were 0.561 seconds legacy and 1.926 seconds hard loading. This single small
 fixture demonstrates added cost, not a realistic fleet benchmark or performance
 promise. Real physical-data admission, warehouse validation and deployment
 remain outside this implementation.
+
+## Final boundary review
+
+The review follows authoritative mutations rather than only public setters:
+
+| Path | Guard |
+| --- | --- |
+| Construction and repair insertion | Full ordered candidate check, repeated before assignment mutation |
+| Reload/new round | Explicit boundary enters the check before insertion; trip quotas remain enforced |
+| Reorder and cross-route postprocessing | Ordered sequence validation; concat summaries cannot authorize hard-loading moves |
+| Destroy/eject intermediate state | May temporarily lack support units; intermediate layouts are not certificates or publishable results |
+| Warm starts and population crossover | Re-enter guarded construction/repair; full final solution validation still required |
+| Single-worker completion | Final repair-or-reject validates physical and ordinary hard constraints |
+| Parallel/HGS completion | Full solution validation after transferring the selected worker result to the main context |
+| Manual plan validation | Explicit trip boundaries, per-round checks, UNKNOWN recorded as a violation |
+| Model mutation/cancellation | Saved result/cache invalidation; interrupted checks are not cached as proof |
+| JSON output | Loading witnesses are recomputed for the returned order and mapped to original request/unit identities |
+
+The standalone suite additionally compares 4,096 seeded randomized instances
+against a separate enumerator that implements the specification without calling
+the production checker, fit logic or certificate validator. Small-budget checks
+cannot report false infeasibility. This supplements the original 2,048 exhaustive
+and 512 varied-geometry cases rather than replacing their edge/concurrency tests.
+
+Profile tests accept the documented time-limit status only alongside a fully
+assigned, validated incumbent. Instrumented ARM execution need not complete an
+optimization profile before its five-second wall-clock budget to satisfy that
+contract. Runtime behavior and profile budgets are unchanged.
