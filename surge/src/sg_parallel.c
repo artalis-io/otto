@@ -782,9 +782,13 @@ cleanup:
     free(items);
 
     if (ctx->hard_loading && ctx->final_solution) {
-        /* Revalidate the complete authoritative result, including must-serve
-         * and ordinary route constraints, after worker-to-master transfer. */
-        if (!sg_route_solution_validate(ctx->final_solution, ctx)) {
+        /* Revalidate with soft infeasible-space exploration disabled: publication
+         * must enforce ordinary hard constraints as well as physical loading. */
+        int penalty_enabled = ctx->penalty.enabled;
+        ctx->penalty.enabled = 0;
+        int valid = sg_route_solution_validate(ctx->final_solution, ctx);
+        ctx->penalty.enabled = penalty_enabled;
+        if (!valid) {
             sg_route_solution_free(ctx->final_solution, NULL); ctx->final_solution = NULL;
             sg_set_error(ctx, "hard loading: refused unverified worker result"); status = SG_STATUS_ERROR;
         }
@@ -1131,9 +1135,13 @@ pop_cleanup:
     free(items);
 
     if (ctx->hard_loading && ctx->final_solution) {
-        /* Revalidate the complete authoritative result, including must-serve
-         * and ordinary route constraints, after worker-to-master transfer. */
-        if (!sg_route_solution_validate(ctx->final_solution, ctx)) {
+        /* Revalidate with soft infeasible-space exploration disabled: publication
+         * must enforce ordinary hard constraints as well as physical loading. */
+        int penalty_enabled = ctx->penalty.enabled;
+        ctx->penalty.enabled = 0;
+        int valid = sg_route_solution_validate(ctx->final_solution, ctx);
+        ctx->penalty.enabled = penalty_enabled;
+        if (!valid) {
             sg_route_solution_free(ctx->final_solution, NULL); ctx->final_solution = NULL;
             sg_set_error(ctx, "hard loading: refused unverified worker result"); status = SG_STATUS_ERROR;
         }
