@@ -782,11 +782,9 @@ cleanup:
     free(items);
 
     if (ctx->hard_loading && ctx->final_solution) {
-        int valid = 1;
-        for (uint32_t v = 0; v < ctx->final_solution->num_vehicles; ++v)
-            if (!sg_loading_stops_ok(ctx, v, sg_route_vehicle_stop_ptr_const(ctx->final_solution, v),
-                ctx->final_solution->route_stop_lengths[v])) { valid = 0; break; }
-        if (!valid) {
+        /* Revalidate the complete authoritative result, including must-serve
+         * and ordinary route constraints, after worker-to-master transfer. */
+        if (!sg_route_solution_validate(ctx->final_solution, ctx)) {
             sg_route_solution_free(ctx->final_solution, NULL); ctx->final_solution = NULL;
             sg_set_error(ctx, "hard loading: refused unverified worker result"); status = SG_STATUS_ERROR;
         }
@@ -1133,11 +1131,9 @@ pop_cleanup:
     free(items);
 
     if (ctx->hard_loading && ctx->final_solution) {
-        int valid = 1;
-        for (uint32_t v = 0; v < ctx->final_solution->num_vehicles; ++v)
-            if (!sg_loading_stops_ok(ctx, v, sg_route_vehicle_stop_ptr_const(ctx->final_solution, v),
-                ctx->final_solution->route_stop_lengths[v])) { valid = 0; break; }
-        if (!valid) {
+        /* Revalidate the complete authoritative result, including must-serve
+         * and ordinary route constraints, after worker-to-master transfer. */
+        if (!sg_route_solution_validate(ctx->final_solution, ctx)) {
             sg_route_solution_free(ctx->final_solution, NULL); ctx->final_solution = NULL;
             sg_set_error(ctx, "hard loading: refused unverified worker result"); status = SG_STATUS_ERROR;
         }
