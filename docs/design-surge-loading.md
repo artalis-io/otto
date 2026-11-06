@@ -47,8 +47,8 @@ immediate support contact. All underlying units enforce their cumulative
 weight/count limits. A vehicle supplies floor slots, per-slot clearance and
 weight limit (uniform in v1), payload, maximum layers and access model.
 
-- SIDE_FREE: independent access to each stack; stop order is irrelevant.
-- REAR_LIFO: independent lanes with explicit slot depth from the rear door;
+- `SG_LOADING_SIDE_FREE`: independent access to each stack; stop order is irrelevant.
+- `SG_LOADING_REAR_LIFO`: independent lanes with explicit slot depth from the rear door;
   shallower slots unload before deeper occupied slots. Within a stack, upper
   units unload before lower units. Equal stop ordinals permit unloading together.
   This is a conservative discrete-lane model; no lateral maneuvers are inferred.
