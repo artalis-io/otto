@@ -103,3 +103,25 @@ separately, hard UNKNOWN rejection, cache invalidation and manual reorder; then
 real historical round fixtures once physical data exists. Historical route
 acceptance alone cannot establish actual loading feasibility. No claim of
 Gyermelyi loading parity until supplied physical data and warehouse validation.
+
+## Implementation validation (2026-11-06)
+
+P1 is implemented in `surge/include/sg_loading.h` and
+`surge/src/sg_loading.c`, built into `libsurge.a`. `make -C surge test` includes
+`test_loading`. The standalone public C API may also be compiled without any
+Surge/Arbor runtime dependency.
+
+Executed: 2,048 exhaustive class/access/stop combinations; 512 varied
+height/weight/count cases against certificate enumeration; deterministic replay;
+66-on-33 loading; malformed witnesses; cumulative top-load and count limits;
+independent lanes; zero/tiny budgets; class 63; integer limits; eight concurrent
+callers. Native macOS release and Linux ARM64 ASan+UBSan runs passed. The macOS
+ASan runtime stalled during its loader initialization, before reaching main;
+that run was stopped and is not a sanitizer pass. Linux ARM64 sanitizer coverage
+was executed instead, in an isolated temporary source directory, without
+changing containers or deployment configuration.
+
+Existing regression suite: 484/484 Surge tests, 27/27 time-budget tests, 19/19
+neighbour tests, 22/22 profile-matrix tests, and direct transport checks passed.
+No real customer loading validation, solver coupling, JSON/HTTP/WASM loading
+interface, Cursus integration or production rollout is claimed by this phase.
