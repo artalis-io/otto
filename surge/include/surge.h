@@ -4,6 +4,7 @@
 #include <stdint.h>
 
 #include "sg_types.h"
+#include "sg_loading.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -15,6 +16,21 @@ typedef void (*SGTravelCallback)(uint32_t from_location, uint32_t to_location,
                                   uint32_t vehicle_id, double departure_time,
                                   double *distance_out, double *duration_out,
                                   void *user_data);
+
+/* Optional physical loading. Configure after adding vehicles/requests.
+ * Hard mode requires complete delivery-only unit and vehicle declarations.
+ * Setters copy inputs and invalidate existing solution/loading evidence. */
+SGStatus sg_set_hard_loading(SGContext *ctx, int enabled, uint64_t node_budget);
+SGStatus sg_vehicle_set_loading(SGContext *ctx, uint32_t vehicle_id,
+                                const SGLoadingVehicle *vehicle);
+SGStatus sg_request_set_loading(SGContext *ctx, uint32_t request_id,
+                                const SGLoadingUnit *units, uint32_t count);
+/* Placements map to request/unit IDs returned in the two optional 128-element
+ * arrays. UNKNOWN/INFEASIBLE never has a placement certificate. The query uses
+ * the context-local cache; serialize access to one context (except sg_cancel). */
+SGStatus sg_solution_get_loading(const SGContext *ctx, uint32_t route_index,
+    uint32_t trip_index, SGLoadingResult *result,
+    uint32_t *request_ids, uint32_t *unit_indices);
 
 const char *sg_version(void);
 
@@ -302,6 +318,10 @@ SGStatus sg_solve(SGContext *ctx);
 
 /* Plan validation — compute ETAs + check constraints on a fixed route */
 SGStatus sg_validate_plan(SGContext *ctx, uint32_t num_routes, const SGPlanRoute *routes);
+/* Optional per-route arrays, one 0/1 flag per task; 1 starts a reload round.
+ * NULL entries preserve the flat-route convention. First flag must be zero. */
+SGStatus sg_validate_plan_with_trips(SGContext *ctx, uint32_t num_routes,
+    const SGPlanRoute *routes, const uint8_t *const *trip_starts);
 uint32_t sg_get_violation_count(const SGContext *ctx);
 SGStatus sg_get_violation(const SGContext *ctx, uint32_t index, SGViolation *out);
 

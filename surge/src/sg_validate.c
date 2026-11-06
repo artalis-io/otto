@@ -9,6 +9,7 @@
 
 #include "sg_internal.h"
 
+#include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -19,7 +20,10 @@
 
 static int push_violation(SGContext *ctx, const SGViolation *v) {
     if (ctx->num_violations >= ctx->violations_capacity) {
+        if (ctx->violations_capacity > UINT32_MAX / 2U) return 0;
         uint32_t new_cap = ctx->violations_capacity == 0 ? 16 : ctx->violations_capacity * 2;
+        size_t new_count = new_cap;
+        if (new_count > SIZE_MAX / sizeof(SGViolation)) return 0;
         SGViolation *new_arr = (SGViolation *)realloc(ctx->violations,
                                                        (size_t)new_cap * sizeof(SGViolation));
         if (!new_arr) return 0;
@@ -59,17 +63,77 @@ static uint32_t *build_task_to_request_map(const SGContext *ctx) {
  * Violation Collection
  * ============================================================================ */
 
-static void collect_violations(SGContext *ctx, const SGRouteSolution *sol) {
+static int collect_violations(SGContext *ctx, const SGRouteSolution *sol) {
     uint32_t v, i, r, d;
     SGViolation viol;
     uint32_t dim_count = ctx->dimension_count;
+    int complete = 1;
 
     for (v = 0; v < sol->num_vehicles; v++) {
         uint32_t stop_len = sol->route_stop_lengths[v];
         const SGRouteStop *stops = sg_route_vehicle_stop_ptr_const(sol, v);
         const SGVehicleRecord *veh = &ctx->vehicles[v];
 
+        if (ctx->hard_loading && stop_len) {
+            uint32_t trips = 1;
+            for (uint32_t si = 1; si < stop_len; ++si) if (stops[si].trip_start) ++trips;
+            for (uint32_t trip = 0; trip < trips; ++trip) {
+                SGLoadingResult lr;
+                SGStatus status = sg_loading_round(ctx, v, stops, stop_len, trip, &lr, NULL, NULL);
+                if (status != SG_STATUS_OK || lr.outcome != SG_LOADING_FEASIBLE) {
+                    memset(&viol, 0, sizeof(viol));
+                    viol.type = status == SG_STATUS_OK && lr.outcome == SG_LOADING_INFEASIBLE
+                        ? SG_VIOLATION_LOADING : SG_VIOLATION_LOADING_UNKNOWN;
+                    viol.vehicle_id = v; viol.stop_index = trip;
+                    viol.request_id = UINT32_MAX; viol.task_id = UINT32_MAX;
+                    viol.actual = lr.reason;
+                    if (!push_violation(ctx, &viol)) complete = 0;
+                }
+            }
+        }
+        if (veh->has_multi_trip && veh->max_trips && stop_len) {
+            uint32_t trips = 1;
+            for (uint32_t si = 1; si < stop_len; ++si) if (stops[si].trip_start) ++trips;
+            if (trips > veh->max_trips) {
+                memset(&viol, 0, sizeof(viol)); viol.type = SG_VIOLATION_MAX_TRIPS;
+                viol.vehicle_id = v; viol.actual = trips; viol.limit = veh->max_trips;
+                if (!push_violation(ctx, &viol)) complete = 0;
+            }
+        }
         if (stop_len == 0) continue;
+
+        /* Match the solver's canonical signed-load span, independently per
+         * depot round. Post-stop positive load alone misses deliveries. */
+        if (sol->route_stop_load && dim_count > 0) {
+            const double *load = sol->route_stop_load +
+                (size_t)v * ((size_t)sol->stop_stride + 1U) * dim_count;
+            uint32_t first = 0;
+            for (uint32_t end = 1; end <= stop_len; ++end) {
+                if (end != stop_len && !stops[end].trip_start) continue;
+                int fixed = first == 0 && veh->has_initial_load && veh->initial_load;
+                for (d = 0; d < dim_count; ++d) {
+                    double pmin = 0, pmax = 0;
+                    double cap = veh->has_capacity && veh->capacity ? veh->capacity[d] : INFINITY;
+                    double il = fixed ? veh->initial_load[d] : 0;
+                    for (uint32_t pos = first + 1; pos <= end; ++pos) {
+                        double value = load[(size_t)pos * dim_count + d];
+                        if (value < pmin) pmin = value;
+                        if (value > pmax) pmax = value;
+                    }
+                    if (sg_cap_dim_excess(pmin, pmax, cap, fixed, il) > 0) {
+                        memset(&viol, 0, sizeof(viol));
+                        viol.type = SG_VIOLATION_CAPACITY;
+                        viol.vehicle_id = v; viol.stop_index = first;
+                        viol.request_id = UINT32_MAX; viol.task_id = UINT32_MAX;
+                        int lower = fixed && il + pmax <= cap + SG_DEMAND_TOLERANCE;
+                        viol.actual = lower ? il + pmin : fixed ? il + pmax : pmax - pmin;
+                        viol.limit = lower ? 0 : cap;
+                        if (!push_violation(ctx, &viol)) complete = 0;
+                    }
+                }
+                first = end;
+            }
+        }
 
         /* Per-stop checks */
         for (i = 0; i < stop_len; i++) {
@@ -87,31 +151,9 @@ static void collect_violations(SGContext *ctx, const SGRouteSolution *sol) {
                 viol.task_id = task_id;
                 viol.actual = s->service_start;
                 viol.limit = (double)task->tw_late;
-                push_violation(ctx, &viol);
+                if (!push_violation(ctx, &viol)) complete = 0;
             }
 
-            /* Capacity violation (check after this stop) */
-            if (sol->route_stop_load && dim_count > 0) {
-                size_t base_offset = (size_t)v * ((size_t)sol->stop_stride + 1U) *
-                                     (size_t)dim_count;
-                const double *load = sol->route_stop_load + base_offset;
-                for (d = 0; d < dim_count; d++) {
-                    double load_after = load[((size_t)i + 1U) * dim_count + d];
-                    double cap = (veh->has_capacity && veh->capacity)
-                                 ? veh->capacity[d] : 0.0;
-                    if (cap > 0.0 && load_after > cap + 1e-9) {
-                        memset(&viol, 0, sizeof(viol));
-                        viol.type = SG_VIOLATION_CAPACITY;
-                        viol.vehicle_id = v;
-                        viol.stop_index = i;
-                        viol.request_id = s->request_id;
-                        viol.task_id = task_id;
-                        viol.actual = load_after;
-                        viol.limit = cap;
-                        push_violation(ctx, &viol);
-                    }
-                }
-            }
         }
 
         /* Compartment capacity violation */
@@ -124,6 +166,7 @@ static void collect_violations(SGContext *ctx, const SGRouteSolution *sol) {
              * cannot blow the stack either; calloc zero-inits. */
             double *comp_load = calloc(
                 (size_t)SG_MAX_COMPARTMENTS_PER_VEHICLE * dim_count, sizeof(double));
+            if (!comp_load) complete = 0;
             for (i = 0; comp_load && i < stop_len; i++) {
                 const SGRouteStop *s = &stops[i];
                 const SGTaskRecord *task = &ctx->tasks[s->task_id];
@@ -140,7 +183,7 @@ static void collect_violations(SGContext *ctx, const SGRouteSolution *sol) {
                         viol.task_id = s->task_id;
                         viol.actual = 0.0;
                         viol.limit = 0.0;
-                        push_violation(ctx, &viol);
+                        if (!push_violation(ctx, &viol)) complete = 0;
                         continue;
                     }
                     for (d = 0; d < dim_count; d++) {
@@ -159,7 +202,7 @@ static void collect_violations(SGContext *ctx, const SGRouteSolution *sol) {
                                 viol.task_id = s->task_id;
                                 viol.actual = comp_load[(size_t)ci * dim_count + d];
                                 viol.limit = cap;
-                                push_violation(ctx, &viol);
+                                if (!push_violation(ctx, &viol)) complete = 0;
                             }
                         }
                     }
@@ -171,6 +214,7 @@ static void collect_violations(SGContext *ctx, const SGRouteSolution *sol) {
         /* Forbidden vehicle / qualification checks (per request on this route) */
         {
             uint8_t *seen_request = (uint8_t *)calloc((size_t)ctx->num_requests, sizeof(uint8_t));
+            if (!seen_request) complete = 0;
             if (seen_request) {
                 for (i = 0; i < stop_len; i++) {
                     uint32_t req_id = stops[i].request_id;
@@ -187,7 +231,7 @@ static void collect_violations(SGContext *ctx, const SGRouteSolution *sol) {
                             viol.task_id = UINT32_MAX;
                             viol.actual = 0.0;
                             viol.limit = 0.0;
-                            push_violation(ctx, &viol);
+                            if (!push_violation(ctx, &viol)) complete = 0;
                         }
 
                         /* Qualification */
@@ -200,7 +244,7 @@ static void collect_violations(SGContext *ctx, const SGRouteSolution *sol) {
                             viol.task_id = UINT32_MAX;
                             viol.actual = 0.0;
                             viol.limit = 0.0;
-                            push_violation(ctx, &viol);
+                            if (!push_violation(ctx, &viol)) complete = 0;
                         }
                     }
                 }
@@ -222,7 +266,7 @@ static void collect_violations(SGContext *ctx, const SGRouteSolution *sol) {
                 viol.task_id = UINT32_MAX;
                 viol.actual = (double)sol->request_pickup_stop_pos[r];
                 viol.limit = (double)sol->request_delivery_stop_pos[r];
-                push_violation(ctx, &viol);
+                if (!push_violation(ctx, &viol)) complete = 0;
             }
         }
 
@@ -230,6 +274,7 @@ static void collect_violations(SGContext *ctx, const SGRouteSolution *sol) {
         if (ctx->has_pd_policy && veh->pd_policy != SG_PD_POLICY_NONE) {
             /* Use a stack/queue to verify ordering of PD pairs */
             uint32_t *pd_buf = (uint32_t *)malloc((size_t)stop_len * sizeof(uint32_t));
+            if (!pd_buf) complete = 0;
             if (pd_buf) {
                 uint32_t top = 0, front = 0;
                 for (i = 0; i < stop_len; i++) {
@@ -256,7 +301,7 @@ static void collect_violations(SGContext *ctx, const SGRouteSolution *sol) {
                             viol.task_id = s->task_id;
                             viol.actual = (double)veh->pd_policy;
                             viol.limit = 0.0;
-                            push_violation(ctx, &viol);
+                            if (!push_violation(ctx, &viol)) complete = 0;
                         }
                     }
                 }
@@ -282,7 +327,7 @@ static void collect_violations(SGContext *ctx, const SGRouteSolution *sol) {
                         viol.task_id = s->task_id;
                         viol.actual = 0.0;
                         viol.limit = 0.0;
-                        push_violation(ctx, &viol);
+                        if (!push_violation(ctx, &viol)) complete = 0;
                     }
                 }
             }
@@ -291,6 +336,7 @@ static void collect_violations(SGContext *ctx, const SGRouteSolution *sol) {
         /* Precedence check: predecessor must complete before successor starts */
         if (ctx->has_precedence) {
             uint8_t *completed = (uint8_t *)calloc((size_t)ctx->num_requests, sizeof(uint8_t));
+            if (!completed) complete = 0;
             if (completed) {
                 for (i = 0; i < stop_len; i++) {
                     const SGRouteStop *s = &stops[i];
@@ -310,7 +356,7 @@ static void collect_violations(SGContext *ctx, const SGRouteSolution *sol) {
                                 viol.task_id = s->task_id;
                                 viol.actual = (double)pred;
                                 viol.limit = (double)s->request_id;
-                                push_violation(ctx, &viol);
+                                if (!push_violation(ctx, &viol)) complete = 0;
                             }
                         }
                     }
@@ -343,7 +389,7 @@ static void collect_violations(SGContext *ctx, const SGRouteSolution *sol) {
                         viol.task_id = UINT32_MAX;
                         viol.actual = ride;
                         viol.limit = max_ride;
-                        push_violation(ctx, &viol);
+                        if (!push_violation(ctx, &viol)) complete = 0;
                     }
                 }
             }
@@ -362,7 +408,7 @@ static void collect_violations(SGContext *ctx, const SGRouteSolution *sol) {
                 viol.task_id = UINT32_MAX;
                 viol.actual = dur;
                 viol.limit = max_dur;
-                push_violation(ctx, &viol);
+                if (!push_violation(ctx, &viol)) complete = 0;
             }
         }
 
@@ -378,7 +424,7 @@ static void collect_violations(SGContext *ctx, const SGRouteSolution *sol) {
                 viol.task_id = UINT32_MAX;
                 viol.actual = dist;
                 viol.limit = veh->max_distance;
-                push_violation(ctx, &viol);
+                if (!push_violation(ctx, &viol)) complete = 0;
             }
         }
 
@@ -392,9 +438,10 @@ static void collect_violations(SGContext *ctx, const SGRouteSolution *sol) {
             viol.task_id = UINT32_MAX;
             viol.actual = (double)stop_len;
             viol.limit = (double)veh->max_tasks;
-            push_violation(ctx, &viol);
+            if (!push_violation(ctx, &viol)) complete = 0;
         }
     }
+    return complete;
 }
 
 /* ============================================================================
@@ -403,6 +450,11 @@ static void collect_violations(SGContext *ctx, const SGRouteSolution *sol) {
 
 SGStatus sg_validate_plan_impl(SGContext *ctx, uint32_t num_routes,
                                const SGPlanRoute *routes) {
+    return sg_validate_plan_impl_with_trips(ctx, num_routes, routes, NULL);
+}
+
+SGStatus sg_validate_plan_impl_with_trips(SGContext *ctx, uint32_t num_routes,
+    const SGPlanRoute *routes, const uint8_t *const *trip_starts) {
     SGRouteSolution *sol = NULL;
     uint32_t *task_to_request = NULL;
     uint8_t *task_assigned = NULL;
@@ -410,6 +462,7 @@ SGStatus sg_validate_plan_impl(SGContext *ctx, uint32_t num_routes,
     uint32_t ri, si, v;
     double total_distance = 0.0;
     uint32_t vehicles_used = 0;
+    SGStatus failure_status = SG_STATUS_OUT_OF_MEMORY;
 
     if (!ctx || (num_routes > 0 && !routes)) {
         return SG_STATUS_INVALID_ARG;
@@ -461,7 +514,7 @@ SGStatus sg_validate_plan_impl(SGContext *ctx, uint32_t num_routes,
                 viol.stop_index = si;
                 viol.request_id = UINT32_MAX;
                 viol.task_id = tid;
-                push_violation(ctx, &viol);
+                if (!push_violation(ctx, &viol)) goto validation_failed;
                 continue;
             }
             if (task_to_request[tid] == UINT32_MAX) {
@@ -471,7 +524,7 @@ SGStatus sg_validate_plan_impl(SGContext *ctx, uint32_t num_routes,
                 viol.stop_index = si;
                 viol.request_id = UINT32_MAX;
                 viol.task_id = tid;
-                push_violation(ctx, &viol);
+                if (!push_violation(ctx, &viol)) goto validation_failed;
                 continue;
             }
             if (task_assigned[tid]) {
@@ -481,7 +534,7 @@ SGStatus sg_validate_plan_impl(SGContext *ctx, uint32_t num_routes,
                 viol.stop_index = si;
                 viol.request_id = task_to_request[tid];
                 viol.task_id = tid;
-                push_violation(ctx, &viol);
+                if (!push_violation(ctx, &viol)) goto validation_failed;
                 continue;
             }
             task_assigned[tid] = 1;
@@ -541,6 +594,7 @@ SGStatus sg_validate_plan_impl(SGContext *ctx, uint32_t num_routes,
             stops[stop_len].request_id = req_id;
             stops[stop_len].task_id = tid;
             stops[stop_len].is_pickup = is_pickup;
+            stops[stop_len].trip_start = trip_starts && trip_starts[ri] ? trip_starts[ri][si] : 0;
 
             prev_arr[stop_len] = stop_len > 0 ? stop_len - 1U : UINT32_MAX;
             next_arr[stop_len] = UINT32_MAX;
@@ -565,6 +619,7 @@ SGStatus sg_validate_plan_impl(SGContext *ctx, uint32_t num_routes,
         /* Build route_requests (one entry per unique request) */
         {
             uint8_t *seen = (uint8_t *)calloc((size_t)ctx->num_requests, sizeof(uint8_t));
+            if (!seen && ctx->num_requests) goto validation_failed;
             if (seen) {
                 for (si = 0; si < stop_len; si++) {
                     uint32_t req_id = stops[si].request_id;
@@ -572,6 +627,8 @@ SGStatus sg_validate_plan_impl(SGContext *ctx, uint32_t num_routes,
                         seen[req_id] = 1;
                         if (req_len < sol->route_stride) {
                             route_reqs[req_len] = req_id;
+                            if (sol->route_request_trip_start)
+                                sol->route_request_trip_start[(size_t)vid * sol->route_stride + req_len] = stops[si].trip_start;
                             sol->request_pos[req_id] = req_len;
                             req_len++;
                         }
@@ -622,7 +679,7 @@ SGStatus sg_validate_plan_impl(SGContext *ctx, uint32_t num_routes,
     sol->total_distance = total_distance;
 
     /* Collect constraint violations */
-    collect_violations(ctx, sol);
+    if (!collect_violations(ctx, sol)) goto validation_failed;
 
     /* Lock violation checks */
     if (ctx->request_locks) {
@@ -654,7 +711,7 @@ SGStatus sg_validate_plan_impl(SGContext *ctx, uint32_t num_routes,
                         fviol.request_id = ri;
                         fviol.actual = (double)sol->request_vehicle[ri];
                         fviol.limit = (double)expected_vehicle;
-                        push_violation(ctx, &fviol);
+                        if (!push_violation(ctx, &fviol)) goto validation_failed;
                     }
                 }
             }
@@ -666,9 +723,22 @@ SGStatus sg_validate_plan_impl(SGContext *ctx, uint32_t num_routes,
                     cviol.type = SG_VIOLATION_COMMITTED_UNASSIGNED;
                     cviol.vehicle_id = UINT32_MAX;
                     cviol.request_id = ri;
-                    push_violation(ctx, &cviol);
+                    if (!push_violation(ctx, &cviol)) goto validation_failed;
                 }
             }
+        }
+    }
+
+    /* A zero violation count is a feasibility claim. Confirm it with the
+     * authoritative hard validator even if an annotator misses a constraint. */
+    if (ctx->num_violations == 0) {
+        int penalty_enabled = ctx->penalty.enabled;
+        ctx->penalty.enabled = 0;
+        int valid = sg_route_solution_validate(sol, ctx);
+        ctx->penalty.enabled = penalty_enabled;
+        if (!valid) {
+            failure_status = SG_STATUS_ERROR;
+            goto validation_failed;
         }
     }
 
@@ -700,4 +770,12 @@ SGStatus sg_validate_plan_impl(SGContext *ctx, uint32_t num_routes,
     free(task_assigned);
 
     return SG_STATUS_OK;
+
+validation_failed:
+    if (sol) sg_route_solution_free(sol, NULL);
+    free(task_to_request);
+    free(task_assigned);
+    sg_set_error(ctx, failure_status == SG_STATUS_OUT_OF_MEMORY
+        ? "out of memory while validating plan" : "plan failed complete hard-constraint validation");
+    return failure_status;
 }

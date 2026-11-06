@@ -22,7 +22,7 @@ SRCS = src/sg_context.c src/sg_solution.c src/sg_cost.c src/sg_feasibility.c \
        src/sg_construct.c src/sg_construct_cfrs.c src/sg_destroy.c src/sg_repair.c \
        src/sg_postprocess.c src/sg_solve.c src/sg_reader.c src/sg_api.c \
        src/sg_parallel.c src/sg_validate.c src/sg_penalty.c src/sg_time_budget.c \
-       src/sg_neighbor.c src/sg_profile_matrix.c src/sg_concat.c src/sg_loading.c
+       src/sg_neighbor.c src/sg_profile_matrix.c src/sg_concat.c src/sg_loading.c src/sg_loading_model.c src/sg_loading_json.c
 OBJS = $(SRCS:.c=.o)
 
 # Not LIB: that is MSVC's library search path, and make re-exports any
@@ -118,7 +118,7 @@ lint-werror:
 	    -Wall -Wextra -Werror -Wshadow -Wunused-but-set-variable $$f -o /dev/null; \
 	done; echo "lint-werror: surge src+tools warning-clean"
 
-.PHONY: all clean test test-transport scripts-test tools lib debug bench bench-li-lim bench-cordeau \
+.PHONY: all clean test loading-cli-test test-transport scripts-test tools lib debug bench bench-li-lim bench-cordeau \
         bench-quick bench-li-lim-quick bench-cordeau-quick bench-all-quick \
         bench-gh-200 bench-gh-all bench-ll-200 bench-ll-all bench-full \
         bench-tune tune-quick tune-all \
@@ -132,12 +132,15 @@ lib: $(LIB_FILE)
 $(LIB_FILE): $(OBJS) ../arbor/libarbor.a ../shared/libshared.a
 	$(AR_CMD)$@ $(OBJS)
 
+# Context/record layout must never be mixed across incremental objects.
+$(OBJS): include/sg_internal.h include/surge.h include/sg_types.h include/sg_loading.h
+
 src/%.o: src/%.c
 	$(CC) $(CFLAGS) $(INCLUDES) -c $< $(OBJ_OUT)$@
 
 src/sg_api.o: src/sg_api_counts.h
 
-$(TEST_BIN): tests/test_surge.c $(LIB_FILE) ../arbor/libarbor.a ../shared/libshared.a src/sg_api_counts.h
+$(TEST_BIN): tests/test_surge.c tests/test_loading_integration.h tests/test_validation_oom.h src/sg_validate.c $(LIB_FILE) ../arbor/libarbor.a ../shared/libshared.a src/sg_api_counts.h
 	$(CC) $(CFLAGS) $(INCLUDES) $< $(call link_lib,.,surge) $(call link_lib,../arbor,arbor) $(call link_lib,../shared,shared) $(LDFLAGS) $(EXE_OUT)$@
 
 # CLI tools. surge_solve: request JSON -> solution JSON (the CLI companion to the
@@ -151,6 +154,9 @@ tools: $(SURGE_SOLVE_BIN)
 
 $(TRANSPORT_TEST_BIN): tests/test_transport_direct.c $(LIB_FILE) ../arbor/libarbor.a ../shared/libshared.a
 	$(CC) $(CFLAGS) $(INCLUDES) $< $(call link_lib,.,surge) $(call link_lib,../arbor,arbor) $(call link_lib,../shared,shared) $(LDFLAGS) $(EXE_OUT)$@
+
+loading-cli-test: $(SURGE_SOLVE_BIN)
+	python3 tests/test_loading_cli.py
 
 test-transport: $(TRANSPORT_TEST_BIN)
 	./$(TRANSPORT_TEST_BIN)
@@ -184,7 +190,8 @@ $(BENCH_TUNE_BIN): benchmarks/bench_tune.c benchmarks/sg_bench_utils.h $(LIB_FIL
 ../shared/libshared.a:
 	$(MAKE) -C ../shared lib
 
-src/sg_loading.o: include/sg_loading.h
+src/sg_loading.o src/sg_loading_model.o src/sg_loading_json.o: include/sg_loading.h
+src/sg_loading_json.o src/sg_api.o: src/sg_loading_json.h
 
 test_loading: tests/test_loading.c tests/loading_oracle.h src/sg_loading.c include/sg_loading.h include/sg_types.h
 	$(CC) $(CFLAGS) $(INCLUDES) tests/test_loading.c src/sg_loading.c $(LDFLAGS) $(EXE_OUT)$@

@@ -1,0 +1,108 @@
+{
+  "config": {
+    "max_iterations": 100,
+    "max_time_seconds": 2,
+    "population": true,
+    "population_threads": 2,
+    "population_generations": 2,
+    "seed": 42
+  },
+  "depots": [
+    {
+      "x": 0,
+      "y": 0
+    }
+  ],
+  "vehicles": [
+    {
+      "start_depot_id": 0,
+      "end_depot_id": 0,
+      "capacity": [
+        10
+      ],
+      "max_trips": 2
+    }
+  ],
+  "tasks": [
+    {
+      "type": "delivery",
+      "x": 1,
+      "y": 1,
+      "tw_early": 0,
+      "tw_late": 100000,
+      "demand": [
+        -1
+      ]
+    },
+    {
+      "type": "delivery",
+      "x": 2,
+      "y": 1,
+      "tw_early": 0,
+      "tw_late": 100000,
+      "demand": [
+        -1
+      ]
+    }
+  ],
+  "requests": [
+    {
+      "delivery_task_id": 0
+    },
+    {
+      "delivery_task_id": 1
+    }
+  ],
+  "loading": {
+    "version": 1,
+    "mode": "hard",
+    "node_budget": 1000,
+    "vehicles": [
+      {
+        "vehicle_id": 0,
+        "access_model": "side_free",
+        "slots": [
+          {
+            "lane": 0,
+            "depth": 0
+          }
+        ],
+        "max_layers": 2,
+        "clearance_mm": 2400,
+        "max_stack_weight_g": 10000,
+        "payload_g": 100000,
+        "allowed_top": [
+          [
+            0
+          ]
+        ]
+      }
+    ],
+    "requests": [
+      {
+        "request_id": 0,
+        "units": [
+          {
+            "height_mm": 1000,
+            "weight_g": 500,
+            "stack_class": 0,
+            "max_weight_above_g": 1000,
+            "max_units_above": 0
+          }
+        ]
+      },
+      {
+        "request_id": 1,
+        "units": [
+          {
+            "height_mm": 1000,
+            "weight_g": 500,
+            "stack_class": 0,
+            "max_weight_above_g": 1000,
+            "max_units_above": 0
+          }
+        ]
+      }
+    ]
+  }
+}

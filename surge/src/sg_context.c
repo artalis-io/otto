@@ -48,6 +48,7 @@ void sg_vehicle_records_free(SGVehicleRecord *vehicles, uint32_t count) {
         return;
     }
     for (i = 0; i < count; i++) {
+        free(vehicles[i].loading);
         free(vehicles[i].capacity);
         vehicles[i].capacity = NULL;
         free(vehicles[i].initial_load);
@@ -70,6 +71,7 @@ void sg_request_records_free(SGRequestRecord *requests, uint32_t count) {
         return;
     }
     for (i = 0; i < count; i++) {
+        free(requests[i].loading_units);
         free(requests[i].allowed_vehicles);
         requests[i].allowed_vehicles = NULL;
         free(requests[i].forbidden_vehicles);
@@ -295,6 +297,7 @@ void sg_free(SGContext *ctx) {
         return;
     }
 
+    free(ctx->loading_cache);
     free(ctx->depots);
     ctx->depots = NULL;
     ctx->num_depots = 0;
@@ -1265,6 +1268,8 @@ SGStatus sg_validate_model(SGContext *ctx) {
         sg_set_error(ctx, "internal data arrays not allocated");
         return SG_STATUS_INFEASIBLE;
     }
+
+    if (sg_loading_model_validate(ctx) != SG_STATUS_OK) return SG_STATUS_INVALID_ARG;
 
     for (i = 0; i < ctx->num_depots; i++) {
         const SGDepotRecord *depot = &ctx->depots[i];
@@ -3230,21 +3235,28 @@ double sg_solution_get_route_total_work(const SGContext *ctx, uint32_t route_ind
  * Plan Validation
  * ============================================================================ */
 
+SGStatus sg_validate_plan_with_trips(SGContext *ctx, uint32_t num_routes,
+    const SGPlanRoute *routes, const uint8_t *const *trip_starts) {
+    if (!ctx || (num_routes && !routes)) return SG_STATUS_INVALID_ARG;
+    SGStatus status = sg_validate_model(ctx);
+    if (status != SG_STATUS_OK) return status;
+    for (uint32_t i = 0; i < num_routes; ++i) {
+        if (routes[i].vehicle_id >= ctx->num_vehicles ||
+            (routes[i].task_count && !routes[i].task_ids)) return SG_STATUS_INVALID_ARG;
+        if (ctx->hard_loading)
+            for (uint32_t j = 0; j < i; ++j)
+                if (routes[j].vehicle_id == routes[i].vehicle_id) return SG_STATUS_INVALID_ARG;
+        if (!trip_starts || !trip_starts[i]) continue;
+        for (uint32_t j = 0; j < routes[i].task_count; ++j)
+            if (trip_starts[i][j] > 1 || (!j && trip_starts[i][j]) ||
+                (trip_starts[i][j] && !ctx->vehicles[routes[i].vehicle_id].has_multi_trip))
+                return SG_STATUS_INVALID_ARG;
+    }
+    return sg_validate_plan_impl_with_trips(ctx, num_routes, routes, trip_starts);
+}
+
 SGStatus sg_validate_plan(SGContext *ctx, uint32_t num_routes, const SGPlanRoute *routes) {
-    SGStatus status;
-
-    if (!ctx) {
-        return SG_STATUS_INVALID_ARG;
-    }
-
-    sg_clear_error(ctx);
-
-    status = sg_validate_model(ctx);
-    if (status != SG_STATUS_OK) {
-        return status;
-    }
-
-    return sg_validate_plan_impl(ctx, num_routes, routes);
+    return sg_validate_plan_with_trips(ctx, num_routes, routes, NULL);
 }
 
 uint32_t sg_get_violation_count(const SGContext *ctx) {

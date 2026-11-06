@@ -1805,7 +1805,7 @@ These are real-world features that require larger architectural changes:
 | **Driver breaks / HoSE** | ✅ Complete. Abstract break model — generic `(max_work, break_duration, max_total_work)` maps to both EU EC 561 and US FMCSA rules. |
 | **Multiple trips** | ✅ Complete. Multi-route-per-vehicle state with depot reload modeling. `sg_vehicle_set_max_trips()`. |
 | **Time-dependent travel** | ✅ Complete. Speed profiles (step-function multipliers), per-vehicle travel profiles, and time-indexed travel brackets (multiple complete matrices by departure time). `sg_set_travel_time_bracket()` + `sg_travel_profile_add_time_bracket()`. |
-| **Load stacking / 3D loading constraints** | 🔲 P1 standalone checker implemented (2026-11); solver integration and real-data validation pending. Per-order stack compatibility, max stack height, weight-on-top limits, non-stackable/orientation flags, and LIFO unload order (2L/3L-CVRP). Bounded Tier-2 loading-feasibility check in the insertion evaluator. See "3L loading checker (design)" below. |
+| **Load stacking / 3D loading constraints** | 🔲 P1 checker and opt-in P2 native/HGS integration implemented (2026-11); real-data validation pending. Per-order stack compatibility, max stack height, weight-on-top limits, non-stackable/orientation flags, and LIFO unload order (2L/3L-CVRP). Bounded Tier-2 loading-feasibility check in the insertion evaluator. See "3L loading checker (design)" below. |
 
 #### Load stacking / 3D loading constraints
 
@@ -1846,25 +1846,29 @@ unload order matters. Without these it cannot be modeled.
 [`design-surge-loading.md`](../design-surge-loading.md). P1 uses explicit physical
 units, not inferred half-height fractions. UNKNOWN is not hard feasibility;
 search exhaustion is not a proof of infeasibility. Missing customer data remains
-a prerequisite for real-world validation. Solver coupling is a separate P2 step.
+a prerequisite for real-world validation. P2 coupling is specified in [`design-surge-loading-p2.md`](../design-surge-loading-p2.md).
 
 
-**Status:** P1 standalone C checker implemented; P2 solver coupling and historical
-physical-data validation pending. A bounded Tier-2 loading-feasibility
+**Status:** P1 standalone C checker and opt-in P2 native/HGS coupling implemented;
+historical physical-data validation pending. A bounded Tier-2 loading-feasibility
 module, scoped to one real distribution fleet, prioritized over further
-speculative multi-trip perf work (direct operational value). Grounded in that
-deployment's data: "pallets" are a FRACTIONAL footprint quantity (partial/half-height
-pallets that stack), floor slots are 17 (rigid) / 33 (semi) / 34 (drawbar), and
-the loading unit is a ROUND (truckload), not the whole multi-round trip.
+speculative multi-trip perf work (direct operational value). Existing deployment exports contain fractional pallet quantities, but these do
+not establish physical footprint or height. The original design used 17 rigid /
+33 semi / 34 drawbar floor positions as examples, not defaults. The supplied
+process document establishes the semi's 33 positions and conditional 66-pallet
+case; actual vehicle geometry requires validated input. The loading unit is a
+ROUND (truckload), not the whole multi-round shift.
 
-**Operational decisions (from the design session):**
+**Intended model (input availability corrected 2026-11):**
 - **Access is per-vehicle** (the fleet is mixed): each vehicle carries an
   `access_model ∈ {REAR_LIFO, SIDE_FREE}`. Rear-load vehicles couple loading to
   route order (LIFO from the door); side-accessible vehicles are order-free.
-- **Per-product stack classes** are available in the data, so the stacking rule
-  is explicit allowed `bottom_class -> {top_classes}`, max layers, max stack
-  weight (not a uniform approximation).
-- **Footprints + heights** are available, so real height/clearance is checked.
+- **Per-product stack classes** are required external inputs, not yet supplied
+  for the current customer. Rules are explicit allowed
+  `bottom_class -> {top_classes}`, layer/count limits and support weight limits
+  (not a uniform approximation).
+- **Footprints + heights** must be supplied; fractional quantities cannot stand
+  in for measured heights or vehicle clearance.
 - Open parameter: the reshuffle policy for rear-load vehicles (may the driver
   temporarily move other customers' pallets). Modeled as a per-vehicle attribute
   defaulting to "none" (strict LIFO); bounded-cost reshuffle is deferred to P3.

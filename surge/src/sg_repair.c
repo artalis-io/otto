@@ -507,7 +507,8 @@ sg_rank_new_trip:
                 /* Evaluate new trip: depot → new_stop(s) → depot */
                 SGRouteStop new_stops[2];
                 uint32_t new_stop_count = 0;
-                if (sg_request_emit_stops(ctx, request_id, new_stops, &new_stop_count)) {
+                if (sg_request_emit_stops(ctx, request_id, new_stops, &new_stop_count) &&
+                    (!ctx->hard_loading || sg_loading_stops_ok(ctx, v, new_stops, new_stop_count))) {
                     const SGDepotRecord *sd = &ctx->depots[vehicle->start_depot_id];
                     const SGDepotRecord *ed = &ctx->depots[vehicle->end_depot_id];
                     double dist_delta = 0.0;
@@ -795,8 +796,8 @@ static ARStatus sg_repair_fill_greedy_linear(SGContext *ctx, SGRouteSolution *so
                 is_new_trip = 1;
                 pos &= ~SG_NEW_TRIP_BIT;
             }
-            if (sg_route_apply_insertion(ctx, sol, request_id, vehicle_id, pos,
-                                         route_distance) != AR_STATUS_OK) {
+            if (sg_route_apply_insertion_mode(ctx, sol, request_id, vehicle_id, pos,
+                                         route_distance, is_new_trip) != AR_STATUS_OK) {
                 return AR_STATUS_ERROR;
             }
         }
@@ -839,8 +840,8 @@ static ARStatus sg_repair_fill_regret_linear(SGContext *ctx, SGRouteSolution *so
                 is_new_trip = 1;
                 pos &= ~SG_NEW_TRIP_BIT;
             }
-            if (sg_route_apply_insertion(ctx, sol, request_id, vehicle_id, pos,
-                                         route_distance) != AR_STATUS_OK) {
+            if (sg_route_apply_insertion_mode(ctx, sol, request_id, vehicle_id, pos,
+                                         route_distance, is_new_trip) != AR_STATUS_OK) {
                 return AR_STATUS_ERROR;
             }
         }
@@ -874,8 +875,8 @@ static ARStatus sg_repair_apply_cached(SGContext *ctx, SGRouteSolution *sol,
             is_new_trip = 1;
             p &= ~SG_NEW_TRIP_BIT;
         }
-        if (sg_route_apply_insertion(ctx, sol, req, entry->vehicle_id, p,
-                                      entry->route_distance) != AR_STATUS_OK) {
+        if (sg_route_apply_insertion_mode(ctx, sol, req, entry->vehicle_id, p,
+                                      entry->route_distance, is_new_trip) != AR_STATUS_OK) {
             return AR_STATUS_ERROR;
         }
     }

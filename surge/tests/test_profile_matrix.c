@@ -45,6 +45,16 @@ static void add_delivery_request(SGContext *ctx, double x, double y,
     assert(rid != UINT32_MAX);
 }
 
+/* A wall-clock profile may legitimately expire under instrumentation. The
+ * contract is a usable, fully validated incumbent, not finishing before 5s. */
+static void solve_and_check_incumbent(SGContext *ctx) {
+    SGStatus status = sg_solve(ctx);
+    assert(status == SG_STATUS_OK || status == SG_STATUS_LIMIT);
+    assert(ctx->final_solution != NULL);
+    assert(ctx->final_solution->base.num_assigned == ctx->num_requests);
+    assert(sg_route_solution_validate(ctx->final_solution, ctx));
+}
+
 /* ---- Tests ---- */
 
 static void test_scale_from_count_boundaries(void) {
@@ -228,7 +238,7 @@ static void test_profile_auto_scale_solve(void) {
                              0, 86400, 120, -10.0);
     }
 
-    assert(sg_solve(ctx) == SG_STATUS_OK);
+    solve_and_check_incumbent(ctx);
 
     /* After solve, config should match FAST×SMALL */
     assert(ctx->config.max_iterations == 2500);
@@ -263,7 +273,7 @@ static void test_profile_explicit_scale_solve(void) {
                              0, 86400, 120, -10.0);
     }
 
-    assert(sg_solve(ctx) == SG_STATUS_OK);
+    solve_and_check_incumbent(ctx);
 
     /* Explicit scale overrides auto-detect */
     assert(ctx->config.max_iterations == 2500);
@@ -297,7 +307,7 @@ static void test_no_profile_manual_config(void) {
                              0, 86400, 120, -10.0);
     }
 
-    assert(sg_solve(ctx) == SG_STATUS_OK);
+    solve_and_check_incumbent(ctx);
 
     /* Config unchanged — matrix not consulted */
     assert(ctx->config.max_iterations == 77);
@@ -354,14 +364,14 @@ static void test_solve_twice_profile_applied_once(void) {
                              0, 86400, 120, -10.0);
     }
 
-    assert(sg_solve(ctx) == SG_STATUS_OK);
+    solve_and_check_incumbent(ctx);
     assert(ctx->profile_applied == 1);
     assert(ctx->config.max_iterations == 500);
     assert(ctx->config.max_time_seconds == 1);
 
     /* Manually change iterations — second solve should keep them */
     ctx->config.max_iterations = 100;
-    assert(sg_solve(ctx) == SG_STATUS_OK);
+    solve_and_check_incumbent(ctx);
     assert(ctx->config.max_iterations == 100);  /* Not overwritten */
 
     sg_free(ctx);
@@ -394,7 +404,7 @@ static void test_all_profiles_resolve(void) {
                                  0, 86400, 120, -10.0);
         }
 
-        assert(sg_solve(ctx) == SG_STATUS_OK);
+        solve_and_check_incumbent(ctx);
         assert(ctx->profile_applied == 1);
         assert(ctx->config.max_iterations > 0);
         assert(ctx->config.max_time_seconds > 0);

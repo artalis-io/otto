@@ -591,6 +591,7 @@ void sg_route_build_segments(const SGContext *ctx, SGRouteSolution *sol,
  * no global time brackets (so sg_travel_dist == sg_travel for distances).
  */
 static int sg_concat_filter_applicable(const SGContext *ctx, uint32_t v) {
+    if (ctx->hard_loading) return 0; /* require full ordered-round fallback */
     if (ctx->has_pd_requests) return 0;
     if (!sg_vehicle_has_timing_segments(ctx, v)) return 0;
     if (ctx->travel_callback) return 0;

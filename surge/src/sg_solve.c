@@ -1531,6 +1531,7 @@ skip_phase2:
     sg_route_solution_free(p2_best, NULL);
 
     if (!solution_valid) {
+        if (ctx->hard_loading) sg_set_error(ctx, "no verified solution preserving hard loading and must-serve constraints");
         return SG_STATUS_ERROR;
     }
     if (ar_status == AR_STATUS_LIMIT) {

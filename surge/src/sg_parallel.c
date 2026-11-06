@@ -50,6 +50,8 @@ typedef struct {
 
 static SGStatus sg_context_clone_init(SGContext *clone, const SGContext *src) {
     memcpy(clone, src, sizeof(SGContext));
+    clone->loading_cache = NULL;
+    clone->loading_parent_cancel = &src->cancel_requested;
 
     /* Fresh RNG for this clone */
     clone->op_rng = sh_rng_create_default();
@@ -105,6 +107,8 @@ static SGStatus sg_context_clone_init(SGContext *clone, const SGContext *src) {
 }
 
 static void sg_context_clone_free(SGContext *clone) {
+    free(clone->loading_cache);
+    clone->loading_cache = NULL;
     sh_rng_free(clone->op_rng);
     clone->op_rng = NULL;
 
@@ -777,6 +781,18 @@ cleanup:
     }
     free(items);
 
+    if (ctx->hard_loading && ctx->final_solution) {
+        /* Revalidate with soft infeasible-space exploration disabled: publication
+         * must enforce ordinary hard constraints as well as physical loading. */
+        int penalty_enabled = ctx->penalty.enabled;
+        ctx->penalty.enabled = 0;
+        int valid = sg_route_solution_validate(ctx->final_solution, ctx);
+        ctx->penalty.enabled = penalty_enabled;
+        if (!valid) {
+            sg_route_solution_free(ctx->final_solution, NULL); ctx->final_solution = NULL;
+            sg_set_error(ctx, "hard loading: refused unverified worker result"); status = SG_STATUS_ERROR;
+        }
+    }
     return status;
 }
 
@@ -1118,6 +1134,18 @@ pop_cleanup:
     sh_rng_free(select_rng);
     free(items);
 
+    if (ctx->hard_loading && ctx->final_solution) {
+        /* Revalidate with soft infeasible-space exploration disabled: publication
+         * must enforce ordinary hard constraints as well as physical loading. */
+        int penalty_enabled = ctx->penalty.enabled;
+        ctx->penalty.enabled = 0;
+        int valid = sg_route_solution_validate(ctx->final_solution, ctx);
+        ctx->penalty.enabled = penalty_enabled;
+        if (!valid) {
+            sg_route_solution_free(ctx->final_solution, NULL); ctx->final_solution = NULL;
+            sg_set_error(ctx, "hard loading: refused unverified worker result"); status = SG_STATUS_ERROR;
+        }
+    }
     return status;
 }
 

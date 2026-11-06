@@ -613,6 +613,8 @@ int sg_route_stop_sequence_feasible(const SGContext *ctx, uint32_t vehicle_id,
         return 1;
     }
 
+    if (ctx->hard_loading && !sg_loading_stops_ok(ctx, vehicle_id, stops, stop_count)) return 0;
+
     vehicle = &ctx->vehicles[vehicle_id];
     if (!vehicle->has_depots || vehicle->start_depot_id >= ctx->num_depots ||
         vehicle->end_depot_id >= ctx->num_depots) {
@@ -1431,6 +1433,8 @@ int sg_route_eval_insertion_cached(const SGContext *ctx, const SGRouteSolution *
     if (pos > route_len || route_len >= sol->route_stride) {
         return 0;
     }
+
+    if (ctx->hard_loading && !sg_loading_insertion_ok(ctx, sol, request_id, vehicle_id, pos, 0)) return 0;
 
     /* Backhaul: D-only request must be inserted before any PD pickup */
     if (ctx->has_backhaul && vehicle->backhaul &&
@@ -3008,8 +3012,13 @@ int sg_route_eval_pd_best_insertion_cached(
 }
 
 ARStatus sg_route_apply_insertion(const SGContext *ctx, SGRouteSolution *sol,
+    uint32_t request_id, uint32_t vehicle_id, uint32_t pos, double distance) {
+    return sg_route_apply_insertion_mode(ctx, sol, request_id, vehicle_id, pos, distance, 0);
+}
+
+ARStatus sg_route_apply_insertion_mode(const SGContext *ctx, SGRouteSolution *sol,
                                   uint32_t request_id, uint32_t vehicle_id,
-                                  uint32_t pos, double new_route_distance) {
+                                  uint32_t pos, double new_route_distance, int new_trip) {
     uint32_t *route;
     uint32_t old_len;
     double old_distance;
@@ -3041,13 +3050,25 @@ ARStatus sg_route_apply_insertion(const SGContext *ctx, SGRouteSolution *sol,
         return AR_STATUS_INVALID_ARG;
     }
 
+    if (new_trip) {
+        const SGVehicleRecord *vehicle = &ctx->vehicles[vehicle_id];
+        if (!old_len || pos != old_len || !vehicle->has_multi_trip) return AR_STATUS_INVALID_ARG;
+        uint32_t trips = 1;
+        const SGRouteStop *stops = sg_route_vehicle_stop_ptr_const(sol, vehicle_id);
+        for (uint32_t i = 1; i < sol->route_stop_lengths[vehicle_id]; ++i)
+            if (stops[i].trip_start) ++trips;
+        if (vehicle->max_trips && trips >= vehicle->max_trips) return AR_STATUS_INVALID_ARG;
+    }
+    if (ctx->hard_loading && !sg_loading_insertion_ok(ctx, sol, request_id, vehicle_id, pos, new_trip))
+        return AR_STATUS_INVALID_ARG;
+
     /* Shift route_request_trip_start alongside route_requests */
     if (sol->route_request_trip_start) {
         uint8_t *ts = sol->route_request_trip_start + (size_t)vehicle_id * sol->route_stride;
         if (pos < old_len) {
             memmove(&ts[pos + 1], &ts[pos], (size_t)(old_len - pos) * sizeof(uint8_t));
         }
-        ts[pos] = 0;  /* Default: not a new trip start. Caller sets if needed. */
+        ts[pos] = new_trip ? 1 : 0;  /* Default: not a new trip start. Caller sets if needed. */
     }
 
     if (pos < old_len) {
@@ -3094,6 +3115,7 @@ ARStatus sg_route_apply_insertion(const SGContext *ctx, SGRouteSolution *sol,
             stop_insert_pos++;
         }
 
+        emitted_stops[0].trip_start = new_trip ? 1 : 0;
         if (emitted_count == 1) {
             /* Delivery-only */
             if (!sg_route_splice_stop(ctx, sol, vehicle_id, stop_insert_pos, &emitted_stops[0])) {
@@ -3163,6 +3185,7 @@ ARStatus sg_route_apply_pd_insertion(const SGContext *ctx, SGRouteSolution *sol,
     if (ctx->requests[request_id].kind != SG_REQUEST_KIND_PICKUP_DELIVERY) {
         return AR_STATUS_INVALID_ARG;
     }
+    if (ctx->hard_loading) return AR_STATUS_INVALID_ARG;
     /* Eligibility chokepoint (see sg_route_apply_insertion). */
     if (request_id < ctx->num_requests &&
         !sg_vehicle_can_serve(ctx, vehicle_id, request_id)) {

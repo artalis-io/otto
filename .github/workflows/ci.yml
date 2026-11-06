@@ -171,6 +171,9 @@ jobs:
       - name: Test Surge scripts
         run: make -C surge scripts-test
 
+      - name: Test native loading JSON with population solver
+        run: make -C surge loading-cli-test
+
       # Surge API is served by Keel (vendor/keel submodule)
       - name: Build Surge API
         run: |
@@ -748,6 +751,9 @@ jobs:
       # this suite was moved out of the C test target in the first place.
       - name: Test Surge scripts
         run: make -C surge scripts-test
+
+      - name: Test native loading JSON with population solver
+        run: make -C surge loading-cli-test
 
       # The FuelWise benchmark regression compares Ralph's MILP objectives
       # against glpsol. Running that on Windows checks Ralph's numerics under a
