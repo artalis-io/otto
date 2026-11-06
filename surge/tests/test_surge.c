@@ -18532,6 +18532,7 @@ static void test_strategy_order_clustered(void) {
 /* ===== main ===== */
 
 #include "test_loading_integration.h"
+#include "test_validation_oom.h"
 
 int main(void) {
     RUN_TEST(test_loading_json_manual_rounds_and_errors);
@@ -18542,6 +18543,8 @@ int main(void) {
     RUN_TEST(test_loading_manual_order_and_cache);
     RUN_TEST(test_loading_multitrip_and_apply_boundary);
     RUN_TEST(test_loading_incomplete_and_unsupported_model);
+    RUN_TEST(test_validation_allocation_failure_never_publishes);
+    RUN_TEST(test_manual_validation_capacity_and_authority);
     printf("surge test suite\n");
     printf("================\n");
 
@@ -19149,9 +19152,9 @@ int main(void) {
     printf("================\n");
     printf("%d/%d tests passed\n", tests_passed, tests_run);
 #ifdef SG_HAS_THREADS
-    assert(tests_run == 492);
+    assert(tests_run == 494);
 #else
-    assert(tests_run == 468);
+    assert(tests_run == 470);
 #endif
     return tests_passed == tests_run ? 0 : 1;
 }

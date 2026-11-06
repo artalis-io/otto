@@ -193,3 +193,12 @@ Profile tests accept the documented time-limit status only alongside a fully
 assigned, validated incumbent. Instrumented ARM execution need not complete an
 optimization profile before its five-second wall-clock budget to satisfy that
 contract. Runtime behavior and profile budgets are unchanged.
+
+Manual validation also fails closed if violation recording or validation scratch
+allocation fails: a partial report cannot publish a new snapshot. Allocation
+fault tests compile the same production source with test-only allocator wrappers,
+including forbidden vehicles, frozen/committed requests, duplicate/unknown tasks,
+loading failures and growing violation buffers. Scalar capacity annotations use
+the canonical signed-load span separately for each depot round, including initial
+delivery cargo and zero/exact capacities. A zero-violation result additionally
+must pass the complete hard validator before publication.

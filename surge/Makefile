@@ -140,7 +140,7 @@ src/%.o: src/%.c
 
 src/sg_api.o: src/sg_api_counts.h
 
-$(TEST_BIN): tests/test_surge.c tests/test_loading_integration.h $(LIB_FILE) ../arbor/libarbor.a ../shared/libshared.a src/sg_api_counts.h
+$(TEST_BIN): tests/test_surge.c tests/test_loading_integration.h tests/test_validation_oom.h src/sg_validate.c $(LIB_FILE) ../arbor/libarbor.a ../shared/libshared.a src/sg_api_counts.h
 	$(CC) $(CFLAGS) $(INCLUDES) $< $(call link_lib,.,surge) $(call link_lib,../arbor,arbor) $(call link_lib,../shared,shared) $(LDFLAGS) $(EXE_OUT)$@
 
 # CLI tools. surge_solve: request JSON -> solution JSON (the CLI companion to the
