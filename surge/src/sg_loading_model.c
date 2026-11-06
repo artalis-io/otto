@@ -212,9 +212,11 @@ int sg_loading_insertion_ok(const SGContext *ctx, const SGRouteSolution *sol, ui
         return 0;
     uint32_t count = sol->route_stop_lengths[vehicle];
     /* Delivery-only hard mode: one stop per request. */
-    if (count != sol->route_lengths[vehicle] || (size_t)count > SIZE_MAX / sizeof(SGRouteStop) - 1)
+    size_t candidate_count = (size_t)count + 1;
+    if (count != sol->route_lengths[vehicle] || !candidate_count ||
+        candidate_count > SIZE_MAX / sizeof(SGRouteStop))
         return 0;
-    SGRouteStop *candidate = malloc(((size_t)count + 1) * sizeof(*candidate));
+    SGRouteStop *candidate = malloc(candidate_count * sizeof(*candidate));
     if (!candidate)
         return 0;
     const SGRouteStop *stops = sg_route_vehicle_stop_ptr_const(sol, vehicle);
