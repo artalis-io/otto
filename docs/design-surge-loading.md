@@ -125,3 +125,7 @@ Existing regression suite: 484/484 Surge tests, 27/27 time-budget tests, 19/19
 neighbour tests, 22/22 profile-matrix tests, and direct transport checks passed.
 No real customer loading validation, solver coupling, JSON/HTTP/WASM loading
 interface, Cursus integration or production rollout is claimed by this phase.
+
+P2 native/HGS integration is implemented separately; see
+[`design-surge-loading-p2.md`](design-surge-loading-p2.md) for its input,
+publication boundaries, manual round validation and remaining limitations.

@@ -73,6 +73,9 @@ typedef struct {
     uint32_t n;
     uint64_t budget, nodes;
     int exhausted;
+    int interrupted;
+    SGLoadingShouldStop should_stop;
+    void *user_data;
     uint32_t order[SG_LOADING_MAX_UNITS];
     uint32_t used[SG_LOADING_MAX_SLOTS];
     uint32_t stack[SG_LOADING_MAX_SLOTS][SG_LOADING_MAX_LAYERS];
@@ -111,6 +114,9 @@ static int fits(const Search *s, uint32_t id, uint32_t slot) {
 }
 
 static int search(Search *s, uint32_t pos) {
+    if (s->should_stop && s->should_stop(s->user_data)) {
+        s->exhausted = s->interrupted = 1; return 0;
+    }
     if (s->nodes == s->budget) { s->exhausted = 1; return 0; }
     ++s->nodes;
     if (pos == s->n) return 1;
@@ -137,6 +143,11 @@ static int search(Search *s, uint32_t pos) {
 
 SGStatus sg_loading_check(const SGLoadingVehicle *v, const SGLoadingUnit *u,
                          uint32_t n, uint64_t budget, SGLoadingResult *r) {
+    return sg_loading_check_controlled(v,u,n,budget,NULL,NULL,r);
+}
+
+SGStatus sg_loading_check_controlled(const SGLoadingVehicle *v, const SGLoadingUnit *u,
+    uint32_t n, uint64_t budget, SGLoadingShouldStop stop, void *user_data, SGLoadingResult *r) {
     if (!r) return SG_STATUS_INVALID_ARG;
     memset(r, 0, sizeof(*r)); r->outcome = SG_LOADING_UNKNOWN;
     r->reason = SG_LOADING_UNSUPPORTED;
@@ -152,6 +163,7 @@ SGStatus sg_loading_check(const SGLoadingVehicle *v, const SGLoadingUnit *u,
     if (n > v->slot_count * v->max_layers ||
         total_height > (uint64_t)v->slot_count * v->clearance_mm) goto capacity;
     Search s = {0}; s.v = v; s.u = u; s.n = n; s.budget = budget;
+    s.should_stop = stop; s.user_data = user_data;
     for (uint32_t i = 0; i < n; ++i) s.order[i] = i;
     /* Every legal stack has a bottom-to-top order sorted by nonincreasing stop
      * in rear mode. Both modes explore vertical permutations too; search
@@ -170,7 +182,8 @@ SGStatus sg_loading_check(const SGLoadingVehicle *v, const SGLoadingUnit *u,
     } else {
         r->nodes = s.nodes;
         r->outcome = s.exhausted ? SG_LOADING_UNKNOWN : SG_LOADING_INFEASIBLE;
-        r->reason = s.exhausted ? SG_LOADING_BUDGET : SG_LOADING_NO_ARRANGEMENT;
+        r->reason = s.interrupted ? SG_LOADING_INTERRUPTED :
+            s.exhausted ? SG_LOADING_BUDGET : SG_LOADING_NO_ARRANGEMENT;
     }
     return SG_STATUS_OK;
 capacity:

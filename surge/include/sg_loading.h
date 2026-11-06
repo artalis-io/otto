@@ -15,7 +15,7 @@ typedef enum { SG_LOADING_SIDE_FREE, SG_LOADING_REAR_LIFO } SGLoadingAccess;
 typedef enum { SG_LOADING_FEASIBLE, SG_LOADING_INFEASIBLE, SG_LOADING_UNKNOWN } SGLoadingOutcome;
 typedef enum {
     SG_LOADING_WITNESS, SG_LOADING_CAPACITY, SG_LOADING_NO_ARRANGEMENT,
-    SG_LOADING_BUDGET, SG_LOADING_UNSUPPORTED
+    SG_LOADING_BUDGET, SG_LOADING_UNSUPPORTED, SG_LOADING_INTERRUPTED
 } SGLoadingReason;
 typedef struct {
     uint32_t stop; /* delivery sequence, smaller numbers unload first */
@@ -48,6 +48,13 @@ typedef struct {
 SGStatus sg_loading_check(const SGLoadingVehicle *vehicle,
     const SGLoadingUnit *units, uint32_t count, uint64_t node_budget,
     SGLoadingResult *result);
+/* Optional cancellation polling for integrations. An interrupted search is
+ * UNKNOWN, not an infeasibility proof; no callback is used by the pure API. */
+typedef int (*SGLoadingShouldStop)(void *user_data);
+SGStatus sg_loading_check_controlled(const SGLoadingVehicle *vehicle,
+    const SGLoadingUnit *units, uint32_t count, uint64_t node_budget,
+    SGLoadingShouldStop should_stop, void *user_data, SGLoadingResult *result);
+
 /* Independent certificate validation. Only OK means the arrangement is valid. */
 SGStatus sg_loading_validate(const SGLoadingVehicle *vehicle,
     const SGLoadingUnit *units, uint32_t count,

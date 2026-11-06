@@ -50,6 +50,8 @@ typedef struct {
 
 static SGStatus sg_context_clone_init(SGContext *clone, const SGContext *src) {
     memcpy(clone, src, sizeof(SGContext));
+    clone->loading_cache = NULL;
+    clone->loading_parent_cancel = &src->cancel_requested;
 
     /* Fresh RNG for this clone */
     clone->op_rng = sh_rng_create_default();
@@ -105,6 +107,8 @@ static SGStatus sg_context_clone_init(SGContext *clone, const SGContext *src) {
 }
 
 static void sg_context_clone_free(SGContext *clone) {
+    free(clone->loading_cache);
+    clone->loading_cache = NULL;
     sh_rng_free(clone->op_rng);
     clone->op_rng = NULL;
 
@@ -777,6 +781,16 @@ cleanup:
     }
     free(items);
 
+    if (ctx->hard_loading && ctx->final_solution) {
+        int valid = 1;
+        for (uint32_t v = 0; v < ctx->final_solution->num_vehicles; ++v)
+            if (!sg_loading_stops_ok(ctx, v, sg_route_vehicle_stop_ptr_const(ctx->final_solution, v),
+                ctx->final_solution->route_stop_lengths[v])) { valid = 0; break; }
+        if (!valid) {
+            sg_route_solution_free(ctx->final_solution, NULL); ctx->final_solution = NULL;
+            sg_set_error(ctx, "hard loading: refused unverified worker result"); status = SG_STATUS_ERROR;
+        }
+    }
     return status;
 }
 
@@ -1118,6 +1132,16 @@ pop_cleanup:
     sh_rng_free(select_rng);
     free(items);
 
+    if (ctx->hard_loading && ctx->final_solution) {
+        int valid = 1;
+        for (uint32_t v = 0; v < ctx->final_solution->num_vehicles; ++v)
+            if (!sg_loading_stops_ok(ctx, v, sg_route_vehicle_stop_ptr_const(ctx->final_solution, v),
+                ctx->final_solution->route_stop_lengths[v])) { valid = 0; break; }
+        if (!valid) {
+            sg_route_solution_free(ctx->final_solution, NULL); ctx->final_solution = NULL;
+            sg_set_error(ctx, "hard loading: refused unverified worker result"); status = SG_STATUS_ERROR;
+        }
+    }
     return status;
 }
 

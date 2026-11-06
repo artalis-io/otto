@@ -392,6 +392,7 @@ typedef struct {
         double  *capacity;      /* [dim_count], NULL = unlimited. Owned. */
     } compartments[SG_MAX_COMPARTMENTS_PER_VEHICLE];
     uint8_t num_compartments;   /* 0..8 */
+    SGLoadingVehicle *loading; /* owned by master; immutable in worker clones */
 } SGVehicleRecord;
 
 typedef struct {
@@ -441,9 +442,18 @@ typedef struct {
     uint16_t num_prec_before;
     uint32_t *precedence_after;        /* [num_prec_after] request IDs that must start after me */
     uint16_t num_prec_after;
+    SGLoadingUnit *loading_units;
+    uint32_t loading_count;
+    uint8_t has_loading_units;
 } SGRequestRecord;
 
+typedef struct SGLoadingCache SGLoadingCache;
+
 struct SGContext {
+    uint8_t hard_loading;
+    uint64_t loading_node_budget;
+    const _Atomic uint8_t *loading_parent_cancel;
+    SGLoadingCache *loading_cache; /* worker-local, never shared between clones */
     SGConfig config;
     SGDemandSignConvention demand_sign_convention;
     uint32_t dimension_count;
@@ -1146,6 +1156,18 @@ int sg_route_eval_insertion(const SGContext *ctx, const SGRouteSolution *sol,
                             uint32_t request_id, uint32_t vehicle_id, uint32_t pos,
                             uint32_t *candidate_route, double *capacity_scratch,
                             double *score_out, double *new_route_distance_out);
+void sg_loading_invalidate(SGContext *ctx);
+SGStatus sg_loading_model_validate(SGContext *ctx);
+int sg_loading_stops_ok(const SGContext *ctx, uint32_t vehicle,
+                       const SGRouteStop *stops, uint32_t count);
+int sg_loading_insertion_ok(const SGContext *ctx, const SGRouteSolution *sol,
+    uint32_t request, uint32_t vehicle, uint32_t position, int new_trip);
+SGStatus sg_loading_round(const SGContext *ctx, uint32_t vehicle,
+    const SGRouteStop *stops, uint32_t count, uint32_t trip,
+    SGLoadingResult *result, uint32_t *requests, uint32_t *units);
+ARStatus sg_route_apply_insertion_mode(const SGContext *ctx, SGRouteSolution *sol,
+    uint32_t request_id, uint32_t vehicle_id, uint32_t pos,
+    double new_route_distance, int new_trip);
 ARStatus sg_route_apply_insertion(const SGContext *ctx, SGRouteSolution *sol,
                                   uint32_t request_id, uint32_t vehicle_id,
                                   uint32_t pos, double new_route_distance);
@@ -1305,6 +1327,8 @@ int sg_try_place_with_ejection(const SGContext *ctx, SGRouteSolution *sol,
 
 /* sg_validate.c */
 SGStatus sg_validate_plan_impl(SGContext *ctx, uint32_t num_routes, const SGPlanRoute *routes);
+SGStatus sg_validate_plan_impl_with_trips(SGContext *ctx, uint32_t num_routes,
+    const SGPlanRoute *routes, const uint8_t *const *trip_starts);
 
 /* sg_penalty.c */
 void sg_penalty_init_adaptive(SGPenaltyManager *mgr, double target_feasible,

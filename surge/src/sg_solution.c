@@ -1325,6 +1325,9 @@ int sg_route_solution_validate(const void *solution, void *user_ctx) {
             }
         }
 
+        /* Physical loading is always hard, including infeasible-space search. */
+        if (ctx->hard_loading && !sg_loading_stops_ok(ctx, v, stops, stop_len)) goto done;
+
         if (stop_len > 0) {
             if (!ctx->penalty.enabled) {
                 if (!sg_route_stop_sequence_feasible(ctx, v, stops, stop_len, &recomputed_distance)) {
@@ -1386,6 +1389,11 @@ int sg_route_solution_validate(const void *solution, void *user_ctx) {
 
     for (r = 0; r < sol->base.total_requests; r++) {
         const SGRequestRecord *request = &ctx->requests[r];
+        /* Must-serve is authoritative even if construction could not place the
+         * request (e.g. its physical load is impossible). Never report success
+         * by silently leaving a committed/frozen request unassigned. */
+        if (ctx->request_locks && ctx->request_locks[r] >= SG_LOCK_COMMITTED &&
+            !sol->base.assigned_flags[r]) goto done;
         if (sol->base.assigned_flags[r]) {
             uint32_t vehicle_id = sol->request_vehicle[r];
             const SGRouteStop *stops;

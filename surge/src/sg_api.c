@@ -6,6 +6,7 @@
 
 #include "sg_api.h"
 #include "sg_api_counts.h"
+#include "sg_loading_json.h"
 #include "surge.h"
 #include "sh_json.h"
 
@@ -1436,7 +1437,7 @@ SGStatus sg_api_build_model(SGContext *ctx, const ShJsonValue *root) {
         }
     }
 
-    return SG_STATUS_OK;
+    return sg_loading_build_json(ctx, sh_json_get(root, "loading"));
 }
 
 /* ============================================================================
@@ -1517,6 +1518,9 @@ static const char *violation_type_name(SGViolationType type) {
         case SG_VIOLATION_QUALIFICATION:     return "qualification";
         case SG_VIOLATION_UNKNOWN_TASK:      return "unknown_task";
         case SG_VIOLATION_DUPLICATE_TASK:    return "duplicate_task";
+        case SG_VIOLATION_LOADING:           return "loading";
+        case SG_VIOLATION_LOADING_UNKNOWN:   return "loading_unknown";
+        case SG_VIOLATION_MAX_TRIPS:         return "max_trips";
         default:                             return "UNKNOWN";
     }
 }
@@ -1841,6 +1845,8 @@ SGStatus sg_api_write_solution(const SGContext *ctx, ShJsonWriter *w,
             }
         }
 
+        sg_loading_write_json(ctx, w);
+
         /* Routes */
         route_count = sg_solution_get_route_count(ctx);
         sh_json_write_key(w, "routes");
@@ -2025,10 +2031,28 @@ char *sg_api_solve(const char *json_body, size_t body_len,
                 return make_error_json(400, "invalid plan format", out_len);
             }
 
+            uint8_t **trip_starts = calloc(num_plan_routes ? num_plan_routes : 1, sizeof(*trip_starts));
+            int trip_ok = trip_starts != NULL;
+            for (uint32_t i = 0; i < num_plan_routes && trip_ok; ++i) {
+                const ShJsonValue *flags = sh_json_get(sh_json_array_get(plan_arr, i), "trip_starts");
+                if (!flags) continue;
+                if (sh_json_type(flags) != SH_JSON_ARRAY || sh_json_array_len(flags) != plan_routes[i].task_count) { trip_ok = 0; break; }
+                trip_starts[i] = calloc(plan_routes[i].task_count ? plan_routes[i].task_count : 1, 1);
+                if (!trip_starts[i]) { trip_ok = 0; break; }
+                for (uint32_t j = 0; j < plan_routes[i].task_count; ++j) {
+                    const ShJsonValue *flag = sh_json_array_get(flags,j);
+                    double d = sh_json_as_double(flag,-1);
+                    if (sh_json_type(flag) != SH_JSON_NUMBER || (d != 0 && d != 1)) { trip_ok=0;break; }
+                    trip_starts[i][j] = (uint8_t)d;
+                }
+            }
             sh_arena_free(arena);
             arena = NULL;
 
-            solve_status = sg_validate_plan(ctx, num_plan_routes, plan_routes);
+            solve_status = trip_ok ? sg_validate_plan_with_trips(ctx, num_plan_routes, plan_routes,
+                (const uint8_t *const *)trip_starts) : SG_STATUS_INVALID_ARG;
+            if (trip_starts) for (uint32_t i = 0; i < num_plan_routes; ++i) free(trip_starts[i]);
+            free(trip_starts);
             free(plan_routes);
             free(task_buf);
 
@@ -2073,6 +2097,7 @@ char *sg_api_solve(const char *json_body, size_t body_len,
                 sh_json_write_kv_double_fmt(&w, "distance_span", stats.distance_span, 17);
                 sh_json_write_object_end(&w);
 
+                sg_loading_write_json(ctx, &w);
                 route_count = sg_solution_get_route_count(ctx);
                 sh_json_write_key(&w, "routes");
                 sh_json_write_array_start(&w);
@@ -2097,6 +2122,7 @@ char *sg_api_solve(const char *json_body, size_t body_len,
                             sh_json_write_object_start(&w);
                             sh_json_write_kv_int(&w, "request_id", stop.request_id);
                             sh_json_write_kv_int(&w, "task_id", stop.task_id);
+                            sh_json_write_kv_int(&w, "trip_index", stop.trip_index);
                             switch (stop.stop_type) {
                                 case SG_STOP_TYPE_PICKUP:  type_str = "pickup"; break;
                                 case SG_STOP_TYPE_DELIVERY: type_str = "delivery"; break;
@@ -2144,7 +2170,7 @@ char *sg_api_solve(const char *json_body, size_t body_len,
                 return make_error_json(500, "failed to write response JSON", out_len);
             }
 
-            if (status_code) *status_code = 200;
+            if (status_code) *status_code = solve_status == SG_STATUS_OK ? 200 : 400;
             if (out_len) *out_len = jb.len;
             return sh_json_buf_take(&jb);
         }
