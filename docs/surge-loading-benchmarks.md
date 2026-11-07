@@ -140,6 +140,11 @@ HGS runs; the output records whether cancellation was requested and actual
 return latency. The external runner kills/reaps its own process group on
 watchdog expiry. A bounded CI test checks termination and publication integrity;
 the separate 2s latency target must be assessed from actual measurements.
+Exploratory controller measurements exceeded the external ten-second watchdog
+even with loading absent, on both the pre-loading baseline and P2. Those are
+failed measurements, not evidence of bounded cancellation. Keep this limitation
+separate from packing cancellation and assess it on the otherwise quiet native
+benchmark host before promising a latency bound.
 
 ## Boundary issue discovered by this pass
 

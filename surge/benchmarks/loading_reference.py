@@ -128,20 +128,35 @@ def check_solution(model, solution):
 
 def exact_routing(model):
     n = len(model['requests'])
-    if not 1 <= n <= 8 or len(model['depots']) != 1:
+    if not 1 <= n <= 8 or model['depots'] != [{'x': 0, 'y': 0}]:
         raise ValueError('small homogeneous synthetic reference only')
+    if set(model) - {'config', 'depots', 'vehicles', 'tasks', 'requests', 'loading'}:
+        raise ValueError('extra model constraints are outside the reference domain')
+    if model['config'].get('lexicographic_objective') is not True:
+        raise ValueError('reference objective is vehicles then distance')
     if any(v != model['vehicles'][0] for v in model['vehicles']):
         raise ValueError('heterogeneous fleet not supported')
     if any(set(v) != {'start_depot_id', 'end_depot_id', 'capacity'} for v in model['vehicles']):
         raise ValueError('reference requires single-trip simple vehicles')
     if 'travel' in model or 'initial_routes' in model:
         raise ValueError('reference requires Euclidean unconstrained routing')
+    if 'loading' in model:
+        physical = model['loading']
+        geometries = [{k: v for k, v in vehicle.items() if k != 'vehicle_id'}
+                      for vehicle in physical['vehicles']]
+        if len(geometries) != len(model['vehicles']) or any(g != geometries[0] for g in geometries):
+            raise ValueError('reference requires homogeneous physical geometry')
+        if ([v['vehicle_id'] for v in physical['vehicles']] != list(range(len(model['vehicles']))) or
+            [r['request_id'] for r in physical['requests']] != list(range(n))):
+            raise ValueError('reference requires canonical fixture identities')
     points = []
     for request in model['requests']:
         if set(request) != {'delivery_task_id'}:
             raise ValueError('reference requires ordinary deliveries')
         task = model['tasks'][request['delivery_task_id']]
-        if task['demand'] != [-1] or task['tw_early'] != 0 or task['tw_late'] != 1000000:
+        if (set(task) != {'type', 'x', 'y', 'demand', 'tw_early', 'tw_late'} or
+            task['type'] != 'delivery' or task['demand'] != [-1] or
+            task['tw_early'] != 0 or task['tw_late'] != 1000000):
             raise ValueError('reference requires unit demand and wide windows')
         points.append((task['x'], task['y']))
     routes = {}

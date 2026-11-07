@@ -81,6 +81,14 @@ class ReferenceTests(unittest.TestCase):
         model['vehicles'][0]['max_trips'] = 2
         with self.assertRaises(ValueError):
             exact_routing(model)
+        model = fixture(6)
+        model['depots'][0]['x'] = 5
+        with self.assertRaises(ValueError):
+            exact_routing(model)
+        model = fixture(6)
+        model['loading']['vehicles'][1]['clearance_mm'] = 1
+        with self.assertRaises(ValueError):
+            exact_routing(model)
 
     def test_nonbinding_is_guaranteed_by_scalar_capacity(self):
         model = fixture()
