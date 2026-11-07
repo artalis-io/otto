@@ -150,20 +150,33 @@ def run(args):
     cases = []
     references = {}
     if not args.external_only:
-        for name, binding, access in [('nonbinding', False, 'side_free'),
-                                      ('binding', True, 'side_free'),
-                                      ('rear', True, 'rear_lifo')]:
+        definitions = [('binding', True, 'side_free'), ('rear', True, 'rear_lifo')]
+        if not args.equivalent_only:
+            definitions.insert(0, ('nonbinding', False, 'side_free'))
+        for name, binding, access in definitions:
             model = fixture(args.orders, binding, access)
             legacy = copy.deepcopy(model)
             del legacy['loading']
-            cases.append((name, [('baseline', legacy), ('current', legacy), ('hard', model)]))
+            if args.equivalent_only:
+                name += '-equivalent'
+                # These public units are identical, with two slots/two layers.
+                # Every ordered subset <= 4 can be loaded, including rear LIFO.
+                # Thus scalar capacity four defines EXACTLY the same feasible
+                # routes, while the hard input retains capacity six/eleven.
+                for vehicle in legacy['vehicles']:
+                    vehicle['capacity'] = [4]
+                variants = [('baseline', legacy), ('current', model)]
+            else:
+                variants = [('baseline', legacy), ('current', legacy), ('hard', model)]
+            cases.append((name, variants))
             if args.orders <= 8:
                 references[name] = {'legacy': exact_routing(legacy), 'hard': exact_routing(model)}
+    synthetic_cases = {case for case, _ in cases}
     for item in args.input:
         name, filename = item.split('=', 1)
         if not name.replace('-', '').replace('_', '').isalnum():
             raise ValueError('case name must be alphanumeric')
-        if name in ('nonbinding', 'binding', 'rear'):
+        if name in ('nonbinding', 'binding', 'rear', 'binding-equivalent', 'rear-equivalent'):
             raise ValueError('external name is reserved for synthetic references')
         model = json.loads(Path(filename).read_bytes())
         if 'loading' in model:
@@ -199,12 +212,13 @@ def run(args):
                         row = json.loads(metadata.read_bytes())
                         if any(row.get(k) != v for k, v in key.items()):
                             raise ValueError('resume identity mismatch')
-                        if case in ('nonbinding', 'binding', 'rear'):
+                        if case in synthetic_cases:
                             check_solution(model, json.loads((directory / 'output.json').read_bytes())['solution'])
                     else:
                         print(json.dumps({'starting': key}), flush=True)
                         row = {**key, **execute(binaries[label], model, directory, args.watchdog,
-                                              synthetic=case in ('nonbinding', 'binding', 'rear'))}
+                                              synthetic=case in synthetic_cases),
+                               'loading_enabled': 'loading' in model}
                         atomic_json(metadata, row)
                     rows.append(row)
                     atomic_json(output / 'report.json', {'schema_version': 1,
@@ -232,6 +246,7 @@ def main():
     parser.add_argument('--output', type=Path, required=True)
     parser.add_argument('--input', action='append', default=[], metavar='NAME=PATH')
     parser.add_argument('--external-only', action='store_true')
+    parser.add_argument('--equivalent-only', action='store_true')
     parser.add_argument('--baseline-revision', default='unspecified')
     parser.add_argument('--current-revision', default='unspecified')
     parser.add_argument('--seconds', type=int, default=30)
@@ -242,6 +257,8 @@ def main():
     parser.add_argument('--seeds', type=int, nargs='+', default=[42, 31415, 2718])
     parser.add_argument('--budgets', choices=['wall', 'iterations'], nargs='+', default=['wall', 'iterations'])
     args = parser.parse_args()
+    if args.external_only and args.equivalent_only:
+        parser.error('external-only and equivalent-only are mutually exclusive')
     if args.seconds < 3 or args.iterations < 3 or args.watchdog <= args.seconds or not 1 <= args.orders <= 128:
         parser.error('seconds/iterations >= 3, watchdog > seconds, orders 1..128 required')
     def interrupted(_signum, _frame):

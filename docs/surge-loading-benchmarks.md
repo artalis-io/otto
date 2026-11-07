@@ -30,6 +30,14 @@ Three seeds are an initial regression screen, not a statistical guarantee.
 - **Small exact:** six orders, exhaustive physical placement and routing/route
   partition enumeration. The Python reference calls no production checker or
   certificate validator. Its deliberately narrow supported domain is checked.
+- **Scalar-equivalent binding reference:** `--equivalent-only` compares the
+  old solver with scalar capacity four against hard loading with four physical
+  cells and the original scalar capacity six/eleven. For these explicitly
+  identical public units, side-free and rear access both permit every ordered
+  subset of up to four units. The feasible routing sets are identical, unlike
+  comparing a physically restricted plan against unconstrained capacity eleven.
+  Use the same 0.75 throughput review target and ordinary quality gates. This
+  supplemental comparison is declared separately before its measurements.
 - **Manual changes:** physically overloaded/reordered warm input, committed and
   frozen assignments, HGS repair and reload-round replay.
 

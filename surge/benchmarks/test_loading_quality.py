@@ -9,7 +9,7 @@ import unittest
 from unittest.mock import Mock, patch
 
 from loading_quality import execute, fixture
-from loading_reference import check_solution, exact_routing, valid_placement
+from loading_reference import check_solution, exact_routing, valid_placement, exhaustive_pack
 from loading_assess import assess
 
 DRIVER = Path(os.environ.get('SURGE_BENCH_DRIVER',
@@ -96,6 +96,20 @@ class ReferenceTests(unittest.TestCase):
             self.assertEqual(vehicle['capacity'][0], len(physical['slots']))
             self.assertEqual(physical['max_layers'], 1)
             self.assertGreaterEqual(physical['payload_g'], vehicle['capacity'][0] * 500)
+
+    def test_binding_reference_has_the_same_feasible_sets(self):
+        for access in ('side_free', 'rear_lifo'):
+            physical = fixture(6, True, access)
+            scalar = copy.deepcopy(physical)
+            del scalar['loading']
+            for vehicle in scalar['vehicles']:
+                vehicle['capacity'] = [4]
+            self.assertEqual(exact_routing(physical), exact_routing(scalar))
+            geometry = physical['loading']['vehicles'][0]
+            for count in range(1, 6):
+                units = [{**physical['loading']['requests'][i]['units'][0], 'stop': i}
+                         for i in range(count)]
+                self.assertEqual(exhaustive_pack(geometry, units), count <= 4)
 
     def test_certificate_rejects_each_physical_violation(self):
         model = fixture(2, True)

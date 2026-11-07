@@ -21,7 +21,7 @@ def assess(report, limits):
         variant[row['seed']] = row
     comparisons = []
     for (case, budget), variants in sorted(groups.items()):
-        choices = [('baseline', 'current', 'disabled')]
+        choices = [('baseline', 'current', 'equivalent' if case.endswith('-equivalent') else 'disabled')]
         if case == 'nonbinding':
             choices.append(('current', 'hard', 'nonbinding'))
         for left, right, purpose in choices:
@@ -77,7 +77,7 @@ def assess(report, limits):
         refs = report.get('exact_references', {}).get(row['case'])
         if not refs:
             continue
-        reference = refs['hard' if row['variant'] == 'hard' else 'legacy']
+        reference = refs['hard' if row.get('loading_enabled', row['variant'] == 'hard') else 'legacy']
         record = {k: row[k] for k in ('case', 'variant', 'budget', 'seed')}
         record['vehicle_gap'] = row['stats']['vehicles_used'] - reference['vehicles']
         record['distance_gap_fraction'] = row['stats']['total_distance'] / reference['distance'] - 1
