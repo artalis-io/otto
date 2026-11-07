@@ -18539,6 +18539,7 @@ int main(void) {
     RUN_TEST(test_loading_interrupted_checks_are_not_cached);
     RUN_TEST(test_loading_preserves_other_hard_constraints);
     RUN_TEST(test_loading_hgs_and_legacy);
+    RUN_TEST(test_loading_population_incoming_frozen_warm_start);
     RUN_TEST(test_loading_unknown_never_publishes);
     RUN_TEST(test_loading_manual_order_and_cache);
     RUN_TEST(test_loading_multitrip_and_apply_boundary);

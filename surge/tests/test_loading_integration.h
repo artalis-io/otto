@@ -51,6 +51,32 @@ static void loading_assert_solution(SGContext *ctx) {
         }
     }
 }
+static void test_loading_population_incoming_frozen_warm_start(void) {
+#ifdef SG_HAS_THREADS
+    for (unsigned hard = 0; hard < 2; ++hard) {
+        for (unsigned population = 0; population < 2; ++population) {
+            SGContext *ctx = loading_context(4, 6, 1);
+            if (!hard) assert(sg_set_hard_loading(ctx, 0, 0) == SG_STATUS_OK);
+            uint32_t vehicle = 2, length = 6, requests[] = {5, 4, 3, 2, 1, 0};
+            assert(sg_set_initial_routes(ctx, 1, &vehicle, &length, requests) == SG_STATUS_OK);
+            assert(sg_request_set_lock(ctx, 5, SG_LOCK_FROZEN) == SG_STATUS_OK);
+            for (uint32_t r = 0; r < 5; ++r)
+                assert(sg_request_set_lock(ctx, r, SG_LOCK_COMMITTED) == SG_STATUS_OK);
+            SGStatus status;
+            if (population) {
+                SGPopulationConfig cfg = {2, 4, 3, 0.5};
+                status = sg_solve_population(ctx, &cfg);
+            } else status = sg_solve_parallel(ctx, 2);
+            assert(status == SG_STATUS_OK || status == SG_STATUS_LIMIT);
+            assert(ctx->final_solution && sg_route_solution_validate(ctx->final_solution, ctx));
+            assert(ctx->stats.unassigned == 0);
+            assert(ctx->final_solution->request_vehicle[5] == 2);
+            if (hard) loading_assert_solution(ctx);
+            sg_free(ctx);
+        }
+    }
+#endif
+}
 static void test_loading_hgs_and_legacy(void) {
     SGContext *ctx = loading_context(2, 4, 1);
 #ifdef SG_HAS_THREADS

@@ -1,0 +1,14 @@
+{
+  "version": 1,
+  "description": "Review gates fixed before long-run results. Failed gates block hard-loading activation; do not silently retune them.",
+  "minimum_paired_seeds": 3,
+  "maximum_paired_served_loss": 0,
+  "maximum_median_vehicle_increase": 0,
+  "maximum_median_distance_increase_fraction": 0.05,
+  "maximum_median_cost_increase_fraction": 0.05,
+  "disabled_minimum_median_throughput_ratio": 0.90,
+  "nonbinding_minimum_median_throughput_ratio": 0.75,
+  "maximum_cancel_latency_ms": 2000,
+  "exact_maximum_vehicle_gap": 0,
+  "exact_maximum_distance_gap_fraction": 0.05
+}
