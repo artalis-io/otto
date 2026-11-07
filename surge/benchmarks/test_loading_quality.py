@@ -6,6 +6,7 @@ import os
 from pathlib import Path
 import tempfile
 import unittest
+from unittest.mock import Mock, patch
 
 from loading_quality import execute, fixture
 from loading_reference import check_solution, exact_routing, valid_placement
@@ -16,6 +17,18 @@ DRIVER = Path(os.environ.get('SURGE_BENCH_DRIVER',
 
 
 class ReferenceTests(unittest.TestCase):
+    def test_interrupted_runner_kills_and_reaps_its_own_child(self):
+        child = Mock(pid=12345, returncode=None)
+        with tempfile.TemporaryDirectory() as path:
+            with patch('loading_quality.subprocess.Popen', return_value=child), \
+                 patch('loading_quality.os.wait4', side_effect=[KeyboardInterrupt(), (12345, 9, None)]) as wait, \
+                 patch('loading_quality.os.killpg') as kill:
+                with self.assertRaises(KeyboardInterrupt):
+                    execute(Path('/not-executed'), {}, Path(path), 30)
+                kill.assert_called_once()
+                self.assertEqual(kill.call_args.args[0], 12345)
+                self.assertEqual(wait.call_args.args, (12345, 0))
+
     def test_quality_gates_do_not_call_lower_service_savings(self):
         limits = json.loads(Path(__file__).with_name('loading_thresholds.json').read_bytes())
         report = {'host': {}, 'runs': [], 'complete': True, 'planned_runs': 6}

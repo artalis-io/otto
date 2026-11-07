@@ -36,7 +36,9 @@ Three seeds are an initial regression screen, not a statistical guarantee.
 Run equal **wall budgets** and equal **requested iteration budgets**. A
 300-iteration HGS budget is split across three generations **per worker**; the
 reported count is aggregate executed work, not necessarily exactly 8×300.
-Early phase termination/postprocessing can differ. Iteration-budget runs set the
+Phase minimums can exceed the requested count; early termination and
+postprocessing can differ. Compare actual counts as well as requested budgets.
+Iteration-budget runs set the
 solver wall limit to zero and use an external watchdog; a watchdog expiry is a
 failed/incomplete run, never a usable incumbent or performance pass.
 

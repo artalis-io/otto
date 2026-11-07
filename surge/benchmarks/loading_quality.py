@@ -82,15 +82,27 @@ def execute(binary, request, directory, timeout, cancel_ms=None, synthetic=False
     timed_out = False
     with (directory / 'output.json').open('wb') as stdout, (directory / 'stderr.log').open('wb') as stderr:
         child = subprocess.Popen(command, stdout=stdout, stderr=stderr, start_new_session=True)
-        while True:
-            pid, status, usage = os.wait4(child.pid, os.WNOHANG)
-            if pid:
+        try:
+            while True:
+                pid, status, usage = os.wait4(child.pid, os.WNOHANG)
+                if pid:
+                    child.returncode = os.waitstatus_to_exitcode(status)
+                    break
+                if time.monotonic() - begin > timeout and not timed_out:
+                    timed_out = True
+                    try:
+                        os.killpg(child.pid, signal.SIGKILL)
+                    except ProcessLookupError:
+                        pass  # Child exited after wait4; still reap it below.
+                time.sleep(0.02)
+        finally:
+            if child.returncode is None:
+                try:
+                    os.killpg(child.pid, signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
+                _, status, _ = os.wait4(child.pid, 0)
                 child.returncode = os.waitstatus_to_exitcode(status)
-                break
-            if time.monotonic() - begin > timeout and not timed_out:
-                timed_out = True
-                os.killpg(child.pid, signal.SIGKILL)
-            time.sleep(0.02)
     result = {'wall_seconds': time.monotonic() - begin, 'returncode': child.returncode,
               'timeout': timed_out, 'cpu_seconds': usage.ru_utime + usage.ru_stime,
               'peak_rss_mib': usage.ru_maxrss / (1048576 if sys.platform == 'darwin' else 1024)}
@@ -232,6 +244,9 @@ def main():
     args = parser.parse_args()
     if args.seconds < 3 or args.iterations < 3 or args.watchdog <= args.seconds or not 1 <= args.orders <= 128:
         parser.error('seconds/iterations >= 3, watchdog > seconds, orders 1..128 required')
+    def interrupted(_signum, _frame):
+        raise KeyboardInterrupt('benchmark interrupted')
+    signal.signal(signal.SIGTERM, interrupted)
     return run(args)
 
 
