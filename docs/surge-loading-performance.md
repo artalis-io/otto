@@ -40,8 +40,10 @@ counter executable or an available controller sampler instead.
   Unit scratch storage is initialized only for populated units, not its full
   maximum capacity on every query.
 - A 32-entry worker-local cache supplements the last-hit fast path. Hashes only
-  select a slot; ordered units, full geometry and node budget must match exactly
-  before reuse. Collisions evict; they never authorize another load. Every cache
+  select a slot; ordered units and node budget must match exactly before reuse.
+  Geometry matches by immutable owned-descriptor identity or exact descriptor
+  bytes. Public setters deep-copy and invalidate the cache before mutation; a
+  caller changing its original descriptor cannot change the owned facts. Collisions evict; they never authorize another load. Every cache
   is bounded independently of solve duration and freed with its context/worker.
 - Interrupted queries remain UNKNOWN and never enter the cache. Model setters
   retain invalidation. UNKNOWN budget results are keyed by the exact budget.

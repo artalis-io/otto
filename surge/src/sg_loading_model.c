@@ -11,6 +11,7 @@
  * hit as L0 so uniform loads do not pay for hashing on every insertion. */
 #define SG_LOADING_CACHE_ENTRIES 32
 typedef struct {
+    const SGLoadingVehicle *source_geometry; /* owned, immutable until setter invalidation */
     SGLoadingVehicle vehicle;
     uint64_t budget;
     uint32_t count;
@@ -38,7 +39,7 @@ static const SGRouteStop *loading_stop(const SGLoadingView *view, uint32_t i) {
 static int loading_key_equal(const SGLoadingCacheEntry *entry,
     const SGLoadingVehicle *v, const SGLoadingUnit *units, uint32_t count, uint64_t budget) {
     return entry->count == count && entry->budget == budget &&
-        memcmp(&entry->vehicle, v, sizeof(*v)) == 0 &&
+        (entry->source_geometry == v || memcmp(&entry->vehicle, v, sizeof(*v)) == 0) &&
         memcmp(entry->units, units, count * sizeof(*units)) == 0;
 }
 
@@ -212,6 +213,7 @@ static SGStatus loading_round(const SGContext *ctx, uint32_t vehicle,
     if (hit) {
         PROFILE(ctx, cache_hits);
         cache->last = bucket;
+        entry->source_geometry = v;
         if (certificate) *result = entry->result;
         else result->outcome = entry->result.outcome;
         return SG_STATUS_OK;
@@ -232,6 +234,7 @@ static SGStatus loading_round(const SGContext *ctx, uint32_t vehicle,
         ((SGContext *)ctx)->loading_cache = cache;
     }
     entry = &cache->entries[bucket];
+    entry->source_geometry = v;
     entry->vehicle = *v;
     entry->budget = ctx->loading_node_budget;
     entry->count = n;

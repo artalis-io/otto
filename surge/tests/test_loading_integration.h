@@ -359,6 +359,20 @@ static void test_loading_bounded_cache_exact_keys(void) {
                     actual.placements) == SG_STATUS_OK);
         }
     }
+    /* Caller descriptors are copied. Only a successful public setter changes
+     * the owned immutable geometry, and it invalidates every cached identity. */
+    SGLoadingVehicle caller = loading_vehicle(1, SG_LOADING_SIDE_FREE);
+    assert(sg_vehicle_set_loading(ctx, 0, &caller) == SG_STATUS_OK);
+    SGRouteStop stable = {0}; stable.request_id = 1;
+    SGLoadingResult changed;
+    assert(sg_loading_round(ctx, 0, &stable, 1, 0, &changed, NULL, NULL) == SG_STATUS_OK);
+    assert(changed.outcome == SG_LOADING_FEASIBLE);
+    caller.clearance_mm = 100;
+    assert(sg_loading_round(ctx, 0, &stable, 1, 0, &changed, NULL, NULL) == SG_STATUS_OK);
+    assert(changed.outcome == SG_LOADING_FEASIBLE);
+    assert(sg_vehicle_set_loading(ctx, 0, &caller) == SG_STATUS_OK);
+    assert(sg_loading_round(ctx, 0, &stable, 1, 0, &changed, NULL, NULL) == SG_STATUS_OK);
+    assert(changed.outcome == SG_LOADING_INFEASIBLE);
     atomic_store(&ctx->cancel_requested, 1);
     SGRouteStop stop = {0}; SGLoadingResult result;
     assert(sg_loading_round(ctx, 0, &stop, 1, 0, &result, NULL, NULL) == SG_STATUS_OK);
