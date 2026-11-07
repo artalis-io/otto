@@ -1551,6 +1551,9 @@ skip_phase2:
 }
 
 static SGStatus sg_solve_impl(SGContext *ctx) {
+#ifdef SG_LOADING_PROFILE
+    if (ctx) memset(&ctx->loading_profile, 0, sizeof(ctx->loading_profile));
+#endif
     ARALNSParams params;
     ARSolutionOps ops;
     ARALNSContext *alns = NULL;

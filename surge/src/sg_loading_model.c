@@ -1,14 +1,62 @@
 #include "sg_internal.h"
+#ifdef SG_LOADING_PROFILE
+#include "sh_pal.h"
+#define PROFILE(ctx, field) (++((SGContext *)(ctx))->loading_profile.field)
+#else
+#define PROFILE(ctx, field) ((void)0)
+#endif
 
-/* Exact-key one-entry cache per worker. No hashes can certify a different load.
- * A small cache deliberately bounds memory independently of solve duration. */
-struct SGLoadingCache {
+/* Bounded worker-local cache. Hashes only choose an entry; exact geometry,
+ * ordered units and budget comparisons alone authorize reuse. Keep the last
+ * hit as L0 so uniform loads do not pay for hashing on every insertion. */
+#define SG_LOADING_CACHE_ENTRIES 32
+typedef struct {
+    const SGLoadingVehicle *source_geometry; /* owned, immutable until setter invalidation */
     SGLoadingVehicle vehicle;
     uint64_t budget;
     uint32_t count;
     SGLoadingUnit units[SG_LOADING_MAX_UNITS];
     SGLoadingResult result;
+} SGLoadingCacheEntry;
+struct SGLoadingCache {
+    uint32_t last;
+    SGLoadingCacheEntry entries[SG_LOADING_CACHE_ENTRIES];
 };
+
+/* A candidate insertion is a view, not an allocated/copied route. Preserve the
+ * exact trip_start behavior of materializing the inserted stop, including pos 0. */
+typedef struct {
+    const SGRouteStop *stops;
+    uint32_t count, insert_pos;
+    SGRouteStop inserted;
+} SGLoadingView;
+
+static const SGRouteStop *loading_stop(const SGLoadingView *view, uint32_t i) {
+    if (i == view->insert_pos) return &view->inserted;
+    return &view->stops[i - (i > view->insert_pos)];
+}
+
+static int loading_key_equal(const SGLoadingCacheEntry *entry,
+    const SGLoadingVehicle *v, const SGLoadingUnit *units, uint32_t count, uint64_t budget) {
+    return entry->count == count && entry->budget == budget &&
+        (entry->source_geometry == v || memcmp(&entry->vehicle, v, sizeof(*v)) == 0) &&
+        memcmp(entry->units, units, count * sizeof(*units)) == 0;
+}
+
+static uint32_t loading_bucket(const SGLoadingUnit *units, uint32_t count, uint64_t budget) {
+    uint64_t hash = budget ^ count;
+    for (uint32_t i = 0; i < count; ++i) {
+        /* Hash named fields, never padding or pointers. A collision only evicts. */
+        const SGLoadingUnit *u = &units[i];
+        hash = (hash ^ u->stop) * UINT64_C(1099511628211);
+        hash = (hash ^ u->height_mm) * UINT64_C(1099511628211);
+        hash = (hash ^ u->weight_g) * UINT64_C(1099511628211);
+        hash = (hash ^ u->max_weight_above_g) * UINT64_C(1099511628211);
+        hash = (hash ^ u->stack_class) * UINT64_C(1099511628211);
+        hash = (hash ^ u->max_units_above) * UINT64_C(1099511628211);
+    }
+    return (uint32_t)(hash ^ (hash >> 32)) % SG_LOADING_CACHE_ENTRIES;
+}
 
 void sg_loading_invalidate(SGContext *ctx) {
     free(ctx->loading_cache);
@@ -104,32 +152,29 @@ static int loading_should_stop(void *data) {
     return sg_cancelled(ctx);
 }
 
-SGStatus sg_loading_round(const SGContext *ctx, uint32_t vehicle, const SGRouteStop *stops,
-                          uint32_t count, uint32_t trip, SGLoadingResult *result,
-                          uint32_t *requests, uint32_t *indices) {
-    if (!result)
-        return SG_STATUS_INVALID_ARG;
-    memset(result, 0, sizeof(*result));
+static SGStatus loading_round(const SGContext *ctx, uint32_t vehicle,
+    const SGLoadingView *view, uint32_t trip, SGLoadingResult *result,
+    uint32_t *requests, uint32_t *indices, int certificate) {
+    if (ctx) PROFILE(ctx, round_calls);
+    if (!result) return SG_STATUS_INVALID_ARG;
+    /* Boolean feasibility needs no placement buffer on an exact cache hit. */
+    memset(result, 0, certificate ? sizeof(*result) : offsetof(SGLoadingResult, placements));
     result->outcome = SG_LOADING_UNKNOWN;
     result->reason = SG_LOADING_UNSUPPORTED;
     if (!ctx || !ctx->hard_loading || vehicle >= ctx->num_vehicles ||
-        !ctx->vehicles[vehicle].loading || (count && !stops))
+        !ctx->vehicles[vehicle].loading || (view->count && !view->stops && !(view->count == 1 && view->insert_pos == 0)))
         return SG_STATUS_INVALID_ARG;
     SGLoadingUnit units[SG_LOADING_MAX_UNITS];
-    memset(units, 0, sizeof(units));
     uint32_t current = 0, n = 0, ordinal = 0;
-    int found = count == 0 && trip == 0;
-    for (uint32_t i = 0; i < count; ++i) {
-        if (i && stops[i].trip_start) {
-            ++current;
-            ordinal = 0;
-        }
-        if (current != trip)
-            continue;
+    int found = view->count == 0 && trip == 0;
+    for (uint32_t i = 0; i < view->count; ++i) {
+        const SGRouteStop *stop = loading_stop(view, i);
+        if (i && stop->trip_start) { ++current; ordinal = 0; }
+        if (current != trip) continue;
         found = 1;
-        uint32_t r = stops[i].request_id;
+        uint32_t r = stop->request_id;
         if (r >= ctx->num_requests || !ctx->requests[r].has_loading_units ||
-            ctx->requests[r].kind != SG_REQUEST_KIND_DELIVERY_ONLY || stops[i].is_pickup)
+            ctx->requests[r].kind != SG_REQUEST_KIND_DELIVERY_ONLY || stop->is_pickup)
             return SG_STATUS_INVALID_ARG;
         const SGRequestRecord *req = &ctx->requests[r];
         if (req->loading_count > SG_LOADING_MAX_UNITS - n)
@@ -137,98 +182,121 @@ SGStatus sg_loading_round(const SGContext *ctx, uint32_t vehicle, const SGRouteS
         for (uint32_t j = 0; j < req->loading_count; ++j) {
             units[n] = req->loading_units[j];
             units[n].stop = ordinal;
-            if (requests)
-                requests[n] = r;
-            if (indices)
-                indices[n] = j;
+            if (requests) requests[n] = r;
+            if (indices) indices[n] = j;
             ++n;
         }
         ++ordinal;
     }
-    if (!found)
-        return SG_STATUS_INVALID_ARG;
-    const SGLoadingVehicle *v = ctx->vehicles[vehicle].loading;
+    if (!found) return SG_STATUS_INVALID_ARG;
     if (n == 0) {
         result->outcome = SG_LOADING_FEASIBLE;
         result->reason = SG_LOADING_WITNESS;
         return SG_STATUS_OK;
     }
-    SGLoadingCache *cache = ctx->loading_cache;
-    if (cache && cache->count == n && cache->budget == ctx->loading_node_budget &&
-        memcmp(&cache->vehicle, v, sizeof(*v)) == 0 &&
-        memcmp(cache->units, units, n * sizeof(*units)) == 0) {
-        *result = cache->result;
+    if (sg_cancelled(ctx)) {
+        result->reason = SG_LOADING_INTERRUPTED;
         return SG_STATUS_OK;
     }
+    const SGLoadingVehicle *v = ctx->vehicles[vehicle].loading;
+    SGLoadingCache *cache = ctx->loading_cache;
+    SGLoadingCacheEntry *entry = cache ? &cache->entries[cache->last] : NULL;
+    uint32_t bucket = 0;
+    int hit = entry && loading_key_equal(entry, v, units, n, ctx->loading_node_budget);
+    if (!hit) {
+        bucket = loading_bucket(units, n, ctx->loading_node_budget);
+        entry = cache ? &cache->entries[bucket] : NULL;
+        hit = entry && loading_key_equal(entry, v, units, n, ctx->loading_node_budget);
+    } else {
+        bucket = cache->last;
+    }
+    if (hit) {
+        PROFILE(ctx, cache_hits);
+        cache->last = bucket;
+        entry->source_geometry = v;
+        if (certificate) *result = entry->result;
+        else result->outcome = entry->result.outcome;
+        return SG_STATUS_OK;
+    }
+    PROFILE(ctx, checker_calls);
+#ifdef SG_LOADING_PROFILE
+    uint64_t checker_begin = sh_monotonic_ns();
+#endif
     SGStatus status = sg_loading_check_controlled(v, units, n, ctx->loading_node_budget,
-                                                  loading_should_stop, (void *)ctx, result);
-    if (status != SG_STATUS_OK || result->reason == SG_LOADING_INTERRUPTED)
-        return status;
+        loading_should_stop, (void *)ctx, result);
+#ifdef SG_LOADING_PROFILE
+    ((SGContext *)ctx)->loading_profile.checker_ns += sh_monotonic_ns() - checker_begin;
+#endif
+    if (status != SG_STATUS_OK || result->reason == SG_LOADING_INTERRUPTED) return status;
     if (!cache) {
         cache = calloc(1, sizeof(*cache));
-        if (!cache)
-            return SG_STATUS_OK; /* result verified; no cache required */
+        if (!cache) return SG_STATUS_OK; /* verified result, no cache required */
         ((SGContext *)ctx)->loading_cache = cache;
     }
-    cache->vehicle = *v;
-    cache->budget = ctx->loading_node_budget;
-    cache->count = n;
-    memcpy(cache->units, units, n * sizeof(*units));
-    cache->result = *result;
+    entry = &cache->entries[bucket];
+    entry->source_geometry = v;
+    entry->vehicle = *v;
+    entry->budget = ctx->loading_node_budget;
+    entry->count = n;
+    memcpy(entry->units, units, n * sizeof(*units));
+    entry->result = *result;
+    cache->last = bucket;
     return SG_STATUS_OK;
 }
 
-int sg_loading_stops_ok(const SGContext *ctx, uint32_t vehicle, const SGRouteStop *stops,
-                        uint32_t count) {
-    if (!ctx->hard_loading)
-        return 1;
+SGStatus sg_loading_round(const SGContext *ctx, uint32_t vehicle, const SGRouteStop *stops,
+    uint32_t count, uint32_t trip, SGLoadingResult *result, uint32_t *requests, uint32_t *indices) {
+    SGLoadingView view = {0};
+    view.stops = stops; view.count = count; view.insert_pos = UINT32_MAX;
+    return loading_round(ctx, vehicle, &view, trip, result, requests, indices, 1);
+}
+
+static int loading_view_ok(const SGContext *ctx, uint32_t vehicle, const SGLoadingView *view) {
     uint32_t trips = 1;
-    for (uint32_t i = 1; i < count; ++i)
-        if (stops[i].trip_start)
-            ++trips;
-    if (vehicle >= ctx->num_vehicles)
-        return 0;
+    for (uint32_t i = 1; i < view->count; ++i)
+        if (loading_stop(view, i)->trip_start) ++trips;
+    if (vehicle >= ctx->num_vehicles) return 0;
     const SGVehicleRecord *v = &ctx->vehicles[vehicle];
-    if ((trips > 1 && !v->has_multi_trip) || (v->max_trips && trips > v->max_trips))
-        return 0;
+    if ((trips > 1 && !v->has_multi_trip) || (v->max_trips && trips > v->max_trips)) return 0;
     for (uint32_t trip = 0; trip < trips; ++trip) {
         SGLoadingResult result;
-        if (sg_loading_round(ctx, vehicle, stops, count, trip, &result, NULL, NULL) !=
-                SG_STATUS_OK ||
-            result.outcome != SG_LOADING_FEASIBLE)
-            return 0;
+        if (loading_round(ctx, vehicle, view, trip, &result, NULL, NULL, 0) != SG_STATUS_OK ||
+            result.outcome != SG_LOADING_FEASIBLE) return 0;
     }
     return 1;
 }
 
+int sg_loading_stops_ok(const SGContext *ctx, uint32_t vehicle, const SGRouteStop *stops,
+    uint32_t count) {
+    if (!ctx->hard_loading) return 1;
+    if (count && !stops) return 0;
+    SGLoadingView view = {0};
+    view.stops = stops; view.count = count; view.insert_pos = UINT32_MAX;
+    return loading_view_ok(ctx, vehicle, &view);
+}
+
 int sg_loading_insertion_ok(const SGContext *ctx, const SGRouteSolution *sol, uint32_t request,
-                            uint32_t vehicle, uint32_t position, int new_trip) {
-    if (!ctx->hard_loading)
-        return 1;
+    uint32_t vehicle, uint32_t position, int new_trip) {
+    if (!ctx->hard_loading) return 1;
     if (request >= ctx->num_requests || vehicle >= sol->num_vehicles ||
         ctx->requests[request].kind != SG_REQUEST_KIND_DELIVERY_ONLY ||
-        position > sol->route_lengths[vehicle])
-        return 0;
+        position > sol->route_lengths[vehicle]) return 0;
+    PROFILE(ctx, insertion_calls);
+#ifdef SG_LOADING_PROFILE
+    uint64_t insertion_begin = sh_monotonic_ns();
+#endif
     uint32_t count = sol->route_stop_lengths[vehicle];
-    /* Delivery-only hard mode: one stop per request. */
-    size_t candidate_count = (size_t)count + 1;
-    if (count != sol->route_lengths[vehicle] || !candidate_count ||
-        candidate_count > SIZE_MAX / sizeof(SGRouteStop))
-        return 0;
-    SGRouteStop *candidate = malloc(candidate_count * sizeof(*candidate));
-    if (!candidate)
-        return 0;
-    const SGRouteStop *stops = sg_route_vehicle_stop_ptr_const(sol, vehicle);
-    if (position)
-        memcpy(candidate, stops, position * sizeof(*candidate));
-    memset(&candidate[position], 0, sizeof(*candidate));
-    candidate[position].request_id = request;
-    candidate[position].task_id = ctx->requests[request].delivery_task_id;
-    candidate[position].trip_start = new_trip ? 1 : 0;
-    if (count > position)
-        memcpy(candidate + position + 1, stops + position, (count - position) * sizeof(*candidate));
-    int ok = sg_loading_stops_ok(ctx, vehicle, candidate, count + 1);
-    free(candidate);
+    if (count != sol->route_lengths[vehicle] || count == UINT32_MAX) return 0;
+    SGLoadingView view = {0};
+    view.stops = sg_route_vehicle_stop_ptr_const(sol, vehicle);
+    view.count = count + 1; view.insert_pos = position;
+    view.inserted.request_id = request;
+    view.inserted.task_id = ctx->requests[request].delivery_task_id;
+    view.inserted.trip_start = new_trip ? 1 : 0;
+    int ok = loading_view_ok(ctx, vehicle, &view);
+#ifdef SG_LOADING_PROFILE
+    ((SGContext *)ctx)->loading_profile.insertion_ns += sh_monotonic_ns() - insertion_begin;
+#endif
     return ok;
 }
 

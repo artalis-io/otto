@@ -1434,7 +1434,7 @@ int sg_route_eval_insertion_cached(const SGContext *ctx, const SGRouteSolution *
         return 0;
     }
 
-    if (ctx->hard_loading && !sg_loading_insertion_ok(ctx, sol, request_id, vehicle_id, pos, 0)) return 0;
+
 
     /* Backhaul: D-only request must be inserted before any PD pickup */
     if (ctx->has_backhaul && vehicle->backhaul &&
@@ -2145,6 +2145,9 @@ int sg_route_eval_insertion_cached(const SGContext *ctx, const SGRouteSolution *
         for (k = 0; k < SG_PENALTY_COUNT; k++)
             score += ctx->penalty.weight[k] * ins_violations[k];
     }
+
+    /* Ordinary constraints reject cheaply before exact physical checking. */
+    if (ctx->hard_loading && !sg_loading_insertion_ok(ctx, sol, request_id, vehicle_id, pos, 0)) return 0;
 
     *score_out = score;
     *new_route_distance_out = new_route_distance;

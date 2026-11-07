@@ -18665,6 +18665,9 @@ int main(void) {
     RUN_TEST(test_loading_population_incoming_frozen_warm_start);
     RUN_TEST(test_loading_unknown_never_publishes);
     RUN_TEST(test_loading_manual_order_and_cache);
+    RUN_TEST(test_loading_bounded_cache_exact_keys);
+    RUN_TEST(test_loading_scalar_prefilter_never_certifies_loading);
+    RUN_TEST(test_loading_insertion_view_matches_materialization);
     RUN_TEST(test_loading_multitrip_and_apply_boundary);
     RUN_TEST(test_loading_incomplete_and_unsupported_model);
     RUN_TEST(test_validation_allocation_failure_never_publishes);
@@ -19281,9 +19284,9 @@ int main(void) {
     printf("================\n");
     printf("%d/%d tests passed\n", tests_passed, tests_run);
 #ifdef SG_HAS_THREADS
-    assert(tests_run == 498);
+    assert(tests_run == 501);
 #else
-    assert(tests_run == 473);
+    assert(tests_run == 476);
 #endif
     return tests_passed == tests_run ? 0 : 1;
 }
