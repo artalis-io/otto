@@ -323,3 +323,97 @@ static void test_loading_preserves_other_hard_constraints(void) {
     assert(!ctx->final_solution);
     sg_free(ctx);
 }
+
+/* Hash collisions, evictions and alternating loads must never certify another
+ * key. Compare every cached answer with the independent pure checker. */
+static void test_loading_bounded_cache_exact_keys(void) {
+    SGContext *ctx = loading_context(2, 64, 1);
+    SGLoadingVehicle other = loading_vehicle(2, SG_LOADING_REAR_LIFO);
+    assert(sg_vehicle_set_loading(ctx, 1, &other) == SG_STATUS_OK);
+    for (uint32_t r = 0; r < 64; ++r) {
+        SGLoadingUnit u = {0, r % 3 ? 700 + r : 9999, 100 + r, 1000, r % 2, 1};
+        assert(sg_request_set_loading(ctx, r, &u, 1) == SG_STATUS_OK);
+    }
+    for (uint32_t pass = 0; pass < 4; ++pass) {
+        for (uint32_t i = 0; i < 64; ++i) {
+            uint32_t r = (i * 17 + pass * 13) % 64;
+            uint32_t v = pass % 2;
+            SGRouteStop stop = {0};
+            stop.request_id = r; stop.task_id = ctx->requests[r].delivery_task_id;
+            SGLoadingUnit unit = ctx->requests[r].loading_units[0];
+            unit.stop = 0;
+            SGLoadingResult expected, actual;
+            assert(sg_loading_check(ctx->vehicles[v].loading, &unit, 1,
+                ctx->loading_node_budget, &expected) == SG_STATUS_OK);
+            assert(sg_loading_round(ctx, v, &stop, 1, 0, &actual, NULL, NULL) == SG_STATUS_OK);
+            assert(actual.outcome == expected.outcome && actual.reason == expected.reason);
+            if (actual.outcome == SG_LOADING_FEASIBLE)
+                assert(sg_loading_validate(ctx->vehicles[v].loading, &unit, 1,
+                    actual.placements) == SG_STATUS_OK);
+            /* Hot L0 and mapped cache reads must also return a full certificate. */
+            memset(&actual, 0xff, sizeof(actual));
+            assert(sg_loading_round(ctx, v, &stop, 1, 0, &actual, NULL, NULL) == SG_STATUS_OK);
+            assert(actual.outcome == expected.outcome);
+            if (actual.outcome == SG_LOADING_FEASIBLE)
+                assert(sg_loading_validate(ctx->vehicles[v].loading, &unit, 1,
+                    actual.placements) == SG_STATUS_OK);
+        }
+    }
+    atomic_store(&ctx->cancel_requested, 1);
+    SGRouteStop stop = {0}; SGLoadingResult result;
+    assert(sg_loading_round(ctx, 0, &stop, 1, 0, &result, NULL, NULL) == SG_STATUS_OK);
+    assert(result.outcome == SG_LOADING_UNKNOWN && result.reason == SG_LOADING_INTERRUPTED);
+    atomic_store(&ctx->cancel_requested, 0);
+    sg_free(ctx);
+}
+
+/* Differential test against materialized candidates for every insertion and
+ * reload boundary, including a trip flag on the original first stop. */
+static void test_loading_insertion_view_matches_materialization(void) {
+    for (unsigned access = 0; access < 2; ++access) {
+        SGContext *ctx = loading_context(1, 5, 1);
+        SGLoadingVehicle geom = loading_vehicle(2, (SGLoadingAccess)access);
+        assert(sg_vehicle_set_loading(ctx, 0, &geom) == SG_STATUS_OK);
+        assert(sg_vehicle_set_max_trips(ctx, 0, 5) == SG_STATUS_OK);
+        SGRouteSolution sol;
+        assert(sg_route_solution_init(ctx, &sol) == AR_STATUS_OK);
+        sol.route_lengths[0] = sol.route_stop_lengths[0] = 4;
+        SGRouteStop *stops = sg_route_vehicle_stop_ptr(&sol, 0);
+        for (unsigned mask = 0; mask < 16; ++mask) {
+            for (unsigned i = 0; i < 4; ++i) {
+                memset(&stops[i], 0, sizeof(stops[i]));
+                stops[i].request_id = i;
+                stops[i].task_id = ctx->requests[i].delivery_task_id;
+                stops[i].trip_start = (mask >> i) & 1;
+            }
+            for (unsigned pos = 0; pos <= 4; ++pos) {
+                for (unsigned reload = 0; reload < 2; ++reload) {
+                    SGRouteStop candidate[5] = {{0}};
+                    memcpy(candidate, stops, pos * sizeof(*stops));
+                    candidate[pos].request_id = 4;
+                    candidate[pos].task_id = ctx->requests[4].delivery_task_id;
+                    candidate[pos].trip_start = reload;
+                    memcpy(candidate + pos + 1, stops + pos, (4 - pos) * sizeof(*stops));
+                    int expected = sg_loading_stops_ok(ctx, 0, candidate, 5);
+                    assert(sg_loading_insertion_ok(ctx, &sol, 4, 0, pos, reload) == expected);
+                }
+            }
+        }
+        sg_route_solution_reset(&sol); sg_free(ctx);
+    }
+    /* Stop count can exceed the unit bound: zero-unit requests remain valid. */
+    SGContext *ctx = loading_context(1, 140, 1);
+    for (unsigned r = 0; r < 139; ++r)
+        assert(sg_request_set_loading(ctx, r, NULL, 0) == SG_STATUS_OK);
+    SGRouteSolution sol;
+    assert(sg_route_solution_init(ctx, &sol) == AR_STATUS_OK);
+    sol.route_lengths[0] = sol.route_stop_lengths[0] = 139;
+    SGRouteStop *stops = sg_route_vehicle_stop_ptr(&sol, 0);
+    for (unsigned i = 0; i < 139; ++i) {
+        stops[i].request_id = i; stops[i].task_id = ctx->requests[i].delivery_task_id;
+    }
+    assert(sg_loading_insertion_ok(ctx, &sol, 139, 0, 0, 0));
+    assert(sg_loading_insertion_ok(ctx, &sol, 139, 0, 70, 0));
+    assert(sg_loading_insertion_ok(ctx, &sol, 139, 0, 139, 0));
+    sg_route_solution_reset(&sol); sg_free(ctx);
+}

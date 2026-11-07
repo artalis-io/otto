@@ -104,6 +104,14 @@ int main(int argc, char **argv) {
     ShJsonWriter writer;
     sh_json_writer_init(&writer, output, stdout);
     sg_api_write_solution(ctx, &writer, status);
+#ifdef SG_LOADING_PROFILE
+    SGLoadingProfile *p = &ctx->loading_profile;
+    printf(",\"loading_profile\":{\"round_calls\":%llu,\"cache_hits\":%llu,"
+           "\"checker_calls\":%llu,\"checker_ns\":%llu,\"insertion_calls\":%llu,\"insertion_ns\":%llu}",
+           (unsigned long long)p->round_calls, (unsigned long long)p->cache_hits,
+           (unsigned long long)p->checker_calls, (unsigned long long)p->checker_ns,
+           (unsigned long long)p->insertion_calls, (unsigned long long)p->insertion_ns);
+#endif
     puts("}");
     sg_free(ctx);
     return valid ? 0 : 1;

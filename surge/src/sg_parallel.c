@@ -57,6 +57,9 @@ static SGStatus sg_context_clone_init(SGContext *clone, const SGContext *src) {
     memcpy((char *)clone + after_cancel, (const char *)src + after_cancel,
            sizeof(SGContext) - after_cancel);
     clone->loading_cache = NULL;
+#ifdef SG_LOADING_PROFILE
+    memset(&clone->loading_profile, 0, sizeof(clone->loading_profile));
+#endif
     clone->parent_cancel = &src->cancel_requested;
 
     /* Fresh RNG for this clone */
@@ -112,7 +115,15 @@ static SGStatus sg_context_clone_init(SGContext *clone, const SGContext *src) {
     return SG_STATUS_OK;
 }
 
-static void sg_context_clone_free(SGContext *clone) {
+static void sg_context_clone_free(SGContext *clone, SGContext *master) {
+#ifdef SG_LOADING_PROFILE
+#define ADD(field) master->loading_profile.field += clone->loading_profile.field
+    ADD(round_calls); ADD(cache_hits); ADD(checker_calls); ADD(checker_ns);
+    ADD(insertion_calls); ADD(insertion_ns);
+#undef ADD
+#else
+    (void)master;
+#endif
     free(clone->loading_cache);
     clone->loading_cache = NULL;
     sh_rng_free(clone->op_rng);
@@ -656,6 +667,9 @@ static void sg_srex_build_warm_start(const SGPopulationMember *p1,
  * ============================================================================ */
 
 static SGStatus sg_solve_parallel_impl(SGContext *ctx, uint32_t num_threads) {
+#ifdef SG_LOADING_PROFILE
+    if (ctx) memset(&ctx->loading_profile, 0, sizeof(ctx->loading_profile));
+#endif
     SGParallelWorkItem *items = NULL;
     ShWorkQueue *queue = NULL;
     ShWorkerPool *pool = NULL;
@@ -795,7 +809,7 @@ cleanup:
     /* Free clones and completions */
     for (i = 0; i < num_threads; i++) {
         sh_completion_cleanup(&items[i].completion);
-        sg_context_clone_free(&items[i].clone);
+        sg_context_clone_free(&items[i].clone, ctx);
     }
     free(items);
 
@@ -821,6 +835,9 @@ cleanup:
 #define SG_POP_DEFAULT_GENERATIONS 3
 
 static SGStatus sg_solve_population_impl(SGContext *ctx, const SGPopulationConfig *cfg) {
+#ifdef SG_LOADING_PROFILE
+    if (ctx) memset(&ctx->loading_profile, 0, sizeof(ctx->loading_profile));
+#endif
     uint32_t num_threads, pop_size, num_gens;
     double xover_frac;
     SGPopulationMember *pop_pool = NULL;
@@ -1087,7 +1104,7 @@ gen_cleanup:
             items[i].clone.total_initial_requests = 0;
             items[i].owns_warm_start = 0;
             sh_completion_cleanup(&items[i].completion);
-            sg_context_clone_free(&items[i].clone);
+            sg_context_clone_free(&items[i].clone, ctx);
         }
         memset(items, 0, (size_t)num_threads * sizeof(SGParallelWorkItem));
 

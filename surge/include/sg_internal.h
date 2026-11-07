@@ -449,7 +449,17 @@ typedef struct {
 
 typedef struct SGLoadingCache SGLoadingCache;
 
+#ifdef SG_LOADING_PROFILE
+typedef struct {
+    uint64_t round_calls, cache_hits, checker_calls, checker_ns;
+    uint64_t insertion_calls, insertion_ns;
+} SGLoadingProfile;
+#endif
+
 struct SGContext {
+#ifdef SG_LOADING_PROFILE
+    SGLoadingProfile loading_profile;
+#endif
     uint8_t hard_loading;
     uint64_t loading_node_budget;
     const _Atomic uint8_t *parent_cancel;

@@ -222,6 +222,21 @@ class NativeTests(unittest.TestCase):
             self.assertEqual(measured['stats']['vehicles_used'], 1)
             self.assertEqual(measured['trips'], 2)
 
+    def test_profile_build_reports_worker_aggregates(self):
+        profile = DRIVER.with_name('bench_loading_driver_profile')
+        self.assertTrue(profile.exists(), 'build loading-benchmark-test')
+        with tempfile.TemporaryDirectory() as path:
+            model = self.model()
+            measured = execute(profile, model, Path(path), 30, synthetic=True)
+            self.assertTrue(measured['valid'], measured)
+            result = json.loads((Path(path) / 'output.json').read_bytes())
+            counters = result['loading_profile']
+            self.assertGreater(counters['insertion_calls'], 0)
+            self.assertGreater(counters['cache_hits'], 0)
+            self.assertGreaterEqual(counters['round_calls'],
+                                    counters['cache_hits'] + counters['checker_calls'])
+            self.assertGreaterEqual(counters['checker_ns'], 0)
+
     def test_cancellation_is_bounded(self):
         import subprocess
         for mode in ('single', 'parallel', 'population'):
