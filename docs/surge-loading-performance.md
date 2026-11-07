@@ -48,9 +48,12 @@ counter executable or an available controller sampler instead.
 - Ordinary insertion constraints are checked before physical packing, avoiding
   packing work for already-rejected candidates. Hard loading is still checked
   before accepting the insertion and again at the apply boundary.
-- The existing hard-loading concat fallback and search heuristics are unchanged.
-  No feasibility shortcuts based on fractional capacity or assumed customer
-  loading facts are introduced.
+- Scalar distance prefilters may reject non-improving local-search moves, as
+  they do without hard loading. Every surviving candidate still takes the full
+  ordered physical validation path before acceptance. A direct regression shows
+  that a scalar-feasible reversal can remain physically invalid and is rejected.
+  These prefilters never certify physical feasibility. Search heuristics and
+  loading facts are unchanged; no fractional-capacity approximation is added.
 
 ## Regression requirements
 

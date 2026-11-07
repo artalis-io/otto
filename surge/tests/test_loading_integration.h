@@ -417,3 +417,38 @@ static void test_loading_insertion_view_matches_materialization(void) {
     assert(sg_loading_insertion_ok(ctx, &sol, 139, 0, 139, 0));
     sg_route_solution_reset(&sol); sg_free(ctx);
 }
+
+static void test_loading_scalar_prefilter_never_certifies_loading(void) {
+    SGContext *ctx = loading_context(1, 4, 1);
+    SGLoadingVehicle geom = loading_vehicle(1, SG_LOADING_REAR_LIFO);
+    assert(sg_vehicle_set_loading(ctx, 0, &geom) == SG_STATUS_OK);
+    SGLoadingUnit top = {0, 1000, 500, 0, 1, 0};
+    assert(sg_request_set_loading(ctx, 1, &top, 1) == SG_STATUS_OK);
+    assert(sg_request_set_loading(ctx, 2, NULL, 0) == SG_STATUS_OK);
+    assert(sg_request_set_loading(ctx, 3, NULL, 0) == SG_STATUS_OK);
+    assert(sg_task_set_location(ctx, ctx->requests[0].delivery_task_id, 1, 0) == SG_STATUS_OK);
+    assert(sg_task_set_location(ctx, ctx->requests[1].delivery_task_id, 10, 0) == SG_STATUS_OK);
+    assert(sg_task_set_location(ctx, ctx->requests[2].delivery_task_id, 0, 0) == SG_STATUS_OK);
+    assert(sg_task_set_location(ctx, ctx->requests[3].delivery_task_id, 11, 0) == SG_STATUS_OK);
+    uint32_t tasks[] = {ctx->requests[2].delivery_task_id, ctx->requests[1].delivery_task_id,
+                        ctx->requests[0].delivery_task_id, ctx->requests[3].delivery_task_id};
+    SGPlanRoute route = {0, tasks, 4};
+    assert(sg_validate_plan(ctx, 1, &route) == SG_STATUS_OK);
+    assert(ctx->num_violations == 0);
+    SGRouteSolution *sol = ctx->final_solution;
+    double scalar_distance;
+    assert(sg_concat_eval_2opt_intra(ctx, sol, 0, 1, 2, &scalar_distance));
+    assert(isfinite(scalar_distance) && scalar_distance < sol->route_distance[0]);
+    SGRouteStop candidate[4];
+    memcpy(candidate, sg_route_vehicle_stop_ptr_const(sol, 0), sizeof(candidate));
+    SGRouteStop swap = candidate[1]; candidate[1] = candidate[2]; candidate[2] = swap;
+    /* The scalar prefilter is NOT a physical feasibility certificate. Both the
+     * loading gate and ordinary full-candidate acceptance must reject this. */
+    assert(!sg_loading_stops_ok(ctx, 0, candidate, 4));
+    double full_distance;
+    assert(!sg_route_stop_sequence_feasible(ctx, 0, candidate, 4, &full_distance));
+    sg_time_budget_init(&ctx->time_budget, 0, 0);
+    (void)sg_route_try_2opt_intra_once(ctx, sol);
+    loading_assert_solution(ctx);
+    sg_free(ctx);
+}
