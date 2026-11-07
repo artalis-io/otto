@@ -101,8 +101,7 @@ SGStatus sg_loading_model_validate(SGContext *ctx) {
 
 static int loading_should_stop(void *data) {
     const SGContext *ctx = data;
-    return atomic_load(&ctx->cancel_requested) ||
-           (ctx->loading_parent_cancel && atomic_load(ctx->loading_parent_cancel));
+    return sg_cancelled(ctx);
 }
 
 SGStatus sg_loading_round(const SGContext *ctx, uint32_t vehicle, const SGRouteStop *stops,

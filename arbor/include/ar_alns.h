@@ -65,6 +65,12 @@ ARStatus ar_alns_get_repair_stats(const ARALNSContext *ctx, int index,
 
 void ar_alns_calibrate_sa(ARALNSParams *params, double initial_cost, int max_iterations);
 
+/* Cheap cooperative stop check, called before each iteration. Must not mutate
+ * the solution; operators remain responsible for their own long inner loops. */
+typedef int (*ARCancelCallback)(void *user_data);
+ARStatus ar_alns_set_cancel_callback(ARALNSContext *ctx,
+                                     ARCancelCallback callback, void *user_data);
+
 /* Progress callback: return non-zero to cancel. Called at segment boundaries. */
 typedef int (*ARProgressCallback)(int64_t iteration, double best_cost,
                                    double elapsed_seconds, void *user_data);

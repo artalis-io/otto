@@ -84,6 +84,10 @@ static ARStatus test_destroy_noop(void *op_ctx, void *solution, int count,
     return AR_STATUS_OK;
 }
 
+static int cancel_on_second_poll(void *data) {
+    return ++*(int *)data >= 2;
+}
+
 int main(void) {
     ARALNSParams params;
     ARSolutionOps ops;
@@ -293,6 +297,36 @@ int main(void) {
         rp.restart_temp_ratio = 1.1;
         rctx = ar_alns_create(&rp, &ops, NULL);
         assert(rctx == NULL);
+    }
+
+    /* Cancellation must not wait for a progress segment, even without a
+       progress callback. A zero target avoids ordinary early convergence. */
+    {
+        ARALNSParams cp;
+        ar_alns_params_default(&cp);
+        cp.max_iterations = 100000;
+        cp.segment_size = 100000;
+        cp.target_cost = -1;
+        ARALNSContext *cc = ar_alns_create(&cp, &ops, NULL);
+        assert(cc);
+        int polls = 0;
+        assert(ar_alns_set_cancel_callback(NULL, cancel_on_second_poll, &polls) == AR_STATUS_INVALID_ARG);
+        assert(ar_alns_set_cancel_callback(cc, cancel_on_second_poll, &polls) == AR_STATUS_OK);
+        ar_alns_add_destroy(cc, "noop", test_destroy_noop, NULL, 1.0);
+        ar_alns_add_repair(cc, "noop", test_repair, NULL, 1.0);
+        TestSolution *cbest = NULL;
+        assert(ar_alns_solve(cc, &initial, (void **)&cbest) == AR_STATUS_LIMIT);
+        ARALNSStats cs;
+        ar_alns_get_stats(cc, &cs);
+        assert(polls == 2 && cs.iterations == 1 && cs.stop_reason == AR_STOP_CANCELLED);
+        assert(cbest && test_validate(cbest, NULL));
+        test_free(cbest, NULL);
+        /* Clearing callback restores normal use on the same context. */
+        ar_alns_set_cancel_callback(cc, NULL, NULL);
+        cbest = NULL;
+        assert(ar_alns_solve(cc, &initial, (void **)&cbest) == AR_STATUS_OK);
+        test_free(cbest, NULL);
+        ar_alns_free(cc);
     }
 
     printf("arbor ALNS test passed\n");

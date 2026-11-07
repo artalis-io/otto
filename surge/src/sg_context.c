@@ -2874,6 +2874,19 @@ SGStatus sg_set_progress_callback(SGContext *ctx, SGProgressCallback cb, void *u
     return SG_STATUS_OK;
 }
 
+SGStatus sg_cancel_result(SGContext *ctx, SGStatus status) {
+    if (ctx && sg_cancelled(ctx)) {
+        if (status == SG_STATUS_OK || status == SG_STATUS_LIMIT)
+            return SG_STATUS_LIMIT;
+        if (ctx->final_solution) {
+            sg_route_solution_free(ctx->final_solution, NULL);
+            ctx->final_solution = NULL;
+        }
+        sg_set_error(ctx, "solve cancelled without a validated incumbent");
+    }
+    return status;
+}
+
 SGStatus sg_cancel(SGContext *ctx) {
     if (!ctx) return SG_STATUS_INVALID_ARG;
     ctx->cancel_requested = 1;

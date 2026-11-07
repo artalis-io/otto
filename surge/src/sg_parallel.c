@@ -49,9 +49,15 @@ typedef struct {
  * ============================================================================ */
 
 static SGStatus sg_context_clone_init(SGContext *clone, const SGContext *src) {
-    memcpy(clone, src, sizeof(SGContext));
+    /* sg_cancel may write the atomic flag while workers are being cloned.
+     * Do not read that atomic object through memcpy's non-atomic byte reads. */
+    size_t cancel_offset = offsetof(SGContext, cancel_requested);
+    size_t after_cancel = cancel_offset + sizeof(src->cancel_requested);
+    memcpy(clone, src, cancel_offset);
+    memcpy((char *)clone + after_cancel, (const char *)src + after_cancel,
+           sizeof(SGContext) - after_cancel);
     clone->loading_cache = NULL;
-    clone->loading_parent_cancel = &src->cancel_requested;
+    clone->parent_cancel = &src->cancel_requested;
 
     /* Fresh RNG for this clone */
     clone->op_rng = sh_rng_create_default();
@@ -649,7 +655,7 @@ static void sg_srex_build_warm_start(const SGPopulationMember *p1,
  * Public API
  * ============================================================================ */
 
-SGStatus sg_solve_parallel(SGContext *ctx, uint32_t num_threads) {
+static SGStatus sg_solve_parallel_impl(SGContext *ctx, uint32_t num_threads) {
     SGParallelWorkItem *items = NULL;
     ShWorkQueue *queue = NULL;
     ShWorkerPool *pool = NULL;
@@ -814,7 +820,7 @@ cleanup:
 
 #define SG_POP_DEFAULT_GENERATIONS 3
 
-SGStatus sg_solve_population(SGContext *ctx, const SGPopulationConfig *cfg) {
+static SGStatus sg_solve_population_impl(SGContext *ctx, const SGPopulationConfig *cfg) {
     uint32_t num_threads, pop_size, num_gens;
     double xover_frac;
     SGPopulationMember *pop_pool = NULL;
@@ -1163,6 +1169,14 @@ pop_cleanup:
         }
     }
     return status;
+}
+
+SGStatus sg_solve_parallel(SGContext *ctx, uint32_t num_threads) {
+    return sg_cancel_result(ctx, sg_solve_parallel_impl(ctx, num_threads));
+}
+
+SGStatus sg_solve_population(SGContext *ctx, const SGPopulationConfig *cfg) {
+    return sg_cancel_result(ctx, sg_solve_population_impl(ctx, cfg));
 }
 
 #endif /* SG_HAS_THREADS */

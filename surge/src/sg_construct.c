@@ -318,7 +318,7 @@ ARStatus sg_construct_initial_solution(SGContext *ctx, SGBootstrapSolution *sol)
         return status;
     }
 
-    while (sol->num_unassigned > 0) {
+    while (sol->num_unassigned > 0 && !sg_cancelled(ctx)) {
         uint32_t request_id = UINT32_MAX;
         uint32_t vehicle_id = UINT32_MAX;
         if (!sg_construct_select_regret_request(ctx, &state, sol, SG_CONSTRUCT_REGRET_K,

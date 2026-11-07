@@ -229,6 +229,7 @@ static ARStatus sg_cfrs_route_cluster(SGContext *ctx, SGRouteSolution *sol,
 
     /* Insert each request at best position */
     for (i = 0; i < count; i++) {
+        if (sg_cancelled(ctx)) break;
         uint32_t rid = request_ids[i];
         int is_pd = (ctx->requests[rid].kind == SG_REQUEST_KIND_PICKUP_DELIVERY);
 
@@ -607,7 +608,7 @@ ARStatus sg_construct_kmeans_tw(SGContext *ctx, SGRouteSolution *sol) {
     }
 
     /* K-means iteration */
-    for (iter = 0; iter < (uint32_t)max_iters; iter++) {
+    for (iter = 0; iter < (uint32_t)max_iters && !sg_cancelled(ctx); iter++) {
         int converged = 1;
 
         /* Assign each request to nearest centroid */
@@ -656,6 +657,8 @@ ARStatus sg_construct_kmeans_tw(SGContext *ctx, SGRouteSolution *sol) {
         }
     }
 
+    if (sg_cancelled(ctx)) goto kmeans_done;
+
     /* Assign clusters to vehicles and route within each */
     {
         /* Rebuild counts for cluster sizes */
@@ -694,6 +697,7 @@ ARStatus sg_construct_kmeans_tw(SGContext *ctx, SGRouteSolution *sol) {
         }
     }
 
+kmeans_done:
     free(order);
     free(features);
     free(centroids);
@@ -876,7 +880,7 @@ ARStatus sg_construct_try_merge_routes(SGContext *ctx, SGRouteSolution *sol) {
     num_v = sol->num_vehicles;
     if (num_v < 2) return AR_STATUS_OK;
 
-    while (merge_count < max_merges) {
+    while (merge_count < max_merges && !sg_cancelled(ctx)) {
         /* Find shortest non-empty route */
         uint32_t best_small = UINT32_MAX;
         uint32_t best_small_len = UINT32_MAX;

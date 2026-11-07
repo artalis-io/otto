@@ -7,6 +7,10 @@
 #include "sg_internal.h"
 #include "sh_json.h"
 #include "sg_api.h"
+#ifdef SG_HAS_THREADS
+#include "sg_parallel.h"
+#include "sh_pal.h"
+#endif
 #include "../src/sg_api_counts.h"
 
 static int tests_run = 0;
@@ -8069,6 +8073,125 @@ static void test_cancel_stops_early(void) {
 
     sg_free(ctx);
 }
+
+static void cancel_after_construction(const SGConvergenceEntry *entry, void *data) {
+    if (entry->phase == SG_PHASE_CONSTRUCTION) sg_cancel((SGContext *)data);
+}
+
+static void test_cancel_construction_skips_remaining_work(void) {
+    SGContext *ctx = make_config(100000, 42);
+    uint32_t depot;
+    add_depot_with_location(ctx, &depot, 0, 0);
+    add_vehicle_with_depot(ctx, depot, 0, 10000, 100);
+    for (int i = 0; i < 12; ++i)
+        add_delivery_request(ctx, i + 1, 0, 0, 10000, 0, -1);
+    sg_set_convergence_callback(ctx, cancel_after_construction, ctx);
+    assert(sg_solve(ctx) == SG_STATUS_LIMIT);
+    assert(ctx->stats.iterations == 0);
+    assert(ctx->final_solution);
+    assert(sg_route_solution_validate(ctx->final_solution, ctx));
+    double distance = ctx->final_solution->total_distance;
+    assert(sg_route_postprocess_reduce_vehicles(ctx, ctx->final_solution) == AR_STATUS_OK);
+    assert(sg_route_postprocess_reduce_vehicles_relaxed(ctx, ctx->final_solution, 1.20) == AR_STATUS_OK);
+    assert(sg_route_postprocess_ejection_reduce(ctx, ctx->final_solution) == AR_STATUS_OK);
+    assert(sg_route_postprocess_polish_distance(ctx, ctx->final_solution) == AR_STATUS_OK);
+    assert(sg_route_postprocess_intensify(ctx, ctx->final_solution) == AR_STATUS_OK);
+    assert(ctx->final_solution->total_distance == distance);
+    assert(sg_route_solution_validate(ctx->final_solution, ctx));
+    /* Cancellation does not poison the next solve or preserve a stale result. */
+    sg_set_convergence_callback(ctx, NULL, NULL);
+    ctx->config.max_iterations = 10;
+    SGStatus status = sg_solve(ctx);
+    assert(status == SG_STATUS_OK || status == SG_STATUS_LIMIT);
+    assert(!sg_cancelled(ctx));
+    assert(sg_route_solution_validate(ctx->final_solution, ctx));
+    sg_cancel(ctx);
+    assert(sg_cancel_result(ctx, SG_STATUS_ERROR) == SG_STATUS_ERROR);
+    assert(ctx->final_solution == NULL);
+    sg_free(ctx);
+}
+
+static void test_cancel_parent_and_unlimited_budget(void) {
+    SGContext *ctx = make_config(100000, 42);
+    uint32_t depot;
+    add_depot_with_location(ctx, &depot, 0, 0);
+    add_vehicle_with_depot(ctx, depot, 0, 10000, 100);
+    for (int i = 0; i < 12; ++i)
+        add_delivery_request(ctx, i + 1, 0, 0, 10000, 0, -1);
+    _Atomic uint8_t parent = 1;
+    ctx->parent_cancel = &parent;
+    ctx->config.max_time_seconds = 0;
+    assert(sg_solve(ctx) == SG_STATUS_LIMIT);
+    assert(ctx->stats.iterations == 0);
+    assert(ctx->final_solution && sg_route_solution_validate(ctx->final_solution, ctx));
+    SGBudgetProbe probe;
+    sg_budget_probe_init(&probe, &ctx->time_budget, 1);
+    assert(sg_budget_probe_expired(&probe));
+    atomic_store(&parent, 0);
+    sg_time_budget_init(&ctx->time_budget, 0, 0);
+    assert(!sg_time_budget_expired(&ctx->time_budget, 1e9));
+    ctx->parent_cancel = NULL;
+    sg_free(ctx);
+}
+
+#ifdef SG_HAS_THREADS
+/* Real cross-thread cancellation is part of the core sanitizer suite as well
+ * as the subprocess benchmark harness. No progress callback is installed. */
+typedef struct {
+    SGContext *ctx;
+    _Atomic int done;
+    int requested;
+} TestNativeCancel;
+
+static void *test_native_cancel_watcher(void *data) {
+    TestNativeCancel *c = data;
+    uint64_t start = sh_monotonic_ms();
+    while (!atomic_load(&c->done)) {
+        if (sh_monotonic_ms() - start >= 100) {
+            sg_cancel(c->ctx);
+            c->requested = 1;
+            break;
+        }
+        sh_sleep_ms(1);
+    }
+    return NULL;
+}
+
+static void test_native_cancel_all_entrypoints(void) {
+    for (int mode = 0; mode < 3; ++mode) {
+        SGContext *ctx = make_config(2000000000, 42);
+        ctx->config.max_time_seconds = 0;
+        ctx->config.segment_size = 1000000;
+        uint32_t depot;
+        add_depot_with_location(ctx, &depot, 0, 0);
+        for (int v = 0; v < 12; ++v)
+            add_vehicle_with_depot(ctx, depot, 0, 100000, 12);
+        for (int i = 0; i < 66; ++i)
+            add_delivery_request(ctx, i % 11 + 1, i / 11 + 1, 0, 100000, 0, -1);
+        TestNativeCancel cancel = {0};
+        cancel.ctx = ctx;
+        atomic_init(&cancel.done, 0);
+        ShThread thread;
+        assert(sh_thread_create(&thread, test_native_cancel_watcher, &cancel) == 0);
+        SGPopulationConfig pop = {0};
+        pop.num_threads = 8;
+        pop.num_generations = 3;
+        SGStatus status = mode == 0 ? sg_solve(ctx) : mode == 1 ?
+            sg_solve_parallel(ctx, 8) : sg_solve_population(ctx, &pop);
+        atomic_store(&cancel.done, 1);
+        sh_thread_join(&thread, NULL);
+        assert(cancel.requested);
+        assert(status == SG_STATUS_LIMIT || status == SG_STATUS_ERROR);
+        if (status == SG_STATUS_LIMIT) {
+            assert(ctx->final_solution);
+            assert(sg_route_solution_validate(ctx->final_solution, ctx));
+        } else {
+            assert(ctx->final_solution == NULL);
+        }
+        sg_free(ctx);
+    }
+}
+#endif
 
 static void test_cancel_api(void) {
     SGContext *ctx = sg_create();
@@ -18789,6 +18912,11 @@ int main(void) {
     RUN_TEST(test_progress_callback_fires);
     RUN_TEST(test_cancel_stops_early);
     RUN_TEST(test_cancel_api);
+    RUN_TEST(test_cancel_construction_skips_remaining_work);
+    RUN_TEST(test_cancel_parent_and_unlimited_budget);
+#ifdef SG_HAS_THREADS
+    RUN_TEST(test_native_cancel_all_entrypoints);
+#endif
 
     /* JSON API */
     RUN_TEST(test_json_api_health);
@@ -19153,9 +19281,9 @@ int main(void) {
     printf("================\n");
     printf("%d/%d tests passed\n", tests_passed, tests_run);
 #ifdef SG_HAS_THREADS
-    assert(tests_run == 495);
+    assert(tests_run == 498);
 #else
-    assert(tests_run == 471);
+    assert(tests_run == 473);
 #endif
     return tests_passed == tests_run ? 0 : 1;
 }
