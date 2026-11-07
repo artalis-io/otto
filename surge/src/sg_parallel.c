@@ -132,6 +132,17 @@ static void sg_context_clone_free(SGContext *clone) {
     /* Do NOT free warm start pointers — they're borrowed from population pool */
 }
 
+/* Incoming manual plans are borrowed just like elite-pool plans. In particular
+ * a frozen request must keep its authoritative vehicle in generation zero;
+ * clearing these routes made every clone reject an otherwise valid model. */
+static void sg_borrow_initial_routes(SGContext *clone, const SGContext *src) {
+    clone->initial_route_vehicle_ids = src->initial_route_vehicle_ids;
+    clone->initial_route_request_ids = src->initial_route_request_ids;
+    clone->initial_route_lengths = src->initial_route_lengths;
+    clone->num_initial_routes = src->num_initial_routes;
+    clone->total_initial_requests = src->total_initial_requests;
+}
+
 /* ============================================================================
  * Worker callback
  * ============================================================================ */
@@ -701,6 +712,7 @@ SGStatus sg_solve_parallel(SGContext *ctx, uint32_t num_threads) {
 
         status = sg_context_clone_init(&items[i].clone, ctx);
         if (status != SG_STATUS_OK) goto cleanup;
+        sg_borrow_initial_routes(&items[i].clone, ctx);
 
         sh_completion_init(&items[i].completion);
 
@@ -917,6 +929,7 @@ SGStatus sg_solve_population(SGContext *ctx, const SGPopulationConfig *cfg) {
 
             status = sg_context_clone_init(&items[i].clone, ctx);
             if (status != SG_STATUS_OK) goto gen_cleanup;
+            if (g == 0) sg_borrow_initial_routes(&items[i].clone, ctx);
 
             /* S27f: Scale penalty weights for dynamic penalty adaptation */
             if (penalty_scale != 1.0) {
@@ -955,7 +968,10 @@ SGStatus sg_solve_population(SGContext *ctx, const SGPopulationConfig *cfg) {
                 uint32_t parent = sg_population_tournament_select(
                     pop_pool, pop_pool_size, select_rng, ctx->num_requests);
 
-                if (i < crossover_cutoff && pop_pool_size >= 2) {
+                if (i < crossover_cutoff && pop_pool_size >= 2 && !ctx->has_frozen) {
+                    /* SREX can discard singleton fragments, including a frozen
+                     * request. Use a complete validated parent for frozen plans;
+                     * population ALNS/diversity still runs on every worker. */
                     /* SREX crossover: merge two tournament-selected parents */
                     uint32_t parent2 = sg_population_tournament_select(
                         pop_pool, pop_pool_size, select_rng, ctx->num_requests);

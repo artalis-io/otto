@@ -118,7 +118,7 @@ lint-werror:
 	    -Wall -Wextra -Werror -Wshadow -Wunused-but-set-variable $$f -o /dev/null; \
 	done; echo "lint-werror: surge src+tools warning-clean"
 
-.PHONY: all clean test loading-cli-test test-transport scripts-test tools lib debug bench bench-li-lim bench-cordeau \
+.PHONY: all clean test loading-cli-test loading-benchmark-test test-transport scripts-test tools lib debug bench bench-li-lim bench-cordeau \
         bench-quick bench-li-lim-quick bench-cordeau-quick bench-all-quick \
         bench-gh-200 bench-gh-all bench-ll-200 bench-ll-all bench-full \
         bench-tune tune-quick tune-all \
@@ -151,6 +151,18 @@ $(SURGE_SOLVE_BIN): tools/surge_solve.c $(LIB_FILE) ../arbor/libarbor.a ../share
 	$(CC) $(CFLAGS) $(INCLUDES) $< $(call link_lib,.,surge) $(call link_lib,../arbor,arbor) $(call link_lib,../shared,shared) $(LDFLAGS) $(EXE_OUT)$@
 
 tools: $(SURGE_SOLVE_BIN)
+
+# Benchmark adapter only: identical source can also link against a pre-loading
+# library. No instrumentation or behavior changes enter production archives.
+bench_loading_driver: benchmarks/bench_loading_driver.c $(LIB_FILE) ../arbor/libarbor.a ../shared/libshared.a
+	$(CC) $(CFLAGS) $(INCLUDES) $< $(call link_lib,.,surge) $(call link_lib,../arbor,arbor) $(call link_lib,../shared,shared) $(LDFLAGS) $(EXE_OUT)$@
+
+bench_loading_probe: benchmarks/bench_loading_probe.c $(LIB_FILE) ../arbor/libarbor.a ../shared/libshared.a
+	$(CC) $(CFLAGS) $(INCLUDES) $< $(call link_lib,.,surge) $(call link_lib,../arbor,arbor) $(call link_lib,../shared,shared) $(LDFLAGS) $(EXE_OUT)$@
+
+loading-benchmark-test: bench_loading_driver bench_loading_probe
+	python3 benchmarks/test_loading_quality.py
+	./bench_loading_probe
 
 $(TRANSPORT_TEST_BIN): tests/test_transport_direct.c $(LIB_FILE) ../arbor/libarbor.a ../shared/libshared.a
 	$(CC) $(CFLAGS) $(INCLUDES) $< $(call link_lib,.,surge) $(call link_lib,../arbor,arbor) $(call link_lib,../shared,shared) $(LDFLAGS) $(EXE_OUT)$@
@@ -409,7 +421,7 @@ tsan: $(TSAN_TEST_BIN)
 
 clean:
 	rm -f $(BUILD_STAMP)
-	rm -f test_loading $(OBJS) $(LIB_FILE) $(TEST_BIN) $(TEST_TB_BIN) $(TEST_NB_BIN) $(TEST_PM_BIN) $(TRANSPORT_TEST_BIN) $(BENCH_SOL_BIN) $(BENCH_PD_BIN) $(BENCH_CORD_BIN) $(BENCH_TUNE_BIN) $(SHARED_LIB) \
+	rm -f test_loading bench_loading_driver bench_loading_probe $(OBJS) $(LIB_FILE) $(TEST_BIN) $(TEST_TB_BIN) $(TEST_NB_BIN) $(TEST_PM_BIN) $(TRANSPORT_TEST_BIN) $(BENCH_SOL_BIN) $(BENCH_PD_BIN) $(BENCH_CORD_BIN) $(BENCH_TUNE_BIN) $(SHARED_LIB) \
 	  $(FUZZ_BIN) $(TSAN_TEST_BIN)
 	rm -f $(FUZZ_API_BIN) $(FUZZ_API_BIN).exe
 
