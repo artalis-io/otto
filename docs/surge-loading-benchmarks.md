@@ -40,6 +40,12 @@ Three seeds are an initial regression screen, not a statistical guarantee.
   supplemental comparison is declared separately before its measurements.
 - **Manual changes:** physically overloaded/reordered warm input, committed and
   frozen assignments, HGS repair and reload-round replay.
+- **Mixed/support-bridge exact cases:** `--adversarial-small` tests two six-order
+  inputs with directed stack classes and rear unloading. In the bridge case,
+  two class-0 units cannot share one slot until a class-1 support unit is added.
+  This non-monotone feasibility case exposes search-quality issues that uniform
+  pallet fixtures cannot. All quality gaps are measured against the independent
+  exact reference, not the less-constrained old plan.
 
 Run equal **wall budgets** and equal **requested iteration budgets**. A
 300-iteration HGS budget is split across three generations **per worker**; the

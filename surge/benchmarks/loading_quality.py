@@ -69,6 +69,23 @@ def fixture(count=66, binding=False, access='side_free'):
     return model
 
 
+def adversarial_fixture(bridge=False):
+    model = fixture(6, True, 'rear_lifo' if bridge else 'side_free')
+    classes = [0, 1, 0, 0, 1, 0] if bridge else [0, 1, 0, 1, 0, 1]
+    points = [(-20, 0), (0, 5), (-10, 0), (10, 0), (0, -5), (20, 0)]
+    for i, task in enumerate(model['tasks']):
+        task['x'], task['y'] = points[i]
+    for vehicle in model['loading']['vehicles']:
+        vehicle.update(slots=[{'lane': 0, 'depth': j} for j in range(1 if bridge else 2)],
+                       max_layers=3 if bridge else 2, clearance_mm=2400,
+                       max_stack_weight_g=5000, allowed_top=[[1], [0] if bridge else []])
+    for i, request in enumerate(model['loading']['requests']):
+        request['units'][0].update(stack_class=classes[i], height_mm=700 if bridge else 1000,
+                                  weight_g=500, max_weight_above_g=2000,
+                                  max_units_above=2 if bridge else 1)
+    return model
+
+
 def execute(binary, request, directory, timeout, cancel_ms=None, synthetic=False):
     """wait4 supplies this child's CPU/peak RSS, not cumulative child maxima."""
     if not hasattr(os, 'wait4'):
@@ -151,10 +168,12 @@ def run(args):
     references = {}
     if not args.external_only:
         definitions = [('binding', True, 'side_free'), ('rear', True, 'rear_lifo')]
-        if not args.equivalent_only:
+        if args.adversarial_small:
+            definitions = [('mixed', True, 'side_free'), ('bridge', True, 'rear_lifo')]
+        elif not args.equivalent_only:
             definitions.insert(0, ('nonbinding', False, 'side_free'))
         for name, binding, access in definitions:
-            model = fixture(args.orders, binding, access)
+            model = adversarial_fixture(name == 'bridge') if args.adversarial_small else fixture(args.orders, binding, access)
             legacy = copy.deepcopy(model)
             del legacy['loading']
             if args.equivalent_only:
@@ -169,14 +188,14 @@ def run(args):
             else:
                 variants = [('baseline', legacy), ('current', legacy), ('hard', model)]
             cases.append((name, variants))
-            if args.orders <= 8:
+            if args.orders <= 8 or args.adversarial_small:
                 references[name] = {'legacy': exact_routing(legacy), 'hard': exact_routing(model)}
     synthetic_cases = {case for case, _ in cases}
     for item in args.input:
         name, filename = item.split('=', 1)
         if not name.replace('-', '').replace('_', '').isalnum():
             raise ValueError('case name must be alphanumeric')
-        if name in ('nonbinding', 'binding', 'rear', 'binding-equivalent', 'rear-equivalent'):
+        if name in ('nonbinding', 'binding', 'rear', 'binding-equivalent', 'rear-equivalent', 'mixed', 'bridge'):
             raise ValueError('external name is reserved for synthetic references')
         model = json.loads(Path(filename).read_bytes())
         if 'loading' in model:
@@ -247,6 +266,7 @@ def main():
     parser.add_argument('--input', action='append', default=[], metavar='NAME=PATH')
     parser.add_argument('--external-only', action='store_true')
     parser.add_argument('--equivalent-only', action='store_true')
+    parser.add_argument('--adversarial-small', action='store_true', help='six-order mixed-class and rear-LIFO support-bridge exact cases')
     parser.add_argument('--baseline-revision', default='unspecified')
     parser.add_argument('--current-revision', default='unspecified')
     parser.add_argument('--seconds', type=int, default=30)
@@ -257,8 +277,8 @@ def main():
     parser.add_argument('--seeds', type=int, nargs='+', default=[42, 31415, 2718])
     parser.add_argument('--budgets', choices=['wall', 'iterations'], nargs='+', default=['wall', 'iterations'])
     args = parser.parse_args()
-    if args.external_only and args.equivalent_only:
-        parser.error('external-only and equivalent-only are mutually exclusive')
+    if sum((args.external_only, args.equivalent_only, args.adversarial_small)) > 1:
+        parser.error('external-only, equivalent-only and adversarial-small are mutually exclusive')
     if args.seconds < 3 or args.iterations < 3 or args.watchdog <= args.seconds or not 1 <= args.orders <= 128:
         parser.error('seconds/iterations >= 3, watchdog > seconds, orders 1..128 required')
     def interrupted(_signum, _frame):

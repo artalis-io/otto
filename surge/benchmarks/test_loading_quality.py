@@ -8,7 +8,7 @@ import tempfile
 import unittest
 from unittest.mock import Mock, patch
 
-from loading_quality import execute, fixture
+from loading_quality import execute, fixture, adversarial_fixture
 from loading_reference import check_solution, exact_routing, valid_placement, exhaustive_pack
 from loading_assess import assess
 
@@ -110,6 +110,17 @@ class ReferenceTests(unittest.TestCase):
                 units = [{**physical['loading']['requests'][i]['units'][0], 'stop': i}
                          for i in range(count)]
                 self.assertEqual(exhaustive_pack(geometry, units), count <= 4)
+
+    def test_mixed_and_nonmonotone_bridge_references(self):
+        for bridge in (False, True):
+            model = adversarial_fixture(bridge)
+            reference = exact_routing(model)
+            self.assertEqual((reference['served'], reference['vehicles']), (6, 2))
+        model = adversarial_fixture(True)
+        units = [{**r['units'][0], 'stop': i} for i, r in enumerate(model['loading']['requests'][:3])]
+        geometry = model['loading']['vehicles'][0]
+        self.assertFalse(exhaustive_pack(geometry, [units[0], units[2]]))
+        self.assertTrue(exhaustive_pack(geometry, units))
 
     def test_certificate_rejects_each_physical_violation(self):
         model = fixture(2, True)
