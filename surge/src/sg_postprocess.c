@@ -106,7 +106,7 @@ static int sg_educate_2opt_intra(const SGContext *ctx, SGRouteSolution *sol, uin
     candidate = (SGRouteStop *)malloc((size_t)stop_len * sizeof(SGRouteStop));
     if (!candidate) return 0;
 
-    for (i = 0; i + 2 < stop_len; i++) {
+    for (i = 0; i + 2 < stop_len && !sg_cancelled(ctx); i++) {
         for (j = i + 2; j < stop_len; j++) {
             double new_dist = 0.0;
 
@@ -264,7 +264,7 @@ void sg_route_educate(SGContext *ctx, SGRouteSolution *sol) {
     if (ctx->current_phase != SG_PHASE_2_POLISH) return;
     if (!ctx->modified_vehicles) return;
 
-    for (v = 0; v < sol->num_vehicles; v++) {
+    for (v = 0; v < sol->num_vehicles && !sg_cancelled(ctx); v++) {
         if (!sg_modified_vehicles_test(ctx, v)) continue;
         if (sol->route_stop_lengths[v] < 3) continue;
 
@@ -1484,6 +1484,7 @@ static ARStatus sg_route_try_eliminate_two_vehicles(const SGContext *ctx,
 
 ARStatus sg_route_postprocess_reduce_vehicles(const SGContext *ctx,
                                               SGRouteSolution *sol) {
+    if (ctx && sg_cancelled(ctx)) return AR_STATUS_OK;
     uint8_t *tried = NULL;
     int improved = 1;
 
@@ -1673,6 +1674,7 @@ ARStatus sg_route_postprocess_reduce_vehicles(const SGContext *ctx,
 ARStatus sg_route_postprocess_reduce_vehicles_relaxed(const SGContext *ctx,
                                                        SGRouteSolution *sol,
                                                        double distance_factor) {
+    if (ctx && sg_cancelled(ctx)) return AR_STATUS_OK;
     uint8_t *tried = NULL;
     int improved = 1;
 
@@ -1842,7 +1844,7 @@ int sg_try_place_with_ejection(const SGContext *ctx, SGRouteSolution *sol,
                                uint8_t *chain_visited, int *budget,
                                SGBudgetProbe *time_probe) {
     /* Step 0: Check wall-clock time budget (amortized). */
-    if (time_probe && sg_budget_probe_expired(time_probe)) {
+    if (sg_cancelled(ctx) || (time_probe && sg_budget_probe_expired(time_probe))) {
         return 0;
     }
 
@@ -2197,6 +2199,7 @@ ARStatus sg_route_postprocess_eject_over_tw(const SGContext *ctx, SGRouteSolutio
 }
 
 ARStatus sg_route_postprocess_ejection_reduce(const SGContext *ctx, SGRouteSolution *sol) {
+    if (ctx && sg_cancelled(ctx)) return AR_STATUS_OK;
     int restarted;
     uint8_t *chain_visited = NULL;
 
@@ -2404,6 +2407,7 @@ ARStatus sg_route_postprocess_ejection_reduce(const SGContext *ctx, SGRouteSolut
 
 ARStatus sg_route_postprocess_polish_distance(const SGContext *ctx,
                                               SGRouteSolution *sol) {
+    if (ctx && sg_cancelled(ctx)) return AR_STATUS_OK;
     uint32_t max_vehicles;
     uint32_t pass;
 
@@ -3043,6 +3047,7 @@ int sg_route_try_pd_reorder_once(const SGContext *ctx, SGRouteSolution *sol) {
 
 
 ARStatus sg_route_postprocess_intensify(const SGContext *ctx, SGRouteSolution *sol) {
+    if (ctx && sg_cancelled(ctx)) return AR_STATUS_OK;
     uint32_t pass;
     uint32_t max_passes;
 

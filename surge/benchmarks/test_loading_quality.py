@@ -223,17 +223,31 @@ class NativeTests(unittest.TestCase):
             self.assertEqual(measured['trips'], 2)
 
     def test_cancellation_is_bounded(self):
-        model = fixture(66)
-        model['config'].update(population=True, population_threads=2,
-                               population_generations=3, max_iterations=2000000000,
-                               max_time_seconds=30, seed=42)
-        with tempfile.TemporaryDirectory() as path:
-            measured = execute(DRIVER, model, Path(path), 10, cancel_ms=100)
-            self.assertFalse(measured['timeout'], measured)
-            self.assertTrue(measured.get('cancel_requested'), measured)
-            # The 2s performance target is assessed separately on measured
-            # hosts; this portable CI test enforces termination/no orphan.
-            self.assertGreaterEqual(measured['cancel_latency_ms'], 0)
+        import subprocess
+        for mode in ('single', 'parallel', 'population'):
+            for hard in (False, True):
+                with self.subTest(mode=mode, hard=hard), tempfile.TemporaryDirectory() as path:
+                    model = fixture(66)
+                    if not hard:
+                        del model['loading']
+                    model['config'].update(population=True, population_threads=8,
+                        population_generations=3, max_iterations=2000000000,
+                        max_time_seconds=0, segment_size=1000000, seed=42)
+                    request = Path(path) / 'request.json'
+                    request.write_text(json.dumps(model))
+                    result = subprocess.run([str(DRIVER), str(request), '100', mode],
+                        capture_output=True, text=True, timeout=10)
+                    self.assertIn(result.returncode, (0, 1), result.stderr)
+                    output = json.loads(result.stdout)
+                    measured = output['benchmark']
+                    self.assertTrue(measured['cancel_requested'])
+                    # Separate measured ARM64 runs enforce the stricter 2s target.
+                    self.assertLess(measured['cancel_latency_ms'], 5000)
+                    if result.returncode == 0:
+                        self.assertTrue(measured['hard_validated'])
+                        check_solution(model, output['solution'])
+                    else:
+                        self.assertFalse(output['solution'].get('routes'))
 
     def test_watchdog_is_not_a_pass(self):
         model = self.model()

@@ -33,7 +33,7 @@ static int output(void *ctx, const char *data, size_t len) {
     return fwrite(data, 1, len, ctx) == len ? 0 : -1;
 }
 int main(int argc, char **argv) {
-    if (argc < 2 || argc > 3) return 2;
+    if (argc < 2 || argc > 4) return 2;
     FILE *f = fopen(argv[1], "rb");
     if (!f) return 2;
     if (fseek(f, 0, SEEK_END)) { fclose(f); return 2; }
@@ -66,7 +66,7 @@ int main(int argc, char **argv) {
     atomic_init(&cancel.done, 0);
     ShThread thread;
     int threaded = 0;
-    if (argc == 3) {
+    if (argc >= 3) {
         char *end;
         long ms = strtol(argv[2], &end, 10);
         if (*end || ms < 1 || ms > 60000) { sg_free(ctx); return 2; }
@@ -78,7 +78,17 @@ int main(int argc, char **argv) {
     pop.num_threads = (uint32_t)threads;
     pop.num_generations = (uint32_t)generations;
     uint64_t begin = sh_monotonic_ms();
-    status = sg_solve_population(ctx, &pop);
+    if (argc < 4 || strcmp(argv[3], "population") == 0)
+        status = sg_solve_population(ctx, &pop);
+    else if (strcmp(argv[3], "parallel") == 0)
+        status = sg_solve_parallel(ctx, (uint32_t)threads);
+    else if (strcmp(argv[3], "single") == 0)
+        status = sg_solve(ctx);
+    else {
+        atomic_store(&cancel.done, 1);
+        if (threaded) sh_thread_join(&thread, NULL);
+        sg_free(ctx); return 2;
+    }
     uint64_t finish = sh_monotonic_ms();
     atomic_store(&cancel.done, 1);
     if (threaded) sh_thread_join(&thread, NULL);

@@ -1,9 +1,12 @@
 #include "sg_time_budget.h"
 
 #include <limits.h>
+#include <stddef.h>
 #include <math.h>
 
 void sg_time_budget_init(SGTimeBudget *tb, double now, double total_seconds) {
+    tb->cancel = NULL;
+    tb->parent_cancel = NULL;
     tb->solve_start = now;
     if (total_seconds <= 0.0) {
         tb->deadline = -1.0;  /* sentinel: unlimited */
@@ -13,6 +16,9 @@ void sg_time_budget_init(SGTimeBudget *tb, double now, double total_seconds) {
 }
 
 int sg_time_budget_expired(const SGTimeBudget *tb, double now) {
+    if ((tb->cancel && atomic_load_explicit(tb->cancel, memory_order_relaxed)) ||
+        (tb->parent_cancel && atomic_load_explicit(tb->parent_cancel, memory_order_relaxed)))
+        return 1;
     if (tb->deadline < 0.0) return 0;  /* unlimited */
     return now >= tb->deadline;
 }

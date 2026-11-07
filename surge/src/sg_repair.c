@@ -353,6 +353,7 @@ int sg_route_rank_insertions_for_request(SGContext *ctx, const SGRouteSolution *
 sg_rank_retry:
 
     for (v = 0; v < sol->num_vehicles; v++) {
+        if (sg_cancelled(ctx)) break;
         SGInsertionCache *ic = ctx->scratch.insertion_cache;
         SGInsertionCacheEntry *ce = NULL;
 
@@ -678,6 +679,7 @@ static uint32_t sg_route_select_request_greedy(SGContext *ctx, const SGRouteSolu
     }
 
     for (i = 0; i < sol->base.num_unassigned; i++) {
+        if (sg_cancelled(ctx)) break;
         uint32_t request_id = sol->base.unassigned_ids[i];
         double first_score = 0.0;
         double kth_score = 0.0;
@@ -727,6 +729,7 @@ static uint32_t sg_route_select_request_regret(SGContext *ctx, const SGRouteSolu
     }
 
     for (i = 0; i < sol->base.num_unassigned; i++) {
+        if (sg_cancelled(ctx)) break;
         uint32_t request_id = sol->base.unassigned_ids[i];
         double first_score = 0.0;
         double kth_score = 0.0;
@@ -766,7 +769,7 @@ static uint32_t sg_route_select_request_regret(SGContext *ctx, const SGRouteSolu
 
 static ARStatus sg_repair_fill_greedy_linear(SGContext *ctx, SGRouteSolution *sol,
                                               double noise_scale) {
-    while (sol->base.num_unassigned > 0) {
+    while (sol->base.num_unassigned > 0 && !sg_cancelled(ctx)) {
         uint32_t vehicle_id = UINT32_MAX;
         uint32_t pos = UINT32_MAX;
         uint32_t pickup_pos = UINT32_MAX;
@@ -810,7 +813,7 @@ static ARStatus sg_repair_fill_greedy_linear(SGContext *ctx, SGRouteSolution *so
 
 static ARStatus sg_repair_fill_regret_linear(SGContext *ctx, SGRouteSolution *sol,
                                               int regret_k, double noise_scale) {
-    while (sol->base.num_unassigned > 0) {
+    while (sol->base.num_unassigned > 0 && !sg_cancelled(ctx)) {
         uint32_t vehicle_id = UINT32_MAX;
         uint32_t pos = UINT32_MAX;
         uint32_t pickup_pos = UINT32_MAX;
@@ -920,6 +923,7 @@ static ARStatus sg_repair_fill_heap(SGContext *ctx, SGRouteSolution *sol,
 
     /* Phase 1: evaluate all unassigned requests, push to heap */
     for (i = 0; i < sol->base.num_unassigned; i++) {
+        if (sg_cancelled(ctx)) break;
         uint32_t req = sol->base.unassigned_ids[i];
         double first_score = 0.0, kth_score = 0.0;
         uint32_t vehicle_id = UINT32_MAX, pos = UINT32_MAX;
@@ -955,7 +959,7 @@ static ARStatus sg_repair_fill_heap(SGContext *ctx, SGRouteSolution *sol,
        O(N * bounce_limit) total pops. */
     {
     uint32_t bounce_count = 0;
-    while (!sh_heap_empty(heap)) {
+    while (!sh_heap_empty(heap) && !sg_cancelled(ctx)) {
         SHHeapEntry top;
         uint32_t req;
         double first_score, kth_score;
@@ -1073,7 +1077,7 @@ static void sg_repair_ejection_fallback(SGContext *ctx, SGRouteSolution *sol) {
 
     cost_before = sg_route_solution_cost(sol, (void *)ctx);
 
-    for (i = 0; i < n && budget > 0; i++) {
+    for (i = 0; i < n && budget > 0 && !sg_cancelled(ctx); i++) {
         uint32_t req = snapshot[i];
         SGRouteSolution *backup;
         if (sol->base.assigned_flags[req]) continue;  /* already placed by a prior chain */

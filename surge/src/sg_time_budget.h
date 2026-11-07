@@ -3,6 +3,7 @@
 
 #include <float.h>
 #include <stdint.h>
+#include <stdatomic.h>
 #include "sh_time.h"
 
 /*
@@ -18,6 +19,8 @@
 
 typedef struct {
     double deadline;      /* absolute monotonic time when budget expires */
+    const _Atomic uint8_t *cancel;
+    const _Atomic uint8_t *parent_cancel;
     double solve_start;   /* when solve began (for elapsed reporting) */
 } SGTimeBudget;
 

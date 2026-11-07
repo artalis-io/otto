@@ -8070,6 +8070,66 @@ static void test_cancel_stops_early(void) {
     sg_free(ctx);
 }
 
+static void cancel_after_construction(const SGConvergenceEntry *entry, void *data) {
+    if (entry->phase == SG_PHASE_CONSTRUCTION) sg_cancel((SGContext *)data);
+}
+
+static void test_cancel_construction_skips_remaining_work(void) {
+    SGContext *ctx = make_config(100000, 42);
+    uint32_t depot;
+    add_depot_with_location(ctx, &depot, 0, 0);
+    add_vehicle_with_depot(ctx, depot, 0, 10000, 100);
+    for (int i = 0; i < 12; ++i)
+        add_delivery_request(ctx, i + 1, 0, 0, 10000, 0, -1);
+    sg_set_convergence_callback(ctx, cancel_after_construction, ctx);
+    assert(sg_solve(ctx) == SG_STATUS_LIMIT);
+    assert(ctx->stats.iterations == 0);
+    assert(ctx->final_solution);
+    assert(sg_route_solution_validate(ctx->final_solution, ctx));
+    double distance = ctx->final_solution->total_distance;
+    assert(sg_route_postprocess_reduce_vehicles(ctx, ctx->final_solution) == AR_STATUS_OK);
+    assert(sg_route_postprocess_reduce_vehicles_relaxed(ctx, ctx->final_solution, 1.20) == AR_STATUS_OK);
+    assert(sg_route_postprocess_ejection_reduce(ctx, ctx->final_solution) == AR_STATUS_OK);
+    assert(sg_route_postprocess_polish_distance(ctx, ctx->final_solution) == AR_STATUS_OK);
+    assert(sg_route_postprocess_intensify(ctx, ctx->final_solution) == AR_STATUS_OK);
+    assert(ctx->final_solution->total_distance == distance);
+    assert(sg_route_solution_validate(ctx->final_solution, ctx));
+    /* Cancellation does not poison the next solve or preserve a stale result. */
+    sg_set_convergence_callback(ctx, NULL, NULL);
+    ctx->config.max_iterations = 10;
+    SGStatus status = sg_solve(ctx);
+    assert(status == SG_STATUS_OK || status == SG_STATUS_LIMIT);
+    assert(!sg_cancelled(ctx));
+    assert(sg_route_solution_validate(ctx->final_solution, ctx));
+    sg_cancel(ctx);
+    assert(sg_cancel_result(ctx, SG_STATUS_ERROR) == SG_STATUS_ERROR);
+    assert(ctx->final_solution == NULL);
+    sg_free(ctx);
+}
+
+static void test_cancel_parent_and_unlimited_budget(void) {
+    SGContext *ctx = make_config(100000, 42);
+    uint32_t depot;
+    add_depot_with_location(ctx, &depot, 0, 0);
+    add_vehicle_with_depot(ctx, depot, 0, 10000, 100);
+    for (int i = 0; i < 12; ++i)
+        add_delivery_request(ctx, i + 1, 0, 0, 10000, 0, -1);
+    _Atomic uint8_t parent = 1;
+    ctx->parent_cancel = &parent;
+    ctx->config.max_time_seconds = 0;
+    assert(sg_solve(ctx) == SG_STATUS_LIMIT);
+    assert(ctx->stats.iterations == 0);
+    assert(ctx->final_solution && sg_route_solution_validate(ctx->final_solution, ctx));
+    SGBudgetProbe probe;
+    sg_budget_probe_init(&probe, &ctx->time_budget, 1);
+    assert(sg_budget_probe_expired(&probe));
+    atomic_store(&parent, 0);
+    sg_time_budget_init(&ctx->time_budget, 0, 0);
+    assert(!sg_time_budget_expired(&ctx->time_budget, 1e9));
+    ctx->parent_cancel = NULL;
+    sg_free(ctx);
+}
+
 static void test_cancel_api(void) {
     SGContext *ctx = sg_create();
     assert(ctx != NULL);
@@ -18789,6 +18849,8 @@ int main(void) {
     RUN_TEST(test_progress_callback_fires);
     RUN_TEST(test_cancel_stops_early);
     RUN_TEST(test_cancel_api);
+    RUN_TEST(test_cancel_construction_skips_remaining_work);
+    RUN_TEST(test_cancel_parent_and_unlimited_budget);
 
     /* JSON API */
     RUN_TEST(test_json_api_health);
@@ -19153,9 +19215,9 @@ int main(void) {
     printf("================\n");
     printf("%d/%d tests passed\n", tests_passed, tests_run);
 #ifdef SG_HAS_THREADS
-    assert(tests_run == 495);
+    assert(tests_run == 497);
 #else
-    assert(tests_run == 471);
+    assert(tests_run == 473);
 #endif
     return tests_passed == tests_run ? 0 : 1;
 }

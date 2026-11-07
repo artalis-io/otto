@@ -83,11 +83,15 @@ static void sg_phase_end(SGContext *ctx, int64_t iterations,
     }
 }
 
+static int sg_cancel_forwarder(void *data) {
+    return sg_cancelled((const SGContext *)data);
+}
+
 /* Progress callback forwarder: Arbor → Surge */
 static int sg_progress_forwarder(int64_t iteration, double best_cost,
                                   double elapsed_seconds, void *user_data) {
     SGContext *ctx = (SGContext *)user_data;
-    if (ctx->cancel_requested) return 1;
+    if (sg_cancelled(ctx)) return 1;
     /* Adaptive penalty self-adjustment at segment boundaries */
     if (ctx->penalty.enabled && ctx->penalty.update) {
         ctx->penalty.update(&ctx->penalty);
@@ -393,7 +397,7 @@ ARStatus sg_route_construct_tw_sorted(SGContext *ctx, SGRouteSolution *sol) {
     }
 
     /* Insert in sorted order using cheapest-position greedy */
-    for (i = 0; i < n; i++) {
+    for (i = 0; i < n && !sg_cancelled(ctx); i++) {
         uint32_t request_id = order[i];
         double best_score = 0.0;
         double kth_score = 0.0;
@@ -443,7 +447,7 @@ ARStatus sg_route_construct_solomon_i1(SGContext *ctx, SGRouteSolution *sol) {
         return AR_STATUS_OK;
     }
 
-    for (;;) {
+    for (; !sg_cancelled(ctx);) {
         uint32_t seed_vehicle = UINT32_MAX;
         uint32_t seed_request = UINT32_MAX;
         int32_t seed_early = INT32_MAX;
@@ -513,7 +517,7 @@ ARStatus sg_route_construct_solomon_i1(SGContext *ctx, SGRouteSolution *sol) {
         }
 
         /* Fill loop: repeatedly insert best c2-scoring request into current vehicle. */
-        for (;;) {
+        for (; !sg_cancelled(ctx);) {
             uint32_t best_req = UINT32_MAX;
             double best_c2 = -INFINITY;
             uint32_t best_pos = UINT32_MAX;
@@ -688,6 +692,7 @@ static ARStatus sg_route_construct_from_warm_start(SGContext *ctx, SGRouteSoluti
             }
 
             for (j = 0; j < len; j++) {
+                if (sg_cancelled(ctx)) return AR_STATUS_OK;
                 uint32_t rid = ctx->initial_route_request_ids[offset + j];
                 double best_score = 0.0;
                 uint32_t best_pos = UINT32_MAX;
@@ -783,7 +788,7 @@ static ARStatus sg_route_construct_initial_solution(SGContext *ctx, SGRouteSolut
     if (status != AR_STATUS_OK) return status;
 
     /* Try remaining strategies, keep lexicographic best */
-    for (m = 1; m < SG_CONSTRUCT_COUNT; m++) {
+    for (m = 1; m < SG_CONSTRUCT_COUNT && !sg_cancelled(ctx); m++) {
         SGRouteSolution alt;
         status = sg_route_solution_init(ctx, &alt);
         if (status == AR_STATUS_OK) {
@@ -891,6 +896,8 @@ static SGStatus sg_solve_route_model(SGContext *ctx) {
     ctx->solve_start_time = sg_monotonic_seconds();
     sg_time_budget_init(&ctx->time_budget, ctx->solve_start_time,
                         (double)ctx->config.max_time_seconds);
+    ctx->time_budget.cancel = &ctx->cancel_requested;
+    ctx->time_budget.parent_cancel = ctx->parent_cancel;
     ctx->current_phase = SG_PHASE_CONSTRUCTION;
     ctx->convergence_count = 0;
     ctx->convergence_write_pos = 0;
@@ -1088,6 +1095,7 @@ static SGStatus sg_solve_route_model(SGContext *ctx) {
         } else {
             sh_rng_seed_time(ctx->op_rng);
         }
+        ar_alns_set_cancel_callback(alns, sg_cancel_forwarder, ctx);
         if (ctx->progress_callback || ctx->cancel_requested ||
             ctx->convergence_buffer || ctx->convergence_callback) {
             ar_alns_set_progress_callback(alns, sg_progress_forwarder, ctx);
@@ -1203,6 +1211,7 @@ skip_phase1:
                     } else {
                         sh_rng_seed_time(ctx->op_rng);
                     }
+                    ar_alns_set_cancel_callback(p15_alns, sg_cancel_forwarder, ctx);
                     if (ctx->progress_callback || ctx->cancel_requested ||
                         ctx->convergence_buffer || ctx->convergence_callback) {
                         ar_alns_set_progress_callback(p15_alns, sg_progress_forwarder, ctx);
@@ -1331,6 +1340,7 @@ skip_phase15:
         } else {
             sh_rng_seed_time(ctx->op_rng);
         }
+        ar_alns_set_cancel_callback(alns, sg_cancel_forwarder, ctx);
         if (ctx->progress_callback || ctx->cancel_requested ||
             ctx->convergence_buffer || ctx->convergence_callback) {
             ar_alns_set_progress_callback(alns, sg_progress_forwarder, ctx);
@@ -1534,13 +1544,13 @@ skip_phase2:
         if (ctx->hard_loading) sg_set_error(ctx, "no verified solution preserving hard loading and must-serve constraints");
         return SG_STATUS_ERROR;
     }
-    if (ar_status == AR_STATUS_LIMIT) {
+    if (sg_cancelled(ctx) || ar_status == AR_STATUS_LIMIT) {
         return SG_STATUS_LIMIT;
     }
     return SG_STATUS_OK;
 }
 
-SGStatus sg_solve(SGContext *ctx) {
+static SGStatus sg_solve_impl(SGContext *ctx) {
     ARALNSParams params;
     ARSolutionOps ops;
     ARALNSContext *alns = NULL;
@@ -1636,6 +1646,7 @@ SGStatus sg_solve(SGContext *ctx) {
     } else {
         sh_rng_seed_time(ctx->op_rng);
     }
+    ar_alns_set_cancel_callback(alns, sg_cancel_forwarder, ctx);
     if (ctx->progress_callback || ctx->cancel_requested ||
         ctx->convergence_buffer || ctx->convergence_callback) {
         ar_alns_set_progress_callback(alns, sg_progress_forwarder, ctx);
@@ -1764,9 +1775,13 @@ SGStatus sg_solve(SGContext *ctx) {
     sg_bootstrap_free(best, NULL);
     ar_alns_free(alns);
 
-    if (ar_status == AR_STATUS_LIMIT) {
+    if (sg_cancelled(ctx) || ar_status == AR_STATUS_LIMIT) {
         return SG_STATUS_LIMIT;
     }
 
     return SG_STATUS_OK;
+}
+
+SGStatus sg_solve(SGContext *ctx) {
+    return sg_cancel_result(ctx, sg_solve_impl(ctx));
 }

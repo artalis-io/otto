@@ -287,6 +287,11 @@ SGStatus sg_set_initial_routes(SGContext *ctx,
 /* Progress callback + cancel */
 typedef int (*SGProgressCallback)(const SGStats *stats, void *user_data);
 SGStatus sg_set_progress_callback(SGContext *ctx, SGProgressCallback cb, void *user_data);
+/* Cooperative stop; safe from another thread while a solve is running.
+ * Active workers observe the request directly, independent of progress segments.
+ * Solve returns LIMIT with a validated incumbent, or ERROR with no route result
+ * if no incumbent can be verified. Reusing the context starts a fresh solve.
+ * This is not preemption: external travel callbacks must themselves return. */
 SGStatus sg_cancel(SGContext *ctx);
 
 /* Convergence tracking: caller-owned ring buffer */

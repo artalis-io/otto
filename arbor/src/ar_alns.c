@@ -52,6 +52,8 @@ struct ARALNSContext {
     ARALNSStats stats;
     void *best_solution;
 
+    ARCancelCallback cancel_callback;
+    void *cancel_data;
     ARProgressCallback progress_callback;
     void *progress_data;
 };
@@ -446,6 +448,14 @@ ARStatus ar_alns_set_progress_callback(ARALNSContext *ctx,
     return AR_STATUS_OK;
 }
 
+ARStatus ar_alns_set_cancel_callback(ARALNSContext *ctx,
+                                     ARCancelCallback callback, void *user_data) {
+    if (!ctx) return AR_STATUS_INVALID_ARG;
+    ctx->cancel_callback = callback;
+    ctx->cancel_data = user_data;
+    return AR_STATUS_OK;
+}
+
 ARStatus ar_alns_solve(ARALNSContext *ctx, const void *initial_solution,
                        void **best_solution_out) {
     ARStatus status = AR_STATUS_OK;
@@ -521,6 +531,12 @@ ARStatus ar_alns_solve(ARALNSContext *ctx, const void *initial_solution,
         double delta = 0.0;
         int accepted = 0;
         double reward = ctx->params.reward_rejected;
+
+        if (ctx->cancel_callback && ctx->cancel_callback(ctx->cancel_data)) {
+            status = AR_STATUS_LIMIT;
+            stop_reason = AR_STOP_CANCELLED;
+            break;
+        }
 
         if (ctx->params.max_time_seconds > 0) {
             double elapsed = ar_now_seconds() - start_time;

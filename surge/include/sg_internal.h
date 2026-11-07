@@ -452,7 +452,7 @@ typedef struct SGLoadingCache SGLoadingCache;
 struct SGContext {
     uint8_t hard_loading;
     uint64_t loading_node_budget;
-    const _Atomic uint8_t *loading_parent_cancel;
+    const _Atomic uint8_t *parent_cancel;
     SGLoadingCache *loading_cache; /* worker-local, never shared between clones */
     SGConfig config;
     SGDemandSignConvention demand_sign_convention;
@@ -1397,6 +1397,16 @@ int sg_concat_eval_cross_exchange(const SGContext *ctx, const SGRouteSolution *s
 int sg_concat_eval_2opt_intra(const SGContext *ctx, const SGRouteSolution *sol,
                                uint32_t v, uint32_t rev_start, uint32_t rev_end,
                                double *new_dist_out);
+
+/* Parent remains alive until every worker has joined. Cancellation never
+ * depends on progress reporting, wall limits or physical-loading mode. */
+static inline int sg_cancelled(const SGContext *ctx) {
+    return atomic_load_explicit(&ctx->cancel_requested, memory_order_relaxed) ||
+        (ctx->parent_cancel &&
+         atomic_load_explicit(ctx->parent_cancel, memory_order_relaxed));
+}
+
+SGStatus sg_cancel_result(SGContext *ctx, SGStatus status);
 
 /* sg_construct_cfrs.c */
 uint32_t sg_estimate_min_vehicles(const SGContext *ctx);
