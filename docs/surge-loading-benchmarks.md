@@ -85,41 +85,44 @@ it exits nonzero for invalid, incomplete or regressed comparisons.
 
 ## Build and run
 
-From a current checkout, with an external baseline checkout at `$BASELINE_ROOT`:
+From a current checkout, set `baseline_root` to an external baseline checkout,
+`benchmark_output` to an external results directory, and `dayonepath`/`daytwopath`
+to existing private native requests. These are operator shell variables, not
+application settings. A C toolchain and Python 3 must already be available:
 
 ```sh
 make -C surge bench_loading_driver bench_loading_probe
-make -C "$BASELINE_ROOT/surge" lib
+make -C "$baseline_root/surge" lib
 cc -Wall -Wextra -O3 -std=c11 -D_GNU_SOURCE -DSG_HAS_THREADS \
-  -I"$BASELINE_ROOT/surge/include" -I"$BASELINE_ROOT/arbor/include" \
-  -I"$BASELINE_ROOT/shared/include" surge/benchmarks/bench_loading_driver.c \
-  "$BASELINE_ROOT/surge/libsurge.a" "$BASELINE_ROOT/arbor/libarbor.a" \
-  "$BASELINE_ROOT/shared/libshared.a" -lm -pthread \
-  -o "$BASELINE_ROOT/bench_loading_driver"
+  -I"$baseline_root/surge/include" -I"$baseline_root/arbor/include" \
+  -I"$baseline_root/shared/include" surge/benchmarks/bench_loading_driver.c \
+  "$baseline_root/surge/libsurge.a" "$baseline_root/arbor/libarbor.a" \
+  "$baseline_root/shared/libshared.a" -lm -pthread \
+  -o "$baseline_root/bench_loading_driver"
 make -C surge loading-benchmark-test
 
-# Public representative cases; OUTPUT must be outside any Git checkout.
+# Public representative cases; benchmark_output must be outside any Git checkout.
 python3 surge/benchmarks/loading_quality.py \
-  --baseline "$BASELINE_ROOT/bench_loading_driver" \
-  --current surge/bench_loading_driver --output "$OUTPUT/synthetic" \
+  --baseline "$baseline_root/bench_loading_driver" \
+  --current surge/bench_loading_driver --output "$benchmark_output/synthetic" \
   --threads 8 --seconds 30 --iterations 300 --seeds 42 31415 2718 \
   --budgets wall iterations \
   --baseline-revision ae414dc1387209fced770607a8f30a91a005187f \
   --current-revision "$(git rev-parse HEAD)"
-python3 surge/benchmarks/loading_assess.py "$OUTPUT/synthetic/report.json"
+python3 surge/benchmarks/loading_assess.py "$benchmark_output/synthetic/report.json"
 
 # Small exact references, same public fixtures and independent validation.
 python3 surge/benchmarks/loading_quality.py \
-  --baseline "$BASELINE_ROOT/bench_loading_driver" \
-  --current surge/bench_loading_driver --output "$OUTPUT/exact" \
+  --baseline "$baseline_root/bench_loading_driver" \
+  --current surge/bench_loading_driver --output "$benchmark_output/exact" \
   --orders 6 --threads 2 --seconds 3 --iterations 60
 
 # Private solver-ready native request JSONs, NEVER Excel/raw data or an image.
 # This preserves every field except explicit benchmark budget/seed/HGS config.
 python3 surge/benchmarks/loading_quality.py \
-  --baseline "$BASELINE_ROOT/bench_loading_driver" \
-  --current surge/bench_loading_driver --output "$OUTPUT/private-wall600" \
-  --external-only --input day1="$DAY1_REQUEST" --input day2="$DAY2_REQUEST" \
+  --baseline "$baseline_root/bench_loading_driver" \
+  --current surge/bench_loading_driver --output "$benchmark_output/private-wall600" \
+  --external-only --input day1="$dayonepath" --input day2="$daytwopath" \
   --threads 8 --seconds 600 --seeds 42 31415 2718 --budgets wall --watchdog 900
 ```
 
