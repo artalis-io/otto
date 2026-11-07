@@ -178,6 +178,22 @@ class NativeTests(unittest.TestCase):
                 with self.assertRaises(ValueError):
                     check_solution(model, solution)
 
+    def test_hgs_quality_for_mixed_and_nonmonotone_classes(self):
+        limits = json.loads(Path(__file__).with_name('loading_thresholds.json').read_bytes())
+        for bridge in (False, True):
+            model = adversarial_fixture(bridge)
+            model['config'].update(population=True, population_threads=2,
+                                   population_generations=3, max_iterations=300,
+                                   max_time_seconds=0, seed=42)
+            optimum = exact_routing(model)
+            with tempfile.TemporaryDirectory() as path:
+                measured = execute(DRIVER, model, Path(path), 30, synthetic=True)
+                self.assertTrue(measured['valid'], measured)
+                self.assertEqual(measured['served'], optimum['served'])
+                self.assertEqual(measured['stats']['vehicles_used'], optimum['vehicles'])
+                self.assertLessEqual(measured['stats']['total_distance'], optimum['distance'] *
+                    (1 + limits['exact_maximum_distance_gap_fraction']) + 1e-7)
+
     def test_reassigned_reordered_warm_start_is_repaired(self):
         model = self.model(access='rear_lifo')
         # A planner supplies all six on one truck: scalar-feasible, physically

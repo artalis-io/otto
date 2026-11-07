@@ -78,7 +78,8 @@ comparisons are withheld when coverage differs: less service is not savings.
 Binding-case fleet counts must be judged against physical feasibility/exact
 references, not unconstrained fleet counts.
 
-CI runs small correctness/harness regressions, not noisy host-dependent speed
+CI runs small correctness/harness regressions and actual mixed-class HGS solves
+against the independent exact references, not noisy host-dependent speed
 assertions. Long measurements belong on an otherwise quiet measured host.
 `loading_assess.py` reports each gate, sample count and paired min/median/max;
 it exits nonzero for invalid, incomplete or regressed comparisons.
