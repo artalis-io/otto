@@ -7,6 +7,10 @@
 #include "sg_internal.h"
 #include "sh_json.h"
 #include "sg_api.h"
+#ifdef SG_HAS_THREADS
+#include "sg_parallel.h"
+#include "sh_pal.h"
+#endif
 #include "../src/sg_api_counts.h"
 
 static int tests_run = 0;
@@ -8129,6 +8133,65 @@ static void test_cancel_parent_and_unlimited_budget(void) {
     ctx->parent_cancel = NULL;
     sg_free(ctx);
 }
+
+#ifdef SG_HAS_THREADS
+/* Real cross-thread cancellation is part of the core sanitizer suite as well
+ * as the subprocess benchmark harness. No progress callback is installed. */
+typedef struct {
+    SGContext *ctx;
+    _Atomic int done;
+    int requested;
+} TestNativeCancel;
+
+static void *test_native_cancel_watcher(void *data) {
+    TestNativeCancel *c = data;
+    uint64_t start = sh_monotonic_ms();
+    while (!atomic_load(&c->done)) {
+        if (sh_monotonic_ms() - start >= 100) {
+            sg_cancel(c->ctx);
+            c->requested = 1;
+            break;
+        }
+        sh_sleep_ms(1);
+    }
+    return NULL;
+}
+
+static void test_native_cancel_all_entrypoints(void) {
+    for (int mode = 0; mode < 3; ++mode) {
+        SGContext *ctx = make_config(2000000000, 42);
+        ctx->config.max_time_seconds = 0;
+        ctx->config.segment_size = 1000000;
+        uint32_t depot;
+        add_depot_with_location(ctx, &depot, 0, 0);
+        for (int v = 0; v < 12; ++v)
+            add_vehicle_with_depot(ctx, depot, 0, 100000, 12);
+        for (int i = 0; i < 66; ++i)
+            add_delivery_request(ctx, i % 11 + 1, i / 11 + 1, 0, 100000, 0, -1);
+        TestNativeCancel cancel = {0};
+        cancel.ctx = ctx;
+        atomic_init(&cancel.done, 0);
+        ShThread thread;
+        assert(sh_thread_create(&thread, test_native_cancel_watcher, &cancel) == 0);
+        SGPopulationConfig pop = {0};
+        pop.num_threads = 8;
+        pop.num_generations = 3;
+        SGStatus status = mode == 0 ? sg_solve(ctx) : mode == 1 ?
+            sg_solve_parallel(ctx, 8) : sg_solve_population(ctx, &pop);
+        atomic_store(&cancel.done, 1);
+        sh_thread_join(&thread, NULL);
+        assert(cancel.requested);
+        assert(status == SG_STATUS_LIMIT || status == SG_STATUS_ERROR);
+        if (status == SG_STATUS_LIMIT) {
+            assert(ctx->final_solution);
+            assert(sg_route_solution_validate(ctx->final_solution, ctx));
+        } else {
+            assert(ctx->final_solution == NULL);
+        }
+        sg_free(ctx);
+    }
+}
+#endif
 
 static void test_cancel_api(void) {
     SGContext *ctx = sg_create();
@@ -18851,6 +18914,9 @@ int main(void) {
     RUN_TEST(test_cancel_api);
     RUN_TEST(test_cancel_construction_skips_remaining_work);
     RUN_TEST(test_cancel_parent_and_unlimited_budget);
+#ifdef SG_HAS_THREADS
+    RUN_TEST(test_native_cancel_all_entrypoints);
+#endif
 
     /* JSON API */
     RUN_TEST(test_json_api_health);
@@ -19215,7 +19281,7 @@ int main(void) {
     printf("================\n");
     printf("%d/%d tests passed\n", tests_passed, tests_run);
 #ifdef SG_HAS_THREADS
-    assert(tests_run == 497);
+    assert(tests_run == 498);
 #else
     assert(tests_run == 473);
 #endif

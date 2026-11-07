@@ -49,7 +49,13 @@ typedef struct {
  * ============================================================================ */
 
 static SGStatus sg_context_clone_init(SGContext *clone, const SGContext *src) {
-    memcpy(clone, src, sizeof(SGContext));
+    /* sg_cancel may write the atomic flag while workers are being cloned.
+     * Do not read that atomic object through memcpy's non-atomic byte reads. */
+    size_t cancel_offset = offsetof(SGContext, cancel_requested);
+    size_t after_cancel = cancel_offset + sizeof(src->cancel_requested);
+    memcpy(clone, src, cancel_offset);
+    memcpy((char *)clone + after_cancel, (const char *)src + after_cancel,
+           sizeof(SGContext) - after_cancel);
     clone->loading_cache = NULL;
     clone->parent_cancel = &src->cancel_requested;
 
