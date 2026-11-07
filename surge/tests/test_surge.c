@@ -19153,9 +19153,9 @@ int main(void) {
     printf("================\n");
     printf("%d/%d tests passed\n", tests_passed, tests_run);
 #ifdef SG_HAS_THREADS
-    assert(tests_run == 494);
+    assert(tests_run == 495);
 #else
-    assert(tests_run == 470);
+    assert(tests_run == 471);
 #endif
     return tests_passed == tests_run ? 0 : 1;
 }

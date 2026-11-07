@@ -50,8 +50,21 @@ class ReferenceTests(unittest.TestCase):
 
     def test_missing_seed_and_invalid_result_fail_review(self):
         limits = json.loads(Path(__file__).with_name('loading_thresholds.json').read_bytes())
-        report = {'host': {}, 'runs': []}
-        self.assertFalse(assess(report, limits)['passed'])
+        report = {'host': {}, 'runs': [], 'complete': True, 'planned_runs': 6}
+        for seed in (1, 2, 3):
+            for variant in ('baseline', 'current'):
+                report['runs'].append({'case': 'example', 'budget': 'iterations', 'seed': seed,
+                    'variant': variant, 'valid': True, 'served': 6, 'iterations_per_second': 100,
+                    'stats': {'vehicles_used': 2, 'total_cost': 100, 'total_distance': 100}})
+        self.assertTrue(assess(report, limits)['passed'])
+        invalid = copy.deepcopy(report)
+        invalid['runs'][2]['valid'] = False
+        self.assertFalse(assess(invalid, limits)['passed'])
+        missing = copy.deepcopy(report)
+        missing['runs'].pop()
+        result = assess(missing, limits)
+        self.assertFalse(result['passed'])
+        self.assertFalse(result['comparisons'][0]['checks']['complete_pairs'])
 
     def test_reference_known_line_and_physical_split(self):
         model = fixture(6, True)
@@ -98,6 +111,12 @@ class ReferenceTests(unittest.TestCase):
         self.assertFalse(valid_placement(changed, units, positions))
         self.assertFalse(valid_placement(vehicle, units, [positions[0], positions[0]]))
         self.assertFalse(valid_placement(vehicle, units, [positions[0]]))
+        self.assertFalse(valid_placement(vehicle, units,
+            [{'slot': 0, 'layer': 1}, {'slot': 1, 'layer': 1}]))
+        rear = copy.deepcopy(vehicle)
+        rear['access_model'] = 'rear_lifo'
+        self.assertFalse(valid_placement(rear, units,
+            [{'slot': 1, 'layer': 0}, {'slot': 0, 'layer': 0}]))
 
 
 @unittest.skipUnless(DRIVER.exists(), 'build make -C surge bench_loading_driver')
