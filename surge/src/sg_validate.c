@@ -742,6 +742,7 @@ SGStatus sg_validate_plan_impl_with_trips(SGContext *ctx, uint32_t num_routes,
         }
     }
 
+    sg_loading_v2_report_invalidate(ctx);
     /* Store as ctx->final_solution */
     if (ctx->final_solution) {
         sg_route_solution_free(ctx->final_solution, NULL);

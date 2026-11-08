@@ -129,17 +129,24 @@ static int removable(const SGLoadingVehicle *v, const SGLoadingPlacement *p,
     return 1;
 }
 
+static SGStatus joint_state(const SGLoadingVehicle *v, const SGAxleProfile *profile,
+    const SGLoadingUnit *units, const SGAxleSignedInterval *cg, const uint32_t *slots,
+    const uint8_t *active, uint32_t count, SGAxleState *out) {
+    if (profile) return sg_axle_state(v,profile,units,cg,slots,active,count,out);
+    memset(out,0,sizeof(*out));return SG_STATUS_OK;
+}
+
 SGStatus sg_axle_loading_validate(const SGLoadingVehicle *v, const SGAxleProfile *profile,
     const SGLoadingUnit *u, const SGAxleSignedInterval *cg, uint32_t n,
     const SGLoadingPlacement *p, const uint32_t *order, SGAxleState *states) {
-    if (n > SG_LOADING_MAX_UNITS || (n && (!u || !cg || !p || !order)))
+    if (n > SG_LOADING_MAX_UNITS || (n && (!u || (profile && !cg) || !p || !order)) || (!profile && cg))
         return SG_STATUS_INVALID_ARG;
     SGStatus status = sg_loading_validate_joint(v, u, n, p);
     if (status != SG_STATUS_OK) return status;
     uint32_t slots[SG_LOADING_MAX_UNITS];uint8_t active[SG_LOADING_MAX_UNITS];
     SGAxleState checked[SG_LOADING_MAX_UNITS+1];
     for (uint32_t i = 0; i < n; i++) { slots[i] = p[i].slot;active[i] = 1; }
-    status = sg_axle_state(v, profile, u, cg, slots, active, n, &checked[0]);
+    status = joint_state(v, profile, u, cg, slots, active, n, &checked[0]);
     if (status != SG_STATUS_OK) return status;
     for (uint32_t step = 0; step < n; step++) {
         uint32_t id = order[step];
@@ -148,7 +155,7 @@ SGStatus sg_axle_loading_validate(const SGLoadingVehicle *v, const SGAxleProfile
             if (active[j] && u[j].stop < u[id].stop) return SG_STATUS_INFEASIBLE;
         if (!removable(v, p, active, n, id)) return SG_STATUS_INFEASIBLE;
         active[id] = 0;
-        status = sg_axle_state(v, profile, u, cg, slots, active, n, &checked[step+1]);
+        status = joint_state(v, profile, u, cg, slots, active, n, &checked[step+1]);
         if (status != SG_STATUS_OK) return status;
     }
     /* Reversing these valid removals gives bottom-up, far-before-near loading
@@ -178,7 +185,7 @@ static int unload(AxleSearch *s, uint32_t step, SGLoadingWork *work) {
             !removable(s->v, s->placements, s->active, s->count, i)) continue;
         if (!sg_loading_work_enter(work)) return 0;
         s->active[i] = 0;
-        SGStatus status = sg_axle_state(s->v,s->profile,s->units,s->cg,s->slots,
+        SGStatus status = joint_state(s->v,s->profile,s->units,s->cg,s->slots,
                                        s->active,s->count,&s->states[step+1]);
         s->order[step] = i;
         if (status == SG_STATUS_OK && unload(s,step+1,work)) return 1;
@@ -190,7 +197,7 @@ static int unload(AxleSearch *s, uint32_t step, SGLoadingWork *work) {
 static int axle_leaf(const SGLoadingPlacement *p, SGLoadingWork *work, void *data) {
     AxleSearch *s = data;s->placements = p;
     for (uint32_t i = 0; i < s->count; i++) { s->slots[i] = p[i].slot;s->active[i] = 1; }
-    if (sg_axle_state(s->v,s->profile,s->units,s->cg,s->slots,s->active,s->count,
+    if (joint_state(s->v,s->profile,s->units,s->cg,s->slots,s->active,s->count,
                       &s->states[0]) != SG_STATUS_OK) return 0;
     return unload(s,0,work);
 }
@@ -200,14 +207,14 @@ SGStatus sg_axle_loading_check(const SGLoadingVehicle *v, const SGAxleProfile *p
     if (!out) return SG_STATUS_INVALID_ARG;
     memset(out,0,sizeof(*out));out->loading.outcome = SG_LOADING_UNKNOWN;
     out->loading.reason = SG_LOADING_UNSUPPORTED;
-    if (n > SG_LOADING_MAX_UNITS || (n && (!u || !cg)) || budget > 100000)
+    if (n > SG_LOADING_MAX_UNITS || (n && (!u || (profile && !cg))) || (!profile && cg) || budget > 100000)
         return SG_STATUS_INVALID_ARG;
     SGLoadingResult physical;
     SGStatus physical_status = sg_loading_check_joint(v,u,n,0,NULL,NULL,NULL,NULL,&physical);
     if (physical_status != SG_STATUS_OK) return physical_status;
     uint32_t empty_slots[SG_LOADING_MAX_UNITS] = {0};
     uint8_t empty[SG_LOADING_MAX_UNITS] = {0};SGAxleState tare;
-    SGStatus status = sg_axle_state(v,profile,u,cg,empty_slots,empty,n,&tare);
+    SGStatus status = joint_state(v,profile,u,cg,empty_slots,empty,n,&tare);
     if (status == SG_STATUS_INVALID_ARG) return status;
     if (physical.outcome == SG_LOADING_INFEASIBLE) {
         out->loading = physical;return SG_STATUS_OK;

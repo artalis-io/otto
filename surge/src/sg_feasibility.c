@@ -88,6 +88,7 @@ int sg_route_update_timing(const SGContext *ctx, SGRouteSolution *sol, uint32_t 
             time_cursor = (double)start_depot->tw_early;
         }
     }
+    if(ctx->loading_v2_has_departure && !sg_loading_v2_apply_departure(ctx,vehicle_id,&time_cursor))return 0;
     depot_depart = time_cursor;
     if (sol->route_depot_depart) {
         sol->route_depot_depart[vehicle_id] = depot_depart;
@@ -877,6 +878,7 @@ int sg_route_stop_sequence_feasible(const SGContext *ctx, uint32_t vehicle_id,
         }
     }
 
+    if(ctx->loading_v2_has_departure && !sg_loading_v2_apply_departure(ctx,vehicle_id,&time_cursor))goto done;
     prev_loc = vehicle->start_location_id;
     {
     uint32_t prev_request_id_seq = UINT32_MAX;

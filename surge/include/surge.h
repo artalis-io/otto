@@ -5,6 +5,7 @@
 
 #include "sg_types.h"
 #include "sg_loading.h"
+#include "sg_loading_v2.h"
 
 #ifdef __cplusplus
 extern "C" {

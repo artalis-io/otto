@@ -49,6 +49,7 @@ void sg_vehicle_records_free(SGVehicleRecord *vehicles, uint32_t count) {
     }
     for (i = 0; i < count; i++) {
         free(vehicles[i].loading);
+        free(vehicles[i].axles);
         free(vehicles[i].capacity);
         vehicles[i].capacity = NULL;
         free(vehicles[i].initial_load);
@@ -72,6 +73,7 @@ void sg_request_records_free(SGRequestRecord *requests, uint32_t count) {
     }
     for (i = 0; i < count; i++) {
         free(requests[i].loading_units);
+        free(requests[i].loading_cg);
         free(requests[i].allowed_vehicles);
         requests[i].allowed_vehicles = NULL;
         free(requests[i].forbidden_vehicles);
@@ -298,6 +300,8 @@ void sg_free(SGContext *ctx) {
     }
 
     free(ctx->loading_cache);
+    free(ctx->loading_v2_cache);
+    sg_loading_v2_report_invalidate(ctx);
     free(ctx->depots);
     ctx->depots = NULL;
     ctx->num_depots = 0;
@@ -1269,7 +1273,8 @@ SGStatus sg_validate_model(SGContext *ctx) {
         return SG_STATUS_INFEASIBLE;
     }
 
-    if (sg_loading_model_validate(ctx) != SG_STATUS_OK) return SG_STATUS_INVALID_ARG;
+    { SGStatus loading_status=sg_loading_model_validate(ctx);
+      if(loading_status!=SG_STATUS_OK)return loading_status; }
 
     for (i = 0; i < ctx->num_depots; i++) {
         const SGDepotRecord *depot = &ctx->depots[i];
@@ -3251,6 +3256,13 @@ double sg_solution_get_route_total_work(const SGContext *ctx, uint32_t route_ind
 SGStatus sg_validate_plan_with_trips(SGContext *ctx, uint32_t num_routes,
     const SGPlanRoute *routes, const uint8_t *const *trip_starts) {
     if (!ctx || (num_routes && !routes)) return SG_STATUS_INVALID_ARG;
+    if (ctx->loading_v2.schema_version == 2) {
+        SGLoadingV2Report *report = NULL;
+        SGStatus status = sg_loading_v2_validate_plan(ctx, num_routes, routes, trip_starts,
+            SG_LOADING_V2_FIND_WITNESSES, NULL, 0, NULL, &report);
+        sg_loading_v2_report_free(report);
+        return status;
+    }
     SGStatus status = sg_validate_model(ctx);
     if (status != SG_STATUS_OK) return status;
     for (uint32_t i = 0; i < num_routes; ++i) {

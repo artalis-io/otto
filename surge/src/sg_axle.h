@@ -34,6 +34,8 @@ SGStatus sg_axle_state(const SGLoadingVehicle *vehicle, const SGAxleProfile *pro
     const SGLoadingUnit *units, const SGAxleSignedInterval *cg_offsets,
     const uint32_t *slots, const uint8_t *active, uint32_t count, SGAxleState *out);
 
+/* NULL profile + NULL CG selects explicit operation-validated stacking only.
+ * Required axle capability must always supply a profile in the context layer. */
 typedef struct {
     SGLoadingResult loading;
     uint32_t unload_order[SG_LOADING_MAX_UNITS]; /* indices in input unit array */

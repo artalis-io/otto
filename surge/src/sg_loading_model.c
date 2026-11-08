@@ -1,4 +1,5 @@
 #include "sg_internal.h"
+#include "sg_loading_v2_internal.h"
 #ifdef SG_LOADING_PROFILE
 #include "sh_pal.h"
 #define PROFILE(ctx, field) (++((SGContext *)(ctx))->loading_profile.field)
@@ -25,11 +26,7 @@ struct SGLoadingCache {
 
 /* A candidate insertion is a view, not an allocated/copied route. Preserve the
  * exact trip_start behavior of materializing the inserted stop, including pos 0. */
-typedef struct {
-    const SGRouteStop *stops;
-    uint32_t count, insert_pos;
-    SGRouteStop inserted;
-} SGLoadingView;
+typedef SGLoadingV2View SGLoadingView;
 
 static const SGRouteStop *loading_stop(const SGLoadingView *view, uint32_t i) {
     if (i == view->insert_pos) return &view->inserted;
@@ -60,6 +57,8 @@ static uint32_t loading_bucket(const SGLoadingUnit *units, uint32_t count, uint6
 
 void sg_loading_invalidate(SGContext *ctx) {
     free(ctx->loading_cache);
+    free(ctx->loading_v2_cache);ctx->loading_v2_cache=NULL;
+    sg_loading_v2_report_invalidate(ctx);
     ctx->loading_cache = NULL;
     ctx->num_violations = 0;
     if (ctx->final_solution) {
@@ -70,7 +69,7 @@ void sg_loading_invalidate(SGContext *ctx) {
 }
 
 SGStatus sg_set_hard_loading(SGContext *ctx, int enabled, uint64_t budget) {
-    if (!ctx || (enabled != 0 && enabled != 1) || budget > 100000)
+    if (!ctx || ctx->loading_v2.schema_version || (enabled != 0 && enabled != 1) || budget > 100000)
         return SG_STATUS_INVALID_ARG;
     sg_loading_invalidate(ctx);
     ctx->hard_loading = (uint8_t)enabled;
@@ -80,7 +79,7 @@ SGStatus sg_set_hard_loading(SGContext *ctx, int enabled, uint64_t budget) {
 
 SGStatus sg_vehicle_set_loading(SGContext *ctx, uint32_t id, const SGLoadingVehicle *v) {
     SGLoadingResult r;
-    if (!ctx || id >= ctx->num_vehicles || !v ||
+    if (!ctx || ctx->loading_v2.schema_version || id >= ctx->num_vehicles || !v ||
         sg_loading_check(v, NULL, 0, 1, &r) != SG_STATUS_OK)
         return SG_STATUS_INVALID_ARG;
     SGLoadingVehicle *copy = malloc(sizeof(*copy));
@@ -94,7 +93,7 @@ SGStatus sg_vehicle_set_loading(SGContext *ctx, uint32_t id, const SGLoadingVehi
 }
 
 SGStatus sg_request_set_loading(SGContext *ctx, uint32_t id, const SGLoadingUnit *u, uint32_t n) {
-    if (!ctx || id >= ctx->num_requests || n > SG_LOADING_MAX_UNITS || (n && !u))
+    if (!ctx || ctx->loading_v2.schema_version || id >= ctx->num_requests || n > SG_LOADING_MAX_UNITS || (n && !u))
         return SG_STATUS_INVALID_ARG;
     for (uint32_t i = 0; i < n; ++i)
         if (!u[i].height_mm || u[i].stack_class >= SG_LOADING_MAX_CLASSES)
@@ -119,6 +118,7 @@ SGStatus sg_request_set_loading(SGContext *ctx, uint32_t id, const SGLoadingUnit
 }
 
 SGStatus sg_loading_model_validate(SGContext *ctx) {
+    if (ctx->loading_v2.schema_version) return sg_loading_v2_model_validate(ctx);
     if (!ctx->hard_loading)
         return SG_STATUS_OK;
     for (uint32_t v = 0; v < ctx->num_vehicles; ++v) {
@@ -157,6 +157,8 @@ static SGStatus loading_round(const SGContext *ctx, uint32_t vehicle,
     uint32_t *requests, uint32_t *indices, int certificate) {
     if (ctx) PROFILE(ctx, round_calls);
     if (!result) return SG_STATUS_INVALID_ARG;
+    if (ctx && ctx->loading_v2.schema_version)
+        return sg_loading_v2_round_view(ctx,vehicle,view,trip,result,requests,indices,certificate,NULL);
     /* Boolean feasibility needs no placement buffer on an exact cache hit. */
     memset(result, 0, certificate ? sizeof(*result) : offsetof(SGLoadingResult, placements));
     result->outcome = SG_LOADING_UNKNOWN;
@@ -307,7 +309,7 @@ SGStatus sg_solution_get_loading(const SGContext *ctx, uint32_t route, uint32_t 
     memset(result, 0, sizeof(*result));
     result->outcome = SG_LOADING_UNKNOWN;
     result->reason = SG_LOADING_UNSUPPORTED;
-    if (!ctx || !ctx->final_solution || route >= sg_solution_get_route_count(ctx))
+    if (!ctx || ctx->loading_v2.schema_version || !ctx->final_solution || route >= sg_solution_get_route_count(ctx))
         return SG_STATUS_INVALID_ARG;
     uint32_t v = sg_solution_get_route_vehicle_id(ctx, route);
     return sg_loading_round(ctx, v, sg_route_vehicle_stop_ptr_const(ctx->final_solution, v),

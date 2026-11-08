@@ -172,7 +172,7 @@ jobs:
         run: make -C surge scripts-test
 
       - name: Test axle arithmetic against independent rational oracle
-        run: make -C surge axle-oracle-test
+        run: make -C surge axle-oracle-test loading-v2-cli-test
 
       - name: Test native loading JSON with population solver
         run: make -C surge loading-cli-test

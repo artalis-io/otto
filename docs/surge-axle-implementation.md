@@ -8,7 +8,7 @@ This record distinguishes a tested internal kernel from an advertised capability
 | --- | --- |
 | A1: static reaction/interval validator | Implemented internally; exact integer comparisons including front-share ratios |
 | A2: joint packing/unloading witness search | Implemented internally; shared node budget, cancellation and independent replay |
-| A3: version-2 context, C/JSON, HGS and reports | Pending; no capability advertised yet |
+| A3: version-2 context, C/JSON, HGS and reports | Implemented on feature branch; native validation below; review/CI and measured release gates required |
 | A4: Cursus admission/publication/approval/export | Pending; no Cursus pin or runtime changes |
 | A5: measured customer pilot | Pending verified physical facts and separate activation approval |
 
@@ -50,3 +50,38 @@ is claimed. No reshuffling, production configuration, deployment, customer datas
 or authoritative plan was changed. Performance/cancellation release gates remain
 required once the native/HGS interface is connected; kernel correctness alone is
 not an activation or throughput certificate.
+
+Native interface checkpoint (not product activation):
+
+- Owned V2 declarations, bounded worker-local caches, HGS guards and immutable
+  retained reports are connected. Failed fixed-plan validation leaves the last
+  accepted snapshot intact; submitted evidence is independently replayed.
+- Full regression: 501/501 main tests, 27 time-budget, 19 neighbour, 22 profile,
+  transport and all existing V1 exhaustive/randomized loading checks passed.
+- Public C test passes: actual two-thread HGS, copied input buffers, retained
+  report lifetime, exact fixed-plan/round replay, forged-state rejection,
+  fractional scoped departure and cancellation.
+- 47 allocation failpoints exercised; six required-allocation failures rejected
+  publication and preserved the prior snapshot. Optional cache allocation can
+  fail without rejecting an independently established witness.
+- 52 real CLI/common API tests pass for solve and replay, malformed inputs,
+  unimplemented reshuffling, literal zero payload, reload-round identity,
+  zero-unit stop timing and routes longer than 128 stops. An independent Python
+  Fraction replay checks every native operation, partial stack, reaction and stop
+  on each positive output, including 12 varied actual HGS models.
+- GCC 14 Linux ARM64 warning-as-error checks passed; no-thread API compilation
+  passed. ASan/UBSan/leak checks passed for the C API, OOM suite, kernel and native
+  JSON solve with the shared library built normally (the existing sanitizer
+  target's dependency convention).
+- A fully sanitized shared library adds per-allocation arena redzones that the
+  existing pre-sized native solution arenas do not reserve. That experimental
+  configuration failed with allocation errors, so it is not recorded as a pass.
+  No arena implementation change or sanitizer suppression was introduced.
+- Existing benchmark harness: 16 regression tests and cache/cancellation probes
+  passed. Paired baseline/V1 and nonbinding V2 measurements remain release gates.
+
+The native interface is documented in [surge-loading-v2.md](surge-loading-v2.md).
+The `axles` example is executable on this branch; reshuffling/combined examples
+remain future-only. Ordinary native model fields in all examples were corrected
+against the actual parser (negative delivery demand, `delivery_task_id`,
+`service_seconds`, `tw_early`/`tw_late`). No compatibility alias was invented.
