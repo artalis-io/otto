@@ -176,8 +176,9 @@ $(TRANSPORT_TEST_BIN): tests/test_transport_direct.c $(LIB_FILE) ../arbor/libarb
 
 # Exact independent Fraction oracle (POSIX compiler; CI's Linux Surge job).
 .PHONY: axle-oracle-test loading-v2-cli-test
-loading-v2-cli-test: $(SURGE_SOLVE_BIN)
+loading-v2-cli-test: $(SURGE_SOLVE_BIN) test_loading_v2_cancel
 	python3 tests/test_loading_v2_json.py
+	python3 -c 'import subprocess; subprocess.run(["./test_loading_v2_cancel"], check=True, timeout=10)'
 
 axle-oracle-test:
 	python3 tests/test_axle_oracle.py
@@ -223,6 +224,9 @@ src/sg_loading_json.o src/sg_api.o: src/sg_loading_json.h
 
 test_loading: tests/test_loading.c tests/loading_oracle.h src/sg_loading.c src/sg_loading_search.h include/sg_loading.h include/sg_types.h
 	$(CC) $(CFLAGS) $(INCLUDES) tests/test_loading.c src/sg_loading.c $(LDFLAGS) $(EXE_OUT)$@
+
+test_loading_v2_cancel: tests/test_loading_v2_cancel.c tests/test_loading_v2.c $(LIB_FILE) ../arbor/libarbor.a ../shared/libshared.a
+	$(CC) $(CFLAGS) $(INCLUDES) $< $(call link_lib,.,surge) $(call link_lib,../arbor,arbor) $(call link_lib,../shared,shared) $(LDFLAGS) $(EXE_OUT)$@
 
 test_loading_v2_oom: tests/test_loading_v2_oom.c tests/test_loading_v2.c src/sg_loading_v2.c $(LIB_FILE) ../arbor/libarbor.a ../shared/libshared.a
 	$(CC) $(CFLAGS) $(INCLUDES) $< $(call link_lib,.,surge) $(call link_lib,../arbor,arbor) $(call link_lib,../shared,shared) $(LDFLAGS) $(EXE_OUT)$@
@@ -449,7 +453,7 @@ tsan: $(TSAN_TEST_BIN)
 
 clean:
 	rm -f $(BUILD_STAMP)
-	rm -f test_axle test_loading test_loading_v2 test_loading_v2_oom bench_loading_driver bench_loading_driver_profile bench_loading_probe $(OBJS) $(LIB_FILE) $(TEST_BIN) $(TEST_TB_BIN) $(TEST_NB_BIN) $(TEST_PM_BIN) $(TRANSPORT_TEST_BIN) $(BENCH_SOL_BIN) $(BENCH_PD_BIN) $(BENCH_CORD_BIN) $(BENCH_TUNE_BIN) $(SHARED_LIB) \
+	rm -f test_axle test_loading test_loading_v2_cancel test_loading_v2 test_loading_v2_oom bench_loading_driver bench_loading_driver_profile bench_loading_probe $(OBJS) $(LIB_FILE) $(TEST_BIN) $(TEST_TB_BIN) $(TEST_NB_BIN) $(TEST_PM_BIN) $(TRANSPORT_TEST_BIN) $(BENCH_SOL_BIN) $(BENCH_PD_BIN) $(BENCH_CORD_BIN) $(BENCH_TUNE_BIN) $(SHARED_LIB) \
 	  $(FUZZ_BIN) $(TSAN_TEST_BIN)
 	rm -f $(FUZZ_API_BIN) $(FUZZ_API_BIN).exe
 
