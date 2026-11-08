@@ -1896,10 +1896,11 @@ with pallets grouped per stop.
   compatibility, max layers, stack weight, height <= clearance, within slot count.
   Narrow first-fit-decreasing + bounded backtracking; FEASIBLE / INFEASIBLE /
   UNKNOWN (budget exceeded). Route order irrelevant.
-- `REAR_LIFO`: order-aware. Columns are LIFO from the door, so unload order is
-  geometry-fixed and must match the route's reverse delivery order. No reshuffle =
-  hard LIFO; bounded reshuffle = a capped cost (P3). Here an insertion's POSITION
-  in the trip is part of loading feasibility, not just its presence.
+- `REAR_LIFO`: order-aware. Nearer occupied slots in a lane and upper units
+  must be unloaded before the units they block. Strict mode permits no temporary
+  offload. Proposed bounded reshuffling (P3) requires explicit valid operations,
+  permission and hard limits, with added time/cost. An insertion's POSITION in
+  the trip is part of loading feasibility, not just its presence.
 
 **Performance (critical; the insertion eval is the hot path):** two-tier, like the
 capacity fast path. Hot path per insertion = a cheap NECESSARY-CONDITION prefilter
@@ -1926,8 +1927,17 @@ beyond half-height, no general 3D bin packer.
    coupling yet. Confirm the rules match reality before trusting them.
 2. **P2 (integrate):** necessary-condition prefilter in the insertion eval + exact
    check at commit with caching + UNKNOWN fallback.
-3. **P3 (reshuffle):** bounded-cost reshuffle for the rear-load vehicles that allow
-   it (hard LIFO -> soft cost).
+3. **P3 (reshuffle):** explicit bounded stage/deliver/restore witnesses for rear-load
+   vehicles and sites that permit them. Handling adds schedule time and cost;
+   physical feasibility, permissions and limits stay hard constraints. Design
+   only: [bounded reshuffling](../design-surge-reshuffling.md).
+
+**Next design review (2026-11-08):** review both
+[axle loads](../design-surge-axle-loads.md) and
+[bounded reshuffling](../design-surge-reshuffling.md), then implement axle loads
+first. Validate existing stackability against real historical truckloads in
+parallel. See [scope, evidence and approval gates](../design-surge-loading-next.md).
+Neither design is implemented or activated; no physical customer facts are inferred.
 
 Distinct from the existing LIFO/FIFO PD policy (that governs *visit order*; this
 governs *physical placement*). Related: the fractional-pallet capacity dimension
