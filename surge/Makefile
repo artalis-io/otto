@@ -176,9 +176,8 @@ $(TRANSPORT_TEST_BIN): tests/test_transport_direct.c $(LIB_FILE) ../arbor/libarb
 
 # Exact independent Fraction oracle (POSIX compiler; CI's Linux Surge job).
 .PHONY: axle-oracle-test loading-v2-cli-test
-loading-v2-cli-test: $(SURGE_SOLVE_BIN) test_loading_v2_cancel
+loading-v2-cli-test: $(SURGE_SOLVE_BIN)
 	python3 tests/test_loading_v2_json.py
-	python3 -c 'import subprocess; subprocess.run(["./test_loading_v2_cancel"], check=True, timeout=10)'
 
 axle-oracle-test:
 	python3 tests/test_axle_oracle.py
@@ -237,7 +236,7 @@ test_loading_v2: tests/test_loading_v2.c $(LIB_FILE) ../arbor/libarbor.a ../shar
 test_axle: tests/test_axle.c src/sg_axle.c src/sg_loading.c src/sg_axle.h src/sg_loading_search.h include/sg_loading.h
 	$(CC) $(CFLAGS) $(INCLUDES) tests/test_axle.c src/sg_axle.c src/sg_loading.c $(LDFLAGS) $(EXE_OUT)$@
 
-test: test_axle test_loading test_loading_v2 test_loading_v2_oom $(TEST_BIN) $(TEST_TB_BIN) $(TEST_NB_BIN) $(TEST_PM_BIN) $(TRANSPORT_TEST_BIN)
+test: test_axle test_loading test_loading_v2 test_loading_v2_oom test_loading_v2_cancel $(TEST_BIN) $(TEST_TB_BIN) $(TEST_NB_BIN) $(TEST_PM_BIN) $(TRANSPORT_TEST_BIN)
 	./$(TRANSPORT_TEST_BIN)
 	./$(TEST_TB_BIN)
 	./$(TEST_NB_BIN)
@@ -245,6 +244,7 @@ test: test_axle test_loading test_loading_v2 test_loading_v2_oom $(TEST_BIN) $(T
 	./test_axle
 	./test_loading_v2
 	./test_loading_v2_oom
+	./test_loading_v2_cancel
 	./$(TEST_PM_BIN)
 	./$(TEST_BIN)
 

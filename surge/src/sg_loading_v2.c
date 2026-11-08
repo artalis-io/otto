@@ -13,7 +13,6 @@ typedef struct {
     uint32_t count, budget;
     SGLoadingUnit units[128];
     SGAxleSignedInterval cg[128];
-    uint32_t requests[128], indices[128];
     SGAxleLoadingResult result;
     uint8_t occupied;
 } V2CacheEntry;
@@ -330,16 +329,23 @@ SGStatus sg_loading_v2_model_validate(SGContext *ctx) {
     return SG_STATUS_OK;
 }
 
+/* Cache proofs use unit ordinals, never application identities. Identical
+ * physical loads can reuse a proof across equivalent vehicles/orders; the
+ * collector always supplies the CURRENT IDs when constructing a report.
+ * Geometry, CG, stop order, capabilities (profile presence) and budget must
+ * still compare exactly. No hash alone authorizes reuse. */
 static int cache_equal(const V2CacheEntry *e, const SGContext *ctx, uint32_t vehicle,
-                       const SGLoadingUnit *units, const SGAxleSignedInterval *cg,
-                       const uint32_t *requests, const uint32_t *indices, uint32_t n) {
-    return e->occupied && e->physical == ctx->vehicles[vehicle].loading &&
-           e->axles == ctx->vehicles[vehicle].axles && e->count == n &&
-           e->budget == ctx->loading_v2.node_budget &&
-           (!n || (!memcmp(e->units, units, n * sizeof(*units)) &&
-                   (!e->axles || !memcmp(e->cg, cg, n * sizeof(*cg))) &&
-                   !memcmp(e->requests, requests, n * sizeof(*requests)) &&
-                   !memcmp(e->indices, indices, n * sizeof(*indices))));
+                       const SGLoadingUnit *units, const SGAxleSignedInterval *cg, uint32_t n) {
+    if (!e->occupied || e->count != n || e->budget != ctx->loading_v2.node_budget)
+        return 0;
+    const SGLoadingVehicle *v = ctx->vehicles[vehicle].loading;
+    const SGAxleProfile *a = ctx->vehicles[vehicle].axles;
+    if (e->physical != v && memcmp(e->physical, v, sizeof(*v)))
+        return 0;
+    if (e->axles != a && (!e->axles || !a || memcmp(e->axles, a, sizeof(*a))))
+        return 0;
+    return !n || (!memcmp(e->units, units, n * sizeof(*units)) &&
+                  (!a || !memcmp(e->cg, cg, n * sizeof(*cg))));
 }
 static int v2_cancel(void *data) {
     const SGContext *ctx = data;
@@ -348,8 +354,7 @@ static int v2_cancel(void *data) {
 }
 SGStatus sg_loading_v2_check_units(const SGContext *ctx, uint32_t vehicle,
                                    const SGLoadingUnit *units, const SGAxleSignedInterval *cg,
-                                   const uint32_t *requests, const uint32_t *indices, uint32_t n,
-                                   int certificate, SGLoadingResult *result,
+                                   uint32_t n, int certificate, SGLoadingResult *result,
                                    SGAxleLoadingResult *full) {
     if (v2_cancel((void *)ctx)) {
         memset(result, 0, sizeof(*result));
@@ -364,14 +369,19 @@ SGStatus sg_loading_v2_check_units(const SGContext *ctx, uint32_t vehicle,
     SGLoadingV2Cache *cache = ctx->loading_v2_cache;
     uint32_t bucket = cache ? cache->last : 0;
     V2CacheEntry *entry = cache ? &cache->entries[bucket] : NULL;
-    if (!entry || !cache_equal(entry, ctx, vehicle, units, cg, requests, indices, n)) {
-        uint64_t hash = ctx->loading_v2.node_budget ^ vehicle ^ n;
-        for (uint32_t i = 0; i < n; i++)
-            hash = (hash ^ requests[i] ^ indices[i] ^ units[i].stop) * UINT64_C(1099511628211);
+    if (!entry || !cache_equal(entry, ctx, vehicle, units, cg, n)) {
+        uint64_t hash = ctx->loading_v2.node_budget ^ n;
+        for (uint32_t i = 0; i < n; i++) {
+            hash = (hash ^ units[i].stop ^ units[i].height_mm ^ units[i].weight_g ^
+                    units[i].max_weight_above_g ^ units[i].stack_class ^ units[i].max_units_above) *
+                   UINT64_C(1099511628211);
+            if (ctx->vehicles[vehicle].axles)
+                hash = (hash ^ (uint32_t)cg[i].min ^ (uint32_t)cg[i].max) * UINT64_C(1099511628211);
+        }
         bucket = (uint32_t)(hash % V2_CACHE_SIZE);
         entry = cache ? &cache->entries[bucket] : NULL;
     }
-    if (entry && cache_equal(entry, ctx, vehicle, units, cg, requests, indices, n)) {
+    if (entry && cache_equal(entry, ctx, vehicle, units, cg, n)) {
         cache->last = bucket;
         if (certificate) {
             *result = entry->result.loading;
@@ -411,8 +421,6 @@ SGStatus sg_loading_v2_check_units(const SGContext *ctx, uint32_t vehicle,
         memcpy(entry->units, units, n * sizeof(*units));
         if (entry->axles)
             memcpy(entry->cg, cg, n * sizeof(*cg));
-        memcpy(entry->requests, requests, n * sizeof(*requests));
-        memcpy(entry->indices, indices, n * sizeof(*indices));
     }
     entry->result = evaluated;
     cache->last = bucket;
@@ -443,7 +451,6 @@ SGStatus sg_loading_v2_round_view(const SGContext *ctx, uint32_t vehicle,
         return SG_STATUS_INVALID_ARG;
     SGLoadingUnit units[128];
     SGAxleSignedInterval cg[128];
-    uint32_t ids[128], positions[128];
     uint32_t n = 0, ordinal = 0, current = 0;
     int found = !view->count && !trip;
     int axles = !!ctx->vehicles[vehicle].axles;
@@ -470,10 +477,8 @@ SGStatus sg_loading_v2_round_view(const SGContext *ctx, uint32_t vehicle,
             units[n].stop = ordinal;
             if (axles)
                 cg[n] = request->loading_cg[j];
-            ids[n] = stop->request_id;
-            positions[n] = j;
             if (requests)
-                requests[n] = ids[n];
+                requests[n] = stop->request_id;
             if (indices)
                 indices[n] = j;
             n++;
@@ -482,8 +487,8 @@ SGStatus sg_loading_v2_round_view(const SGContext *ctx, uint32_t vehicle,
     }
     if (!found)
         return SG_STATUS_INVALID_ARG;
-    return sg_loading_v2_check_units(ctx, vehicle, units, axles ? cg : NULL, ids, positions, n,
-                                     certificate, result, full);
+    return sg_loading_v2_check_units(ctx, vehicle, units, axles ? cg : NULL, n, certificate, result,
+                                     full);
 }
 SGStatus sg_loading_round_v2(const SGContext *ctx, uint32_t vehicle, const SGRouteStop *stops,
                              uint32_t count, uint32_t trip, SGAxleLoadingResult *result,
@@ -1289,7 +1294,8 @@ SGStatus sg_loading_v2_check_round(SGContext *ctx, const SGLoadingV2Round *round
     uint8_t *selected = NULL;
     status = round_stops(ctx, round, &stops, &selected);
     free(selected);
-    SGAxleLoadingResult physical;
+    SGAxleLoadingResult physical = {0};
+    physical.loading.outcome = SG_LOADING_UNKNOWN;
     if (status == SG_STATUS_OK)
         status = sg_loading_round_v2(&shadow, round->vehicle_id, stops, round->task_count, 0,
                                      &physical, NULL, NULL);

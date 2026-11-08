@@ -64,7 +64,7 @@ Native interface checkpoint (not product activation):
 - 47 allocation failpoints exercised; six required-allocation failures rejected
   publication and preserved the prior snapshot. Optional cache allocation can
   fail without rejecting an independently established witness.
-- 52 real CLI/common API tests pass for solve and replay, malformed inputs,
+- 63 real CLI/common API tests pass for solve and replay, malformed inputs,
   unimplemented reshuffling, literal zero payload, reload-round identity,
   zero-unit stop timing and routes longer than 128 stops. An independent Python
   Fraction replay checks every native operation, partial stack, reaction and stop
@@ -85,3 +85,35 @@ The `axles` example is executable on this branch; reshuffling/combined examples
 remain future-only. Ordinary native model fields in all examples were corrected
 against the actual parser (negative delivery demand, `delivery_task_id`,
 `service_seconds`, `tw_early`/`tw_late`). No compatibility alias was invented.
+
+Measured synthetic screen and CI remediation:
+
+- 54 paired pre-change/current runs (66 orders, three seeds, two threads, wall
+  and iteration budgets) were independently valid and passed the unchanged
+  existing regression assessor. Disabled-mode median throughput ratios were
+  0.959–1.032 across case/budget groups; no coverage/quality gate failed.
+- Initial V2 nonbinding screen was too slow: median throughput 0.439 of V1 on
+  the 66-order wall fixture. This failure is retained in the external evidence.
+- The V2 cache had unnecessarily included application identities and vehicle
+  pointers. It now compares normalized physical geometry/profile values, CG,
+  stop order, unit facts, capability presence and budget exactly. Cached proofs
+  contain ordinal positions only; report identities always come from the current
+  route. Differential-geometry/CG/unit and identity-remapping replay tests pass.
+- Repeated 66-order V1/V2 wall screen: three valid pairs, no service or fleet
+  loss, median throughput ratio 0.990 (range 0.913–1.096), distance ratios
+  0.990–1.000. Small six-order iteration screen: identical service/fleet/distance,
+  median ratio 1.009. These short controller runs are screening evidence, not a
+  quiet-host/customer performance guarantee; no threshold was relaxed.
+- Real V2 HGS cancellation returned in 0 ms locally and 3 ms under ARM64 Linux
+  sanitizers in the measured runs. Canceled contexts yielded no new report.
+- CI identified missing Windows/sanitizer registration for that cancellation
+  executable and static-analysis warnings around empty arrays/scoped results.
+  The test is now in the normal cross-platform/sanitized target, and values are
+  explicitly initialized. Local coverage registries and static analysis pass.
+- Actual native request/result/capability output passed Draft-07 validation using
+  the approved schema and the already-installed Ajv tool (no dependency added).
+
+Measurements and binary/input hashes are retained outside Git under
+`data/otto-axle-loads-2026-11-08` in the controller workspace. AMD64/Windows CI,
+longer heterogeneous physical workloads, Cursus integration and measured customer
+facts remain explicit release/activation boundaries.

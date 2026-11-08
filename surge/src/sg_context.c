@@ -1273,8 +1273,8 @@ SGStatus sg_validate_model(SGContext *ctx) {
         return SG_STATUS_INFEASIBLE;
     }
 
-    { SGStatus loading_status=sg_loading_model_validate(ctx);
-      if(loading_status!=SG_STATUS_OK)return loading_status; }
+    SGStatus loading_status = sg_loading_model_validate(ctx);
+    if (loading_status != SG_STATUS_OK) return loading_status;
 
     for (i = 0; i < ctx->num_depots; i++) {
         const SGDepotRecord *depot = &ctx->depots[i];

@@ -143,7 +143,7 @@ SGStatus sg_axle_loading_validate(const SGLoadingVehicle *v, const SGAxleProfile
         return SG_STATUS_INVALID_ARG;
     SGStatus status = sg_loading_validate_joint(v, u, n, p);
     if (status != SG_STATUS_OK) return status;
-    uint32_t slots[SG_LOADING_MAX_UNITS];uint8_t active[SG_LOADING_MAX_UNITS];
+    uint32_t slots[SG_LOADING_MAX_UNITS] = {0};uint8_t active[SG_LOADING_MAX_UNITS] = {0};
     SGAxleState checked[SG_LOADING_MAX_UNITS+1];
     for (uint32_t i = 0; i < n; i++) { slots[i] = p[i].slot;active[i] = 1; }
     status = joint_state(v, profile, u, cg, slots, active, n, &checked[0]);

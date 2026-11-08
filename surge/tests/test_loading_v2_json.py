@@ -125,6 +125,42 @@ r = run(zero_payload, status='OK')
 assert r['stats']['unassigned'] == 1 and not r['routes']
 assert r['loading']['unassigned_checks'][0]['infeasible_vehicles'] == 1
 
+# Equivalent physical facts can reuse ordinal proofs while report identities
+# remain current. Different geometry/CG/unit facts must never reuse that proof.
+for variation in ('identity', 'geometry', 'cg', 'unit-collision'):
+    pair = copy.deepcopy(BASE)
+    pair['vehicles'].append(copy.deepcopy(pair['vehicles'][0]))
+    pair['tasks'].append(copy.deepcopy(pair['tasks'][0]))
+    pair['requests'].append({'delivery_task_id': 1})
+    lv = copy.deepcopy(pair['loading']['vehicles'][0]); lv['vehicle_id'] = 1
+    lv['axles']['profile_sha256'] = 'b' * 64
+    pair['loading']['vehicles'].append(lv)
+    lr = copy.deepcopy(pair['loading']['requests'][0]); lr['request_id'] = 1
+    pair['loading']['requests'].append(lr)
+    if variation == 'geometry': lv['axles']['slot_centres_mm'] = [3000]
+    if variation == 'cg': lr['units'][0]['cg_offset_mm'] = {'min': -10, 'max': 20}
+    if variation == 'unit-collision':
+        lr['units'][0].update(weight_g=500001, height_mm=1001)
+    pair['plan'] = [{'vehicle_id': 0, 'task_ids': [0]}, {'vehicle_id': 1, 'task_ids': [1]}]
+    r = run(pair, status='OK')
+    assert [round_['placements'][0]['request_id'] for round_ in r['loading']['rounds']] == [0, 1]
+    pair['loading_witnesses'] = r['loading']
+    run(pair, status='OK')
+
+# Signed front overhang coordinates and optional fraction rules survive JSON
+# decoding and exact replay without unsigned narrowing or floating reactions.
+overhang = copy.deepcopy(BASE)
+overhang['loading']['vehicles'][0]['axles'].update(deck_min_mm=-2000, slot_centres_mm=[-1000],
+    min_front_fraction={'numerator': 1, 'denominator': 2})
+run(overhang, status='OK')
+front_share = copy.deepcopy(BASE)
+front_share['loading']['vehicles'][0]['axles']['min_front_fraction'] = {'numerator': 3, 'denominator': 5}
+r = run(front_share, status='OK')
+assert r['stats']['unassigned'] == 1
+bad = copy.deepcopy(fixed)
+bad['loading_witnesses']['rounds'][0]['axle_states'][1]['front_min_g']['numerator'] = '9007199254740993'
+run(bad, False, 'INVALID_ARG')
+
 # Every reload round has its own witness; zero-unit stops retain their timing.
 multi = copy.deepcopy(BASE)
 multi['tasks'].extend([copy.deepcopy(multi['tasks'][0]), copy.deepcopy(multi['tasks'][0])])

@@ -36,7 +36,11 @@ their arrays and remain readable after context mutation/free; release each calle
 reference with `sg_loading_v2_report_free`. Report views are borrowed until that
 reference is released. Context access remains single-owner; only `sg_cancel` is
 safe concurrently, as in the existing solver API. Worker clones have independent
-mutable loading caches and share immutable model facts.
+mutable loading caches and share immutable model facts. Cache reuse compares
+physical geometry, axle/CG facts, unit/stop order and work budget exactly.
+Application identities are not physics: cached proofs use unit ordinals, while
+report identities are always mapped from the current route. Hash equality alone
+never permits reuse.
 
 `sg_loading_v2_validate_plan` stages ordinary validation and physical evidence
 before replacing the accepted snapshot. FIND searches; REPLAY validates the
@@ -81,3 +85,19 @@ Cursus integration, independent BigInt replay at its fenced publication boundary
 capability-pinned workers, sparse-ID remapping, approval/export invalidation and
 customer pilot evidence remain separate required work before product activation.
 Reshuffling is still design-only. No production rollout is included here.
+
+For a bounded paired screen of V1 versus V2, with exactly equivalent floor-slot
+and scalar feasibility and deliberately nonbinding axle limits:
+
+```sh
+make -C surge bench_loading_driver
+python3 surge/benchmarks/axle_nonbinding.py --binary surge/bench_loading_driver \
+  --orders 66 --budgets wall --output /absolute/external/path/axle-screen
+```
+
+The three paired seeds alternate order and use the existing child CPU/RSS runner.
+V2 states/operations are also replayed with independent Python Fraction arithmetic.
+The report distinguishes validity, service, vehicles, distance and throughput;
+validity alone is not a performance pass. These facts are synthetic and do not
+supply missing customer measurements. Long quiet-host and customer gates still
+apply before activation.

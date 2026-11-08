@@ -57,7 +57,8 @@ static uint32_t loading_bucket(const SGLoadingUnit *units, uint32_t count, uint6
 
 void sg_loading_invalidate(SGContext *ctx) {
     free(ctx->loading_cache);
-    free(ctx->loading_v2_cache);ctx->loading_v2_cache=NULL;
+    free(ctx->loading_v2_cache);
+    ctx->loading_v2_cache = NULL;
     sg_loading_v2_report_invalidate(ctx);
     ctx->loading_cache = NULL;
     ctx->num_violations = 0;
@@ -158,7 +159,7 @@ static SGStatus loading_round(const SGContext *ctx, uint32_t vehicle,
     if (ctx) PROFILE(ctx, round_calls);
     if (!result) return SG_STATUS_INVALID_ARG;
     if (ctx && ctx->loading_v2.schema_version)
-        return sg_loading_v2_round_view(ctx,vehicle,view,trip,result,requests,indices,certificate,NULL);
+        return sg_loading_v2_round_view(ctx, vehicle, view, trip, result, requests, indices, certificate, NULL);
     /* Boolean feasibility needs no placement buffer on an exact cache hit. */
     memset(result, 0, certificate ? sizeof(*result) : offsetof(SGLoadingResult, placements));
     result->outcome = SG_LOADING_UNKNOWN;

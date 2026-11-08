@@ -14,7 +14,6 @@ void sg_loading_v2_clear_error(SGContext *ctx);
 SGStatus sg_loading_v2_model_validate(SGContext *ctx);
 SGStatus sg_loading_v2_check_units(const SGContext *ctx, uint32_t vehicle,
                                    const SGLoadingUnit *units, const SGAxleSignedInterval *cg,
-                                   const uint32_t *requests, const uint32_t *indices,
                                    uint32_t count, int certificate, SGLoadingResult *result,
                                    SGAxleLoadingResult *full);
 SGStatus sg_loading_round_v2(const SGContext *ctx, uint32_t vehicle, const SGRouteStop *stops,
