@@ -64,11 +64,12 @@ Native interface checkpoint (not product activation):
 - 47 allocation failpoints exercised; six required-allocation failures rejected
   publication and preserved the prior snapshot. Optional cache allocation can
   fail without rejecting an independently established witness.
-- 63 real CLI/common API tests pass for solve and replay, malformed inputs,
+- 67 real CLI/common API tests pass for solve and replay, malformed inputs,
   unimplemented reshuffling, literal zero payload, reload-round identity,
   zero-unit stop timing and routes longer than 128 stops. An independent Python
   Fraction replay checks every native operation, partial stack, reaction and stop
-  on each positive output, including 12 varied actual HGS models.
+  on each positive output, including 12 varied actual HGS models. Committed and
+  frozen assignments are exercised in staged validation and native HGS.
 - GCC 14 Linux ARM64 warning-as-error checks passed; no-thread API compilation
   passed. ASan/UBSan/leak checks passed for the C API, OOM suite, kernel and native
   JSON solve with the shared library built normally (the existing sanitizer

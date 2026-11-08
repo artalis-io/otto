@@ -147,6 +147,24 @@ for variation in ('identity', 'geometry', 'cg', 'unit-collision'):
     pair['loading_witnesses'] = r['loading']
     run(pair, status='OK')
 
+# Ordinary committed/frozen constraints remain authoritative during staged
+# physical validation and actual multi-worker HGS.
+locked = copy.deepcopy(BASE)
+locked.update(committed_requests=[0], plan=[])
+run(locked, False, 'INFEASIBLE')
+frozen = copy.deepcopy(pair)
+frozen.pop('loading_witnesses')
+frozen.update(frozen_requests=[0], initial_routes=[{'vehicle_id': 0, 'request_ids': [0]},
+                                                  {'vehicle_id': 1, 'request_ids': [1]}])
+frozen['plan'] = [{'vehicle_id': 1, 'task_ids': [0]}, {'vehicle_id': 0, 'task_ids': [1]}]
+run(frozen, False, 'INFEASIBLE')
+frozen['plan'] = [{'vehicle_id': 0, 'task_ids': [0]}, {'vehicle_id': 1, 'task_ids': [1]}]
+run(frozen, status='OK')
+frozen.pop('plan')
+r = run(frozen, status='OK')
+assert r['stats']['unassigned'] == 0
+assert any(route['vehicle_id'] == 0 and any(s['request_id'] == 0 for s in route['stops']) for route in r['routes'])
+
 # Signed front overhang coordinates and optional fraction rules survive JSON
 # decoding and exact replay without unsigned narrowing or floating reactions.
 overhang = copy.deepcopy(BASE)
