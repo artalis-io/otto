@@ -1,0 +1,8 @@
+{
+  "status": "INVALID_ARG",
+  "loading_error": {
+    "code": "invalid_input",
+    "path": "/loading/vehicles/0/axles/wheelbase_mm",
+    "message": "Expected an integer wheelbase in [1,1000000] millimetres."
+  }
+}

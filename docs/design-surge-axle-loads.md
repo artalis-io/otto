@@ -146,6 +146,12 @@ failure: singleton checks and failed candidate diagnostics have limited scope.
 
 ## Proposed native and certificate boundaries
 
+The [shared C/JSON v2 API specification](roadmaps/surge-loading-v2-api.md)
+defines the exact proposed declarations, schema, examples, ownership, status
+mapping and required parity tests. These are review contracts, not current API
+support. Its full-plan replay must propagate the submitted handling witness
+through the actual schedule; independent successful partial checks are insufficient.
+
 Add a future `loading` schema version 2 with explicit `required_capabilities`,
 versioned axle descriptors and per-unit CG declarations. This is a proposal, not
 an accepted request example. Version 1 remains byte-shape compatible without new

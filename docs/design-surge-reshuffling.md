@@ -177,11 +177,18 @@ scope; do not infer a universal unassigned reason from one attempted sequence.
 
 ## Interfaces, caches and authoritative publication
 
+The [shared C/JSON v2 API specification](roadmaps/surge-loading-v2-api.md)
+defines the exact proposed declarations, schema, examples, ownership, status
+mapping and required parity tests. These are review contracts, not current API
+support. Its full-plan replay must propagate the submitted handling witness
+through the actual schedule; independent successful partial checks are insufficient.
+
 Use the common future loading schema version 2 and explicit required-capabilities
 contract. Do not reinterpret version-1 `rear_lifo` as allowing reshuffling. Add a
 separate versioned handling policy/access declaration while retaining its strict
-base access geometry. Use versioned sibling C descriptors/functions; proposed
-names and schema shapes are not current public API promises.
+base access geometry. Use versioned sibling C descriptors/functions;
+the precise proposed names/shapes are recorded in that specification but are not
+implemented public API promises.
 
 Cache exact immutable unit/geometry/policy identities, ordered stop/round
 boundaries, axle descriptors, work budgets and handling rules. Physical operation

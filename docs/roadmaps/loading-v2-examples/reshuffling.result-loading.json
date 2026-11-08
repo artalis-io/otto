@@ -1,0 +1,114 @@
+{
+  "version": 2,
+  "mode": "hard",
+  "required_capabilities": [
+    "stacking",
+    "bounded_reshuffling"
+  ],
+  "node_budget": 10000,
+  "rounds": [
+    {
+      "vehicle_id": 0,
+      "trip_index": 0,
+      "outcome": "feasible",
+      "reason": "witness",
+      "nodes": 7,
+      "placements": [
+        {
+          "request_id": 0,
+          "unit_index": 0,
+          "slot": 0,
+          "layer": 0
+        },
+        {
+          "request_id": 1,
+          "unit_index": 0,
+          "slot": 0,
+          "layer": 1
+        }
+      ],
+      "operations": [
+        {
+          "kind": "load",
+          "stop_index": null,
+          "request_id": 0,
+          "unit_index": 0,
+          "slot": 0,
+          "layer": 0
+        },
+        {
+          "kind": "load",
+          "stop_index": null,
+          "request_id": 1,
+          "unit_index": 0,
+          "slot": 0,
+          "layer": 1
+        },
+        {
+          "kind": "stage",
+          "stop_index": 0,
+          "request_id": 1,
+          "unit_index": 0,
+          "slot": 0,
+          "layer": 1,
+          "staging_position": 0
+        },
+        {
+          "kind": "deliver",
+          "stop_index": 0,
+          "request_id": 0,
+          "unit_index": 0,
+          "slot": 0,
+          "layer": 0
+        },
+        {
+          "kind": "restore",
+          "stop_index": 0,
+          "request_id": 1,
+          "unit_index": 0,
+          "slot": 0,
+          "layer": 0,
+          "staging_position": 0
+        },
+        {
+          "kind": "deliver",
+          "stop_index": 1,
+          "request_id": 1,
+          "unit_index": 0,
+          "slot": 0,
+          "layer": 0
+        }
+      ],
+      "axle_states": [],
+      "stops": [
+        {
+          "stop_index": 0,
+          "task_id": 0,
+          "arrival_sec": 0,
+          "service_start_sec": 0,
+          "departure_sec": 120,
+          "base_service_sec": 60,
+          "extra_service_sec": 60,
+          "extra_moves": 2,
+          "extra_fee_units": 5
+        },
+        {
+          "stop_index": 1,
+          "task_id": 1,
+          "arrival_sec": 120,
+          "service_start_sec": 120,
+          "departure_sec": 180,
+          "base_service_sec": 60,
+          "extra_service_sec": 0,
+          "extra_moves": 0,
+          "extra_fee_units": 0
+        }
+      ],
+      "extra_moves": 2,
+      "extra_service_sec": 60,
+      "extra_fee_units": 5
+    }
+  ],
+  "unassigned_checks": [],
+  "frontier_budget": 256
+}

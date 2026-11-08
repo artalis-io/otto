@@ -29,6 +29,15 @@ constraints. No alternative optimizer, automatic constraint relaxation, inferred
 vehicle facts or post-hoc filtering of the sole returned incumbent is proposed.
 The supported intersection of constraints must have one replayable witness.
 
+## Interface specification for review
+
+Both extensions share a [precise C/JSON version-2 contract](roadmaps/surge-loading-v2-api.md),
+with proposed C types/functions, strict JSON Schema, axle-only/reshuffling-only/
+combined examples, full-plan witness replay, ownership/error/version semantics,
+and authoritative C-versus-JSON parity tests. It supersedes vague interface naming
+in the physical design narratives, without making the functions implemented.
+Schema/compilation checks of proposed examples are not native execution tests.
+
 ## Existing baseline
 
 - OTTO reference: `605691491b8199376dc989e440cce13b1fcd705c` (merged loading

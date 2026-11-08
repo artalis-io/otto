@@ -1,0 +1,1529 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://artalis.io/schemas/proposals/surge-loading-v2.schema.json",
+  "$comment": "DESIGN ONLY. Not implemented, hosted or accepted by current Surge. Root validates request.loading; result is #/definitions/result. Semantic constraints are normative in the API design.",
+  "allOf": [
+    {
+      "$ref": "#/definitions/request"
+    }
+  ],
+  "definitions": {
+    "signed_interval": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "min": {
+          "type": "integer",
+          "minimum": -1000000,
+          "maximum": 1000000
+        },
+        "max": {
+          "type": "integer",
+          "minimum": -1000000,
+          "maximum": 1000000
+        }
+      },
+      "required": [
+        "min",
+        "max"
+      ]
+    },
+    "mass_interval": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "min": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 1000000000
+        },
+        "max": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 1000000000
+        }
+      },
+      "required": [
+        "min",
+        "max"
+      ]
+    },
+    "fraction": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "numerator": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 1000000
+        },
+        "denominator": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 1000000
+        }
+      },
+      "required": [
+        "numerator",
+        "denominator"
+      ]
+    },
+    "axles": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "model": {
+          "const": "rigid_two_axle_v1"
+        },
+        "profile_sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "wheelbase_mm": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 1000000
+        },
+        "deck_min_mm": {
+          "type": "integer",
+          "minimum": -1000000,
+          "maximum": 1000000
+        },
+        "deck_max_mm": {
+          "type": "integer",
+          "minimum": -1000000,
+          "maximum": 1000000
+        },
+        "footprint_length_mm": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 1000000
+        },
+        "slot_centres_mm": {
+          "type": "array",
+          "items": {
+            "type": "integer",
+            "minimum": -1000000,
+            "maximum": 1000000
+          },
+          "minItems": 1,
+          "maxItems": 128
+        },
+        "front_tare_g": {
+          "$ref": "#/definitions/mass_interval"
+        },
+        "rear_tare_g": {
+          "$ref": "#/definitions/mass_interval"
+        },
+        "front_limits_g": {
+          "$ref": "#/definitions/mass_interval"
+        },
+        "rear_limits_g": {
+          "$ref": "#/definitions/mass_interval"
+        },
+        "max_gross_g": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 1000000000
+        },
+        "min_front_fraction": {
+          "oneOf": [
+            {
+              "type": "null"
+            },
+            {
+              "$ref": "#/definitions/fraction"
+            }
+          ]
+        }
+      },
+      "required": [
+        "model",
+        "profile_sha256",
+        "wheelbase_mm",
+        "deck_min_mm",
+        "deck_max_mm",
+        "footprint_length_mm",
+        "slot_centres_mm",
+        "front_tare_g",
+        "rear_tare_g",
+        "front_limits_g",
+        "rear_limits_g",
+        "max_gross_g",
+        "min_front_fraction"
+      ]
+    },
+    "handling": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "model": {
+          "const": "fixed_slot_external_staging_v1"
+        },
+        "profile_sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "allowed": {
+          "type": "boolean"
+        },
+        "equipment_mask": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 7
+        },
+        "max_unit_weight_g": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 1000000000
+        },
+        "max_unit_height_mm": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 4294967295
+        },
+        "max_staged_units": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 4
+        },
+        "max_extra_moves_per_stop": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 8
+        },
+        "max_extra_moves_per_round": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 64
+        },
+        "max_extra_sec_per_stop": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 2147483647
+        },
+        "max_extra_sec_per_round": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 2147483647
+        },
+        "stage_sec": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 86400
+        },
+        "restore_sec": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 86400
+        },
+        "stage_fee_units": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 1000000000
+        },
+        "restore_fee_units": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 1000000000
+        }
+      },
+      "required": [
+        "model",
+        "profile_sha256",
+        "allowed",
+        "equipment_mask",
+        "max_unit_weight_g",
+        "max_unit_height_mm",
+        "max_staged_units",
+        "max_extra_moves_per_stop",
+        "max_extra_moves_per_round",
+        "max_extra_sec_per_stop",
+        "max_extra_sec_per_round",
+        "stage_sec",
+        "restore_sec",
+        "stage_fee_units",
+        "restore_fee_units"
+      ]
+    },
+    "staging_position": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "max_weight_g": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 1000000000
+        },
+        "max_height_mm": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 4294967295
+        },
+        "allowed_classes": {
+          "type": "array",
+          "items": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 63
+          },
+          "minItems": 0,
+          "maxItems": 64,
+          "uniqueItems": true
+        }
+      },
+      "required": [
+        "max_weight_g",
+        "max_height_mm",
+        "allowed_classes"
+      ]
+    },
+    "stop_policy": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "task_id": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 4294967295
+        },
+        "profile_sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "allowed": {
+          "type": "boolean"
+        },
+        "equipment_available_mask": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 7
+        },
+        "equipment_permitted_mask": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 7
+        },
+        "positions": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/staging_position"
+          },
+          "minItems": 0,
+          "maxItems": 4
+        },
+        "handling_interval_sec": {
+          "oneOf": [
+            {
+              "type": "null"
+            },
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "start": {
+                  "type": "number",
+                  "minimum": 0,
+                  "maximum": 1000000000000
+                },
+                "end": {
+                  "type": "number",
+                  "minimum": 0,
+                  "maximum": 1000000000000
+                }
+              },
+              "required": [
+                "start",
+                "end"
+              ]
+            }
+          ]
+        },
+        "max_extra_moves": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 8
+        },
+        "max_extra_sec": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 2147483647
+        }
+      },
+      "required": [
+        "task_id",
+        "profile_sha256",
+        "allowed",
+        "equipment_available_mask",
+        "equipment_permitted_mask",
+        "positions",
+        "handling_interval_sec",
+        "max_extra_moves",
+        "max_extra_sec"
+      ]
+    },
+    "unit": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "height_mm": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 4294967295
+        },
+        "weight_g": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 1000000000
+        },
+        "stack_class": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 63
+        },
+        "max_weight_above_g": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 1000000000
+        },
+        "max_units_above": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 127
+        },
+        "cg_offset_mm": {
+          "$ref": "#/definitions/signed_interval"
+        },
+        "temporary_offload_allowed": {
+          "type": "boolean"
+        },
+        "required_equipment_mask": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 7
+        }
+      },
+      "required": [
+        "height_mm",
+        "weight_g",
+        "stack_class",
+        "max_weight_above_g",
+        "max_units_above"
+      ]
+    },
+    "vehicle": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "vehicle_id": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 4294967295
+        },
+        "access_model": {
+          "enum": [
+            "side_free",
+            "rear_lifo"
+          ]
+        },
+        "slots": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "lane": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 4294967295
+              },
+              "depth": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 4294967295
+              }
+            },
+            "required": [
+              "lane",
+              "depth"
+            ]
+          },
+          "minItems": 1,
+          "maxItems": 128
+        },
+        "max_layers": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 8
+        },
+        "clearance_mm": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 4294967295
+        },
+        "max_stack_weight_g": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 1000000000
+        },
+        "payload_g": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 1000000000
+        },
+        "allowed_top": {
+          "type": "array",
+          "items": {
+            "type": "array",
+            "items": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 63
+            },
+            "minItems": 0,
+            "maxItems": 64,
+            "uniqueItems": true
+          },
+          "minItems": 1,
+          "maxItems": 64
+        },
+        "axles": {
+          "$ref": "#/definitions/axles"
+        },
+        "handling": {
+          "$ref": "#/definitions/handling"
+        }
+      },
+      "required": [
+        "vehicle_id",
+        "access_model",
+        "slots",
+        "max_layers",
+        "clearance_mm",
+        "max_stack_weight_g",
+        "payload_g",
+        "allowed_top"
+      ]
+    },
+    "request_units": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "request_id": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 4294967295
+        },
+        "units": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/unit"
+          },
+          "minItems": 0,
+          "maxItems": 128
+        }
+      },
+      "required": [
+        "request_id",
+        "units"
+      ]
+    },
+    "request": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "version": {
+          "const": 2
+        },
+        "mode": {
+          "const": "hard"
+        },
+        "required_capabilities": {
+          "type": "array",
+          "items": {
+            "enum": [
+              "stacking",
+              "axle_loads",
+              "bounded_reshuffling"
+            ]
+          },
+          "minItems": 1,
+          "maxItems": 3,
+          "uniqueItems": true,
+          "contains": {
+            "const": "stacking"
+          }
+        },
+        "node_budget": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 100000
+        },
+        "frontier_budget": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 4096
+        },
+        "vehicles": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/vehicle"
+          },
+          "minItems": 1,
+          "maxItems": 100000
+        },
+        "requests": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/request_units"
+          },
+          "minItems": 0,
+          "maxItems": 100000
+        },
+        "stops": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/stop_policy"
+          },
+          "minItems": 0,
+          "maxItems": 100000
+        }
+      },
+      "required": [
+        "version",
+        "mode",
+        "required_capabilities",
+        "node_budget",
+        "vehicles",
+        "requests"
+      ],
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "required_capabilities": {
+                "contains": {
+                  "const": "axle_loads"
+                }
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "vehicles": {
+                "items": {
+                  "required": [
+                    "axles"
+                  ]
+                }
+              },
+              "requests": {
+                "items": {
+                  "properties": {
+                    "units": {
+                      "items": {
+                        "required": [
+                          "cg_offset_mm"
+                        ]
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "else": {
+            "properties": {
+              "vehicles": {
+                "items": {
+                  "properties": {
+                    "axles": false
+                  }
+                }
+              },
+              "requests": {
+                "items": {
+                  "properties": {
+                    "units": {
+                      "items": {
+                        "properties": {
+                          "cg_offset_mm": false
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "required_capabilities": {
+                "contains": {
+                  "const": "bounded_reshuffling"
+                }
+              }
+            }
+          },
+          "then": {
+            "required": [
+              "frontier_budget",
+              "stops"
+            ],
+            "properties": {
+              "vehicles": {
+                "items": {
+                  "required": [
+                    "handling"
+                  ]
+                }
+              },
+              "requests": {
+                "items": {
+                  "properties": {
+                    "units": {
+                      "items": {
+                        "required": [
+                          "temporary_offload_allowed",
+                          "required_equipment_mask"
+                        ]
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "else": {
+            "properties": {
+              "frontier_budget": false,
+              "stops": false,
+              "vehicles": {
+                "items": {
+                  "properties": {
+                    "handling": false
+                  }
+                }
+              },
+              "requests": {
+                "items": {
+                  "properties": {
+                    "units": {
+                      "items": {
+                        "properties": {
+                          "temporary_offload_allowed": false,
+                          "required_equipment_mask": false
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      ]
+    },
+    "placement": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "request_id": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 4294967295
+        },
+        "unit_index": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 127
+        },
+        "slot": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 127
+        },
+        "layer": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 7
+        }
+      },
+      "required": [
+        "request_id",
+        "unit_index",
+        "slot",
+        "layer"
+      ]
+    },
+    "operation": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "kind": {
+          "enum": [
+            "load",
+            "deliver",
+            "stage",
+            "restore"
+          ]
+        },
+        "stop_index": {
+          "oneOf": [
+            {
+              "type": "null"
+            },
+            {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 4294967295
+            }
+          ]
+        },
+        "request_id": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 4294967295
+        },
+        "unit_index": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 127
+        },
+        "slot": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 127
+        },
+        "layer": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 7
+        },
+        "staging_position": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 3
+        }
+      },
+      "required": [
+        "kind",
+        "stop_index",
+        "request_id",
+        "unit_index",
+        "slot",
+        "layer"
+      ],
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "kind": {
+                "const": "load"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "stop_index": {
+                "type": "null"
+              }
+            }
+          },
+          "else": {
+            "properties": {
+              "stop_index": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 4294967295
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "kind": {
+                "enum": [
+                  "stage",
+                  "restore"
+                ]
+              }
+            }
+          },
+          "then": {
+            "required": [
+              "staging_position"
+            ]
+          },
+          "else": {
+            "properties": {
+              "staging_position": false
+            }
+          }
+        }
+      ]
+    },
+    "rational": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "numerator": {
+          "type": "string",
+          "pattern": "^(0|-?[1-9][0-9]*)$",
+          "maxLength": 20
+        },
+        "denominator": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 1000000
+        }
+      },
+      "required": [
+        "numerator",
+        "denominator"
+      ]
+    },
+    "axle_state": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "step": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 320
+        },
+        "front_min_g": {
+          "$ref": "#/definitions/rational"
+        },
+        "front_max_g": {
+          "$ref": "#/definitions/rational"
+        },
+        "rear_min_g": {
+          "$ref": "#/definitions/rational"
+        },
+        "rear_max_g": {
+          "$ref": "#/definitions/rational"
+        },
+        "gross_min_g": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 130000000000
+        },
+        "gross_max_g": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 130000000000
+        }
+      },
+      "required": [
+        "step",
+        "front_min_g",
+        "front_max_g",
+        "rear_min_g",
+        "rear_max_g",
+        "gross_min_g",
+        "gross_max_g"
+      ]
+    },
+    "stop_evidence": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "stop_index": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 4294967295
+        },
+        "task_id": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 4294967295
+        },
+        "arrival_sec": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1000000000000
+        },
+        "service_start_sec": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1000000000000
+        },
+        "departure_sec": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1000000000000
+        },
+        "base_service_sec": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1000000000000
+        },
+        "extra_service_sec": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 2147483647
+        },
+        "extra_moves": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 8
+        },
+        "extra_fee_units": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 8000000000
+        }
+      },
+      "required": [
+        "stop_index",
+        "task_id",
+        "arrival_sec",
+        "service_start_sec",
+        "departure_sec",
+        "base_service_sec",
+        "extra_service_sec",
+        "extra_moves",
+        "extra_fee_units"
+      ]
+    },
+    "round": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "vehicle_id": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 4294967295
+        },
+        "trip_index": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 4294967295
+        },
+        "outcome": {
+          "enum": [
+            "feasible",
+            "infeasible",
+            "unknown"
+          ]
+        },
+        "reason": {
+          "enum": [
+            "witness",
+            "capacity_bound",
+            "exhaustive_no_witness",
+            "node_budget",
+            "frontier_budget",
+            "interrupted",
+            "unsupported_size",
+            "schedule_rejected"
+          ]
+        },
+        "nodes": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 100000
+        },
+        "placements": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/placement"
+          },
+          "minItems": 0,
+          "maxItems": 128
+        },
+        "operations": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/operation"
+          },
+          "minItems": 0,
+          "maxItems": 320
+        },
+        "axle_states": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/axle_state"
+          },
+          "minItems": 0,
+          "maxItems": 321
+        },
+        "stops": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/stop_evidence"
+          },
+          "minItems": 0,
+          "maxItems": 100000
+        },
+        "extra_moves": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 64
+        },
+        "extra_service_sec": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 2147483647
+        },
+        "extra_fee_units": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 64000000000
+        }
+      },
+      "required": [
+        "vehicle_id",
+        "trip_index",
+        "outcome",
+        "reason",
+        "nodes",
+        "placements",
+        "operations",
+        "axle_states",
+        "stops",
+        "extra_moves",
+        "extra_service_sec",
+        "extra_fee_units"
+      ],
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "outcome": {
+                "const": "feasible"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "reason": {
+                "const": "witness"
+              }
+            }
+          },
+          "else": {
+            "properties": {
+              "placements": {
+                "maxItems": 0
+              },
+              "operations": {
+                "maxItems": 0
+              },
+              "axle_states": {
+                "maxItems": 0
+              },
+              "stops": {
+                "maxItems": 0
+              },
+              "extra_moves": {
+                "const": 0
+              },
+              "extra_service_sec": {
+                "const": 0
+              },
+              "extra_fee_units": {
+                "const": 0
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "outcome": {
+                "const": "infeasible"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "reason": {
+                "enum": [
+                  "capacity_bound",
+                  "exhaustive_no_witness"
+                ]
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "outcome": {
+                "const": "unknown"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "reason": {
+                "enum": [
+                  "node_budget",
+                  "frontier_budget",
+                  "interrupted",
+                  "unsupported_size",
+                  "schedule_rejected"
+                ]
+              }
+            }
+          }
+        }
+      ]
+    },
+    "diagnostic": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "request_id": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 4294967295
+        },
+        "scope": {
+          "const": "physical_singleton_not_route_insertability"
+        },
+        "diagnostic_node_budget": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 128
+        },
+        "feasible_vehicles": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 4294967295
+        },
+        "infeasible_vehicles": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 4294967295
+        },
+        "unknown_vehicles": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 4294967295
+        }
+      },
+      "required": [
+        "request_id",
+        "scope",
+        "diagnostic_node_budget",
+        "feasible_vehicles",
+        "infeasible_vehicles",
+        "unknown_vehicles"
+      ]
+    },
+    "result": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "version": {
+          "const": 2
+        },
+        "mode": {
+          "const": "hard"
+        },
+        "required_capabilities": {
+          "type": "array",
+          "items": {
+            "enum": [
+              "stacking",
+              "axle_loads",
+              "bounded_reshuffling"
+            ]
+          },
+          "minItems": 1,
+          "maxItems": 3,
+          "uniqueItems": true,
+          "contains": {
+            "const": "stacking"
+          }
+        },
+        "node_budget": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 100000
+        },
+        "frontier_budget": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 4096
+        },
+        "rounds": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/round"
+          },
+          "minItems": 0
+        },
+        "unassigned_checks": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/diagnostic"
+          },
+          "minItems": 0
+        }
+      },
+      "required": [
+        "version",
+        "mode",
+        "required_capabilities",
+        "node_budget",
+        "rounds",
+        "unassigned_checks"
+      ],
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "required_capabilities": {
+                "contains": {
+                  "const": "axle_loads"
+                }
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "rounds": {
+                "items": {
+                  "if": {
+                    "properties": {
+                      "outcome": {
+                        "const": "feasible"
+                      }
+                    }
+                  },
+                  "then": {
+                    "properties": {
+                      "axle_states": {
+                        "minItems": 1
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "else": {
+            "properties": {
+              "rounds": {
+                "items": {
+                  "properties": {
+                    "axle_states": {
+                      "maxItems": 0
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "required_capabilities": {
+                "contains": {
+                  "const": "bounded_reshuffling"
+                }
+              }
+            }
+          },
+          "then": {
+            "required": [
+              "frontier_budget"
+            ]
+          },
+          "else": {
+            "properties": {
+              "rounds": {
+                "items": {
+                  "properties": {
+                    "operations": {
+                      "items": {
+                        "properties": {
+                          "kind": {
+                            "enum": [
+                              "load",
+                              "deliver"
+                            ]
+                          }
+                        }
+                      }
+                    },
+                    "extra_moves": {
+                      "const": 0
+                    },
+                    "extra_service_sec": {
+                      "const": 0
+                    },
+                    "extra_fee_units": {
+                      "const": 0
+                    },
+                    "stops": {
+                      "items": {
+                        "properties": {
+                          "extra_moves": {
+                            "const": 0
+                          },
+                          "extra_service_sec": {
+                            "const": 0
+                          },
+                          "extra_fee_units": {
+                            "const": 0
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              },
+              "frontier_budget": false
+            }
+          }
+        }
+      ]
+    },
+    "error_detail": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "code": {
+          "enum": [
+            "invalid_input",
+            "unsupported_version",
+            "unsupported_capability",
+            "unsupported_model",
+            "invalid_witness",
+            "witness_rejected",
+            "no_result",
+            "allocation_failed",
+            "internal_error",
+            "validation_unknown"
+          ]
+        },
+        "path": {
+          "type": "string"
+        },
+        "message": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "code",
+        "path",
+        "message"
+      ]
+    },
+    "capabilities": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "schema_version": {
+          "const": 2
+        },
+        "implemented_capabilities": {
+          "type": "array",
+          "items": {
+            "enum": [
+              "stacking",
+              "axle_loads",
+              "bounded_reshuffling"
+            ]
+          },
+          "minItems": 1,
+          "maxItems": 3,
+          "uniqueItems": true,
+          "contains": {
+            "const": "stacking"
+          }
+        },
+        "axle_models": {
+          "type": "array",
+          "items": {
+            "const": "rigid_two_axle_v1"
+          },
+          "minItems": 0,
+          "maxItems": 1,
+          "uniqueItems": true
+        },
+        "handling_models": {
+          "type": "array",
+          "items": {
+            "const": "fixed_slot_external_staging_v1"
+          },
+          "minItems": 0,
+          "maxItems": 1,
+          "uniqueItems": true
+        },
+        "limits": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "max_units": {
+              "const": 128
+            },
+            "max_slots": {
+              "const": 128
+            },
+            "max_classes": {
+              "const": 64
+            },
+            "max_layers": {
+              "const": 8
+            },
+            "max_stops": {
+              "const": 100000
+            },
+            "max_nodes": {
+              "const": 100000
+            },
+            "max_frontier": {
+              "const": 4096
+            },
+            "max_staged": {
+              "const": 4
+            },
+            "max_extra_moves_stop": {
+              "const": 8
+            },
+            "max_extra_moves_round": {
+              "const": 64
+            },
+            "max_operations": {
+              "const": 320
+            },
+            "max_axle_states": {
+              "const": 321
+            }
+          },
+          "required": [
+            "max_units",
+            "max_slots",
+            "max_classes",
+            "max_layers",
+            "max_stops",
+            "max_nodes",
+            "max_frontier",
+            "max_staged",
+            "max_extra_moves_stop",
+            "max_extra_moves_round",
+            "max_operations",
+            "max_axle_states"
+          ]
+        }
+      },
+      "required": [
+        "schema_version",
+        "implemented_capabilities",
+        "axle_models",
+        "handling_models",
+        "limits"
+      ]
+    }
+  }
+}
