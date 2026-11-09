@@ -1,0 +1,122 @@
+{
+  "config": {
+    "max_iterations": 100,
+    "max_time_seconds": 2,
+    "population": true,
+    "population_threads": 2,
+    "population_generations": 2,
+    "seed": 42
+  },
+  "depots": [
+    {
+      "x": 0,
+      "y": 0
+    }
+  ],
+  "vehicles": [
+    {
+      "start_depot_id": 0,
+      "end_depot_id": 0,
+      "capacity": [
+        2000
+      ]
+    }
+  ],
+  "tasks": [
+    {
+      "x": 0,
+      "y": 0,
+      "type": "delivery",
+      "demand": [
+        500
+      ],
+      "service": 60,
+      "tw": [
+        0,
+        100000
+      ]
+    }
+  ],
+  "requests": [
+    {
+      "delivery_task": 0
+    }
+  ],
+  "loading": {
+    "version": 2,
+    "mode": "hard",
+    "required_capabilities": [
+      "stacking",
+      "axle_loads"
+    ],
+    "node_budget": 10000,
+    "vehicles": [
+      {
+        "vehicle_id": 0,
+        "access_model": "side_free",
+        "slots": [
+          {
+            "lane": 0,
+            "depth": 0
+          }
+        ],
+        "max_layers": 2,
+        "clearance_mm": 2400,
+        "max_stack_weight_g": 1000000,
+        "payload_g": 10000000,
+        "allowed_top": [
+          [
+            0
+          ]
+        ],
+        "axles": {
+          "model": "rigid_two_axle_v1",
+          "profile_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "wheelbase_mm": 4000,
+          "deck_min_mm": 0,
+          "deck_max_mm": 8000,
+          "footprint_length_mm": 1200,
+          "slot_centres_mm": [
+            2000
+          ],
+          "front_tare_g": {
+            "min": 3000000,
+            "max": 3000000
+          },
+          "rear_tare_g": {
+            "min": 2000000,
+            "max": 2000000
+          },
+          "front_limits_g": {
+            "min": 0,
+            "max": 6000000
+          },
+          "rear_limits_g": {
+            "min": 0,
+            "max": 6500000
+          },
+          "max_gross_g": 12000000,
+          "min_front_fraction": null
+        }
+      }
+    ],
+    "requests": [
+      {
+        "request_id": 0,
+        "units": [
+          {
+            "height_mm": 1000,
+            "weight_g": 500000,
+            "stack_class": 0,
+            "max_weight_above_g": 500000,
+            "max_units_above": 1,
+            "cg_offset_mm": {
+              "min": -50,
+              "max": 50
+            }
+          }
+        ]
+      }
+    ]
+  }
+}

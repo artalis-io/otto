@@ -1,0 +1,126 @@
+{
+  "version": 2,
+  "mode": "hard",
+  "required_capabilities": [
+    "stacking",
+    "axle_loads"
+  ],
+  "node_budget": 10000,
+  "rounds": [
+    {
+      "vehicle_id": 0,
+      "trip_index": 0,
+      "outcome": "feasible",
+      "reason": "witness",
+      "nodes": 7,
+      "placements": [
+        {
+          "request_id": 0,
+          "unit_index": 0,
+          "slot": 0,
+          "layer": 0
+        }
+      ],
+      "operations": [
+        {
+          "kind": "load",
+          "stop_index": null,
+          "request_id": 0,
+          "unit_index": 0,
+          "slot": 0,
+          "layer": 0
+        },
+        {
+          "kind": "deliver",
+          "stop_index": 0,
+          "request_id": 0,
+          "unit_index": 0,
+          "slot": 0,
+          "layer": 0
+        }
+      ],
+      "axle_states": [
+        {
+          "step": 0,
+          "front_min_g": {
+            "numerator": "12000000000",
+            "denominator": 4000
+          },
+          "front_max_g": {
+            "numerator": "12000000000",
+            "denominator": 4000
+          },
+          "rear_min_g": {
+            "numerator": "8000000000",
+            "denominator": 4000
+          },
+          "rear_max_g": {
+            "numerator": "8000000000",
+            "denominator": 4000
+          },
+          "gross_min_g": 5000000,
+          "gross_max_g": 5000000
+        },
+        {
+          "step": 1,
+          "front_min_g": {
+            "numerator": "12975000000",
+            "denominator": 4000
+          },
+          "front_max_g": {
+            "numerator": "13025000000",
+            "denominator": 4000
+          },
+          "rear_min_g": {
+            "numerator": "8975000000",
+            "denominator": 4000
+          },
+          "rear_max_g": {
+            "numerator": "9025000000",
+            "denominator": 4000
+          },
+          "gross_min_g": 5500000,
+          "gross_max_g": 5500000
+        },
+        {
+          "step": 2,
+          "front_min_g": {
+            "numerator": "12000000000",
+            "denominator": 4000
+          },
+          "front_max_g": {
+            "numerator": "12000000000",
+            "denominator": 4000
+          },
+          "rear_min_g": {
+            "numerator": "8000000000",
+            "denominator": 4000
+          },
+          "rear_max_g": {
+            "numerator": "8000000000",
+            "denominator": 4000
+          },
+          "gross_min_g": 5000000,
+          "gross_max_g": 5000000
+        }
+      ],
+      "stops": [
+        {
+          "stop_index": 0,
+          "task_id": 0,
+          "arrival_sec": 0,
+          "service_start_sec": 0,
+          "departure_sec": 60,
+          "base_service_sec": 60,
+          "extra_service_sec": 0,
+          "extra_moves": 0,
+          "extra_fee_units": 0
+        }
+      ],
+      "extra_moves": 0,
+      "extra_service_sec": 0,
+      "extra_fee_units": 0
+    }
+  ],
+  "unassigned_checks": []
+}

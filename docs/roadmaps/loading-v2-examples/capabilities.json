@@ -1,0 +1,28 @@
+{
+  "schema_version": 2,
+  "implemented_capabilities": [
+    "stacking",
+    "axle_loads",
+    "bounded_reshuffling"
+  ],
+  "axle_models": [
+    "rigid_two_axle_v1"
+  ],
+  "handling_models": [
+    "fixed_slot_external_staging_v1"
+  ],
+  "limits": {
+    "max_units": 128,
+    "max_slots": 128,
+    "max_classes": 64,
+    "max_layers": 8,
+    "max_stops": 100000,
+    "max_nodes": 100000,
+    "max_frontier": 4096,
+    "max_staged": 4,
+    "max_extra_moves_stop": 8,
+    "max_extra_moves_round": 64,
+    "max_operations": 320,
+    "max_axle_states": 321
+  }
+}

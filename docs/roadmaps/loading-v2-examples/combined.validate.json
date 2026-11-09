@@ -1,0 +1,485 @@
+{
+  "config": {
+    "max_iterations": 100,
+    "max_time_seconds": 2,
+    "population": true,
+    "population_threads": 2,
+    "population_generations": 2,
+    "seed": 42
+  },
+  "depots": [
+    {
+      "x": 0,
+      "y": 0
+    }
+  ],
+  "vehicles": [
+    {
+      "start_depot_id": 0,
+      "end_depot_id": 0,
+      "capacity": [
+        2000
+      ]
+    }
+  ],
+  "tasks": [
+    {
+      "x": 0,
+      "y": 0,
+      "type": "delivery",
+      "demand": [
+        500
+      ],
+      "service": 60,
+      "tw": [
+        0,
+        100000
+      ]
+    },
+    {
+      "x": 0,
+      "y": 0,
+      "type": "delivery",
+      "demand": [
+        500
+      ],
+      "service": 60,
+      "tw": [
+        0,
+        100000
+      ]
+    }
+  ],
+  "requests": [
+    {
+      "delivery_task": 0
+    },
+    {
+      "delivery_task": 1
+    }
+  ],
+  "loading": {
+    "version": 2,
+    "mode": "hard",
+    "required_capabilities": [
+      "stacking",
+      "axle_loads",
+      "bounded_reshuffling"
+    ],
+    "node_budget": 10000,
+    "frontier_budget": 256,
+    "vehicles": [
+      {
+        "vehicle_id": 0,
+        "access_model": "rear_lifo",
+        "slots": [
+          {
+            "lane": 0,
+            "depth": 0
+          }
+        ],
+        "max_layers": 2,
+        "clearance_mm": 2400,
+        "max_stack_weight_g": 1000000,
+        "payload_g": 10000000,
+        "allowed_top": [
+          [
+            0
+          ]
+        ],
+        "handling": {
+          "model": "fixed_slot_external_staging_v1",
+          "profile_sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "allowed": true,
+          "equipment_mask": 0,
+          "max_unit_weight_g": 1000000,
+          "max_unit_height_mm": 2400,
+          "max_staged_units": 1,
+          "max_extra_moves_per_stop": 2,
+          "max_extra_moves_per_round": 2,
+          "max_extra_sec_per_stop": 60,
+          "max_extra_sec_per_round": 60,
+          "stage_sec": 30,
+          "restore_sec": 30,
+          "stage_fee_units": 2,
+          "restore_fee_units": 3
+        },
+        "axles": {
+          "model": "rigid_two_axle_v1",
+          "profile_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "wheelbase_mm": 4000,
+          "deck_min_mm": 0,
+          "deck_max_mm": 8000,
+          "footprint_length_mm": 1200,
+          "slot_centres_mm": [
+            2000
+          ],
+          "front_tare_g": {
+            "min": 3000000,
+            "max": 3000000
+          },
+          "rear_tare_g": {
+            "min": 2000000,
+            "max": 2000000
+          },
+          "front_limits_g": {
+            "min": 0,
+            "max": 6000000
+          },
+          "rear_limits_g": {
+            "min": 0,
+            "max": 6500000
+          },
+          "max_gross_g": 12000000,
+          "min_front_fraction": null
+        }
+      }
+    ],
+    "requests": [
+      {
+        "request_id": 0,
+        "units": [
+          {
+            "height_mm": 1000,
+            "weight_g": 500000,
+            "stack_class": 0,
+            "max_weight_above_g": 500000,
+            "max_units_above": 1,
+            "temporary_offload_allowed": false,
+            "required_equipment_mask": 0,
+            "cg_offset_mm": {
+              "min": 0,
+              "max": 0
+            }
+          }
+        ]
+      },
+      {
+        "request_id": 1,
+        "units": [
+          {
+            "height_mm": 1000,
+            "weight_g": 500000,
+            "stack_class": 0,
+            "max_weight_above_g": 500000,
+            "max_units_above": 1,
+            "temporary_offload_allowed": true,
+            "required_equipment_mask": 1,
+            "cg_offset_mm": {
+              "min": 0,
+              "max": 0
+            }
+          }
+        ]
+      }
+    ],
+    "stops": [
+      {
+        "task_id": 0,
+        "profile_sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+        "allowed": true,
+        "equipment_available_mask": 1,
+        "equipment_permitted_mask": 1,
+        "positions": [
+          {
+            "max_weight_g": 1000000,
+            "max_height_mm": 2400,
+            "allowed_classes": [
+              0
+            ]
+          }
+        ],
+        "handling_interval_sec": null,
+        "max_extra_moves": 2,
+        "max_extra_sec": 60
+      },
+      {
+        "task_id": 1,
+        "profile_sha256": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+        "allowed": false,
+        "equipment_available_mask": 0,
+        "equipment_permitted_mask": 0,
+        "positions": [],
+        "handling_interval_sec": null,
+        "max_extra_moves": 0,
+        "max_extra_sec": 0
+      }
+    ]
+  },
+  "plan": [
+    {
+      "vehicle_id": 0,
+      "task_ids": [
+        0,
+        1
+      ],
+      "trip_starts": [
+        0,
+        0
+      ]
+    }
+  ],
+  "loading_witnesses": {
+    "version": 2,
+    "mode": "hard",
+    "required_capabilities": [
+      "stacking",
+      "axle_loads",
+      "bounded_reshuffling"
+    ],
+    "node_budget": 10000,
+    "rounds": [
+      {
+        "vehicle_id": 0,
+        "trip_index": 0,
+        "outcome": "feasible",
+        "reason": "witness",
+        "nodes": 7,
+        "placements": [
+          {
+            "request_id": 0,
+            "unit_index": 0,
+            "slot": 0,
+            "layer": 0
+          },
+          {
+            "request_id": 1,
+            "unit_index": 0,
+            "slot": 0,
+            "layer": 1
+          }
+        ],
+        "operations": [
+          {
+            "kind": "load",
+            "stop_index": null,
+            "request_id": 0,
+            "unit_index": 0,
+            "slot": 0,
+            "layer": 0
+          },
+          {
+            "kind": "load",
+            "stop_index": null,
+            "request_id": 1,
+            "unit_index": 0,
+            "slot": 0,
+            "layer": 1
+          },
+          {
+            "kind": "stage",
+            "stop_index": 0,
+            "request_id": 1,
+            "unit_index": 0,
+            "slot": 0,
+            "layer": 1,
+            "staging_position": 0
+          },
+          {
+            "kind": "deliver",
+            "stop_index": 0,
+            "request_id": 0,
+            "unit_index": 0,
+            "slot": 0,
+            "layer": 0
+          },
+          {
+            "kind": "restore",
+            "stop_index": 0,
+            "request_id": 1,
+            "unit_index": 0,
+            "slot": 0,
+            "layer": 0,
+            "staging_position": 0
+          },
+          {
+            "kind": "deliver",
+            "stop_index": 1,
+            "request_id": 1,
+            "unit_index": 0,
+            "slot": 0,
+            "layer": 0
+          }
+        ],
+        "axle_states": [
+          {
+            "step": 0,
+            "front_min_g": {
+              "numerator": "12000000000",
+              "denominator": 4000
+            },
+            "front_max_g": {
+              "numerator": "12000000000",
+              "denominator": 4000
+            },
+            "rear_min_g": {
+              "numerator": "8000000000",
+              "denominator": 4000
+            },
+            "rear_max_g": {
+              "numerator": "8000000000",
+              "denominator": 4000
+            },
+            "gross_min_g": 5000000,
+            "gross_max_g": 5000000
+          },
+          {
+            "step": 1,
+            "front_min_g": {
+              "numerator": "13000000000",
+              "denominator": 4000
+            },
+            "front_max_g": {
+              "numerator": "13000000000",
+              "denominator": 4000
+            },
+            "rear_min_g": {
+              "numerator": "9000000000",
+              "denominator": 4000
+            },
+            "rear_max_g": {
+              "numerator": "9000000000",
+              "denominator": 4000
+            },
+            "gross_min_g": 5500000,
+            "gross_max_g": 5500000
+          },
+          {
+            "step": 2,
+            "front_min_g": {
+              "numerator": "14000000000",
+              "denominator": 4000
+            },
+            "front_max_g": {
+              "numerator": "14000000000",
+              "denominator": 4000
+            },
+            "rear_min_g": {
+              "numerator": "10000000000",
+              "denominator": 4000
+            },
+            "rear_max_g": {
+              "numerator": "10000000000",
+              "denominator": 4000
+            },
+            "gross_min_g": 6000000,
+            "gross_max_g": 6000000
+          },
+          {
+            "step": 3,
+            "front_min_g": {
+              "numerator": "13000000000",
+              "denominator": 4000
+            },
+            "front_max_g": {
+              "numerator": "13000000000",
+              "denominator": 4000
+            },
+            "rear_min_g": {
+              "numerator": "9000000000",
+              "denominator": 4000
+            },
+            "rear_max_g": {
+              "numerator": "9000000000",
+              "denominator": 4000
+            },
+            "gross_min_g": 5500000,
+            "gross_max_g": 5500000
+          },
+          {
+            "step": 4,
+            "front_min_g": {
+              "numerator": "12000000000",
+              "denominator": 4000
+            },
+            "front_max_g": {
+              "numerator": "12000000000",
+              "denominator": 4000
+            },
+            "rear_min_g": {
+              "numerator": "8000000000",
+              "denominator": 4000
+            },
+            "rear_max_g": {
+              "numerator": "8000000000",
+              "denominator": 4000
+            },
+            "gross_min_g": 5000000,
+            "gross_max_g": 5000000
+          },
+          {
+            "step": 5,
+            "front_min_g": {
+              "numerator": "13000000000",
+              "denominator": 4000
+            },
+            "front_max_g": {
+              "numerator": "13000000000",
+              "denominator": 4000
+            },
+            "rear_min_g": {
+              "numerator": "9000000000",
+              "denominator": 4000
+            },
+            "rear_max_g": {
+              "numerator": "9000000000",
+              "denominator": 4000
+            },
+            "gross_min_g": 5500000,
+            "gross_max_g": 5500000
+          },
+          {
+            "step": 6,
+            "front_min_g": {
+              "numerator": "12000000000",
+              "denominator": 4000
+            },
+            "front_max_g": {
+              "numerator": "12000000000",
+              "denominator": 4000
+            },
+            "rear_min_g": {
+              "numerator": "8000000000",
+              "denominator": 4000
+            },
+            "rear_max_g": {
+              "numerator": "8000000000",
+              "denominator": 4000
+            },
+            "gross_min_g": 5000000,
+            "gross_max_g": 5000000
+          }
+        ],
+        "stops": [
+          {
+            "stop_index": 0,
+            "task_id": 0,
+            "arrival_sec": 0,
+            "service_start_sec": 0,
+            "departure_sec": 120,
+            "base_service_sec": 60,
+            "extra_service_sec": 60,
+            "extra_moves": 2,
+            "extra_fee_units": 5
+          },
+          {
+            "stop_index": 1,
+            "task_id": 1,
+            "arrival_sec": 120,
+            "service_start_sec": 120,
+            "departure_sec": 180,
+            "base_service_sec": 60,
+            "extra_service_sec": 0,
+            "extra_moves": 0,
+            "extra_fee_units": 0
+          }
+        ],
+        "extra_moves": 2,
+        "extra_service_sec": 60,
+        "extra_fee_units": 5
+      }
+    ],
+    "unassigned_checks": [],
+    "frontier_budget": 256
+  }
+}
