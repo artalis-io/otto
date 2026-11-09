@@ -88,6 +88,13 @@ static int unit(const ShJsonValue *object, SGLoadingUnit *u) {
 SGStatus sg_loading_build_json(SGContext *ctx, const ShJsonValue *value) {
     if (!value)
         return SG_STATUS_OK;
+    if (sh_json_as_double(sh_json_get(value, "version"), -1) == 2)
+        return sg_loading_v2_build_json(ctx, value);
+    uint64_t unsupported_version;
+    if (number(sh_json_get(value, "version"), UINT32_MAX, &unsupported_version) && unsupported_version > 2) {
+        SGLoadingV2Config unsupported = {sizeof(unsupported), (uint32_t)unsupported_version, SG_LOADING_V2_STACKING, 0, 0};
+        return sg_loading_v2_set_config(ctx, &unsupported);
+    }
     uint64_t version, budget;
     const char *mode = sh_json_as_string(sh_json_get(value, "mode"), NULL);
     if (!field(value, "version", 1, &version) || version != 1 || !mode || strcmp(mode, "hard") ||
@@ -177,6 +184,13 @@ static const char *reason(SGLoadingReason value) {
 void sg_loading_write_json(const SGContext *ctx, ShJsonWriter *w) {
     if (!ctx->hard_loading)
         return;
+    if (ctx->loading_v2.schema_version == 2) {
+        SGLoadingV2Report *report = NULL;
+        if (sg_loading_v2_solution_report(ctx, &report) == SG_STATUS_OK)
+            sg_loading_v2_write_report(w, report);
+        sg_loading_v2_report_free(report);
+        return;
+    }
     sh_json_write_key(w, "loading");
     sh_json_write_object_start(w);
     sh_json_write_kv_int(w, "version", 1);

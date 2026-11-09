@@ -19,12 +19,19 @@
 #include "sh_arena.h"
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
+#include "../src/sg_loading_json.h"
 
 static int write_stdout(void *ctx, const char *data, size_t len) {
     return fwrite(data, 1, len, (FILE *)ctx) == len ? 0 : -1;
 }
 
 int main(int argc, char **argv) {
+    if (argc == 2 && !strcmp(argv[1], "--capabilities")) {
+        ShJsonWriter w;sh_json_writer_init(&w,write_stdout,stdout);
+        sg_loading_v2_write_capabilities(&w);fputc('\n',stdout);
+        return sh_json_writer_error(&w)?1:0;
+    }
     if (argc < 2) {
         fprintf(stderr, "usage: %s <request.json>  > solution.json\n", argv[0]);
         return 2;
@@ -48,6 +55,14 @@ int main(int argc, char **argv) {
     if (!arena || sh_json_parse(buf, (size_t)sz, arena, &root) != SH_JSON_OK || !root) {
         fprintf(stderr, "surge_solve: JSON parse failed\n");
         free(buf); if (arena) sh_arena_free(arena); return 1;
+    }
+    if (sh_json_as_double(sh_json_get(sh_json_get(root,"loading"),"version"),-1)>=2) {
+        int status=500;size_t length=0;
+        char *response=sg_api_solve(buf,(size_t)sz,&status,&length);
+        free(buf);sh_arena_free(arena);
+        if(!response)return 1;
+        int ok=fwrite(response,1,length,stdout)==length;fputc('\n',stdout);free(response);
+        return ok&&status==200?0:1;
     }
     free(buf);
 

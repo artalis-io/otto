@@ -18,6 +18,7 @@
 #include "../src/sg_time_budget.h"
 #include "../src/sg_neighbor.h"
 #include "../src/sg_profile_matrix.h"
+#include "../src/sg_axle.h"
 
 /* Construction method enum for pluggable heuristics */
 typedef enum {
@@ -393,6 +394,8 @@ typedef struct {
     } compartments[SG_MAX_COMPARTMENTS_PER_VEHICLE];
     uint8_t num_compartments;   /* 0..8 */
     SGLoadingVehicle *loading; /* owned by master; immutable in worker clones */
+    SGAxleProfile *axles;
+    char loading_profile_sha256[65];
 } SGVehicleRecord;
 
 typedef struct {
@@ -443,11 +446,13 @@ typedef struct {
     uint32_t *precedence_after;        /* [num_prec_after] request IDs that must start after me */
     uint16_t num_prec_after;
     SGLoadingUnit *loading_units;
+    SGAxleSignedInterval *loading_cg;
     uint32_t loading_count;
     uint8_t has_loading_units;
 } SGRequestRecord;
 
 typedef struct SGLoadingCache SGLoadingCache;
+typedef struct SGLoadingV2Cache SGLoadingV2Cache;
 
 #ifdef SG_LOADING_PROFILE
 typedef struct {
@@ -464,6 +469,15 @@ struct SGContext {
     uint64_t loading_node_budget;
     const _Atomic uint8_t *parent_cancel;
     SGLoadingCache *loading_cache; /* worker-local, never shared between clones */
+    SGLoadingV2Config loading_v2;
+    SGLoadingV2Error loading_v2_error;
+    SGLoadingV2Cache *loading_v2_cache;
+    SGLoadingV2Report *loading_v2_committed_report;
+    uint8_t loading_v2_has_departure;
+    uint32_t loading_v2_departure_vehicle;
+    double loading_v2_departure;
+    SGLoadingShouldStop loading_v2_stop;
+    void *loading_v2_stop_data;
     SGConfig config;
     SGDemandSignConvention demand_sign_convention;
     uint32_t dimension_count;
@@ -1167,6 +1181,9 @@ int sg_route_eval_insertion(const SGContext *ctx, const SGRouteSolution *sol,
                             uint32_t *candidate_route, double *capacity_scratch,
                             double *score_out, double *new_route_distance_out);
 void sg_loading_invalidate(SGContext *ctx);
+void sg_loading_v2_report_invalidate(SGContext *ctx);
+void sg_loading_v2_clear_error(SGContext *ctx);
+int sg_loading_v2_apply_departure(const SGContext *ctx,uint32_t vehicle,double *time);
 SGStatus sg_loading_model_validate(SGContext *ctx);
 int sg_loading_stops_ok(const SGContext *ctx, uint32_t vehicle,
                        const SGRouteStop *stops, uint32_t count);

@@ -1,6 +1,7 @@
 # Proposed loading-v2 examples
 
-All files are **synthetic design examples, not implemented Surge inputs**.
+All files are **synthetic examples**. The `axles.request.json` example now runs
+on the axle implementation branch; reshuffling/combined files remain design-only.
 No customer data, measured vehicle defaults or verified profile records are here.
 Current loading-v1 binaries must reject the required v2 declaration.
 

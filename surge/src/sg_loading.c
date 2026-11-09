@@ -1,12 +1,13 @@
 #include "sg_loading.h"
+#include "sg_loading_search.h"
 #include <string.h>
 #include <limits.h>
 
-static int inputs_ok(const SGLoadingVehicle *v, const SGLoadingUnit *u, uint32_t n) {
+static int inputs_ok(const SGLoadingVehicle *v, const SGLoadingUnit *u, uint32_t n, int allow_zero_limits) {
     if (!v || (n && !u) || n > SG_LOADING_MAX_UNITS ||
         !v->slot_count || v->slot_count > SG_LOADING_MAX_SLOTS ||
         !v->max_layers || v->max_layers > SG_LOADING_MAX_LAYERS ||
-        !v->clearance_mm || !v->max_stack_weight_g || !v->payload_g ||
+        (!allow_zero_limits && (!v->clearance_mm || !v->max_stack_weight_g || !v->payload_g)) ||
         !v->class_count || v->class_count > SG_LOADING_MAX_CLASSES ||
         (v->access != SG_LOADING_SIDE_FREE && v->access != SG_LOADING_REAR_LIFO)) return 0;
     for (uint32_t i = 0; i < v->slot_count; ++i)
@@ -21,9 +22,9 @@ static int inputs_ok(const SGLoadingVehicle *v, const SGLoadingUnit *u, uint32_t
 
 /* Deliberately recompute all geometry/support/access rules from the certificate,
  * independently of search state and pruning. Integer subtraction avoids overflow. */
-SGStatus sg_loading_validate(const SGLoadingVehicle *v, const SGLoadingUnit *u,
-                            uint32_t n, const SGLoadingPlacement *p) {
-    if (!inputs_ok(v, u, n) || (n && !p)) return SG_STATUS_INVALID_ARG;
+static SGStatus validate(const SGLoadingVehicle *v, const SGLoadingUnit *u,
+                         uint32_t n, const SGLoadingPlacement *p, int allow_zero_limits) {
+    if (!inputs_ok(v, u, n, allow_zero_limits) || (n && !p)) return SG_STATUS_INVALID_ARG;
     uint64_t payload = 0;
     for (uint32_t i = 0; i < n; ++i) {
         if (p[i].slot >= v->slot_count || p[i].layer >= v->max_layers)
@@ -67,15 +68,26 @@ SGStatus sg_loading_validate(const SGLoadingVehicle *v, const SGLoadingUnit *u,
     return SG_STATUS_OK;
 }
 
+
+SGStatus sg_loading_validate(const SGLoadingVehicle *v, const SGLoadingUnit *u,
+                            uint32_t n, const SGLoadingPlacement *p) {
+    return validate(v,u,n,p,0);
+}
+SGStatus sg_loading_validate_joint(const SGLoadingVehicle *v, const SGLoadingUnit *u,
+                                  uint32_t n, const SGLoadingPlacement *p) {
+    return validate(v,u,n,p,1);
+}
+static SGStatus check_common(const SGLoadingVehicle *v, const SGLoadingUnit *u,
+    uint32_t n, uint64_t budget, SGLoadingShouldStop stop, void *user_data,
+    SGLoadingLeafCheck leaf_check, void *leaf_data, int allow_zero_limits, SGLoadingResult *r);
+
 typedef struct {
     const SGLoadingVehicle *v;
     const SGLoadingUnit *u;
     uint32_t n;
-    uint64_t budget, nodes;
-    int exhausted;
-    int interrupted;
-    SGLoadingShouldStop should_stop;
-    void *user_data;
+    SGLoadingWork work;
+    SGLoadingLeafCheck leaf_check;
+    void *leaf_data;
     uint32_t order[SG_LOADING_MAX_UNITS];
     uint32_t used[SG_LOADING_MAX_SLOTS];
     uint32_t stack[SG_LOADING_MAX_SLOTS][SG_LOADING_MAX_LAYERS];
@@ -114,12 +126,9 @@ static int fits(const Search *s, uint32_t id, uint32_t slot) {
 }
 
 static int search(Search *s, uint32_t pos) {
-    if (s->should_stop && s->should_stop(s->user_data)) {
-        s->exhausted = s->interrupted = 1; return 0;
-    }
-    if (s->nodes == s->budget) { s->exhausted = 1; return 0; }
-    ++s->nodes;
-    if (pos == s->n) return 1;
+    if (!sg_loading_work_enter(&s->work)) return 0;
+    if (pos == s->n)
+        return !s->leaf_check || s->leaf_check(s->placements, &s->work, s->leaf_data);
     for (uint32_t pick = pos; pick < s->n; ++pick) {
         uint32_t id = s->order[pick];
         s->order[pick] = s->order[pos]; s->order[pos] = id;
@@ -134,7 +143,7 @@ static int search(Search *s, uint32_t pos) {
             --s->used[slot];
             s->height[slot] -= s->u[id].height_mm;
             s->weight[slot] -= s->u[id].weight_g;
-            if (s->exhausted) return 0;
+            if (s->work.exhausted) return 0;
         }
         s->order[pos] = s->order[pick]; s->order[pick] = id;
     }
@@ -148,10 +157,21 @@ SGStatus sg_loading_check(const SGLoadingVehicle *v, const SGLoadingUnit *u,
 
 SGStatus sg_loading_check_controlled(const SGLoadingVehicle *v, const SGLoadingUnit *u,
     uint32_t n, uint64_t budget, SGLoadingShouldStop stop, void *user_data, SGLoadingResult *r) {
+    return check_common(v,u,n,budget,stop,user_data,NULL,NULL,0,r);
+}
+
+SGStatus sg_loading_check_joint(const SGLoadingVehicle *v, const SGLoadingUnit *u,
+    uint32_t n, uint64_t budget, SGLoadingShouldStop stop, void *user_data,
+    SGLoadingLeafCheck leaf_check, void *leaf_data, SGLoadingResult *r) {
+    return check_common(v,u,n,budget,stop,user_data,leaf_check,leaf_data,1,r);
+}
+static SGStatus check_common(const SGLoadingVehicle *v, const SGLoadingUnit *u,
+    uint32_t n, uint64_t budget, SGLoadingShouldStop stop, void *user_data,
+    SGLoadingLeafCheck leaf_check, void *leaf_data, int allow_zero_limits, SGLoadingResult *r) {
     if (!r) return SG_STATUS_INVALID_ARG;
     memset(r, 0, sizeof(*r)); r->outcome = SG_LOADING_UNKNOWN;
     r->reason = SG_LOADING_UNSUPPORTED;
-    if (!inputs_ok(v, u, n)) return SG_STATUS_INVALID_ARG;
+    if (!inputs_ok(v, u, n, allow_zero_limits)) return SG_STATUS_INVALID_ARG;
     uint64_t payload = 0, total_height = 0;
     for (uint32_t i = 0; i < n; ++i) {
         total_height += u[i].height_mm;
@@ -162,8 +182,9 @@ SGStatus sg_loading_check_controlled(const SGLoadingVehicle *v, const SGLoadingU
     }
     if (n > v->slot_count * v->max_layers ||
         total_height > (uint64_t)v->slot_count * v->clearance_mm) goto capacity;
-    Search s = {0}; s.v = v; s.u = u; s.n = n; s.budget = budget;
-    s.should_stop = stop; s.user_data = user_data;
+    Search s = {0}; s.v = v; s.u = u; s.n = n; s.work.budget = budget;
+    s.work.should_stop = stop; s.work.user_data = user_data;
+    s.leaf_check = leaf_check; s.leaf_data = leaf_data;
     for (uint32_t i = 0; i < n; ++i) s.order[i] = i;
     /* Every legal stack has a bottom-to-top order sorted by nonincreasing stop
      * in rear mode. Both modes explore vertical permutations too; search
@@ -175,15 +196,15 @@ SGStatus sg_loading_check_controlled(const SGLoadingVehicle *v, const SGLoadingU
             s.order[j] = id;
         }
     if (search(&s, 0)) {
-        r->nodes = s.nodes;
-        if (sg_loading_validate(v, u, n, s.placements) != SG_STATUS_OK) return SG_STATUS_ERROR;
+        r->nodes = s.work.nodes;
+        if (validate(v, u, n, s.placements, allow_zero_limits) != SG_STATUS_OK) return SG_STATUS_ERROR;
         r->outcome = SG_LOADING_FEASIBLE; r->reason = SG_LOADING_WITNESS; r->count = n;
         memcpy(r->placements, s.placements, n * sizeof(*r->placements));
     } else {
-        r->nodes = s.nodes;
-        r->outcome = s.exhausted ? SG_LOADING_UNKNOWN : SG_LOADING_INFEASIBLE;
-        r->reason = s.interrupted ? SG_LOADING_INTERRUPTED :
-            s.exhausted ? SG_LOADING_BUDGET : SG_LOADING_NO_ARRANGEMENT;
+        r->nodes = s.work.nodes;
+        r->outcome = s.work.exhausted ? SG_LOADING_UNKNOWN : SG_LOADING_INFEASIBLE;
+        r->reason = s.work.interrupted ? SG_LOADING_INTERRUPTED :
+            s.work.exhausted ? SG_LOADING_BUDGET : SG_LOADING_NO_ARRANGEMENT;
     }
     return SG_STATUS_OK;
 capacity:

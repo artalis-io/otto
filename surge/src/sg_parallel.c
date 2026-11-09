@@ -57,6 +57,8 @@ static SGStatus sg_context_clone_init(SGContext *clone, const SGContext *src) {
     memcpy((char *)clone + after_cancel, (const char *)src + after_cancel,
            sizeof(SGContext) - after_cancel);
     clone->loading_cache = NULL;
+    clone->loading_v2_cache = NULL;
+    clone->loading_v2_committed_report = NULL;
 #ifdef SG_LOADING_PROFILE
     memset(&clone->loading_profile, 0, sizeof(clone->loading_profile));
 #endif
@@ -125,6 +127,9 @@ static void sg_context_clone_free(SGContext *clone, SGContext *master) {
     (void)master;
 #endif
     free(clone->loading_cache);
+    free(clone->loading_v2_cache);
+    clone->loading_v2_cache = NULL;
+    sg_loading_v2_report_invalidate(clone);
     clone->loading_cache = NULL;
     sh_rng_free(clone->op_rng);
     clone->op_rng = NULL;
@@ -1189,10 +1194,18 @@ pop_cleanup:
 }
 
 SGStatus sg_solve_parallel(SGContext *ctx, uint32_t num_threads) {
+    if (ctx) {
+        sg_loading_v2_report_invalidate(ctx);
+        if (ctx->loading_v2.schema_version) sg_loading_v2_clear_error(ctx);
+    }
     return sg_cancel_result(ctx, sg_solve_parallel_impl(ctx, num_threads));
 }
 
 SGStatus sg_solve_population(SGContext *ctx, const SGPopulationConfig *cfg) {
+    if (ctx) {
+        sg_loading_v2_report_invalidate(ctx);
+        if (ctx->loading_v2.schema_version) sg_loading_v2_clear_error(ctx);
+    }
     return sg_cancel_result(ctx, sg_solve_population_impl(ctx, cfg));
 }
 

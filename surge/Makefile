@@ -22,7 +22,7 @@ SRCS = src/sg_context.c src/sg_solution.c src/sg_cost.c src/sg_feasibility.c \
        src/sg_construct.c src/sg_construct_cfrs.c src/sg_destroy.c src/sg_repair.c \
        src/sg_postprocess.c src/sg_solve.c src/sg_reader.c src/sg_api.c \
        src/sg_parallel.c src/sg_validate.c src/sg_penalty.c src/sg_time_budget.c \
-       src/sg_neighbor.c src/sg_profile_matrix.c src/sg_concat.c src/sg_loading.c src/sg_loading_model.c src/sg_loading_json.c
+       src/sg_neighbor.c src/sg_profile_matrix.c src/sg_concat.c src/sg_loading.c src/sg_loading_model.c src/sg_loading_json.c src/sg_axle.c src/sg_loading_v2.c src/sg_loading_v2_json.c
 OBJS = $(SRCS:.c=.o)
 
 # Not LIB: that is MSVC's library search path, and make re-exports any
@@ -133,12 +133,15 @@ $(LIB_FILE): $(OBJS) ../arbor/libarbor.a ../shared/libshared.a
 	$(AR_CMD)$@ $(OBJS)
 
 # Context/record layout must never be mixed across incremental objects.
-$(OBJS): include/sg_internal.h include/surge.h include/sg_types.h include/sg_loading.h
+$(OBJS): include/sg_internal.h include/surge.h include/sg_types.h include/sg_loading.h include/sg_loading_v2.h
 
 src/%.o: src/%.c
 	$(CC) $(CFLAGS) $(INCLUDES) -c $< $(OBJ_OUT)$@
 
 src/sg_api.o: src/sg_api_counts.h
+src/sg_axle.o: src/sg_axle.h src/sg_loading_search.h
+src/sg_loading.o: src/sg_loading_search.h
+src/sg_loading_model.o src/sg_loading_v2.o src/sg_loading_v2_json.o: src/sg_loading_v2_internal.h src/sg_axle.h
 
 $(TEST_BIN): tests/test_surge.c tests/test_loading_integration.h tests/test_validation_oom.h src/sg_validate.c $(LIB_FILE) ../arbor/libarbor.a ../shared/libshared.a src/sg_api_counts.h
 	$(CC) $(CFLAGS) $(INCLUDES) $< $(call link_lib,.,surge) $(call link_lib,../arbor,arbor) $(call link_lib,../shared,shared) $(LDFLAGS) $(EXE_OUT)$@
@@ -170,6 +173,15 @@ loading-benchmark-test: bench_loading_driver bench_loading_probe bench_loading_d
 
 $(TRANSPORT_TEST_BIN): tests/test_transport_direct.c $(LIB_FILE) ../arbor/libarbor.a ../shared/libshared.a
 	$(CC) $(CFLAGS) $(INCLUDES) $< $(call link_lib,.,surge) $(call link_lib,../arbor,arbor) $(call link_lib,../shared,shared) $(LDFLAGS) $(EXE_OUT)$@
+
+# Exact independent Fraction oracle (POSIX compiler; CI's Linux Surge job).
+.PHONY: axle-oracle-test loading-v2-cli-test
+loading-v2-cli-test: $(SURGE_SOLVE_BIN)
+	python3 tests/test_loading_v2_json.py
+
+axle-oracle-test:
+	python3 tests/test_axle_oracle.py
+	python3 tests/test_axle_search_oracle.py
 
 loading-cli-test: $(SURGE_SOLVE_BIN)
 	python3 tests/test_loading_cli.py
@@ -209,14 +221,30 @@ $(BENCH_TUNE_BIN): benchmarks/bench_tune.c benchmarks/sg_bench_utils.h $(LIB_FIL
 src/sg_loading.o src/sg_loading_model.o src/sg_loading_json.o: include/sg_loading.h
 src/sg_loading_json.o src/sg_api.o: src/sg_loading_json.h
 
-test_loading: tests/test_loading.c tests/loading_oracle.h src/sg_loading.c include/sg_loading.h include/sg_types.h
+test_loading: tests/test_loading.c tests/loading_oracle.h src/sg_loading.c src/sg_loading_search.h include/sg_loading.h include/sg_types.h
 	$(CC) $(CFLAGS) $(INCLUDES) tests/test_loading.c src/sg_loading.c $(LDFLAGS) $(EXE_OUT)$@
 
-test: test_loading $(TEST_BIN) $(TEST_TB_BIN) $(TEST_NB_BIN) $(TEST_PM_BIN) $(TRANSPORT_TEST_BIN)
+test_loading_v2_cancel: tests/test_loading_v2_cancel.c tests/test_loading_v2.c $(LIB_FILE) ../arbor/libarbor.a ../shared/libshared.a
+	$(CC) $(CFLAGS) $(INCLUDES) $< $(call link_lib,.,surge) $(call link_lib,../arbor,arbor) $(call link_lib,../shared,shared) $(LDFLAGS) $(EXE_OUT)$@
+
+test_loading_v2_oom: tests/test_loading_v2_oom.c tests/test_loading_v2.c src/sg_loading_v2.c $(LIB_FILE) ../arbor/libarbor.a ../shared/libshared.a
+	$(CC) $(CFLAGS) $(INCLUDES) $< $(call link_lib,.,surge) $(call link_lib,../arbor,arbor) $(call link_lib,../shared,shared) $(LDFLAGS) $(EXE_OUT)$@
+
+test_loading_v2: tests/test_loading_v2.c $(LIB_FILE) ../arbor/libarbor.a ../shared/libshared.a
+	$(CC) $(CFLAGS) $(INCLUDES) $< $(call link_lib,.,surge) $(call link_lib,../arbor,arbor) $(call link_lib,../shared,shared) $(LDFLAGS) $(EXE_OUT)$@
+
+test_axle: tests/test_axle.c src/sg_axle.c src/sg_loading.c src/sg_axle.h src/sg_loading_search.h include/sg_loading.h
+	$(CC) $(CFLAGS) $(INCLUDES) tests/test_axle.c src/sg_axle.c src/sg_loading.c $(LDFLAGS) $(EXE_OUT)$@
+
+test: test_axle test_loading test_loading_v2 test_loading_v2_oom test_loading_v2_cancel $(TEST_BIN) $(TEST_TB_BIN) $(TEST_NB_BIN) $(TEST_PM_BIN) $(TRANSPORT_TEST_BIN)
 	./$(TRANSPORT_TEST_BIN)
 	./$(TEST_TB_BIN)
 	./$(TEST_NB_BIN)
 	./test_loading
+	./test_axle
+	./test_loading_v2
+	./test_loading_v2_oom
+	./test_loading_v2_cancel
 	./$(TEST_PM_BIN)
 	./$(TEST_BIN)
 
@@ -425,7 +453,7 @@ tsan: $(TSAN_TEST_BIN)
 
 clean:
 	rm -f $(BUILD_STAMP)
-	rm -f test_loading bench_loading_driver bench_loading_driver_profile bench_loading_probe $(OBJS) $(LIB_FILE) $(TEST_BIN) $(TEST_TB_BIN) $(TEST_NB_BIN) $(TEST_PM_BIN) $(TRANSPORT_TEST_BIN) $(BENCH_SOL_BIN) $(BENCH_PD_BIN) $(BENCH_CORD_BIN) $(BENCH_TUNE_BIN) $(SHARED_LIB) \
+	rm -f test_axle test_loading test_loading_v2_cancel test_loading_v2 test_loading_v2_oom bench_loading_driver bench_loading_driver_profile bench_loading_probe $(OBJS) $(LIB_FILE) $(TEST_BIN) $(TEST_TB_BIN) $(TEST_NB_BIN) $(TEST_PM_BIN) $(TRANSPORT_TEST_BIN) $(BENCH_SOL_BIN) $(BENCH_PD_BIN) $(BENCH_CORD_BIN) $(BENCH_TUNE_BIN) $(SHARED_LIB) \
 	  $(FUZZ_BIN) $(TSAN_TEST_BIN)
 	rm -f $(FUZZ_API_BIN) $(FUZZ_API_BIN).exe
 

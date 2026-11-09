@@ -1786,5 +1786,6 @@ static SGStatus sg_solve_impl(SGContext *ctx) {
 }
 
 SGStatus sg_solve(SGContext *ctx) {
+    if(ctx){sg_loading_v2_report_invalidate(ctx);if(ctx->loading_v2.schema_version)sg_loading_v2_clear_error(ctx);}
     return sg_cancel_result(ctx, sg_solve_impl(ctx));
 }

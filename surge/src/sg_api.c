@@ -5,6 +5,8 @@
  */
 
 #include "sg_api.h"
+#include "sg_internal.h"
+#include "sg_parallel.h"
 #include "sg_api_counts.h"
 #include "sg_loading_json.h"
 #include "surge.h"
@@ -1650,6 +1652,19 @@ SGStatus sg_api_write_solution(const SGContext *ctx, ShJsonWriter *w,
                                 SGStatus solve_status) {
     if (!ctx || !w) return SG_STATUS_INVALID_ARG;
 
+    if (ctx->loading_v2.schema_version == 2 &&
+        ((solve_status != SG_STATUS_OK && solve_status != SG_STATUS_LIMIT) ||
+         (solve_status == SG_STATUS_LIMIT && ctx->loading_v2_error.code != SG_LOADING_V2_ERROR_NONE))) {
+        /* A rejected replay preserves the old snapshot for explicit inspection,
+         * but must not serialize that old plan as this request's result. */
+        sg_loading_v2_write_error(ctx, w, solve_status);
+        return sh_json_writer_error(w) ? SG_STATUS_ERROR : SG_STATUS_OK;
+    }
+    SGLoadingV2Report *loading_report = NULL;
+    if (ctx->loading_v2.schema_version == 2) {
+        SGStatus report_status = sg_loading_v2_solution_report(ctx, &loading_report);
+        if (report_status != SG_STATUS_OK) return report_status;
+    }
     sh_json_write_object_start(w);
 
     /* Serialize the solution whenever one is committed, even under a non-OK
@@ -1845,7 +1860,8 @@ SGStatus sg_api_write_solution(const SGContext *ctx, ShJsonWriter *w,
             }
         }
 
-        sg_loading_write_json(ctx, w);
+        if (loading_report) sg_loading_v2_write_report(w, loading_report);
+        else sg_loading_write_json(ctx, w);
 
         /* Routes */
         route_count = sg_solution_get_route_count(ctx);
@@ -1954,6 +1970,7 @@ SGStatus sg_api_write_solution(const SGContext *ctx, ShJsonWriter *w,
 
     sh_json_write_object_end(w);
 
+    sg_loading_v2_report_free(loading_report);
     return sh_json_writer_error(w) ? SG_STATUS_ERROR : SG_STATUS_OK;
 }
 
@@ -1977,7 +1994,13 @@ char *sg_api_solve(const char *json_body, size_t body_len,
         return make_error_json(400, "empty request body", out_len);
     }
 
-    arena = sh_arena_create(body_len * 2 + 4096);
+    /* Compact JSON can require many value nodes per input byte. Match the
+     * CLI parser's allowance and guard the size calculation before allocation. */
+    if (body_len > (SIZE_MAX - 4096) / 64) {
+        if (status_code) *status_code = 400;
+        return make_error_json(400, "request too large", out_len);
+    }
+    arena = sh_arena_create(body_len * 64 + 4096);
     if (!arena) {
         if (status_code) *status_code = 500;
         return make_error_json(500, "out of memory", out_len);
@@ -2000,6 +2023,25 @@ char *sg_api_solve(const char *json_body, size_t body_len,
     build_status = sg_api_build_model(ctx, root);
 
     if (build_status != SG_STATUS_OK) {
+        if (ctx->loading_v2_error.code != SG_LOADING_V2_ERROR_NONE) {
+            int code = build_status == SG_STATUS_OUT_OF_MEMORY || build_status == SG_STATUS_ERROR
+                           ? 500
+                           : 400;
+            sh_json_buf_init(&jb);
+            sh_json_writer_init(&w, sh_json_buf_write, &jb);
+            sg_loading_v2_write_error(ctx, &w, build_status);
+            sh_arena_free(arena);
+            sg_free(ctx);
+            if (status_code)
+                *status_code = code;
+            if (out_len)
+                *out_len = jb.len;
+            if (sh_json_writer_error(&w)) {
+                sh_json_buf_free(&jb);
+                return NULL;
+            }
+            return sh_json_buf_take(&jb);
+        }
         sh_arena_free(arena);
         {
             const char *err = sg_get_last_error(ctx);
@@ -2010,9 +2052,115 @@ char *sg_api_solve(const char *json_body, size_t body_len,
                 resp = make_error_json(400, "failed to build model", out_len);
             }
             sg_free(ctx);
-            if (status_code) *status_code = 400;
+            if (status_code)
+                *status_code = 400;
             return resp;
         }
+    }
+
+    if (ctx->loading_v2.schema_version == 2) {
+        ShJsonValue *plan = sh_json_get(root, "plan");
+        ShJsonValue *witnesses = sh_json_get(root, "loading_witnesses");
+        if (plan) {
+            SGPlanRoute *routes = NULL;
+            uint32_t count = 0;
+            uint32_t *tasks = NULL;
+            uint8_t **flags = NULL;
+            solve_status = SG_STATUS_INVALID_ARG;
+            if (sg_loading_v2_plan_json_shape(ctx, plan) &&
+                parse_plan_routes(plan, &routes, &count, &tasks) == 0) {
+                flags = calloc(count ? count : 1, sizeof(*flags));
+                int ok = flags != NULL;
+                for (uint32_t i = 0; i < count && ok; i++) {
+                    const ShJsonValue *list =
+                        sh_json_get(sh_json_array_get(plan, i), "trip_starts");
+                    if (!list)
+                        continue;
+                    if (sh_json_type(list) != SH_JSON_ARRAY ||
+                        sh_json_array_len(list) != routes[i].task_count) {
+                        ok = 0;
+                        break;
+                    }
+                    flags[i] = calloc(routes[i].task_count ? routes[i].task_count : 1, 1);
+                    if (!flags[i]) {
+                        ok = 0;
+                        break;
+                    }
+                    for (uint32_t j = 0; j < routes[i].task_count; j++) {
+                        const ShJsonValue *v = sh_json_array_get(list, j);
+                        double d = sh_json_as_double(v, -1);
+                        if (sh_json_type(v) != SH_JSON_NUMBER || (d != 0 && d != 1)) {
+                            ok = 0;
+                            break;
+                        }
+                        flags[i][j] = (uint8_t)d;
+                    }
+                }
+                if (ok)
+                    solve_status = sg_loading_v2_validate_json(ctx, witnesses, count, routes,
+                                                               (const uint8_t *const *)flags);
+            }
+            if (flags)
+                for (uint32_t i = 0; i < count; i++)
+                    free(flags[i]);
+            free(flags);
+            free(routes);
+            free(tasks);
+        } else if (witnesses) {
+            sg_set_error(ctx, "loading_witnesses requires a fixed plan");
+            solve_status = SG_STATUS_INVALID_ARG;
+        } else {
+            const ShJsonValue *cfg = sh_json_get(root, "config");
+            if (sh_json_as_bool(sh_json_get(cfg, "population"), false)) {
+#ifdef SG_HAS_THREADS
+                SGPopulationConfig pop = {0};
+                int64_t threads = sh_json_as_int(sh_json_get(cfg, "population_threads"), 0);
+                int64_t generations = sh_json_as_int(sh_json_get(cfg, "population_generations"), 3);
+                pop.num_threads = threads < 0 ? 0 : threads > 256 ? 256 : (uint32_t)threads;
+                pop.num_generations = generations < 0      ? 3
+                                      : generations > 1000 ? 1000
+                                                           : (uint32_t)generations;
+                solve_status = sg_solve_population(ctx, &pop);
+#else
+                sg_set_error(ctx, "population search is unavailable in this build");
+                solve_status = SG_STATUS_NOT_IMPLEMENTED;
+#endif
+            } else
+                solve_status = sg_solve(ctx);
+        }
+        sh_arena_free(arena);
+        sh_json_buf_init(&jb);
+        sh_json_writer_init(&w, sh_json_buf_write, &jb);
+        int code = 200;
+        SGStatus written = SG_STATUS_OK;
+        if (solve_status == SG_STATUS_OK || (!plan && solve_status == SG_STATUS_LIMIT))
+            written = sg_api_write_solution(ctx, &w, solve_status);
+        else {
+            code = solve_status == SG_STATUS_INFEASIBLE || solve_status == SG_STATUS_LIMIT ? 422
+                   : solve_status == SG_STATUS_ERROR || solve_status == SG_STATUS_OUT_OF_MEMORY
+                       ? 500
+                       : 400;
+        }
+        if (code != 200 || written != SG_STATUS_OK) {
+            if (written != SG_STATUS_OK)
+                code = 500;
+            sh_json_buf_free(&jb);
+            sh_json_buf_init(&jb);
+            sh_json_writer_init(&w, sh_json_buf_write, &jb);
+            sg_loading_v2_write_error(ctx, &w, written != SG_STATUS_OK ? written : solve_status);
+        }
+        sg_free(ctx);
+        if (sh_json_writer_error(&w) || !jb.buf) {
+            sh_json_buf_free(&jb);
+            if (status_code)
+                *status_code = 500;
+            return make_error_json(500, "failed to write v2 response", out_len);
+        }
+        if (status_code)
+            *status_code = code;
+        if (out_len)
+            *out_len = jb.len;
+        return sh_json_buf_take(&jb);
     }
 
     /* Check for plan validation mode */
@@ -2023,11 +2171,11 @@ char *sg_api_solve(const char *json_body, size_t body_len,
             uint32_t num_plan_routes = 0;
             uint32_t *task_buf = NULL;
 
-            if (parse_plan_routes(plan_arr, &plan_routes, &num_plan_routes,
-                                  &task_buf) != 0) {
+            if (parse_plan_routes(plan_arr, &plan_routes, &num_plan_routes, &task_buf) != 0) {
                 sh_arena_free(arena);
                 sg_free(ctx);
-                if (status_code) *status_code = 400;
+                if (status_code)
+                    *status_code = 400;
                 return make_error_json(400, "invalid plan format", out_len);
             }
 
@@ -2256,6 +2404,8 @@ char *sg_api_version(size_t *out_len) {
 
     sh_json_write_object_start(&w);
     sh_json_write_kv_string(&w, "version", sg_version());
+    sh_json_write_key(&w, "loading_capabilities");
+    sg_loading_v2_write_capabilities(&w);
     sh_json_write_object_end(&w);
 
     if (sh_json_writer_error(&w) || !jb.buf) {

@@ -28,34 +28,30 @@
       "y": 0,
       "type": "delivery",
       "demand": [
-        500
+        -500
       ],
-      "service": 60,
-      "tw": [
-        0,
-        100000
-      ]
+      "service_seconds": 60,
+      "tw_early": 0,
+      "tw_late": 100000
     },
     {
       "x": 0,
       "y": 0,
       "type": "delivery",
       "demand": [
-        500
+        -500
       ],
-      "service": 60,
-      "tw": [
-        0,
-        100000
-      ]
+      "service_seconds": 60,
+      "tw_early": 0,
+      "tw_late": 100000
     }
   ],
   "requests": [
     {
-      "delivery_task": 0
+      "delivery_task_id": 0
     },
     {
-      "delivery_task": 1
+      "delivery_task_id": 1
     }
   ],
   "loading": {
