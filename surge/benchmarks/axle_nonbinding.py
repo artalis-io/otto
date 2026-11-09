@@ -9,9 +9,11 @@ import copy
 import hashlib
 import json
 from pathlib import Path
+import platform
 import statistics
 import sys
 from loading_quality import fixture, execute, atomic_json
+from loading_assess import assess
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'tests'))
 from loading_v2_reference import verify
 
@@ -35,9 +37,23 @@ def axle_model(model):
     return out
 
 
+def review(report, limits):
+    """Reuse the established equivalent-feasible-set release gates."""
+    rows = []
+    for row in report['runs']:
+        if row['variant'] not in ('v1', 'v2'):
+            raise ValueError('unknown axle comparison variant')
+        rows.append(dict(row, case='axle-nonbinding-equivalent',
+                         variant='baseline' if row['variant'] == 'v1' else 'current'))
+    if any(not row.get('valid') for row in rows):
+        return dict(passed=False, comparisons=[], error='invalid native benchmark output; use bench_loading_driver, not surge_solve')
+    return assess(dict(runs=rows, host=report['host'], complete=report['complete'],
+                       planned_runs=report['planned_runs']), limits)
+
+
 def main():
     p = argparse.ArgumentParser(description=__doc__)
-    p.add_argument('--binary', type=Path, required=True)
+    p.add_argument('--binary', type=Path, required=True, help='native bench_loading_driver adapter (not surge_solve)')
     p.add_argument('--output', type=Path, required=True)
     p.add_argument('--seconds', type=int, default=3)
     p.add_argument('--iterations', type=int, default=100)
@@ -59,8 +75,10 @@ def main():
     output = args.output.resolve(); output.mkdir(parents=True, exist_ok=True)
     binary = args.binary.resolve()
     report = dict(binary_sha256=hashlib.sha256(binary.read_bytes()).hexdigest(),
-                  runner_sha256=hashlib.sha256(Path(__file__).read_bytes()).hexdigest(), runs=[], complete=False)
+                  runner_sha256=hashlib.sha256(Path(__file__).read_bytes()).hexdigest(), runs=[], complete=False,
+                  host=dict(architecture=platform.machine(), system=platform.system()))
     planned = len(args.seeds) * len(args.budgets) * 2
+    report['planned_runs'] = planned
     for budget in args.budgets:
         for ordinal, seed in enumerate(args.seeds):
             v1 = fixture(args.orders, False)
@@ -89,8 +107,10 @@ def main():
                 distance_ratio=b.get('stats', {}).get('total_distance', 0)/a['stats']['total_distance'] if a.get('stats', {}).get('total_distance') else None))
         comparisons.append(dict(budget=budget, pairs=paired, median_throughput_ratio=statistics.median(r['throughput_ratio'] for r in paired)))
     report['comparisons'] = comparisons
+    limits = json.loads(Path(__file__).with_name('loading_thresholds.json').read_bytes())
+    report['review'] = review(report, limits)
     atomic_json(output / 'report.json', report)
-    if not all(r['valid'] for r in report['runs']): raise SystemExit(1)
+    if not report['review']['passed']: raise SystemExit(1)
 
 
 if __name__ == '__main__':

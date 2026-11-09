@@ -118,3 +118,6 @@ Measurements and binary/input hashes are retained outside Git under
 `data/otto-axle-loads-2026-11-08` in the controller workspace. AMD64/Windows CI,
 longer heterogeneous physical workloads, Cursus integration and measured customer
 facts remain explicit release/activation boundaries.
+
+Further synthetic coverage and the coverage-gap audit are documented in
+[surge-axle-physics-regression.md](surge-axle-physics-regression.md).

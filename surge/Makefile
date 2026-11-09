@@ -169,13 +169,17 @@ bench_loading_probe: benchmarks/bench_loading_probe.c $(LIB_FILE) ../arbor/libar
 
 loading-benchmark-test: bench_loading_driver bench_loading_probe bench_loading_driver_profile
 	python3 benchmarks/test_loading_quality.py
+	python3 benchmarks/test_axle_nonbinding.py
 	./bench_loading_probe
 
 $(TRANSPORT_TEST_BIN): tests/test_transport_direct.c $(LIB_FILE) ../arbor/libarbor.a ../shared/libshared.a
 	$(CC) $(CFLAGS) $(INCLUDES) $< $(call link_lib,.,surge) $(call link_lib,../arbor,arbor) $(call link_lib,../shared,shared) $(LDFLAGS) $(EXE_OUT)$@
 
 # Exact independent Fraction oracle (POSIX compiler; CI's Linux Surge job).
-.PHONY: axle-oracle-test loading-v2-cli-test
+.PHONY: axle-oracle-test loading-v2-cli-test axle-physics-test
+axle-physics-test: $(SURGE_SOLVE_BIN)
+	python3 tests/test_axle_physics.py
+
 loading-v2-cli-test: $(SURGE_SOLVE_BIN)
 	python3 tests/test_loading_v2_json.py
 
