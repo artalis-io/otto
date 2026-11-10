@@ -12,6 +12,18 @@ import tempfile
 
 ROOT = Path(__file__).resolve().parents[1]
 
+def load_library(directory):
+    """Shared test-only field bridge; never linked into production archives."""
+    if os.name == 'nt':
+        raise RuntimeError('Fraction bridge requires a POSIX compiler; native C tests remain portable.')
+    library = Path(directory) / 'oracle.so'
+    compiler = shlex.split(os.environ.get('CC', 'cc'))
+    shared = '-dynamiclib' if sys.platform == 'darwin' else '-shared'
+    subprocess.run(compiler + ['-std=c11', '-O1', shared, '-fPIC', '-Wall', '-Wextra', '-Werror',
+        '-I'+str(ROOT/'include'), str(ROOT/'tests/axle_oracle_probe.c'), str(ROOT/'src/sg_axle.c'),
+        str(ROOT/'src/sg_loading.c'), '-o', str(library)], check=True)
+    return ctypes.CDLL(str(library))
+
 def oracle(row):
     L, deck_min, deck_max, footprint, x, tf0, tf1, tr0, tr1, f0, f1, r0, r1, gross, has, p, q, n = row[:18]
     del deck_min, deck_max, footprint
@@ -41,11 +53,7 @@ def main():
     if os.name == 'nt':
         raise SystemExit('Fraction bridge requires a POSIX compiler; native C tests remain portable.')
     with tempfile.TemporaryDirectory(prefix='surge-axle-oracle-') as directory:
-        library = Path(directory)/'oracle.so'
-        compiler = shlex.split(os.environ.get('CC', 'cc'))
-        shared = '-dynamiclib' if sys.platform == 'darwin' else '-shared'
-        subprocess.run(compiler+['-std=c11','-O1',shared,'-fPIC','-Wall','-Wextra','-Werror','-I'+str(ROOT/'include'),str(ROOT/'tests/axle_oracle_probe.c'),str(ROOT/'src/sg_axle.c'),str(ROOT/'src/sg_loading.c'),'-o',str(library)],check=True)
-        lib=ctypes.CDLL(str(library));probe=lib.sg_axle_oracle_probe
+        lib=load_library(directory);probe=lib.sg_axle_oracle_probe
         probe.argtypes=[ctypes.POINTER(ctypes.c_int64),ctypes.c_uint32,ctypes.POINTER(ctypes.c_int64)];probe.restype=ctypes.c_int
         rng=random.Random(20261108);count=0
         def check(row):

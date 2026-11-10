@@ -27,9 +27,50 @@ int sg_axle_oracle_probe(const int64_t *in, uint32_t length, int64_t *out) {
     return status;
 }
 
-int sg_axle_joint_probe(const int64_t *in, uint32_t length, int64_t *out) {
+/* Multiple independent slot positions, per-unit assignment and CG intervals.
+ * The bridge only copies fields; all expected physics lives in Python. */
+int sg_axle_multislot_probe(const int64_t *in, uint32_t length, int64_t *out) {
+    if (!in || !out || length < 18 || in[4] < 1 || in[4] > 128 ||
+        in[17] < 0 || in[17] > 128 ||
+        length != 18 + (uint32_t)in[4] + 5*(uint32_t)in[17])
+        return SG_STATUS_INVALID_ARG;
+    SGLoadingVehicle v = {0};
+    SGAxleProfile p = {0};
+    v.slot_count = p.slot_count = (uint32_t)in[4];
+    p.wheelbase_mm = (uint32_t)in[0];
+    p.deck_min_mm = (int32_t)in[1]; p.deck_max_mm = (int32_t)in[2];
+    p.footprint_length_mm = (uint32_t)in[3];
+    p.front_tare_g = (SGAxleMassInterval){(uint64_t)in[5], (uint64_t)in[6]};
+    p.rear_tare_g = (SGAxleMassInterval){(uint64_t)in[7], (uint64_t)in[8]};
+    p.front_limits_g = (SGAxleMassInterval){(uint64_t)in[9], (uint64_t)in[10]};
+    p.rear_limits_g = (SGAxleMassInterval){(uint64_t)in[11], (uint64_t)in[12]};
+    p.max_gross_g = (uint64_t)in[13];
+    p.has_min_front_fraction = (uint8_t)in[14];
+    p.min_front_fraction = (SGAxleFraction){(uint32_t)in[15], (uint32_t)in[16]};
+    for (uint32_t i = 0; i < v.slot_count; i++) {
+        v.lane[i] = i;
+        p.slot_centres_mm[i] = (int32_t)in[18+i];
+    }
+    SGLoadingUnit units[128] = {{0}};
+    SGAxleSignedInterval cg[128]; uint32_t slots[128]; uint8_t active[128];
+    uint32_t n = (uint32_t)in[17], base = 18 + v.slot_count;
+    for (uint32_t i = 0; i < n; i++) {
+        units[i].weight_g = (uint64_t)in[base+5*i];
+        cg[i] = (SGAxleSignedInterval){(int32_t)in[base+5*i+1], (int32_t)in[base+5*i+2]};
+        slots[i] = (uint32_t)in[base+5*i+3]; active[i] = (uint8_t)in[base+5*i+4];
+    }
+    SGAxleState r;
+    SGStatus status = sg_axle_state(&v, &p, units, cg, slots, active, n, &r);
+    out[0] = r.front_min_num; out[1] = r.front_max_num;
+    out[2] = r.rear_min_num; out[3] = r.rear_max_num;
+    out[4] = r.denominator; out[5] = (int64_t)r.gross_min_g; out[6] = (int64_t)r.gross_max_g;
+    return status;
+}
+
+static int joint_probe(const int64_t *in, uint32_t length, int64_t *out, int with_cg) {
+    uint32_t stride = with_cg ? 8 : 6;
     if (!in || !out || length<22 || in[17]<0 || in[17]>3 ||
-        length!=22+6*(uint32_t)in[17]) return SG_STATUS_INVALID_ARG;
+        length!=22+stride*(uint32_t)in[17]) return SG_STATUS_INVALID_ARG;
     SGLoadingVehicle v={0};v.slot_count=2;v.max_layers=2;v.clearance_mm=2400;
     v.class_count=2;v.max_stack_weight_g=12000000;v.payload_g=12000000;
     v.access=(SGLoadingAccess)in[19];v.allowed_top[0]=(uint64_t)in[20];v.allowed_top[1]=(uint64_t)in[21];
@@ -45,12 +86,22 @@ int sg_axle_joint_probe(const int64_t *in, uint32_t length, int64_t *out) {
     p.min_front_fraction=(SGAxleFraction){(uint32_t)in[15],(uint32_t)in[16]};
     uint32_t n=(uint32_t)in[17];SGLoadingUnit units[3]={{0}};SGAxleSignedInterval cg[3]={{0,0}};
     for(uint32_t i=0;i<n;i++){
-        units[i].weight_g=(uint64_t)in[22+6*i];units[i].stop=(uint32_t)in[23+6*i];
-        units[i].stack_class=(uint32_t)in[24+6*i];units[i].max_units_above=(uint32_t)in[25+6*i];
-        units[i].max_weight_above_g=(uint64_t)in[26+6*i];units[i].height_mm=(uint32_t)in[27+6*i];
+        units[i].weight_g=(uint64_t)in[22+stride*i];units[i].stop=(uint32_t)in[23+stride*i];
+        units[i].stack_class=(uint32_t)in[24+stride*i];units[i].max_units_above=(uint32_t)in[25+stride*i];
+        units[i].max_weight_above_g=(uint64_t)in[26+stride*i];units[i].height_mm=(uint32_t)in[27+stride*i];
+        if (with_cg)
+            cg[i] = (SGAxleSignedInterval){(int32_t)in[28+stride*i], (int32_t)in[29+stride*i]};
     }
     SGAxleLoadingResult r;SGStatus status=sg_axle_loading_check(&v,&p,units,cg,n,100000,NULL,NULL,&r);
     out[0]=r.loading.outcome;out[1]=(int64_t)r.loading.nodes;
     for(uint32_t i=0;i<n;i++){out[2+2*i]=r.loading.placements[i].slot;out[3+2*i]=r.loading.placements[i].layer;out[2+2*n+i]=r.unload_order[i];}
     return status;
+}
+
+int sg_axle_joint_probe(const int64_t *in, uint32_t length, int64_t *out) {
+    return joint_probe(in, length, out, 0);
+}
+
+int sg_axle_joint_cg_probe(const int64_t *in, uint32_t length, int64_t *out) {
+    return joint_probe(in, length, out, 1);
 }
